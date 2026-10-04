@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -12,7 +13,8 @@ import (
 // boundedZipDirectory admits the bounded ordinary ZIP layout written by
 // buildArchive before archive/zip allocates its central-directory inventory.
 // Native v1 never needs ZIP64, split disks, executable prefixes or comments.
-// Decompression, CRC and data-descriptor checks remain archive/zip's work.
+// Local headers/descriptors are checked here: archive/zip deliberately ignores
+// some descriptor fields. Decompression and payload CRC remain its work.
 func boundedZipDirectory(raw []byte) error {
 	if len(raw) < 22 || !bytes.HasPrefix(raw, []byte{'P', 'K', 3, 4}) {
 		return ErrInvalid
@@ -33,6 +35,8 @@ func boundedZipDirectory(raw []byte) error {
 		return ErrInvalid
 	}
 	at := int(start)
+	type span struct{ start, end uint64 }
+	spans := make([]span, 0, count)
 	for i := 0; i < count; i++ {
 		if at > end-46 || u32(raw[at:]) != 0x02014b50 {
 			return ErrInvalid
@@ -54,9 +58,39 @@ func boundedZipDirectory(raw []byte) error {
 		if u32(lh) != 0x04034b50 || u16(lh[6:]) != u16(h[8:]) || u16(lh[8:]) != u16(h[10:]) || dataStart > start || dataStart+uint64(u32(h[20:])) > start || !bytes.Equal(name, raw[int(local)+30:int(local)+30+localName]) {
 			return ErrInvalid
 		}
+		crc, compressed, expanded := u32(h[16:]), u32(h[20:]), u32(h[24:])
+		localMatches := u32(lh[14:]) == crc && u32(lh[18:]) == compressed && u32(lh[22:]) == expanded
+		dataEnd := dataStart + uint64(compressed)
+		if u16(lh[6:])&8 != 0 {
+			zeroPlaceholder := u32(lh[14:]) == 0 && u32(lh[18:]) == 0 && u32(lh[22:]) == 0
+			if (!zeroPlaceholder && !localMatches) || dataEnd+16 > start {
+				return ErrInvalid
+			}
+			descriptor := raw[int(dataEnd) : int(dataEnd)+16]
+			if u32(descriptor) != 0x08074b50 || u32(descriptor[4:]) != crc || u32(descriptor[8:]) != compressed || u32(descriptor[12:]) != expanded {
+				return ErrInvalid
+			}
+			dataEnd += 16
+		} else if !localMatches {
+			return ErrInvalid
+		}
+		spans = append(spans, span{local, dataEnd})
 		at = next
 	}
 	if at != end {
+		return ErrInvalid
+	}
+	// Native archives contain only the referenced local records, with no hidden
+	// prefixes, overlapping payloads or unreferenced records between entries.
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	var previous uint64
+	for _, item := range spans {
+		if item.start != previous || item.end <= item.start {
+			return ErrInvalid
+		}
+		previous = item.end
+	}
+	if previous != start {
 		return ErrInvalid
 	}
 	return nil
@@ -99,8 +133,19 @@ func uniqueJSONKeys(raw []byte) error {
 			for d.More() {
 				keyToken, err := d.Token()
 				key, ok := keyToken.(string)
+				if err != nil || !ok {
+					return ErrInvalid
+				}
+				// Schema property names are ASCII. encoding/json uses Unicode
+				// EqualFold, which also aliases long-s to ASCII s; ToLower alone
+				// cannot reject those duplicate decoder identities.
+				for _, ch := range key {
+					if ch > 127 {
+						return ErrInvalid
+					}
+				}
 				key = strings.ToLower(key)
-				if err != nil || !ok || seen[key] {
+				if seen[key] {
 					return ErrInvalid
 				}
 				seen[key] = true

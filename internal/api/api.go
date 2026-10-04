@@ -3,11 +3,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io/fs"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -30,6 +32,8 @@ type Options struct {
 	Server         *serverinfo.Collector
 	Sites          *sites.Store
 	Operator       *operator.Manager
+	// nil preserves older UI callers; zero explicitly disables local previews.
+	SitePreviewPort *uint16
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -145,7 +149,16 @@ func New(o Options) http.Handler {
 				http.Error(w, "Panel entry unavailable", http.StatusServiceUnavailable)
 				return
 			}
+			if o.SitePreviewPort != nil {
+				if !bytes.Contains(raw, []byte("<head>")) {
+					http.Error(w, "Panel entry unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				meta := `<head><meta name="sifruno-sites-port" content="` + strconv.Itoa(int(*o.SitePreviewPort)) + `">`
+				raw = bytes.Replace(raw, []byte("<head>"), []byte(meta), 1)
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
 			if r.Method != http.MethodHead {
 				w.Write(raw)
 			}

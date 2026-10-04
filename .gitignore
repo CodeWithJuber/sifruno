@@ -17,4 +17,5 @@ __pycache__/
 *.pyc
 deliverables/runtime/
 deliverables/runtime-builds/
+deliverables/
 *.tsbuildinfo

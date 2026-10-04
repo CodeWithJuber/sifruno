@@ -6,8 +6,8 @@ Sifruno is a modern hosting-panel project with the original WHM/cPanel ecosystem
 
 ```powershell
 npm run panel:build
-./scripts/go.ps1 build -o bin/sifruno.exe ./cmd/sifruno
-./scripts/go.ps1 build -o bin/panelctl.exe ./cmd/panelctl
+./scripts/go.ps1 build -buildvcs=false -o bin/sifruno.exe ./cmd/sifruno
+./scripts/go.ps1 build -buildvcs=false -o bin/panelctl.exe ./cmd/panelctl
 ./bin/sifruno.exe --listen 127.0.0.1:8080 --state .state/sifruno --ui web/dist
 ```
 
@@ -18,6 +18,10 @@ The new Websites section manages actual app-owned static files: persisted sites,
 Portable builds target Windows/Linux/macOS amd64/arm64: `npm run runtime:build`. Build verification and runtime qualification are separate. Historical systems remain connector/remote candidates, not guaranteed native targets. See [platform scope](docs/platform-support.md) and [archive contract](docs/runtime-builds.md).
 
 The delivered source is `deliverables/sifruno-source.zip` with a file manifest and sibling SHA256. Source packaging excludes private state, tooling caches and dependencies and compares inputs locally against inherited credential values without printing them. Windows native archive verification is `node scripts/verify-runtime.mjs`; its report is `artifacts/runtime/native-windows.json`. Other OS archives remain build-verified only.
+
+Native Sifruno v1 ZIP export/import uses the same authenticated API from the local UI and CLI. Imports create a new static site after full bounded validation; downloads retain the recorded backup hash. Original cPanel backups and account migration remain unsupported. See [transfer contract](docs/native-transfers.md).
+
+Development now uses isolated Git worktrees for UI, CLI and review. The session permits four concurrent agents including the integrating root; the [twenty-four workstreams](docs/parallel-development.md) run in batches. No Git remote or publication is configured, and running private state is excluded from source snapshots.
 
 ## Branding
 

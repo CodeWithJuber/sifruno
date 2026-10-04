@@ -182,6 +182,8 @@ func TestImportHostileArchivesCreateNoRecordOrFiles(t *testing.T) {
 		{"zero source revision", strings.Replace(string(manifest), `"revision":1`, `"revision":0`, 1)},
 		{"unknown JSON field", strings.Replace(string(manifest), `"version":1`, `"version":1,"unexpected":true`, 1)},
 		{"duplicate JSON identity", strings.Replace(string(manifest), `"version":1`, `"version":0,"VERSION":1`, 1)},
+		{"Unicode folded identity alias", strings.Replace(string(manifest), `"site_id":"`+m.SiteID+`"`, `"site_id":"`+m.SiteID+`","ſite_id":"`+strings.Repeat("c", 32)+`"`, 1)},
+		{"Unicode folded hash alias", strings.Replace(string(manifest), `"sha256":`, `"ſha256":"`+strings.Repeat("c", 64)+`","sha256":`, 1)},
 		{"duplicate file JSON hash", strings.Replace(string(manifest), `"sha256":`, `"SHA256":"forged","sha256":`, 1)},
 		{"size mismatch", strings.Replace(string(manifest), fmt.Sprintf(`"bytes":%d`, len(data)), `"bytes":1`, 1)},
 		{"empty catalog", strings.Replace(string(manifest), string(mustJSON(t, m.Files)), `[]`, 1)},

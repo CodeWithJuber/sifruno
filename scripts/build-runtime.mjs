@@ -200,7 +200,9 @@ Overview shows native CPU, memory, volumes, uptime and aggregate network data.
 Services are read-only Windows SCM / Linux systemd observations; macOS service
 inventory is explicitly unavailable. Unknown measurements stay unavailable.
 Websites manages real app-owned static files with local operator sign-in,
-revision/hash saves, suspend/resume and bounded ZIP backups/restores. Open
+revision/hash saves, suspend/resume and bounded ZIP backups/restores. Native
+Sifruno v1 ZIPs can be downloaded and imported into a new static website through
+the local UI, API or CLI; original cPanel backups are not supported. Open
 .state/sifruno/operator/access.key privately on this server to sign in; never
 send it through chat or public links. The native CLI reads that private key
 automatically: run ${cli} --state .state/sifruno sites list in a second terminal

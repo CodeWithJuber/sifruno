@@ -87,8 +87,7 @@ func run() error {
 	}
 	monitor := serverinfo.NewCollector()
 	defer monitor.Close()
-	handler := api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
-	server := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+	server := &http.Server{Addr: *listen, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return err
@@ -96,15 +95,18 @@ func run() error {
 	defer listener.Close()
 	servers := []*http.Server{server}
 	listeners := []net.Listener{listener}
+	previewPort := uint16(0)
 	if *sitesListen != "" {
 		websiteListener, e := net.Listen("tcp", *sitesListen)
 		if e != nil {
 			return e
 		}
 		defer websiteListener.Close()
+		previewPort = uint16(websiteListener.Addr().(*net.TCPAddr).Port)
 		servers = append(servers, &http.Server{Addr: *sitesListen, Handler: websiteStore.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10})
 		listeners = append(listeners, websiteListener)
 	}
+	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, SitePreviewPort: &previewPort, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, len(servers))

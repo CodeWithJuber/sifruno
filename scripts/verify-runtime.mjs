@@ -82,13 +82,27 @@ try{
  await writeFile(pageFile,pageContent);
  site=siteCommand(['write','--id',site.id,'--path','index.html','--from',pageFile,'--revision',String(file.revision),'--sha256',file.sha256]);
  const backup=siteCommand(['backup','--id',site.id,'--revision',String(site.revision)]);
+ phase='native ZIP CLI export and import';
+ const exportFile=join(work,'native-site-export.zip');
+ const exported=siteCommand(['export','--id',site.id,'--backup',backup.id,'--out',exportFile]);
+ const exportedBytes=await readFile(exportFile);
+ assert.equal(exported.sha256,backup.sha256,'Export did not match the recorded backup');
+ assert.equal(hash(exportedBytes),backup.sha256,'Exported ZIP bytes changed');
+ assert.equal(exported.bytes,backup.bytes,'Exported ZIP size changed');
+ command(['--state',state,'--panel-url',url,'sites','export','--id',site.id,'--backup',backup.id,'--out',exportFile],{fail:true});
+ assert.equal(hash(await readFile(exportFile)),backup.sha256,'Existing export file was overwritten');
+ const imported=siteCommand(['import','--name','Native imported archive','--domain','native-import.test','--from',exportFile]);
+ assert.notEqual(imported.id,site.id,'Import reused the original target');
+ assert.equal(siteCommand(['read','--id',imported.id,'--path','index.html']).content,pageContent,'Imported content differs from backup');
+ assert.equal(siteCommand(['backups','--id',imported.id]).items.length,0,'Import fabricated source backup history');
  file=siteCommand(['read','--id',site.id,'--path','index.html']);
  await writeFile(pageFile,'<p>Changed after backup</p>');
  site=siteCommand(['write','--id',site.id,'--path','index.html','--from',pageFile,'--revision',String(file.revision),'--sha256',file.sha256]);
  site=siteCommand(['restore','--id',site.id,'--backup',backup.id,'--revision',String(site.revision)]);
  assert.equal(siteCommand(['read','--id',site.id,'--path','index.html']).content,pageContent,'Restored website bytes differ');
- const getWebsite=()=>new Promise((yes,no)=>{const req=http.request(`http://127.0.0.1:${sitePort}/`,{headers:{Host:site.preview_host}},res=>{let body='';res.setEncoding('utf8');res.on('data',chunk=>{body+=chunk;if(body.length>8192)req.destroy()});res.on('end',()=>yes({status:res.statusCode,body}))});req.once('error',no);req.setTimeout(5000,()=>req.destroy());req.end()});
+ const getWebsite=(host=site.preview_host)=>new Promise((yes,no)=>{const req=http.request(`http://127.0.0.1:${sitePort}/`,{headers:{Host:host}},res=>{let body='';res.setEncoding('utf8');res.on('data',chunk=>{body+=chunk;if(body.length>8192)req.destroy()});res.on('end',()=>yes({status:res.statusCode,body}))});req.once('error',no);req.setTimeout(5000,()=>req.destroy());req.end()});
  let preview=await getWebsite();assert.equal(preview.status,200);assert.equal(preview.body,pageContent);
+ assert.equal((await getWebsite(imported.preview_host)).body,pageContent,'Imported HTTP content differs');
  site=siteCommand(['state','--id',site.id,'--state','suspended','--revision',String(site.revision)]);assert.notEqual((await getWebsite()).status,200);
  site=siteCommand(['state','--id',site.id,'--state','active','--revision',String(site.revision)]);assert.equal((await getWebsite()).body,pageContent);
  command(['--state',state,'--panel-url',url,'sites','write','--id',site.id,'--path','index.html','--from',pageFile,'--revision',String(file.revision),'--sha256',file.sha256],{fail:true});
@@ -97,6 +111,8 @@ try{
  server=startServer();let restarted=false;
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/v1/status',{signal:AbortSignal.timeout(1000)})).ok){restarted=true;break}}catch{};await new Promise(r=>setTimeout(r,50))}
  assert(restarted,'Restarted native server did not become ready');assert.equal(siteCommand(['read','--id',site.id,'--path','index.html']).content,pageContent);assert.equal((await getWebsite()).body,pageContent);assert.equal(siteCommand(['backups','--id',site.id]).items.length,1);
+ assert.equal(siteCommand(['read','--id',imported.id,'--path','index.html']).content,pageContent,'Imported files did not survive restart');
+ assert.equal((await getWebsite(imported.preview_host)).body,pageContent,'Imported HTTP content did not survive restart');
  const {chromium}=await import('playwright');const browser=await chromium.launch({headless:true,env:environment});
  phase='native UI fixture states';
  try{
@@ -106,7 +122,9 @@ try{
   await page.getByTestId('nav-budget').click();await page.getByText('Spending needs attention',{exact:true}).waitFor();
   const artifacts=join(root,'artifacts/runtime');await mkdir(artifacts,{recursive:true});await page.screenshot({path:join(artifacts,'native-budget-alert.png'),fullPage:true});assert.equal(errors.length,0,'Native UI errors');
  }finally{await browser.close()}
- const evidence={checked_at:new Date().toISOString(),host:os.version(),os:'windows',arch:'amd64',run_id:latest.run_id,archive_sha256:archived.sha256,archive_integrity:true,manifest_files:manifest.files.length,server_startup:true,read_only_http_guards:true,cli_recovery:true,approval_replay_rejected:true,budget_reconciliation_guard:true,authenticated_website_cli:true,website_backup_restore_bytes:true,website_suspend_resume:true,website_process_restart_persistence:true,populated_trail_ui:true,budget_alert_ui:true,paid_provider_calls:0,compatibility_certified:false,other_os_runtime_verified:false};
+ const evidence={checked_at:new Date().toISOString(),host:os.version(),os:'windows',arch:'amd64',run_id:latest.run_id,archive_sha256:archived.sha256,archive_integrity:true,manifest_files:manifest.files.length,server_startup:true,read_only_http_guards:true,cli_recovery:true,approval_replay_rejected:true,budget_reconciliation_guard:true,authenticated_website_cli:true,website_backup_restore_bytes:true,native_zip_cli_export_import:true,native_zip_hash_match:true,native_zip_output_overwrite_refused:true,native_zip_import_http_restart:true,website_suspend_resume:true,website_process_restart_persistence:true,populated_trail_ui:true,budget_alert_ui:true,paid_provider_calls:0,compatibility_certified:false,other_os_runtime_verified:false};
+ const runEvidence=join(root,'artifacts/runtime/native-runs',latest.run_id);await mkdir(runEvidence,{recursive:true});
+ await writeFile(join(runEvidence,'native-windows.json'),JSON.stringify(evidence,null,2)+'\n');
  await mkdir(join(root,'artifacts/runtime'),{recursive:true});await writeFile(join(root,'artifacts/runtime/native-windows.json'),JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence,null,2));
 }finally{server.kill()}
 }

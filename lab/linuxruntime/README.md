@@ -66,3 +66,12 @@ From the Windows source workspace, use the primary Go wrapper with this worktree
 as the working directory and child-only `GOOS=linux`, `GOARCH=amd64`,
 `CGO_ENABLED=0` to build `./lab/linuxruntime`. Save output in this worktree.
 Linux compilation/vet evidence must remain separate from actual guest execution.
+
+The independent Unix challenges executed in the observed guest are preserved
+verbatim as `reviewer_linux_test.go`. They cover bounded/hash admission, exclusive
+run reports, real Unix links/modes, catalog/privacy tampering, exact negative
+exit classification and actual owned command deadline cleanup. Compile them with
+Linux-targeted `go test -c ./lab/linuxruntime`; run only in fresh disposable guest
+scratch with `-test.run '^TestReviewer' -test.timeout=60s`. The actual prior
+overlay-built executable and tracked-copy cross-build have distinct provenance;
+see `docs/linux-runtime-review.md` and `docs/linux-guest-toolchain.md`.

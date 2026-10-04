@@ -97,4 +97,168 @@ export async function siteRequest<T>(
 }
 
 export const siteURL = (siteId: string, suffix = "") => `/api/v1/sites/${encodeURIComponent(siteId)}${suffix}`;
-export const previewURL = (site: Site) => validSite(site) ? `http://${site.preview_host}:8082/` : undefined;
+export function sitePreviewPort(): number | undefined {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="sifruno-sites-port"]');
+  if (!meta) return 8082;
+  const value = meta.content.trim();
+  if (!/^\d{1,5}$/.test(value)) return undefined;
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
+}
+export const previewURL = (site: Site) => {
+  const port = sitePreviewPort();
+  return validSite(site) && port ? `http://${site.preview_host}:${port}/` : undefined;
+};
+
+const maxTransferArchive = 34 * 1024 * 1024;
+
+function transferMessage(status: number): string {
+  if (status === 401) return message(401);
+  if (status === 403) return message(403);
+  if (status === 404) return message(404);
+  if (status === 409) return message(409);
+  if (status === 413) return "The ZIP archive exceeds the 34 MiB transfer limit.";
+  if (status === 422) return "This is not a valid native Sifruno site archive, or its site values are invalid.";
+  if (status === 503) return message(503);
+  return `The local transfer returned HTTP ${status}. No successful result was confirmed.`;
+}
+
+async function transferError(response: Response): Promise<SiteApiError> {
+  // Transfer failures are JSON problems; successful transfer bodies stay binary.
+  await response.body?.cancel().catch(() => undefined);
+  return new SiteApiError(response.status, "website_transfer_failed", transferMessage(response.status));
+}
+
+async function readBoundedJson(response: Response, limit: number): Promise<unknown> {
+  const contentType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+  const body = response.body;
+  if (contentType !== "application/json" || !body) {
+    await body?.cancel().catch(() => undefined);
+    throw new SiteApiError(0, "invalid_response", "The import did not return a readable JSON website record.");
+  }
+  const lengthHeader = response.headers.get("Content-Length");
+  let expectedLength: number | undefined;
+  if (lengthHeader !== null) {
+    if (!/^\d+$/.test(lengthHeader)) {
+      await body.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The import response has an invalid length header.");
+    }
+    expectedLength = Number(lengthHeader);
+    if (!Number.isSafeInteger(expectedLength) || expectedLength > limit) {
+      await body.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The import response exceeds the 16 KiB response limit.");
+    }
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The import response exceeds the 16 KiB response limit.");
+    }
+    chunks.push(value);
+  }
+  if (expectedLength !== undefined && size !== expectedLength) {
+    throw new SiteApiError(0, "invalid_response", "The import response did not match its length header.");
+  }
+  const data = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.byteLength; }
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(data)); }
+  catch { throw new SiteApiError(0, "invalid_response", "The import response was not valid JSON."); }
+}
+
+export async function downloadSiteBackup(siteId: string, backupId: string, expectedSha256: string): Promise<Blob> {
+  if (!sha(expectedSha256)) throw new SiteApiError(0, "invalid_response", "The backup hash is invalid.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetch(siteURL(siteId, `/backups/${encodeURIComponent(backupId)}/download`), {
+      method: "GET", credentials: "same-origin", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "application/zip" },
+    });
+    if (!response.ok) throw await transferError(response);
+    const contentType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+    const body = response.body;
+    if (contentType !== "application/zip" || !body) {
+      await body?.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The download did not return a readable application/zip stream.");
+    }
+    const lengthHeader = response.headers.get("Content-Length");
+    let expectedLength: number | undefined;
+    if (lengthHeader !== null) {
+      if (!/^\d+$/.test(lengthHeader)) {
+        await body.cancel().catch(() => undefined);
+        throw new SiteApiError(0, "invalid_response", "The ZIP download has an invalid length header.");
+      }
+      expectedLength = Number(lengthHeader);
+      if (!Number.isSafeInteger(expectedLength) || expectedLength <= 0 || expectedLength > maxTransferArchive) {
+        await body.cancel().catch(() => undefined);
+        throw new SiteApiError(0, "invalid_response", "The ZIP download exceeds the 34 MiB transfer limit.");
+      }
+    }
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > maxTransferArchive) {
+        await reader.cancel().catch(() => undefined);
+        throw new SiteApiError(0, "invalid_response", "The ZIP download exceeds the 34 MiB transfer limit.");
+      }
+      chunks.push(value);
+    }
+    if (size === 0 || (expectedLength !== undefined && size !== expectedLength)) {
+      throw new SiteApiError(0, "invalid_response", "The ZIP download was empty or did not match its length header.");
+    }
+    const archive = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { archive.set(chunk, offset); offset += chunk.byteLength; }
+    const digest = await crypto.subtle.digest("SHA-256", archive);
+    const actualSha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (actualSha256 !== expectedSha256) throw new SiteApiError(0, "invalid_response", "The downloaded ZIP hash does not match the selected backup record.");
+    return new Blob([archive], { type: "application/zip" });
+  } catch (error) {
+    if (error instanceof SiteApiError) throw error;
+    throw new SiteApiError(0, "connection_failed", "The ZIP download could not be confirmed. Refresh the backup list before trying again.");
+  } finally { clearTimeout(timer); }
+}
+
+export async function importSiteArchive(input: { name: string; domain: string; archive: File; csrf: string }): Promise<Site> {
+  const nameBytes = new TextEncoder().encode(input.name.trim()).length;
+  const domainBytes = new TextEncoder().encode(input.domain.trim()).length;
+  if (!input.name.trim() || nameBytes > 80 || !input.domain.trim() || input.domain.trim().length > 253 || domainBytes > 253 || !input.csrf) {
+    throw new SiteApiError(422, "invalid_request", "Check the website name, domain and operator session before importing.");
+  }
+  if (!input.archive || input.archive.size === 0 || input.archive.size > maxTransferArchive) {
+    throw new SiteApiError(413, "invalid_request", "Choose a nonempty ZIP archive up to 34 MiB.");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  const form = new FormData();
+  form.append("name", input.name);
+  form.append("domain", input.domain);
+  form.append("archive", input.archive, input.archive.name || "site.zip");
+  try {
+    const response = await fetch("/api/v1/sites/import", {
+      method: "POST", credentials: "same-origin", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "application/json", "X-CSRF-Token": input.csrf },
+      body: form,
+    });
+    if (!response.ok) throw await transferError(response);
+    const value = await readBoundedJson(response, 16 * 1024);
+    if (!validSite(value)) throw new SiteApiError(0, "invalid_response", "The import response did not confirm a persisted website.");
+    return value;
+  } catch (error) {
+    if (error instanceof SiteApiError) throw error;
+    throw new SiteApiError(0, "connection_failed", "The import result could not be confirmed. Refresh websites before trying again.");
+  } finally { clearTimeout(timer); }
+}

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Archive, ArrowUpRight, File, Folder, Globe, Info, LockKeyhole, LogOut, RefreshCw, Save, Search } from "lucide-react";
+import { Archive, ArrowDownToLine, ArrowUpRight, File, Folder, Globe, Info, LockKeyhole, LogOut, RefreshCw, Save, Search, Upload } from "lucide-react";
 import { bytes } from "@/Dashboard";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
-import { previewURL, SiteApiError, siteRequest, siteURL, validBackup, validBackupList, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
+import { downloadSiteBackup, importSiteArchive, previewURL, sitePreviewPort, SiteApiError, siteRequest, siteURL, validBackup, validBackupList, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
 import type { OperatorSession, Site, SiteBackup, SiteFile, SiteFileContent } from "@/lib/sites-api";
 
 interface Editor {
@@ -39,13 +39,24 @@ export default function Websites({ revision, active, onStatus }: { revision: num
   const [loadedAt, setLoadedAt] = useState<Date>();
   const [restore, setRestore] = useState<{ site: Site; backup: SiteBackup }>();
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importName, setImportName] = useState("");
+  const [importDomain, setImportDomain] = useState("");
+  const [importArchive, setImportArchive] = useState<File>();
+  const [discardDraftForImport, setDiscardDraftForImport] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
+  const importDialog = useRef<HTMLDialogElement>(null);
   const latestEditor = useRef(editor);
   const latestSelected = useRef(selected);
   latestEditor.current = editor;
   latestSelected.current = selected;
   const dirty = Boolean(editor && (editor.isNew || editor.draft !== editor.savedContent));
   const nameBytes = new TextEncoder().encode(name.trim()).length;
+  const importNameBytes = new TextEncoder().encode(importName.trim()).length;
+  const importDomainLength = importDomain.trim().length;
+  const importDomainBytes = new TextEncoder().encode(importDomain.trim()).length;
+  const previewPort = sitePreviewPort();
+  const maxTransferArchive = 34 * 1024 * 1024;
   const authenticated = session?.authenticated === true;
   const editable = authenticated && selected && selected.state !== "recovery_required";
 
@@ -121,6 +132,10 @@ export default function Websites({ revision, active, onStatus }: { revision: num
   useEffect(() => {
     if (restore && dialog.current && !dialog.current.open) dialog.current.showModal();
   }, [restore]);
+  useEffect(() => {
+    if (importOpen && importDialog.current && !importDialog.current.open) importDialog.current.showModal();
+    else if (!importOpen && importDialog.current?.open) importDialog.current.close();
+  }, [importOpen]);
 
   async function run(label: string, action: () => Promise<void>) {
     if (busy) return;
@@ -160,6 +175,35 @@ export default function Websites({ revision, active, onStatus }: { revision: num
       setNotice(`Created ${site.name}.`);
     });
   }
+  async function exportBackup(site: Site, backup: SiteBackup) {
+    await run("Downloading ZIP backup", async () => {
+      const archive = await downloadSiteBackup(site.id, backup.id, backup.sha256);
+      const url = URL.createObjectURL(archive);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "sifruno-site.zip";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice(`Downloaded ZIP backup from ${site.name}.`);
+    });
+  }
+  async function submitImportArchive(event: React.FormEvent) {
+    event.preventDefault();
+    if (!session?.authenticated || busy) return;
+    if (dirty && !discardDraftForImport) { setError("Save or explicitly discard your editor draft before importing a website."); return; }
+    if (importNameBytes > 80) { setError("The website name must fit within 80 UTF-8 bytes."); return; }
+    if (importDomainLength > 253 || importDomainBytes > 253) { setError("The domain must fit within 253 UTF-8 bytes."); return; }
+    if (!importArchive || importArchive.size === 0 || importArchive.size > maxTransferArchive) { setError("Choose a nonempty native Sifruno ZIP archive up to 34 MiB."); return; }
+    await run("Importing native ZIP", async () => {
+      const site = await importSiteArchive({ name: importName.trim(), domain: importDomain.trim(), archive: importArchive, csrf: session.csrf_token });
+      if (dirty) { setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); }
+      updateSite(site);
+      await loadSite(site.id);
+      setImportOpen(false); setImportName(""); setImportDomain(""); setImportArchive(undefined); setDiscardDraftForImport(false);
+      setNotice(`Imported native Sifruno ZIP as ${site.name}.`);
+    });
+  }
+
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (!session?.authenticated || !selected || !editor) return;
@@ -205,7 +249,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
         setSession(next); setSites([]); setSelected(undefined); setFiles([]); setBackups([]); setEditor(undefined); setConflict(undefined); setRestore(undefined);
       }); }} /></div>
       <div className="hosting-notice"><Info /><span>App-owned static websites · local HTTP preview. DNS, TLS, PHP, mail, databases and full server backups are not provided by this slice.</span></div>
-      <Card className="dashboard-card website-create" padding={0}><div className="card-heading"><h2>Create website</h2><span>{sites.length} actual {sites.length === 1 ? "website" : "websites"}</span></div>
+      <Card className="dashboard-card website-create" padding={0}><div className="card-heading"><div><h2>Create website</h2><span>{sites.length} actual {sites.length === 1 ? "website" : "websites"}</span></div><Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={Boolean(busy)} onClick={() => { setError(undefined); setImportOpen(true); }} /></div>
         <form onSubmit={create}><div><label htmlFor="website-name">Website name</label><input id="website-name" value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} aria-invalid={nameBytes > 80} aria-describedby={nameBytes > 80 ? "website-name-help" : undefined} disabled={Boolean(busy)} />{nameBytes > 80 && <p id="website-name-help" className="website-help website-error">Name is too long ({nameBytes}/80 UTF-8 bytes).</p>}</div><div><label htmlFor="website-domain">Domain</label><input id="website-domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="example.test" required maxLength={253} autoCapitalize="none" spellCheck={false} disabled={Boolean(busy)} /></div><Button label="Create website" type="submit" variant="primary" isLoading={busy === "Creating website"} isDisabled={Boolean(busy) || dirty || sites.length >= 100 || nameBytes > 80 || !name.trim() || !domain.trim()} /></form>
       </Card>
       <div className="website-layout">
@@ -215,8 +259,8 @@ export default function Websites({ revision, active, onStatus }: { revision: num
         {selected ? <div className="website-detail-stack">
           <Card className="dashboard-card website-details" padding={0} data-testid="website-details" data-site-id={selected.id} data-revision={selected.revision}><div className="card-heading"><div><h2>{selected.name}</h2><p>{selected.domain}</p></div><span className={`website-state website-state-${selected.state}`}>{selected.state.replaceAll("_", " ")}</span></div>
             <dl><div><dt>Revision</dt><dd>{selected.revision}</dd></div><div><dt>Created</dt><dd>{dateLabel(selected.created_at)}</dd></div><div><dt>Updated</dt><dd>{dateLabel(selected.updated_at)}</dd></div></dl>
-            <div className="website-actions"><Button label="Local HTTP preview" icon={<ArrowUpRight />} href={previewURL(selected)} target="_blank" rel="noopener noreferrer" isDisabled={selected.state !== "active"} variant="secondary" size="sm" /><Button label={selected.state === "suspended" ? "Resume website" : "Suspend website"} variant="secondary" size="sm" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!session.authenticated || !requireClean()) return; void run("Changing website state", async () => { const site = await siteRequest(siteURL(selected.id, "/state"), validSite, { method: "POST", csrf: session.csrf_token, body: { state: selected.state === "suspended" ? "active" : "suspended", expected_revision: selected.revision } }); updateSite(site); await loadSite(site.id); setNotice(`Website is ${site.state}.`); }); }} /></div>
-            <p className="website-help">Preview serves the site's actual files at {selected.preview_host}:8082 using local HTTP.</p>
+            <div className="website-actions"><Button label="Local HTTP preview" icon={<ArrowUpRight />} href={previewURL(selected)} target="_blank" rel="noopener noreferrer" isDisabled={selected.state !== "active" || !previewPort} variant="secondary" size="sm" /><Button label={selected.state === "suspended" ? "Resume website" : "Suspend website"} variant="secondary" size="sm" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!session.authenticated || !requireClean()) return; void run("Changing website state", async () => { const site = await siteRequest(siteURL(selected.id, "/state"), validSite, { method: "POST", csrf: session.csrf_token, body: { state: selected.state === "suspended" ? "active" : "suspended", expected_revision: selected.revision } }); updateSite(site); await loadSite(site.id); setNotice(`Website is ${site.state}.`); }); }} /></div>
+            <p className="website-help">{previewPort ? <>Preview serves the site's actual files at {selected.preview_host}:{previewPort} using local HTTP.</> : "Preview serving is disabled in this local runtime."}</p>
             {selected.state === "recovery_required" && <p className="website-message" role="alert">This website requires scoped recovery. Serving and managed changes are disabled until its recovery is resolved.</p>}
           </Card>
           <Card className="dashboard-card website-files" padding={0}><div className="card-heading"><h2><Folder />Files</h2><Button label="Add text file" variant="ghost" size="sm" isDisabled={Boolean(busy) || dirty || !editable || files.length >= 64} onClick={() => { if (!requireClean()) return; setEditor({ path: "", draft: "", savedContent: "", sha256: "", revision: selected.revision, isNew: true }); setConflict(undefined); setError(undefined); }} /></div>
@@ -229,12 +273,19 @@ export default function Websites({ revision, active, onStatus }: { revision: num
             </form>}
           </Card>
           <Card className="dashboard-card website-backups" padding={0}><div className="card-heading"><div><h2><Archive />ZIP backups</h2><p>App-owned site files only · {backups.length} recorded</p></div><Button label="Create ZIP backup" icon={<Archive />} size="sm" variant="secondary" isLoading={busy === "Creating backup"} isDisabled={Boolean(busy) || !editable || dirty} onClick={() => { if (!session.authenticated) return; void run("Creating backup", async () => { const backup = await siteRequest(siteURL(selected.id, "/backups"), validBackup, { method: "POST", csrf: session.csrf_token, body: { expected_revision: selected.revision } }); await loadSite(selected.id); setNotice(`Created ZIP backup with ${backup.files} files.`); }); }} /></div>
-            {!backups.length ? <p className="website-empty">No ZIP backups recorded. Create a backup of this site's current files.</p> : <div className="website-backup-list">{backups.map((backup) => <article key={backup.id}><div><strong>{dateLabel(backup.created_at)}</strong><p>{backup.files} files · {bytes(backup.bytes)} · revision {backup.revision}</p><details><summary>Backup hash</summary><code>{backup.sha256}</code></details></div><Button label={`Restore backup ${backup.id}`} size="sm" variant="secondary" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!requireClean()) return; setRestore({ site: selected, backup }); setRestoreConfirmed(false); }}>Restore</Button></article>)}</div>}
+            {!backups.length ? <p className="website-empty">No ZIP backups recorded. Create a backup of this site's current files.</p> : <div className="website-backup-list">{backups.map((backup) => <article key={backup.id}><div><strong>{dateLabel(backup.created_at)}</strong><p>{backup.files} files · {bytes(backup.bytes)} · revision {backup.revision}</p><details><summary>Backup hash</summary><code>{backup.sha256}</code></details></div><div className="website-backup-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || !authenticated} isLoading={busy === "Downloading ZIP backup"} onClick={() => { if (authenticated) void exportBackup(selected, backup); }} /><Button label={`Restore backup ${backup.id}`} size="sm" variant="secondary" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!requireClean()) return; setRestore({ site: selected, backup }); setRestoreConfirmed(false); }}>Restore</Button></div></article>)}</div>}
           </Card>
         </div> : <Card className="dashboard-card website-no-selection" padding={0}><Globe /><h2>Select a website</h2><p>Its actual files, state and ZIP backups will appear here.</p></Card>}
       </div>
     </>}
     {busy && session && <p className="website-busy" role="status">{busy}…</p>}
+    {authenticated && <dialog ref={importDialog} className="website-transfer-dialog" aria-labelledby="import-title" onCancel={(event) => { if (busy) event.preventDefault(); else setImportOpen(false); }}><h2 id="import-title">Import native Sifruno ZIP</h2><p>Import an app-owned static website archive into a new website. This accepts native Sifruno site ZIPs only; cPanel host backups are not compatible.</p><form onSubmit={submitImportArchive}>
+      <div><label htmlFor="import-website-name">Website name</label><input id="import-website-name" value={importName} onChange={(event) => setImportName(event.target.value)} required maxLength={80} aria-invalid={importNameBytes > 80} disabled={Boolean(busy)} /><span className="website-help">{importNameBytes}/80 UTF-8 bytes</span></div>
+      <div><label htmlFor="import-website-domain">Domain</label><input id="import-website-domain" value={importDomain} onChange={(event) => setImportDomain(event.target.value)} required maxLength={253} autoCapitalize="none" spellCheck={false} disabled={Boolean(busy)} /><span className="website-help">{importDomainBytes}/253 UTF-8 bytes</span></div>
+      <div><label htmlFor="import-website-archive">Native site ZIP</label><input id="import-website-archive" type="file" accept=".zip,application/zip,application/octet-stream" required disabled={Boolean(busy)} onChange={(event) => setImportArchive(event.target.files?.[0])} /><span className="website-help">Maximum 34 MiB · ZIP only</span>{importArchive && <span className="website-help">{importArchive.name} · {bytes(importArchive.size)}</span>}</div>
+      {dirty && <label className="website-discard-draft"><input type="checkbox" checked={discardDraftForImport} onChange={(event) => setDiscardDraftForImport(event.target.checked)} disabled={Boolean(busy)} />Discard the unsaved editor draft after the import succeeds.</label>}
+      <div className="website-transfer-actions"><Button label="Cancel import" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setImportOpen(false)} /><Button label="Import website" type="submit" variant="primary" isLoading={busy === "Importing native ZIP"} isDisabled={Boolean(busy) || !importName.trim() || importNameBytes > 80 || !importDomain.trim() || importDomainLength > 253 || importDomainBytes > 253 || !importArchive || importArchive.size === 0 || importArchive.size > maxTransferArchive || (dirty && !discardDraftForImport)} /></div>
+    </form>{error && <p role="alert" className="website-error">{error}</p>}</dialog>}
     {restore && <dialog ref={dialog} className="website-restore-dialog" aria-labelledby="restore-title" onCancel={(event) => { if (busy) event.preventDefault(); else setRestore(undefined); }}><h2 id="restore-title">Restore ZIP backup?</h2><p>Replace the app-owned files of <strong>{restore.site.name}</strong> with the backup from {dateLabel(restore.backup.created_at)}.</p><dl><div><dt>Backup</dt><dd>{restore.backup.files} files · {bytes(restore.backup.bytes)} · revision {restore.backup.revision}</dd></div><div><dt>Expected current revision</dt><dd>{restore.site.revision}</dd></div></dl><p>This restores site files through scoped recovery. It does not restore a server, database or mail system.</p><label><input type="checkbox" checked={restoreConfirmed} onChange={(e) => setRestoreConfirmed(e.target.checked)} disabled={Boolean(busy)} />I understand that the current site files will be replaced.</label><div><Button label="Cancel restore" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setRestore(undefined)} /><Button label="Confirm restore" variant="primary" isDisabled={!restoreConfirmed || Boolean(busy)} isLoading={busy === "Restoring backup"} onClick={() => { if (!session?.authenticated || !restoreConfirmed || !requireClean()) return; void run("Restoring backup", async () => { const site = await siteRequest(siteURL(restore.site.id, "/restore"), validSite, { method: "POST", csrf: session.csrf_token, body: { backup_id: restore.backup.id, expected_revision: restore.site.revision } }); updateSite(site); setEditor(undefined); latestEditor.current = undefined; await loadSite(site.id); setRestore(undefined); setNotice(`Restored ${site.name} from its ZIP backup.`); }); }} /></div>{error && <p role="alert" className="website-error">{error}</p>}</dialog>}
   </section>;
 }

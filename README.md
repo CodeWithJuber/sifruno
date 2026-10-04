@@ -19,7 +19,7 @@ Portable builds target Windows/Linux/macOS amd64/arm64: `npm run runtime:build`.
 
 The delivered source is `deliverables/sifruno-source.zip` with a file manifest and sibling SHA256. Source packaging excludes private state, tooling caches and dependencies and compares inputs locally against inherited credential values without printing them. Windows native archive verification is `node scripts/verify-runtime.mjs`; its report is `artifacts/runtime/native-windows.json`. Other OS archives remain build-verified only.
 
-Native Sifruno v1 ZIP export/import uses the same authenticated API from the local UI and CLI. Imports create a new static site after full bounded validation; downloads retain the recorded backup hash. Original cPanel backups and account migration remain unsupported. See [transfer contract](docs/native-transfers.md).
+Native Sifruno v1 ZIP export/import uses the same authenticated API from the local UI and CLI. Imports create a new static site after full bounded validation; downloads retain the recorded backup hash. Original cPanel account restoration and migration remain unimplemented. A separate `panelctl backup inspect --from ORIGINAL.tar.gz --out NEW.jsonl` streams original-format TAR/gzip hashes and metadata for migration characterization, without extracting files or exposing their contents. See [native transfers](docs/native-transfers.md) and [original backup inspection](docs/cpanel-backup-inspection.md).
 
 Development now uses isolated Git worktrees for UI, CLI and review. The session permits four concurrent agents including the integrating root; the [twenty-four workstreams](docs/parallel-development.md) run in batches. No Git remote or publication is configured, and running private state is excluded from source snapshots.
 

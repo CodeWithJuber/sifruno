@@ -202,7 +202,14 @@ inventory is explicitly unavailable. Unknown measurements stay unavailable.
 Websites manages real app-owned static files with local operator sign-in,
 revision/hash saves, suspend/resume and bounded ZIP backups/restores. Native
 Sifruno v1 ZIPs can be downloaded and imported into a new static website through
-the local UI, API or CLI; original cPanel backups are not supported. Open
+the local UI, API or CLI. Original cPanel account restoration remains unimplemented.
+For read-only original TAR/TAR.GZ characterization, run
+${cli} backup inspect --from ORIGINAL.tar.gz --out NEW.jsonl
+against a quiesced independent local archive. This streams hashes and metadata,
+never extracts files or initializes panel state. Complete catalogs require full
+archive/checksum validation. Limits:32GiB source,128GiB expanded,32GiB/file,
+100000 entries,256MiB catalog and ten minutes. Authentic reference compatibility
+remains unverified; a complete inventory is not a restored account. Open
 .state/sifruno/operator/access.key privately on this server to sign in; never
 send it through chat or public links. The native CLI reads that private key
 automatically: run ${cli} --state .state/sifruno sites list in a second terminal

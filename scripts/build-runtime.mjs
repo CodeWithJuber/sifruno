@@ -120,7 +120,7 @@ async function notices(destination, target) {
     index.push({ ...metadata, files: copied });
   }
   await licenses(join(root, '.tools/go'), 'go', { name: 'Go', source: 'https://go.dev' });
-  const mods = run(go, ['list', '-mod=readonly', '-deps', '-f', '{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}', './cmd/sifruno', './cmd/panelctl'], environment(target));
+  const mods = run(go, ['list', '-mod=readonly', '-buildvcs=false', '-deps', '-f', '{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}', './cmd/sifruno', './cmd/panelctl'], environment(target));
   for (const line of [...new Set(mods.split(/\r?\n/).filter(Boolean))].sort()) {
     const [name, version, directory] = line.split('|');
     if (!version) continue;

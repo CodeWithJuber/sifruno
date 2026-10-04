@@ -166,16 +166,24 @@ func runSites(args []string, state, base string, out, errs io.Writer) error {
 	}
 	f := flag.NewFlagSet("sites "+args[0], flag.ContinueOnError)
 	f.SetOutput(errs)
+	transfer := args[0] == "export" || args[0] == "import"
+	if transfer {
+		f.SetOutput(io.Discard)
+	}
 	id := f.String("id", "", "Website ID")
 	name := f.String("name", "", "Website name")
 	domain := f.String("domain", "", "Website domain")
 	path := f.String("path", "", "Relative managed file")
-	from := f.String("from", "", "Local UTF-8 file to save")
+	from := f.String("from", "", "Local UTF-8 file to save or native ZIP to import")
 	revision := f.Uint64("revision", 0, "Expected current website revision")
 	sha := f.String("sha256", "", "Expected current file hash, empty for a new file")
 	wantedState := f.String("state", "", "active or suspended")
-	backup := f.String("backup", "", "Backup ID to restore")
+	backup := f.String("backup", "", "Native backup ID to restore or export")
+	destination := f.String("out", "", "New native ZIP export file (never overwritten)")
 	if err := f.Parse(args[1:]); err != nil {
+		if transfer {
+			return errors.New("invalid site transfer flags; run panelctl help")
+		}
 		return err
 	}
 	if f.NArg() != 0 {
@@ -184,13 +192,23 @@ func runSites(args []string, state, base string, out, errs io.Writer) error {
 	method, endpoint := http.MethodGet, "/api/v1/sites"
 	var body any
 	sub := args[0]
-	if sub != "list" && sub != "create" {
+	if sub != "list" && sub != "create" && sub != "import" {
 		if *id == "" || strings.ContainsAny(*id, "/\\?#%") {
 			return errors.New("sites command requires a valid --id")
 		}
 		endpoint += "/" + url.PathEscape(*id)
 	}
 	switch sub {
+	case "export":
+		if !transferID(*id) || !transferID(*backup) || *destination == "" {
+			return errors.New("export requires --id, --backup and --out")
+		}
+		endpoint += "/backups/" + *backup + "/download"
+	case "import":
+		if *from == "" || *name == "" || len(*name) > 80 || !utf8.ValidString(*name) || *domain == "" || len(*domain) > 253 || !utf8.ValidString(*domain) {
+			return errors.New("import requires --name, --domain and --from within the native limits")
+		}
+		endpoint += "/import"
 	case "list", "show":
 	case "create":
 		method = http.MethodPost
@@ -262,6 +280,12 @@ func runSites(args []string, state, base string, out, errs io.Writer) error {
 	}
 	key = ""
 	defer func() { _, _ = c.request(http.MethodPost, "/api/v1/session/logout", map[string]any{}) }()
+	if sub == "export" {
+		return c.exportSite(endpoint, *destination, out)
+	}
+	if sub == "import" {
+		return c.importSite(endpoint, *name, *domain, *from, out)
+	}
 	raw, err := c.request(method, endpoint, body)
 	if err != nil {
 		return err

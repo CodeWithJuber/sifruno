@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -87,6 +89,27 @@ func TestSitesCLIAuthenticatedRecoveryAndPersistence(t *testing.T) {
 	}
 	var saved sites.FileContent
 	json.Unmarshal(call("read", "--id", site.ID, "--path", "index.html"), &saved)
+	archivePath := filepath.Join(t.TempDir(), "native.zip")
+	var exported struct {
+		Bytes  int    `json:"bytes"`
+		SHA256 string `json:"sha256"`
+	}
+	json.Unmarshal(call("export", "--id", site.ID, "--backup", backup.ID, "--out", archivePath), &exported)
+	archiveBytes, archiveErr := os.ReadFile(archivePath)
+	archiveHash := sha256.Sum256(archiveBytes)
+	if archiveErr != nil || exported.Bytes != len(archiveBytes) || exported.SHA256 != backup.SHA256 || exported.SHA256 != hex.EncodeToString(archiveHash[:]) {
+		t.Fatal("CLI export actual hash mismatch")
+	}
+	var imported sites.Site
+	json.Unmarshal(call("import", "--name", "Imported CLI fixture", "--domain", "imported-cli.example", "--from", archivePath), &imported)
+	if imported.ID == site.ID || imported.ID == "" {
+		t.Fatal("import reused source identity")
+	}
+	var importedContent sites.FileContent
+	json.Unmarshal(call("read", "--id", imported.ID, "--path", "index.html"), &importedContent)
+	if importedContent.Content != content {
+		t.Fatal("CLI import did not persist exact content")
+	}
 	os.WriteFile(input, []byte("<p>Changed after backup</p>"), 0600)
 	json.Unmarshal(call("write", "--id", site.ID, "--path", "index.html", "--from", input, "--revision", fmt.Sprint(saved.Revision), "--sha256", saved.SHA256), &site)
 	json.Unmarshal(call("restore", "--id", site.ID, "--backup", backup.ID, "--revision", fmt.Sprint(site.Revision)), &site)
@@ -134,6 +157,10 @@ func TestSitesCLIAuthenticatedRecoveryAndPersistence(t *testing.T) {
 	json.Unmarshal(call("read", "--id", site.ID, "--path", "index.html"), &restored)
 	if restored.Content != content {
 		t.Fatal("website content did not persist across restart")
+	}
+	json.Unmarshal(call("read", "--id", imported.ID, "--path", "index.html"), &importedContent)
+	if importedContent.Content != content {
+		t.Fatal("imported website did not persist across restart")
 	}
 	call("backups", "--id", site.ID)
 }

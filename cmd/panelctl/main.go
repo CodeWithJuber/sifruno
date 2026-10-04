@@ -37,8 +37,11 @@ const usage = `panelctl [--state .state/sifruno] [--panel-url http://127.0.0.1:8
  sites state --id ID --state active|suspended --revision N
  sites backup --id ID --revision N
  sites restore --id ID --backup ID --revision N
+ sites export --id ID --backup ID --out NEW.zip
+ sites import --name NAME --domain DOMAIN --from NATIVE.zip
 Local operator commands; sites require the running panel and its private access.key.
 Sites manage app-owned static files only. Original WHM/cPanel compatibility is unverified.
+ZIP transfer supports native Sifruno v1 static-site archives only, not cPanel host backups.
 `
 
 func main() {

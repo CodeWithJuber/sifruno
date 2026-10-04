@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "license": "MIT",
+  "source_url": "https://raw.githubusercontent.com/facebook/astryx/e730c899bb470a6e24128df3c58560a0d2d69871/LICENSE",
+  "source_commit": "e730c899bb470a6e24128df3c58560a0d2d69871",
+  "source_repository": "https://github.com/facebook/astryx",
+  "source_tag": "v0.6.5",
+  "release_tag_url": "https://api.github.com/repos/facebook/astryx/git/ref/tags/v0.6.5",
+  "sha256": "a6855be541fc8f446acd1bc4f2f8efce1ace6dce71dba32fcd8da553ee54b473",
+  "packages": [
+    {
+      "name": "@astryxdesign/core",
+      "version": "0.6.5",
+      "registry_metadata_url": "https://registry.npmjs.org/@astryxdesign/core/0.6.5",
+      "source_package_json_url": "https://raw.githubusercontent.com/facebook/astryx/e730c899bb470a6e24128df3c58560a0d2d69871/packages/core/package.json",
+      "dist_tarball": "https://registry.npmjs.org/@astryxdesign/core/-/core-0.6.5.tgz",
+      "dist_integrity": "sha512-fI2ELLMxoPHKOJWKYyoTWi31q9Dg0SLWjuBMrkl6tQY3WFf3TjTrDn4f7KyOF6mryjbTsf93uQNOUJKbay1o/A==",
+      "provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@astryxdesign%2fcore@0.6.5",
+      "subject_sha512": "7c8d842cb331a0f1ca38958a632a135a2df5abd0e0d122d68ee04cae497ab506375857f74e34eb0e7e1fecac8e17a9abca36d3b1ff77b9034e50929b6b2d68fc"
+    },
+    {
+      "name": "@astryxdesign/theme-neutral",
+      "version": "0.6.5",
+      "registry_metadata_url": "https://registry.npmjs.org/@astryxdesign/theme-neutral/0.6.5",
+      "source_package_json_url": "https://raw.githubusercontent.com/facebook/astryx/e730c899bb470a6e24128df3c58560a0d2d69871/packages/themes/neutral/package.json",
+      "dist_tarball": "https://registry.npmjs.org/@astryxdesign/theme-neutral/-/theme-neutral-0.6.5.tgz",
+      "dist_integrity": "sha512-8Ylen70//sYhVJvst2prflxng5t3ryRlsJJkS44vvY0/9A4KGjCs7bxfRAfSrFxF/dSXZ8sQHuGxbXZiRn7PHQ==",
+      "provenance_url": "https://registry.npmjs.org/-/npm/v1/attestations/@astryxdesign%2ftheme-neutral@0.6.5",
+      "subject_sha512": "f1895e9fbd3ffec621549becb76a6b7e5c67839b77af2465b092644b8e2fbd8d3ff40e0a1a30acedbc5f4407d2ac5c45fdd49767cb101ee1b16d7662467ecf1d"
+    }
+  ],
+  "resolution_method": "official-npm-slsa-provenance-and-release-tag",
+  "verification_note": "Registry provenance payloads were inspected; commit and subject digest match published metadata and installed lockfile. Attestation signatures were not independently verified.",
+  "retrieved_at": "2026-10-04T18:08:01.552Z"
+}

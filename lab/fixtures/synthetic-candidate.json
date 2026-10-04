@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "id": "synthetic-candidate",
+  "kind": "synthetic",
+  "role": "candidate",
+  "provenance": {
+    "product": "Synthetic Sifruno fixture",
+    "exact_build": "fixture-1",
+    "os": "Synthetic AlmaLinux 9",
+    "arch": "x86_64",
+    "captured_at": "2026-10-04T00:00:00Z",
+    "features": [
+      "synthetic-cli"
+    ],
+    "artifacts": [
+      {
+        "name": "fixture",
+        "path": "/fixtures/not-a-real-cpanel-artifact",
+        "sha256": "cff42ed2ceb7eec2e0adab497a1ddffef91b09a691e426491120489cff15d5ae"
+      }
+    ],
+    "disposable_host_attested": false,
+    "licensed_reference_attested": false
+  },
+  "cases": [
+    {
+      "operation": {
+        "id": "cli.fixture-default",
+        "obligation_id": "cli.whmapi1",
+        "transport": "cli",
+        "command": [
+          "/fixtures/whmapi1",
+          "fixture"
+        ]
+      },
+      "outcome": {
+        "format": "json",
+        "exit_code": 0,
+        "stdout": "{\"metadata\":{\"result\":1.0},\"data\":{\"default\":1e0}}",
+        "stderr": ""
+      }
+    },
+    {
+      "operation": {
+        "id": "cli.fixture-error",
+        "obligation_id": "cli.whmapi1",
+        "transport": "cli",
+        "command": [
+          "/fixtures/whmapi1",
+          "missing"
+        ]
+      },
+      "outcome": {
+        "format": "json",
+        "exit_code": 0,
+        "stdout": "{\"metadata\":{\"result\":0,\"reason\":\"Unknown function\"}}",
+        "stderr": "Unexpected warning\n"
+      }
+    }
+  ],
+  "sha256": "a44d3df65d1f21c2a01dba8c3042b7f2d8786c1f2440478929952ee103f408ea"
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "license": "MIT",
+  "source_url": "https://raw.githubusercontent.com/facebook/stylex/1fcb9a51cbecad2c82255e0f4b45cc072fa1a95a/LICENSE",
+  "source_commit": "1fcb9a51cbecad2c82255e0f4b45cc072fa1a95a",
+  "source_repository": "https://github.com/facebook/stylex",
+  "source_tag": "0.19.1",
+  "release_tag_url": "https://api.github.com/repos/facebook/stylex/git/ref/tags/0.19.1",
+  "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+  "packages": [
+    {
+      "name": "@stylexjs/stylex",
+      "version": "0.19.1",
+      "registry_metadata_url": "https://registry.npmjs.org/@stylexjs/stylex/0.19.1",
+      "source_package_json_url": "https://raw.githubusercontent.com/facebook/stylex/1fcb9a51cbecad2c82255e0f4b45cc072fa1a95a/packages/@stylexjs/stylex/package.json",
+      "dist_tarball": "https://registry.npmjs.org/@stylexjs/stylex/-/stylex-0.19.1.tgz",
+      "dist_integrity": "sha512-JwNFm0MOYPqi+M4Ax5Un4ZxfZp4HEAX2sAWetZ88KALFcv1eEiHNJs75oO3V3U7RVWnzfkiM8i9eBowC3hqgUw=="
+    }
+  ],
+  "resolution_method": "official-github-release-tag-and-package-version",
+  "verification_note": "Official release tag resolves to this commit; source package name/version and npm metadata match the installed lockfile.",
+  "retrieved_at": "2026-10-04T18:08:01.674Z"
+}

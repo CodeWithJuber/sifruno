@@ -1,0 +1,27 @@
+{
+  "name": "sifruno-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence and recovery workbench for the zero-change hosting compatibility project",
+  "scripts": {
+    "panel:build": "npm --prefix web run build",
+    "panel:dev": "npm --prefix web run dev",
+    "panel:typecheck": "npm --prefix web run typecheck",
+    "runtime:build": "node scripts/build-runtime.mjs",
+    "brand:build": "node scripts/brand-build.mjs",
+    "brand:check": "node scripts/brand-check.mjs",
+    "brand:preview": "node scripts/brand-server.mjs",
+    "brand:browser-check": "node scripts/brand-browser-check.mjs",
+    "tools:doctor": "node scripts/analysis.mjs doctor",
+    "tools:analyze": "node scripts/analysis.mjs analyze",
+    "test:tools": "npm run brand:check && npm run brand:browser-check"
+  },
+  "devDependencies": {
+    "@fontsource/inter": "5.3.0",
+    "lucide-static": "1.52.0",
+    "opentype.js": "2.0.0",
+    "playwright": "1.62.1",
+    "rea-agents": "3.2.1",
+    "sharp": "0.35.5"
+  }
+}

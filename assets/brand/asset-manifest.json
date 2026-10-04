@@ -1,0 +1,476 @@
+{
+  "brand": "Sifruno",
+  "version": "1.0.0",
+  "generator": "scripts/brand-build.mjs",
+  "identity": {
+    "status": "approved",
+    "direction": "v3-custom-lettering",
+    "approvedOn": "2026-10-04",
+    "colorSplit": "sifr-uno",
+    "primaryLogo": "logos/sifruno-logo-primary.svg",
+    "darkLogo": "logos/sifruno-logo-on-dark.svg"
+  },
+  "originality": "Original S mark and V3 custom logo lettering; Inter-derived V1/V2 wordmark outlines; Lucide interface icons.",
+  "files": [
+    {
+      "path": "favicons/apple-touch-icon.png",
+      "bytes": 2799,
+      "sha256": "ebd1f82a1aeb857a2c3b62ac08ecd6b46048ebe02ff6a6a608443c11b62b600d"
+    },
+    {
+      "path": "favicons/favicon-16.png",
+      "bytes": 386,
+      "sha256": "2e6342709cc5028855370845bb8873f49cfc9b925665ca8a5a744ea937b86492"
+    },
+    {
+      "path": "favicons/favicon-32.png",
+      "bytes": 668,
+      "sha256": "34b8b776b7cbadf8440f2763951c4a73921a2fcfb7adfe05c3bc79c6b5ef1eeb"
+    },
+    {
+      "path": "favicons/favicon-48.png",
+      "bytes": 1013,
+      "sha256": "1943575c8de3627cbd15fe2dae92f37188dbb0bf883122019a0e20139d77d746"
+    },
+    {
+      "path": "favicons/favicon.ico",
+      "bytes": 2121,
+      "sha256": "dd918470b928ebeac5ca933531530e4ce16b98221519dbbd5d40e452ce1e13f9"
+    },
+    {
+      "path": "favicons/favicon.svg",
+      "bytes": 339,
+      "sha256": "8815fdaa95f493c741c86ae2abbc60cb5c8e104805634fe23e8871c33801da69"
+    },
+    {
+      "path": "fonts/inter-latin-400.woff2",
+      "bytes": 23664,
+      "sha256": "8909904ab6c872eb994093482a88a28eca2cd95912d7b6fecd72103b0dc07edc"
+    },
+    {
+      "path": "fonts/inter-latin-500.woff2",
+      "bytes": 24272,
+      "sha256": "f3779f1efccc4bdcdf9c0a02ab95bf6bd092ed09c48c08cedc725889edd1d19f"
+    },
+    {
+      "path": "fonts/inter-latin-600.woff2",
+      "bytes": 24452,
+      "sha256": "f9a06e79cd3a2a20951c0f0e28f66dd0e6d3fda73911d640a2125c8fcb78f21a"
+    },
+    {
+      "path": "icons/sifruno-app-icon-1024.png",
+      "bytes": 36699,
+      "sha256": "70f10cbb541e6e60b18b833aa3261ee5964445cab80f28e3ee2e1a80650034dc"
+    },
+    {
+      "path": "icons/sifruno-app-icon-192.png",
+      "bytes": 2951,
+      "sha256": "51168068e5c4674f3f38144c3c77385c3036e6f77daebdc2cfe80b6abd9a548e"
+    },
+    {
+      "path": "icons/sifruno-app-icon-512.png",
+      "bytes": 12495,
+      "sha256": "96f7ced2f2e8f778e1369092b601771454ba007f206145bee5dec59bf5acc100"
+    },
+    {
+      "path": "icons/sifruno-app-icon-maskable.svg",
+      "bytes": 379,
+      "sha256": "875b1dab0a8f0848268d6ac007f34aad39ea05f508029ec8899d9e634c8596eb"
+    },
+    {
+      "path": "icons/sifruno-app-icon.svg",
+      "bytes": 366,
+      "sha256": "c1c7348cf5ad49258de3fb03edb8a2d8136f6a659d7022fd6fd48da1c906ea1a"
+    },
+    {
+      "path": "icons/sifruno-maskable-512.png",
+      "bytes": 11817,
+      "sha256": "f5020f854adb542964cbe6780851b72c159487638b0b222861003e19ebdc4585"
+    },
+    {
+      "path": "icons/ui-archive.svg",
+      "bytes": 418,
+      "sha256": "0444f12d97ff4d04e6bc809dcd1888ae2713a54ccf35f7a6a3fcf7f6b78b0c3e"
+    },
+    {
+      "path": "icons/ui-database.svg",
+      "bytes": 408,
+      "sha256": "4b6feaa043bc515bb0e2b48eaebe67885010be4576e7710cac3b2c81c1e7d9f0"
+    },
+    {
+      "path": "icons/ui-globe.svg",
+      "bytes": 407,
+      "sha256": "845c0c172bf7850acf1bd276cd277c698c050cdcb2cefc7071fb5d0fa3e8c7f2"
+    },
+    {
+      "path": "icons/ui-layout-dashboard.svg",
+      "bytes": 503,
+      "sha256": "3890332480066546e313cb2b0e91c77e55eff7f4bc6c5fb9c3067582095c7a9d"
+    },
+    {
+      "path": "icons/ui-mail.svg",
+      "bytes": 391,
+      "sha256": "356b589747a5d1ee39b40a54afb6c3e90ae4652e40001c5235978c83d8ebbffa"
+    },
+    {
+      "path": "icons/ui-puzzle.svg",
+      "bytes": 762,
+      "sha256": "2507ed3ad0ff8c59e41a8da52f5c73819351f9b7b09b69f5e1faab99b9654274"
+    },
+    {
+      "path": "icons/ui-server.svg",
+      "bytes": 490,
+      "sha256": "387c468037fbf3e657bca355cb5dc26b2b41902e2ced9fb297c4c85030ec3b64"
+    },
+    {
+      "path": "icons/ui-settings-2.svg",
+      "bytes": 405,
+      "sha256": "b1dfbc5bdc8c72d93225c73939b779fdcc3489baa933e3b911bea6f42486776f"
+    },
+    {
+      "path": "icons/ui-shield-check.svg",
+      "bytes": 498,
+      "sha256": "1e1844031cde1664ee754e1e68eb857ba653624e892cec2ca072eb53825bff24"
+    },
+    {
+      "path": "icons/ui-terminal.svg",
+      "bytes": 340,
+      "sha256": "8409ca91cf53e41b9274995dc10a533c4e971ea4c518e300e2bbd070d3b80340"
+    },
+    {
+      "path": "icons/ui-users.svg",
+      "bytes": 459,
+      "sha256": "f712315a4d6ecf21f64a980e93ce5e2d21a48ac0836d59b0641d30862191057c"
+    },
+    {
+      "path": "icons/ui-workflow.svg",
+      "bytes": 430,
+      "sha256": "2f368366c6a8f280bf66bb85e5dfc64609e06478c7fc3a0b3976d606b2ce7a6c"
+    },
+    {
+      "path": "lettering/sifruno-display.json",
+      "bytes": 1072,
+      "sha256": "07193292343cd31efd9ce0498c18f7d5df213ee673a88f407335dd31770e14b1"
+    },
+    {
+      "path": "licenses/inter-OFL.txt",
+      "bytes": 4477,
+      "sha256": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345"
+    },
+    {
+      "path": "licenses/lucide-LICENSE.txt",
+      "bytes": 3208,
+      "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+    },
+    {
+      "path": "logos/sifruno-logo-mono-ink.png",
+      "bytes": 9141,
+      "sha256": "3d6c1f7f11d5f86101d5fd997cd0943a37018cb1878dd6e3fc0ccac2cfd8d9bd"
+    },
+    {
+      "path": "logos/sifruno-logo-mono-ink.svg",
+      "bytes": 1242,
+      "sha256": "4e27eff1c7239f68cd68e4b8570614e3b5e0484e880960027baa1af6753abe85"
+    },
+    {
+      "path": "logos/sifruno-logo-mono-white.png",
+      "bytes": 7863,
+      "sha256": "82807dd0f42d121cbd34a9fbad9f6a5326857ad4588048bd6bb7490969c2d284"
+    },
+    {
+      "path": "logos/sifruno-logo-mono-white.svg",
+      "bytes": 1242,
+      "sha256": "1fffe7ba4738a194ad51282ebfc535b8a71662d2c602cdd1e3ba43fdf788455e"
+    },
+    {
+      "path": "logos/sifruno-logo-on-dark.png",
+      "bytes": 9222,
+      "sha256": "6444ba3f185d41a551ffab6b18e11d197442e2f9531d7b959b937a237c4f3a5d"
+    },
+    {
+      "path": "logos/sifruno-logo-on-dark.svg",
+      "bytes": 1255,
+      "sha256": "aa9066e54c0c8d32413803b37b62f34696dcc3a6b834b12dbee634a7f79e565a"
+    },
+    {
+      "path": "logos/sifruno-logo-primary.png",
+      "bytes": 9887,
+      "sha256": "380ea9ebce3f574e67220a1c105b6478bdb5e56bf62dcd76202507b4db7370e4"
+    },
+    {
+      "path": "logos/sifruno-logo-primary.svg",
+      "bytes": 1255,
+      "sha256": "0d9a05cc0101dd298ec6fdadca34731f3ae99a9da45c15dcea35aa6243269e32"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-mono-ink.png",
+      "bytes": 16965,
+      "sha256": "a9af63d44f1b71e5400c5c52c7aab54519b5be4b692009290d0ec0dd037f1187"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-mono-ink.svg",
+      "bytes": 3325,
+      "sha256": "6a651295174bb5b4cfd65552034978b7140bc0870695858b7e9e0d548b166681"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-mono-white.png",
+      "bytes": 13495,
+      "sha256": "f049c45160bbcd68e915003100de8dc70e088fc493bf98a80fceb6b5946ff0de"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-mono-white.svg",
+      "bytes": 3325,
+      "sha256": "f31a332a067853ce9b1329b6b18f35d58f8ab68a7fc2ad988f0837fe6fc3e0c7"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-on-dark.png",
+      "bytes": 14576,
+      "sha256": "884d9559376e90629be6b3faa603aa336ddc706c0249f55d1ef5e7af0f7e75d6"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-on-dark.svg",
+      "bytes": 3325,
+      "sha256": "eeebc1cd97684adb6934e21c5eba3b348922b75acfa623411fae41b5f3a7a0d0"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-primary.png",
+      "bytes": 17590,
+      "sha256": "753d6073f4fc70deb557aae50524fb01c6fe9ef53eb61eb3735bbbed19fc9d57"
+    },
+    {
+      "path": "logos/sifruno-v1-logo-primary.svg",
+      "bytes": 3325,
+      "sha256": "8f1f2a980ef1d200a1f675422be599e3c3625e994deb10a0161c3a7e561a8c03"
+    },
+    {
+      "path": "logos/sifruno-v1-wordmark-mono-ink.svg",
+      "bytes": 3175,
+      "sha256": "20f4c0c048c6079e1714a8d00033ad3330fc472970af9346a7d286c449f8f43f"
+    },
+    {
+      "path": "logos/sifruno-v1-wordmark-mono-white.svg",
+      "bytes": 3175,
+      "sha256": "3794aa096e98f195a385a87570b16be50b3e340c97a6bd222c07a0f56ff791ea"
+    },
+    {
+      "path": "logos/sifruno-v1-wordmark-on-dark.svg",
+      "bytes": 3175,
+      "sha256": "3794aa096e98f195a385a87570b16be50b3e340c97a6bd222c07a0f56ff791ea"
+    },
+    {
+      "path": "logos/sifruno-v1-wordmark-primary.svg",
+      "bytes": 3175,
+      "sha256": "20f4c0c048c6079e1714a8d00033ad3330fc472970af9346a7d286c449f8f43f"
+    },
+    {
+      "path": "logos/sifruno-v2-mono-ink.png",
+      "bytes": 14490,
+      "sha256": "c7fcc98b2aed99ce572a1203bd47b084e0d38e9d1f93c6091db49ce24ac27715"
+    },
+    {
+      "path": "logos/sifruno-v2-mono-ink.svg",
+      "bytes": 2673,
+      "sha256": "7b46e398d4b097498d308e036c3b5f7546cd22012119fe81264d91931eaad568"
+    },
+    {
+      "path": "logos/sifruno-v2-mono-white.png",
+      "bytes": 11141,
+      "sha256": "2d99156bec1757d13124ba48898e151f75f5755c0b43d5986ba61b0525effae1"
+    },
+    {
+      "path": "logos/sifruno-v2-mono-white.svg",
+      "bytes": 2673,
+      "sha256": "c0f2d52846b686eb17450fb26f1469794357318847186d48facc5897f56fed3e"
+    },
+    {
+      "path": "logos/sifruno-v2-sif-runo-on-dark.png",
+      "bytes": 12980,
+      "sha256": "6a040879fdfde430baa70d6c7e1e9162793bf0bebda18391c58e76f0131f9103"
+    },
+    {
+      "path": "logos/sifruno-v2-sif-runo-on-dark.svg",
+      "bytes": 2682,
+      "sha256": "ba71f4d7f8d5773ca04d5a79467b02a609a76b893ce412e240a2e044f0c0f503"
+    },
+    {
+      "path": "logos/sifruno-v2-sif-runo-primary.png",
+      "bytes": 15043,
+      "sha256": "a36571a5427ef702252e050e2b23cc4eb8630b42dc03f7bb7f578b77e72f6f6d"
+    },
+    {
+      "path": "logos/sifruno-v2-sif-runo-primary.svg",
+      "bytes": 2682,
+      "sha256": "a86581b26f68e9cb313d790cb6c4ab9a63d9f142829fee0fc10d7e446a1aeff2"
+    },
+    {
+      "path": "logos/sifruno-v2-sifr-uno-on-dark.png",
+      "bytes": 13207,
+      "sha256": "55f483d11cdd6f5b50e7fd2fc5ce21e37fccdac3186200c1dacdc8a6fd971523"
+    },
+    {
+      "path": "logos/sifruno-v2-sifr-uno-on-dark.svg",
+      "bytes": 2686,
+      "sha256": "be65fa3def92487f1b1523ff8911e8ca004bed2aeb6b871b4c0c2010ec9d4d33"
+    },
+    {
+      "path": "logos/sifruno-v2-sifr-uno-primary.png",
+      "bytes": 15134,
+      "sha256": "b8748d4fc912484dc8964e51dfe01632f6de519ffc532cb18c20e5b6530a2b32"
+    },
+    {
+      "path": "logos/sifruno-v2-sifr-uno-primary.svg",
+      "bytes": 2686,
+      "sha256": "9a570d7317ebd26350d1f1b389b5f8309132366de2ca225c9ce6c010e991f5f2"
+    },
+    {
+      "path": "logos/sifruno-v3-mono-ink.png",
+      "bytes": 9141,
+      "sha256": "3d6c1f7f11d5f86101d5fd997cd0943a37018cb1878dd6e3fc0ccac2cfd8d9bd"
+    },
+    {
+      "path": "logos/sifruno-v3-mono-ink.svg",
+      "bytes": 1242,
+      "sha256": "4e27eff1c7239f68cd68e4b8570614e3b5e0484e880960027baa1af6753abe85"
+    },
+    {
+      "path": "logos/sifruno-v3-mono-white.png",
+      "bytes": 7863,
+      "sha256": "82807dd0f42d121cbd34a9fbad9f6a5326857ad4588048bd6bb7490969c2d284"
+    },
+    {
+      "path": "logos/sifruno-v3-mono-white.svg",
+      "bytes": 1242,
+      "sha256": "1fffe7ba4738a194ad51282ebfc535b8a71662d2c602cdd1e3ba43fdf788455e"
+    },
+    {
+      "path": "logos/sifruno-v3-sif-runo-on-dark.png",
+      "bytes": 8945,
+      "sha256": "4454fb85f5938ceaf1e1ecbc6f1ab62ff741859c85b1ae32ee3433678a945bf9"
+    },
+    {
+      "path": "logos/sifruno-v3-sif-runo-on-dark.svg",
+      "bytes": 1255,
+      "sha256": "15b7800008ffaba5232322a71b926d0155b77c0710d0694b7d979449d874c10d"
+    },
+    {
+      "path": "logos/sifruno-v3-sif-runo-primary.png",
+      "bytes": 9588,
+      "sha256": "acbf366b9e72bcd3edaab77ec71c552b85dc9adb7cf225388b6f82327db277a8"
+    },
+    {
+      "path": "logos/sifruno-v3-sif-runo-primary.svg",
+      "bytes": 1255,
+      "sha256": "4b76a17f18d951e7a3b78662be7bb36c34094e76c4335532ef907b4e702cf67a"
+    },
+    {
+      "path": "logos/sifruno-v3-sifr-uno-on-dark.png",
+      "bytes": 9222,
+      "sha256": "6444ba3f185d41a551ffab6b18e11d197442e2f9531d7b959b937a237c4f3a5d"
+    },
+    {
+      "path": "logos/sifruno-v3-sifr-uno-on-dark.svg",
+      "bytes": 1255,
+      "sha256": "aa9066e54c0c8d32413803b37b62f34696dcc3a6b834b12dbee634a7f79e565a"
+    },
+    {
+      "path": "logos/sifruno-v3-sifr-uno-primary.png",
+      "bytes": 9887,
+      "sha256": "380ea9ebce3f574e67220a1c105b6478bdb5e56bf62dcd76202507b4db7370e4"
+    },
+    {
+      "path": "logos/sifruno-v3-sifr-uno-primary.svg",
+      "bytes": 1255,
+      "sha256": "0d9a05cc0101dd298ec6fdadca34731f3ae99a9da45c15dcea35aa6243269e32"
+    },
+    {
+      "path": "logos/sifruno-wordmark-mono-ink.svg",
+      "bytes": 1242,
+      "sha256": "4e27eff1c7239f68cd68e4b8570614e3b5e0484e880960027baa1af6753abe85"
+    },
+    {
+      "path": "logos/sifruno-wordmark-mono-white.svg",
+      "bytes": 1242,
+      "sha256": "1fffe7ba4738a194ad51282ebfc535b8a71662d2c602cdd1e3ba43fdf788455e"
+    },
+    {
+      "path": "logos/sifruno-wordmark-on-dark.svg",
+      "bytes": 1255,
+      "sha256": "aa9066e54c0c8d32413803b37b62f34696dcc3a6b834b12dbee634a7f79e565a"
+    },
+    {
+      "path": "logos/sifruno-wordmark-primary.svg",
+      "bytes": 1255,
+      "sha256": "0d9a05cc0101dd298ec6fdadca34731f3ae99a9da45c15dcea35aa6243269e32"
+    },
+    {
+      "path": "marks/sifruno-mark-mono-ink.svg",
+      "bytes": 285,
+      "sha256": "db3627374b16d082aae58b7acb4be964c11eb004638f6038cda916a41194493d"
+    },
+    {
+      "path": "marks/sifruno-mark-mono-white.svg",
+      "bytes": 285,
+      "sha256": "fc90341416491c97363d84c8d7188985ccde4ed50a980eb0fa783d0fc59933e6"
+    },
+    {
+      "path": "marks/sifruno-mark-on-dark.svg",
+      "bytes": 285,
+      "sha256": "4aced2c22973d44bd7f8b85e0d9fb86d26da308420cf85966f360c05b1ff8f6b"
+    },
+    {
+      "path": "marks/sifruno-mark-primary.svg",
+      "bytes": 285,
+      "sha256": "e346396308d7c434403104bb501a29441ebf28948b8ea6dd0e4f7e0c6afb9fed"
+    },
+    {
+      "path": "site.webmanifest",
+      "bytes": 589,
+      "sha256": "3be2cdae0ea631420922119bd2adc10211c6c80ba1f51f8eeb0436d74bbe2fa9"
+    },
+    {
+      "path": "social/sifruno-avatar.png",
+      "bytes": 36699,
+      "sha256": "70f10cbb541e6e60b18b833aa3261ee5964445cab80f28e3ee2e1a80650034dc"
+    },
+    {
+      "path": "social/sifruno-cover.png",
+      "bytes": 31266,
+      "sha256": "ba769576689cbf18717267786b60925bb75eeaa50e521ff9ff25923436b9cf17"
+    },
+    {
+      "path": "social/sifruno-cover.svg",
+      "bytes": 11888,
+      "sha256": "ceef956864516efb822d324a6426afd5a045f46fec0e3103357c6c0571eafd4c"
+    },
+    {
+      "path": "social/sifruno-v1-cover.png",
+      "bytes": 33156,
+      "sha256": "51df1202e63c5d24115f3c5002a961621a006230e95329510d4e2072e8bfb2c0"
+    },
+    {
+      "path": "social/sifruno-v1-cover.svg",
+      "bytes": 13998,
+      "sha256": "8798ff016f8e9b437c79f990fd57c3012eb3c7975363d6d8508cbee3cc2a5c25"
+    },
+    {
+      "path": "social/sifruno-v2-comparison.png",
+      "bytes": 55427,
+      "sha256": "8392afcd0873e00b423cc3acb7eebde72eb8d7ade27bfe702bd9197cb6b2056e"
+    },
+    {
+      "path": "social/sifruno-v2-comparison.svg",
+      "bytes": 33458,
+      "sha256": "0414a4983f332f47928366fc1d0ecbdc8212dfacf5694cbd105f6e17de34850a"
+    },
+    {
+      "path": "social/sifruno-v3-typography.png",
+      "bytes": 63918,
+      "sha256": "0af909869347f27d6b11b958ab4cc910018410cb566291024b6cb8a5a9dbdfdd"
+    },
+    {
+      "path": "social/sifruno-v3-typography.svg",
+      "bytes": 64112,
+      "sha256": "5530d777122fbce3a4d3d081baa46f2d51f62a9c034e4f849c6b87c1cd09d5c0"
+    }
+  ]
+}

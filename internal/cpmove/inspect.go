@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -429,6 +430,9 @@ func paxDigest(records map[string]string, l Limits) ([]string, string, error) {
 	keys := make([]string, 0, len(records))
 	total := 0
 	for k, v := range records {
+		if !utf8.ValidString(k) {
+			return nil, "", ErrUnsupported
+		}
 		total += len(k) + len(v)
 		if len(k) > l.MaxPathBytes || len(v) > maxRetainedMetadata || total > maxRetainedMetadata {
 			return nil, "", ErrLimit

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // The SDK caps special headers at 1 MiB (archive/tar/format.go). This guard
@@ -192,6 +193,11 @@ func (g *tarGuard) parseMetadata() error {
 			return ErrArchive
 		}
 		key, value := record[:equals], record[equals+1:]
+		// JSON key-name strings cannot retain invalid UTF-8 bytes. Refuse that
+		// variant rather than serialize replacement characters as observations.
+		if !utf8.ValidString(key) {
+			return ErrUnsupported
+		}
 		if strings.ContainsRune(key, 0) || strings.ContainsRune(key, '\n') {
 			return ErrArchive
 		}

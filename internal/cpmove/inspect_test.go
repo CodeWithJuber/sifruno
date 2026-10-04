@@ -278,11 +278,31 @@ func TestSyntheticPhysicalMetadataUnsupported(t *testing.T) {
 	requireFailure(t, append(append(append([]byte{}, one...), one...), valid...), ErrUnsupported)
 	requireFailure(t, append(one, make([]byte, 1024)...), ErrArchive)
 	requireFailure(t, append(physicalFrame(t, tar.TypeXHeader, "malformed"), valid...), ErrArchive)
+	requireFailure(t, append(physicalFrame(t, tar.TypeXHeader, paxRecord("vendor."+string([]byte{0xff}), "raw")), valid...), ErrUnsupported)
 	requireFailure(t, append(physicalFrame(t, tar.TypeXHeader, paxRecord("vendor.large", strings.Repeat("x", maxRetainedMetadata))), valid...), ErrLimit)
 	requireFailure(t, append(physicalFrame(t, tar.TypeXHeader, strings.Repeat("x", maxMetadata+1)), valid...), ErrLimit)
 	for _, kind := range []byte{tar.TypeGNULongName, tar.TypeGNULongLink} {
 		requireFailure(t, append(physicalFrame(t, kind, "ordinary\x00hidden"), valid...), ErrUnsupported)
 		requireFailure(t, append(physicalFrame(t, kind, ""), valid...), ErrUnsupported)
+	}
+}
+
+func TestSyntheticPAXRawNameAndLinkBytes(t *testing.T) {
+	name := "raw-name-" + string([]byte{0xff, 0xfe})
+	link := "raw-target-" + string([]byte{0xfd, 0xfc})
+	metadata := paxRecord("path", name) + paxRecord("linkpath", link) + paxRecord("vendor.note", string([]byte{0xff, 0xfe}))
+	input := append(physicalFrame(t, tar.TypeXHeader, metadata), physicalFrame(t, tar.TypeSymlink, "")...)
+	input = append(input, make([]byte, 1024)...)
+	_, entries, err := collect(t, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].NameBase64 != b64(name) || entries[0].LinkNameBase64 != b64(link) {
+		t.Fatalf("raw PAX names replaced: %+v", entries)
+	}
+	_, expected, err := paxDigest(map[string]string{"path": name, "linkpath": link, "vendor.note": string([]byte{0xff, 0xfe})}, DefaultLimits())
+	if err != nil || expected != entries[0].PAXSHA256 {
+		t.Fatal("raw value digest differs", err)
 	}
 }
 

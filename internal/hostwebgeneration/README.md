@@ -45,7 +45,7 @@ Pending operations survive close/crash/reopen and block new Plan/Apply calls.
 Recover requires the exact pending operation ID and coordinator revision. It
 first freshly observes the runtime; unknown third-party identities are never
 overwritten. A previous generation is restored only if its full snapshot equals
-the newly reserved accounts. Otherwise a new exact denied bundle is persisted
+both the newly reserved accounts and the originally intended after snapshot. Otherwise a new exact denied bundle is persisted
 and passed to Rollback. The denied observation must match that bundle and the
 current snapshot before recovery completes. A provider's postcallback failure
 after provisional commit durably reopens recovery at the current revision.
@@ -80,3 +80,132 @@ deadline/drift rejection, mandatory durable semantic validation, damage during
 execution, and bounded generation/event storage. Actual Apache/FPM activation,
 supplementary groups, SELinux policy, restart/reload, suspension integration and
 reboot recovery still require native executor/peer-boundary qualification.
+
+
+## Explicit denied repair (optional, unactivated)
+
+`Coordinator.RepairDenied` requires the optional `DeniedRepairer` capability.
+Legacy executors keep the existing strict `Observe`/`Recover` workflow; they
+cannot enter the new repair route. No production broker, API or authenticated
+operator integration is added. The caller supplies bounded actor/reason metadata,
+exact coordinator revision, and the pending operation ID (empty only for an
+explicit clean-controller-death entry). Healthy clean state rejects this entry.
+
+`InspectRecovery` separates owned durable configuration metadata from a fresh
+observation. An inspection may observe the configured identity or an exact
+validated owned pending target; any third identity is refused. Historical
+`Completed` metadata never proves serving health. Completion requires an exact
+native terminal receipt, an independent strict `Observe`, the newly reserved
+account snapshot, and lease verification before each mutation and commit. The
+provider's mandatory postcallback check can still quarantine a provisional
+commit. Work uses `lease.Context()` throughout; canceled or expired results
+cannot complete.
+
+Before native repair the coordinator persists an immutable attempt: original
+operation/revision/before/after, attempt ID, native base revision, actual source,
+current denied target and original native state CAS. The versioned intent digest
+excludes the changing CAS token; retries use a freshly inspected token while
+requiring the exact original binding in the returned receipt. Executor generation
+inputs are defensive copies. A changed account inventory (including suspension
+or removal) produces a newly journaled denial, never an old active rollback.
+
+A native repair committed at base+1 before coordinator completion can be retried
+without relaunch or another native counter increment. The coordinator asks the
+native executor for an idempotent fresh receipt before completing once. A
+provider postcallback failure after coordinator completion reopens the exact
+attempt; a fresh receipt, strict observation and reserved snapshot can produce a
+`reconfirmed` terminal event with no second revision increment.
+
+If that completed native target is dead or its snapshot is stale, the exact
+historical consumption tuple permits `repair_checkpoint`: only the coordinator
+counter advances to the already consumed native revision. `Current` stays at
+its last committed generation and pending recovery remains closed. A separate
+persisted fresh attempt then uses the new base/source and a new denied target.
+Checkpoint metadata does not claim live serving. A failure before native intent
+persistence can retry the saved source/attempt; prior native pending/completed
+bindings must match exact independently validated journal history. Semantic
+replay rejects unknown phases, unbound receipts, reused attempts, invalid
+checkpoint/reconfirm transitions, revision changes and mismatched state, even
+when the entire hash chain has been recomputed. Every operation validates this
+history before action; polling is not a prerequisite.
+
+This slice deliberately refuses an original (non-repair) `Apply` that committed
+native base+1 but died before coordinator completion, when native `Completed` is
+nil and the coordinator still has the original base. It performs no native
+repair, signal or counter increment in that divergent state. Markerless original Apply reconciliation remains refused; this is not general crash recovery.
+Foreign ownership, corrupt stores, missing capabilities, unavailable account
+reservations and exhausted bounds likewise fail closed. Existing bounds remain
+16 generations/128 events; terminal and quarantine event capacity is reserved
+before executor calls. There is no automatic journal deletion or pruning.
+
+The new tests use isolated real Bolt/JSON protocol stores and counter-bearing
+executor models. They exercise clean death, partial intent, native commit before
+coordinator finish, changed inventory, postcallback quarantine, counter-only
+checkpoint, pre-native failure retry, fresh receipt reconfirmation, rehashed
+semantic corruption and lease verification boundaries. They do not launch
+Apache/PHP, qualify Linux ownership/PID reuse, verify controller death on a real
+host, or establish reboot/vendor compatibility. Native recovery fault tests and
+separate production integration remain required.
+
+
+Optional new metadata fields preserve legacy journal replay in this new reader.
+They do not make old binaries compatible with advanced recovery events or
+pending records. Experimental recovery state must use its matching reader and
+version; an older binary's strict decoder must refuse those records. There is
+no implicit downgrade or state rollback. This unactivated package changes no
+live product state. Preserve the private database and run the matching reviewed
+binary for retry; do not erase a pending record to escape quarantine.
+
+
+## Apply-only consumption checkpoint (unactivated)
+
+The optional inspection now carries a separate `CompletedApply` historical
+record. Its version 1/kind `apply` binding identifies the original operation,
+original/native base (equal in this slice), exact Before/After identities,
+versioned intent digest, originally admitted state CAS, installation inputs and
+boot identity. The native implementation must mint it only from a persisted
+Apply intent and atomically promote it with native completion. Rollback and old
+clean LastOperation/Configured tuples cannot synthesize this proof. Inspection
+may retain it during an exact same-original denied repair pending; generic Apply
+pending or completed repair coexistence is refused. Metadata does not attest
+fresh health, authenticate root edits or prove actual Linux execution.
+
+With original coordinator intent at R and exact native Apply consumption at
+R+1, `apply_checkpoint` advances only the coordinator counter, once. `Current`
+remains the previous committed generation; pending recovery and the entire
+immutable completion marker survive reopen and subsequent denial attempts.
+The original revision comes from the original journal intent, not the advanced
+pending AtRevision. If the coordinator already committed R+1 before provider
+postcallback quarantine, the exact original committed journal event permits
+recording the checkpoint without another increment. These are distinct semantic
+replay paths, tracked by the counter-advanced flag. A healthy observed original
+After is insufficient for automatic active completion: the exact persisted
+Apply marker permits only a newly reserved denial in this recovery route.
+
+A separate durable repair attempt uses native base R+1 and Source=original
+After. It recompiles denial from current accounts, including suspension/removal.
+The historical checkpoint's inspected state digest is retained for audit, not
+future CAS admission: owned cleanup can change state bytes before the first
+repair intent. A freshly re-inspected native CAS admits the new attempt; that
+attempt's original admitted CAS then stays immutable across partial retries.
+The saved Apply completion must continue to match exactly. A native denied
+completion clears its native Apply marker; the coordinator journal retains it
+through completion, quarantine and reconfirmation.
+
+All existing lease verification boundaries remain, including verified checkpoint
+admission, verification before intent/native action and after strict observation,
+and provider postcallback quarantine. Reused partial attempts explicitly retain
+quarantine authority even when their successful callback clears pending state
+before a provider failure. No old active rollback, unobserved active success,
+implicit downgrade or automatic state pruning is introduced. Legacy Recover
+refuses advanced checkpoint records; retry needs this matching reader.
+
+Tests use isolated real Bolt/JSON stores and counter-bearing trusted executor
+models. They cover native-before-coordinator completion, exact healthy/dead
+After, once-only/reopened checkpoints, pre-native failures, partial retries,
+postcallback reconfirmation, already-committed quarantine, changed current
+inventory, refreshed CAS, malformed/missing markers, duplicate/rehashed semantic
+corruption, unknown fields, capacity and cancellation/lease boundaries. These are
+source/protocol checks. Actual Linux Apply/repair/controller death, disk/fsync
+failure, stock-host/reboot/capacity and authenticated product integration remain
+separate gates. No running product state or API has been changed.

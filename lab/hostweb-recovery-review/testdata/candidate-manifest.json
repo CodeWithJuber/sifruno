@@ -1,0 +1,129 @@
+{
+  "runtime_freeze_manifest_sha256": "2274c8970ab1db9df3a27dc2872eee264e864aeabbcffbc8355782a809570083",
+  "schema_version": 1,
+  "native_donor_sha256": "22ca4ff7fb9e2253c894505a875bb303c29abccad5908d54fcc61b526ca8c2af",
+  "parent_commit": "a5e6a412d2e4674e71ae67ff80ef557bd03d521b",
+  "files": [
+    {
+      "bytes": 17208,
+      "sha256": "b365703e11d0d0f7c6214660599c7fa9f36bd8c37e2b5dd274d2677f54bb9e30",
+      "path": "internal/hostwebgeneration/coordinator_test.go"
+    },
+    {
+      "bytes": 13474,
+      "sha256": "07ec46f0d2587cdb042eb7d098f43c4e5efb63b3e0416ea316276232a8cdb505",
+      "path": "internal/hostwebgeneration/coordinator.go"
+    },
+    {
+      "bytes": 696,
+      "sha256": "b2ac9603cccbdaf81d692cf21c0e78b5afc30447aea5e2bc575e9f73bfea0899",
+      "path": "internal/hostwebgeneration/guard_unix.go"
+    },
+    {
+      "bytes": 1111,
+      "sha256": "6d9257e1a0e2a2d33423c3e15429402688c87a0a69d1bebd73b1f5a101f69461",
+      "path": "internal/hostwebgeneration/guard_windows.go"
+    },
+    {
+      "bytes": 10590,
+      "sha256": "725f497a934fc9148914fe6feb17d40babab6ef12e5415ec5dfe0ec4d54d5e96",
+      "path": "internal/hostwebgeneration/README.md"
+    },
+    {
+      "bytes": 10988,
+      "sha256": "e0d78a6bd935844df0cb1a8714a00cf77c4a6f20314919afc9d863a4cea1b655",
+      "path": "internal/hostwebgeneration/recovery_storage.go"
+    },
+    {
+      "bytes": 23763,
+      "sha256": "3c7be108f92d5448b9ffeb697efcface4e64d7ff3a873c6c6ca141d97df0df8c",
+      "path": "internal/hostwebgeneration/recovery_test.go"
+    },
+    {
+      "bytes": 3519,
+      "sha256": "22ca4ff7fb9e2253c894505a875bb303c29abccad5908d54fcc61b526ca8c2af",
+      "path": "internal/hostwebgeneration/recovery_types.go"
+    },
+    {
+      "bytes": 13881,
+      "sha256": "e85e51f7bf706368d55e6bf39490b658fc2322d7b470338ed2ffeee866d2196c",
+      "path": "internal/hostwebgeneration/recovery.go"
+    },
+    {
+      "bytes": 16619,
+      "sha256": "5eb61c507ec9dcaeb4c7f28d51aaaad98b2d4a3d22fd576383fe2a03d99ce1e9",
+      "path": "internal/hostwebgeneration/storage.go"
+    },
+    {
+      "bytes": 11265,
+      "path": "internal/hostwebruntime/files_linux.go",
+      "sha256": "e9e5fc50b8b6c07561330ebf4c6ce1eca694799065b5714006d46deaf8c1b344"
+    },
+    {
+      "bytes": 5356,
+      "path": "internal/hostwebruntime/files_linux_test.go",
+      "sha256": "e829c0f087f2e5b9e4fc0a989e0f6ff879e659fded7615e0d8abf4c56df82b2d"
+    },
+    {
+      "bytes": 12544,
+      "path": "internal/hostwebruntime/observe_linux.go",
+      "sha256": "6b4c59e3407497c49c61ac017c79d18d8c1b6f62102d75820cb297f837e75483"
+    },
+    {
+      "bytes": 12685,
+      "path": "internal/hostwebruntime/process_linux.go",
+      "sha256": "a8ad4dfb83e1e5c2159a72ff4df01b6331afa071104de03f6fcc8e72db06546c"
+    },
+    {
+      "bytes": 4535,
+      "path": "internal/hostwebruntime/process_linux_test.go",
+      "sha256": "be1a4b2d535bc59590cd1a0c284129afa92b8e420b8335b1f368c31abb5fe5b1"
+    },
+    {
+      "bytes": 13262,
+      "path": "internal/hostwebruntime/README.md",
+      "sha256": "1394e5352a69621496f7ea52f17bbf08925594cc0004bfb69d13cfb52a91975d"
+    },
+    {
+      "bytes": 10453,
+      "path": "internal/hostwebruntime/recovery.go",
+      "sha256": "53172111041b12fbffbe8e03889f555fa0e52d9e3bcb3b03ed55c303ccaa95ff"
+    },
+    {
+      "bytes": 15631,
+      "path": "internal/hostwebruntime/recovery_linux.go",
+      "sha256": "8fede8b6e234bbb355b40f4b5090e91d6ca7f951af00a03f11130af140998f91"
+    },
+    {
+      "bytes": 11617,
+      "path": "internal/hostwebruntime/recovery_linux_test.go",
+      "sha256": "8489c076178dfe78c3387eaa05503b529f9fc12973b6134f2a7a25c27241cd1c"
+    },
+    {
+      "bytes": 13760,
+      "path": "internal/hostwebruntime/recovery_test.go",
+      "sha256": "dbe8135fddc30aa0dfa6539985bcff7e7aab22f6a3820e4281aa431197a7d5b2"
+    },
+    {
+      "bytes": 8534,
+      "path": "internal/hostwebruntime/runtime.go",
+      "sha256": "0119c40d076f45f011ce8eb2c7e52ffa8ac56a40307da1072695cc48ba02a5ea"
+    },
+    {
+      "bytes": 15619,
+      "path": "internal/hostwebruntime/runtime_linux.go",
+      "sha256": "bb992eafb5a9c3705069e42558a649ac5faf3e247787e73ba784610bcb2cccee"
+    },
+    {
+      "bytes": 7764,
+      "path": "internal/hostwebruntime/runtime_test.go",
+      "sha256": "13ad208e19b24f97bafc848d401957692ef8e61c907b75282efa947e1566cb53"
+    },
+    {
+      "bytes": 1321,
+      "path": "internal/hostwebruntime/unavailable.go",
+      "sha256": "31c9e301c6fdbb6b0e0196a3cdece6416aca57f5f054c405a7659de5cfbf296e"
+    }
+  ],
+  "kind": "independent-web-recovery-candidate-pins"
+}

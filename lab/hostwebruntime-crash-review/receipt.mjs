@@ -11,6 +11,23 @@ const id = x => assert.equal(typeof x === 'string' && /^[a-f0-9]{32}$/.test(x), 
 const same = (a,b) => assert.deepEqual(a,b);
 const integer = (n,min=0,max=Number.MAX_SAFE_INTEGER) => assert(Number.isSafeInteger(n)&&n>=min&&n<=max);
 const ROOT='/opt/sifruno-runtime-fixture';
+const startIdentity = s => assert(typeof s==='string'&&/^[1-9][0-9]{0,19}$/.test(s)&&BigInt(s)<=18446744073709551615n);
+function namespaceDrain(d, ids) {
+  exact(d,['attempts','elapsed_ms','initial','final','extinct']);
+  integer(d.attempts,1,162);integer(d.elapsed_ms,0,10000);
+  assert(d.elapsed_ms>=50*(d.attempts-1));assert.equal(d.extinct,true);
+  for(const s of [d.initial,d.final]) {
+    exact(s,['matching','error','error_pid','error_errno']);
+    assert(['','namespace_inventory','proc_inventory','proc_namespace_read','proc_stat_read','proc_process_identity','proc_matching_bound'].includes(s.error));
+    integer(s.error_pid,0,4194304);integer(s.error_errno,0,4095);
+    if(!s.error){assert.equal(s.error_pid,0);assert.equal(s.error_errno,0);}
+    assert(Array.isArray(s.matching)&&s.matching.length<=1024);
+    let last=0;
+    for(const p of s.matching){exact(p,['pid','start','namespace']);integer(p.pid,2,4194304);assert(p.pid>last);last=p.pid;startIdentity(p.start);integer(p.namespace,1);assert(ids.includes(p.namespace));}
+  }
+  assert.equal(d.final.error,'');same(d.final.matching,[]);
+  if(d.attempts===1)same(d.initial,d.final);
+}
 export const digestJSON=digest;
 export function expectedFixture() {
   const profile={Name:'restricted-chroot-v1',ManagedRoot:ROOT+'/managed',ManagedHomeRoot:ROOT+'/homes',FrontChroot:ROOT+'/front-jail',ApacheModuleRoot:'/usr/lib64/httpd/modules',BackendChrootRoot:ROOT+'/backend-jails',RuntimeRoot:ROOT+'/runtime',ApacheBinary:'/usr/sbin/httpd',FPMBinary:'/usr/sbin/php-fpm',TLSRoot:ROOT+'/tls',CAFile:ROOT+'/tls/ca.pem',FrontendIP:'127.0.0.1',FrontendPort:18082,BackendPort:18443,FrontUID:48,FrontGID:48,ControllerUID:2000};
@@ -87,7 +104,7 @@ function history(h) {
   }
 }
 export function auditDriver(r, pins) {
-  exact(r,['schema_version','fixture_only','execution_kind','run_id','nonce','driver_sha256','input_sha256','profile_sha256','intended_generations','observations','probes','crash','checkpoints','history','inventory_sha256','source_catalog_sha256','prerequisites','stage','passed','shutdown_passed','close_passed','listeners_extinct','input_stable','selinux_stable','worker_evidence','observed_namespace_ids','namespaces_extinct']);
+  exact(r,['schema_version','fixture_only','execution_kind','run_id','nonce','driver_sha256','input_sha256','profile_sha256','intended_generations','observations','probes','crash','checkpoints','history','inventory_sha256','source_catalog_sha256','prerequisites','stage','passed','shutdown_passed','close_passed','listeners_extinct','input_stable','selinux_stable','worker_evidence','observed_namespace_ids','namespaces_extinct','namespace_epochs','namespace_drain']);
   assert.equal(r.schema_version,2);assert.equal(r.fixture_only,true);
   assert.equal(r.execution_kind,'native-linux-controller-crash-driver');assert.equal(r.stage,'complete');
   for(const k of ['passed','shutdown_passed','close_passed','listeners_extinct','input_stable','selinux_stable','namespaces_extinct'])assert.equal(r[k],true);
@@ -103,7 +120,7 @@ export function auditDriver(r, pins) {
   assert(typeof r.prerequisites.kernel_release==='string'&&/^[\x20-\x7e]{1,128}$/.test(r.prerequisites.kernel_release));
   for(const k of ['CapEff','CapPrm','CapBnd','CapAmb','CapInh']) {const x=r.prerequisites[k];assert(typeof x==='string'&&/^[a-fA-F0-9]{16}$/.test(x));assert.equal(BigInt('0x'+x)&((1n<<12n)|(1n<<13n)),0n);}
   const death=r.crash,b=death.boundary,n=b.native,a=n.completed_apply;
-  exact(death,['boundary','parent_pid','child_pid','child_start','owned_child','signal','wait_signaled','native_metadata_stable','journal_before_sha256','journal_after_sha256','strict_observe_rejected','listeners_extinct','namespaces_extinct']);
+  exact(death,['boundary','parent_pid','child_pid','child_start','owned_child','signal','wait_signaled','native_metadata_stable','journal_before_sha256','journal_after_sha256','strict_observe_rejected','listeners_extinct','namespaces_extinct','namespace_drain']);
   exact(b,['nonce','pid','start','operation_id','before','after','native']);inspection(n);
   for(const k of ['owned_child','wait_signaled','native_metadata_stable','strict_observe_rejected','listeners_extinct','namespaces_extinct'])assert.equal(death[k],true);
   assert.equal(death.signal,9);assert(Number.isSafeInteger(death.parent_pid)&&death.parent_pid>1);
@@ -187,8 +204,21 @@ export function auditDriver(r, pins) {
   assert(w.groups===null||Array.isArray(w.groups)&&w.groups.length<=1&&w.groups.every(n=>n===20001));
   exact(w.capabilities,['CapEff','CapPrm','CapInh','CapAmb']);for(const x of Object.values(w.capabilities))assert.equal(x,'0000000000000000');
   assert.equal(w.root,ROOT+'/backend-jails/'+expected.active[0].id);assert(typeof w.start==='string'&&/^[1-9][0-9]{0,19}$/.test(w.start));
-  assert(Array.isArray(r.observed_namespace_ids)&&r.observed_namespace_ids.length===9);
-  r.observed_namespace_ids.forEach(n=>integer(n,1));assert.equal(new Set(r.observed_namespace_ids).size,r.observed_namespace_ids.length);assert(r.observed_namespace_ids.includes(w.namespace));
+  assert(Array.isArray(r.namespace_epochs)&&r.namespace_epochs.length===3);
+  const union=new Set(),roles=['front:','backend:'+expected.active[0].id,'fpm:'+expected.active[0].id,'backend:'+expected.active[1].id,'fpm:'+expected.active[1].id];
+  for(const [i,e] of r.namespace_epochs.entries()) {
+    exact(e,['stage','state_sha256','processes']);
+    assert.equal(e.stage,['before_kill','repair_denied','selective'][i]);
+    assert.equal(e.state_sha256,[n.state_sha256,r.checkpoints[5].native.state_sha256,r.checkpoints[8].native.state_sha256][i]);
+    assert(Array.isArray(e.processes));assert.equal(e.processes.length,[5,1,3][i]);
+    same(e.processes.map(p=>p.role+':'+p.account_id).sort(),(i===0?roles:i===1?roles.slice(0,1):roles.slice(0,3)).toSorted());
+    const pids=new Set(),namespaces=new Set();
+    for(const p of e.processes){exact(p,['role','account_id','pid','start','namespace']);integer(p.pid,2,4194304);startIdentity(p.start);integer(p.namespace,1);assert(!pids.has(p.pid)&&!namespaces.has(p.namespace));pids.add(p.pid);namespaces.add(p.namespace);union.add(p.namespace);}
+  }
+  const ids=[...union].sort((a,b)=>a-b);same(r.observed_namespace_ids,ids);assert(ids.length>=5&&ids.length<=9);
+  const fpm=r.namespace_epochs[2].processes.find(p=>p.role==='fpm');assert.equal(w.namespace,fpm.namespace);assert.notEqual(w.host_pid,fpm.pid);
+  namespaceDrain(death.namespace_drain,r.namespace_epochs[0].processes.map(p=>p.namespace));
+  namespaceDrain(r.namespace_drain,ids);
   return r;
 }
 

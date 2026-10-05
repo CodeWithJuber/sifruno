@@ -18,7 +18,7 @@ policy, reboot recovery, cPanel compatibility, or another operating system.
 3. Recovery under the current reserved account snapshot records an
    `apply_checkpoint` that consumes exactly one historical counter without
    adopting the original active target. `RepairDenied` then installs a fresh
-   denied generation, records its receipt, and independently denies both
+   denied generation, records its receipt, and measures denial for both
    tenants and unknown host. Historical completion is not serving evidence.
 4. A later ordinary apply independently serves alpha while current bravo is
    suspended. Revision and snapshot hashes distinguish this apply from the
@@ -37,7 +37,8 @@ policy, reboot recovery, cPanel compatibility, or another operating system.
 - Root owns any offline disposable QEMU execution and retains each failed model
   and result alongside the eventual accepted receipt.
 - Native acceptance requires exact source freeze, raw serial/report bytes,
-  command exits, durable journal evidence, independent HTTP response hashes,
+  command exits, durable journal evidence, independently reconstructed alpha
+  HTTP response hashes (same-driver requests),
   current inventory revisions, and owned cleanup.
 
 Recovery path: all edits are additive lab-only commits. Revert those commits to

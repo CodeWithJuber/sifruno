@@ -73,6 +73,47 @@ namespace IDs for this fixed 5-old + 1-denial + 3-selective lab. A kernel inode
 reuse or omitted ID fails closed; preserve its actual report and diagnose it
 without asserting a product defect.
 
+## First actual native attempt: failed, retained
+
+Root ran `crash-1791218270997-97151f195c50f14c34065997` under catalogue
+`38fd4353ae7f4f4b9ff6a563fbe1c970e47caafe15cfe77faf1e4169f5333a40`.
+The host rejected terminal exit 1. Independent read-only raw serial inspection
+found the actual owned/reaped SIGKILL 9, nine recovery checkpoints and history
+events, ten HTTP probes, and passing shutdown/close/listener/input/SELinux gates.
+The driver's final namespace extinction gate was false. Its five emitted
+namespace inode values reused earlier values across stages. The previous
+nine-distinct-ID assumption was invalid for this kernel run; the false cleanup
+gate's exact cause remains unmeasured in that report. No product defect or
+successful native qualification is inferred from this failed result.
+
+`first-native-failure.json` retains the report, serial and compact driver SHA256,
+actual counter sequence, namespace IDs and failed classification. Root preserved
+the ignored run unchanged. A revised model must retain exact 5/1/3 process epochs
+bound to native state hashes, permit inode reuse only across those epochs, and
+provide bounded drain diagnostics plus an independent guest post-exit scan.
+
+The read-only `audit_prepared.py` command against prepared run
+`crash-1791218107015-7c2b4b45d3cb81d6ea487130`, using local Python with `-I -B`,
+exited 0: 2542 source inputs, 14 runner files and 29 actual ISO payload entries
+matched. The preparation-only ISO SHA256 was
+`271ba47993ffb792afe515866fd28cd05ad8ec8c5981f70efd4ca0f7603be115`.
+Preparation was never classified as native execution. `audit_result.mjs` is a
+read-only helper for a future accepted result and has only syntax verification
+at this point.
+
+The explicit replacement receipt model has 67/67 synthetic challenge tests
+(`node --test lab/hostwebruntime-crash-review/test_receipt.mjs`, exit 0).
+Exactly three raw-metadata process epochs bind to the before-kill, denied and
+selective native state hashes with 5/1/3 distinct current process/namespace pins.
+The sorted union may have 5 through 9 IDs only through recorded cross-epoch
+reuse. The final measured alpha worker must inhabit the selective FPM namespace.
+Both crash-time and final drain receipts retain initial and terminal scans,
+bounded attempts and elapsed time, matching PID/start/namespace identities and
+fixed read-error/errno/PID diagnostics. Success requires empty error-free terminal
+scans; initial measured errors or members may drain within the bound. The old
+strict-nine schema is rejected. These are synthetic parser checks, not a second
+native result.
+
 ## Limits and recovery
 
 `receipt.mjs` validates an exact success schema under explicit source/input/nonce

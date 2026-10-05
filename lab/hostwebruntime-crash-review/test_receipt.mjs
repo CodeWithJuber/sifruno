@@ -40,6 +40,16 @@ export function synthetic() {
     if(i===5||i===6){const b=i===5?'SIFRUNO_STATIC_webalpha\n':'SIFRUNO_PHP_webalpha\nSELF=readable\nHOST=denied\nSIBLING=denied\nPID=7\n';p.status=200;p.bytes=Buffer.byteLength(b);p.sha256=hash(b);p.namespace_pid=i===6?7:0;}return p;
   });
   const r={schema_version:2,fixture_only:true,execution_kind:'native-linux-controller-crash-driver',run_id:hash('sifruno-crash:'+nonce).slice(0,32),nonce:'b'.repeat(32),driver_sha256:hash('synthetic-driver'),input_sha256:hash('synthetic-input'),profile_sha256:f.profileSHA,intended_generations:[before,after,denied,selective],observations:[{stage:'before_kill',identity:after},...stages.slice(5).map(stage=>({stage,identity:stage==='selective_apply'?selective:denied}))],probes,crash:{boundary:{nonce:'b'.repeat(32),pid:101,start:'123',operation_id:op,before,after,native:{...native,observed:after}},parent_pid:100,child_pid:101,child_start:'123',owned_child:true,signal:9,wait_signaled:true,native_metadata_stable:true,journal_before_sha256:hash('synthetic-db'),journal_after_sha256:hash('synthetic-db'),strict_observe_rejected:true,listeners_extinct:true,namespaces_extinct:true},checkpoints,history:h,inventory_sha256:f.currentSHA,source_catalog_sha256:hash('synthetic-catalog'),prerequisites:{selinux_enforce:'1',NoNewPrivs:'0',CapEff:'0'.repeat(16),CapPrm:'0'.repeat(16),CapBnd:'0'.repeat(16),CapAmb:'0'.repeat(16),CapInh:'0'.repeat(16),network_admin_raw_absent:'true',kernel_release:'synthetic-no-native-run'},stage:'complete',passed:true,shutdown_passed:true,close_passed:true,listeners_extinct:true,input_stable:true,selinux_stable:true,worker_evidence:[{account_id:f.active[0].id,host_pid:200,namespace_pid:7,namespace:1005,uid:[20001,20001,20001,20001],gid:[20001,20001,20001,20001],groups:null,capabilities:{CapEff:'0'.repeat(16),CapPrm:'0'.repeat(16),CapInh:'0'.repeat(16),CapAmb:'0'.repeat(16)},root:'/opt/sifruno-runtime-fixture/backend-jails/'+f.active[0].id,start:'456'}],observed_namespace_ids:[1001,1002,1003,1004,1005,1006,1007,1008,1009],namespaces_extinct:true};
+  const process=(role,account_id,pid,namespace)=>({role,account_id,pid,start:String(pid*10),namespace});
+  r.namespace_epochs=[
+    {stage:'before_kill',state_sha256:stateSHA,processes:[process('front','',110,1001),process('backend',f.active[0].id,111,1002),process('fpm',f.active[0].id,112,1005),process('backend',f.active[1].id,113,1003),process('fpm',f.active[1].id,114,1004)]},
+    {stage:'repair_denied',state_sha256:checkpoints[5].native.state_sha256,processes:[process('front','',210,1001)]},
+    {stage:'selective',state_sha256:checkpoints[8].native.state_sha256,processes:[process('front','',310,1001),process('backend',f.active[0].id,311,1002),process('fpm',f.active[0].id,312,1005)]},
+  ];
+  const scan=()=>({matching:[],error:'',error_pid:0,error_errno:0});
+  r.namespace_drain={attempts:1,elapsed_ms:0,initial:scan(),final:scan(),extinct:true};
+  r.crash.namespace_drain=clone(r.namespace_drain);
+  r.observed_namespace_ids=[1001,1002,1003,1004,1005];
   return {r:clone(r),pins:{nonce,driverSHA:r.driver_sha256,catalogSHA:r.source_catalog_sha256,inputSHA:r.input_sha256}};
 }
 test('synthetic complete success schema passes; does not execute a guest',()=>{const {r,pins}=synthetic();assert.equal(auditDriver(r,pins),r);});
@@ -80,6 +90,28 @@ const mutations={
   'configured dead identity forged':r=>r.checkpoints[2].native.configured=r.intended_generations[2],
   'dead operation forged':r=>r.checkpoints[3].native.last_operation_id='f'.repeat(32),
   'missing namespace':r=>r.observed_namespace_ids.pop(),
+  'missing epoch':r=>r.namespace_epochs.pop(),
+  'epoch state unbound':r=>r.namespace_epochs[1].state_sha256=r.namespace_epochs[0].state_sha256,
+  'epoch stage alias':r=>r.namespace_epochs[1].stage='RepairDenied',
+  'epoch process missing':r=>r.namespace_epochs[0].processes.pop(),
+  'epoch duplicate PID':r=>r.namespace_epochs[0].processes[1].pid=r.namespace_epochs[0].processes[0].pid,
+  'epoch duplicate namespace':r=>r.namespace_epochs[2].processes[1].namespace=r.namespace_epochs[2].processes[0].namespace,
+  'epoch unknown field':r=>r.namespace_epochs[0].processes[0].boot='unadmitted',
+  'epoch noncanonical start':r=>r.namespace_epochs[0].processes[0].start='010',
+  'epoch suspended worker':r=>r.namespace_epochs[2].processes[1].account_id='b'.repeat(32),
+  'final worker wrong epoch namespace':r=>r.worker_evidence[0].namespace=1003,
+  'namespace union unsorted':r=>r.observed_namespace_ids.reverse(),
+  'namespace drain false':r=>r.namespace_drain.extinct=false,
+  'namespace drain scan error':r=>r.namespace_drain.final.error='proc_namespace_read',
+  'namespace drain hidden errno':r=>r.namespace_drain.final.error_errno=13,
+  'namespace drain terminal member':r=>r.namespace_drain.final.matching=[{pid:312,start:'3120',namespace:1005}],
+  'namespace drain unknown reason':r=>r.namespace_drain.initial.error='ignored_permission',
+  'namespace drain zero attempts':r=>r.namespace_drain.attempts=0,
+  'namespace drain unbounded attempts':r=>r.namespace_drain.attempts=163,
+  'namespace drain unbounded time':r=>r.namespace_drain.elapsed_ms=10001,
+  'namespace drain impossible timing':r=>r.namespace_drain.attempts=2,
+  'namespace single scan contradictory':r=>r.namespace_drain.initial.matching=[{pid:312,start:'3120',namespace:1005}],
+  'crash drain error':r=>r.crash.namespace_drain.final.error='proc_stat_read',
 };
 for(const [name,mutation]of Object.entries(mutations))test('reject '+name,()=>{const {r,pins}=synthetic();mutation(r);assert.throws(()=>auditDriver(r,pins));});
 function rechain(r) {
@@ -92,4 +124,31 @@ test('forged consumed checkpoint refused even with recomputed valid event chain'
 });
 test('original commit refused even with recomputed valid event chain',()=>{
   const {r,pins}=synthetic();r.history[0].phase='committed';rechain(r);assert.throws(()=>auditDriver(r,pins));
+});
+test('distinct namespace epochs also pass with exact nine-ID union',()=>{
+  const {r,pins}=synthetic();r.namespace_epochs[1].processes[0].namespace=1006;
+  r.namespace_epochs[2].processes.forEach((p,i)=>p.namespace=1007+i);r.worker_evidence[0].namespace=1009;
+  r.observed_namespace_ids=[1001,1002,1003,1004,1005,1006,1007,1008,1009];auditDriver(r,pins);
+});
+test('bounded observed drain retains initial member and error diagnostics',()=>{
+  const {r,pins}=synthetic();r.namespace_drain.attempts=3;r.namespace_drain.elapsed_ms=102;
+  r.namespace_drain.initial={matching:[{pid:200,start:'456',namespace:1005}],error:'proc_namespace_read',error_pid:900,error_errno:13};auditDriver(r,pins);
+});
+test('initial drain member outside admitted namespace union refused',()=>{
+  const {r,pins}=synthetic();r.namespace_drain.attempts=2;r.namespace_drain.elapsed_ms=51;
+  r.namespace_drain.initial.matching=[{pid:200,start:'456',namespace:999}];assert.throws(()=>auditDriver(r,pins));
+});
+test('legacy strict-nine schema lacks measured epochs and drain and is refused',()=>{
+  const {r,pins}=synthetic();delete r.namespace_epochs;delete r.namespace_drain;delete r.crash.namespace_drain;
+  r.observed_namespace_ids=[1001,1002,1003,1004,1005,1006,1007,1008,1009];assert.throws(()=>auditDriver(r,pins));
+});
+test('unbounded initial scan member inventory refused',()=>{
+  const {r,pins}=synthetic();r.namespace_drain.attempts=2;r.namespace_drain.elapsed_ms=51;
+  r.namespace_drain.initial.matching=Array.from({length:1025},(_,i)=>({pid:1000+i,start:'456',namespace:1005}));
+  assert.throws(()=>auditDriver(r,pins));
+});
+test('duplicate initial scan process identity refused',()=>{
+  const {r,pins}=synthetic();r.namespace_drain.attempts=2;r.namespace_drain.elapsed_ms=51;
+  r.namespace_drain.initial.matching=[{pid:200,start:'456',namespace:1005},{pid:200,start:'456',namespace:1005}];
+  assert.throws(()=>auditDriver(r,pins));
 });

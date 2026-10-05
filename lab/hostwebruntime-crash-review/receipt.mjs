@@ -71,7 +71,8 @@ function history(h) {
     exact(e,[...base,...('repair' in e ? ['repair']:[]),...('apply_checkpoint' in e ? ['apply_checkpoint']:[])]);
     assert.equal(e.sequence,i+1);assert.equal(e.previous_sha256,previous);hex(e.sha256);
     id(e.operation_id);identity(e.before);identity(e.after);
-    assert.equal(typeof e.actor,'string');assert.equal(typeof e.reason,'string');assert(!Number.isNaN(Date.parse(e.at)));
+    for(const [k,max]of [['actor',120],['reason',500]])assert(typeof e[k]==='string'&&e[k].length>0&&e[k].length<=max&&e[k].trim()===e[k]&&!/[\x00-\x1f\x7f]/.test(e[k]));
+    assert(typeof e.at==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(e.at)&&!Number.isNaN(Date.parse(e.at)));
     // The Event struct's field order is part of Go's hashed JSON encoding.
     const canonical=Object.fromEntries([...base,...('repair' in e ? ['repair']:[]),...('apply_checkpoint' in e ? ['apply_checkpoint']:[])].map(k=>[k,k==='sha256'?'':e[k]]));
     assert.equal(e.sha256,digest(canonical),'Independent journal hash');previous=e.sha256;
@@ -126,6 +127,7 @@ export function auditDriver(r, pins) {
   const repair=old.filter(e=>e.phase==='repair_completed');assert.equal(repair.length,1);
   const repaired=repair[0];assert.equal(repaired.revision,2);assert.equal(repaired.repair.committed_revision,2);
   const rb=repaired.repair.binding;assert.equal(rb.base_revision,1);assert.equal(rb.original_revision,0);
+  assert.equal(rb.admitted_state_sha256,n.state_sha256);
   same(rb.before,b.before);same(rb.after,b.after);same(rb.source,b.after);same(rb.target,repaired.after);
   assert.notEqual(rb.target.generation_id,b.after.generation_id);assert.equal(rb.target.snapshot_sha256,r.inventory_sha256);
   const finish=h.at(-1);assert.equal(finish.phase,'committed');assert.equal(finish.revision,3);
@@ -152,12 +154,13 @@ export function auditDriver(r, pins) {
       assert.equal(c.coordinator.phase,i===0?'applying':'recovery_required');
       assert(!c.coordinator.current);assert.equal(c.coordinator.pending_operation,b.operation_id);
       assert.equal(c.native.state_sha256,n.state_sha256);same(c.native.completed_apply,a);assert(!c.native.observed);
+      same(c.native.configured,b.after);assert.equal(c.native.last_operation_id,b.operation_id);assert(!c.native.completed);
     } else {
       assert.equal(c.coordinator.phase,'idle');
       assert(!c.coordinator.pending_operation);same(c.coordinator.current,i<8?rb.target:finish.after);
       same(c.native.observed,c.coordinator.current);same(c.native.configured,c.coordinator.current);
-      if(i<8) {same(c.native.completed,rb);assert(!c.native.completed_apply);}
-      else {applyCompletion(c.native.completed_apply);assert.equal(c.native.completed_apply.binding.native_base_revision,2);same(c.native.completed_apply.binding.before,rb.target);same(c.native.completed_apply.binding.after,finish.after);assert.equal(c.native.completed_apply.binding.operation_id,finish.operation_id);assert.equal(c.native.completed_apply.result_revision,3);assert.equal(c.native.last_operation_id,finish.operation_id);assert(!c.native.completed);}
+      if(i<8) {same(c.native.completed,rb);assert(!c.native.completed_apply);assert.equal(c.native.last_operation_id,b.operation_id);}
+      else {applyCompletion(c.native.completed_apply);const next=c.native.completed_apply.binding;assert.equal(next.native_base_revision,2);same(next.before,rb.target);same(next.after,finish.after);assert.equal(next.operation_id,finish.operation_id);assert.equal(next.admitted_state_sha256,r.checkpoints[7].native.state_sha256);assert.equal(next.inputs_sha256,a.binding.inputs_sha256);assert.equal(next.boot_id,a.binding.boot_id);assert.equal(c.native.completed_apply.result_revision,3);assert.equal(c.native.last_operation_id,finish.operation_id);assert(!c.native.completed);}
     }
   }
   same(r.checkpoints[5].native,r.checkpoints[6].native);same(r.checkpoints[5].native,r.checkpoints[7].native);
@@ -184,7 +187,7 @@ export function auditDriver(r, pins) {
   assert(w.groups===null||Array.isArray(w.groups)&&w.groups.length<=1&&w.groups.every(n=>n===20001));
   exact(w.capabilities,['CapEff','CapPrm','CapInh','CapAmb']);for(const x of Object.values(w.capabilities))assert.equal(x,'0000000000000000');
   assert.equal(w.root,ROOT+'/backend-jails/'+expected.active[0].id);assert(typeof w.start==='string'&&/^[1-9][0-9]{0,19}$/.test(w.start));
-  assert(Array.isArray(r.observed_namespace_ids)&&r.observed_namespace_ids.length>=5&&r.observed_namespace_ids.length<=9);
+  assert(Array.isArray(r.observed_namespace_ids)&&r.observed_namespace_ids.length===9);
   r.observed_namespace_ids.forEach(n=>integer(n,1));assert.equal(new Set(r.observed_namespace_ids).size,r.observed_namespace_ids.length);assert(r.observed_namespace_ids.includes(w.namespace));
   return r;
 }

@@ -15,7 +15,7 @@ source behavior only. No native Linux guest was executed by this reviewer.
   estimate was unknown; assigned additive review directory and read-only source
   review resolved the heuristic assumptions. No live mutation authorized.
 - `node --test lab/hostwebruntime-crash-review/test_receipt.mjs`: exit 0,
-  36/36 synthetic tests passed, zero skips/TODOs. These tests include forged
+  39/39 synthetic tests passed, zero skips/TODOs. These tests include forged
   consumed-only checkpoint and original-commit claims with a recomputed valid
   journal hash chain, source provenance, PID/nonce/signal, stale checkpoint
   prefixes, native reopen state, current inventory, PHP hash/PID, final worker
@@ -39,7 +39,7 @@ equality check for the denied native state after reopen. The validator now
 requires equal native inspection at `denied_repaired`, `healthy_repair_refused`
 and `reopened_denied`; synthetic decoded snapshots were also separated through
 JSON round-trip, avoiding shared JS object aliases. Expanded final checks pass
-36/36. This was a local synthetic failure, not a native runtime failure.
+39/39. This was a local synthetic failure, not a native runtime failure.
 
 A PowerShell `<` stdin redirection attempt was rejected before execution.
 PowerShell pipeline into the wrapper then produced utility exit 2 because the
@@ -57,6 +57,21 @@ Root's partial `freeze.mjs` initially collected test names from only main and
 native Linux test files, omitting `contract_test.go`. This was communicated to
 root as a pre-run blocker; final assembled freeze must include the complete
 Linux-qualified test set.
+
+Independent assembled parser challenge command:
+`SIFRUNO_CRASH_CANDIDATE_ROOT=<web-crash-integration> node --test
+lab/hostwebruntime-crash-review/test_assembled.mjs` passed 57/57 at its initial
+review point (36 receipt tests plus 21 new guest/serial integration tests).
+Unknown fields, nested duplicate JSON, marker alias/foreign nonce, contradictory
+panic, nonzero terminal/test/driver exits, old serving proof, changed package/
+policy/environment and cleanup failure were refused. No guest executed.
+
+Before root's assembled freeze, the receipt authority was tightened to require
+configured/operation equality at dead checkpoints, repair admitted-state equality,
+selective Apply admitted-state/boot/input continuity, and exactly nine distinct
+namespace IDs for this fixed 5-old + 1-denial + 3-selective lab. A kernel inode
+reuse or omitted ID fails closed; preserve its actual report and diagnose it
+without asserting a product defect.
 
 ## Limits and recovery
 

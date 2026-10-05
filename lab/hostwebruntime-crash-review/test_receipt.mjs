@@ -16,6 +16,8 @@ export function synthetic() {
     return {binding:b,result_revision:revision+1};
   }
   const completed=completion(op,0,before,after),final=completion(later,2,denied,selective),stateSHA=hash('synthetic-active-state');
+  final.binding.admitted_state_sha256=hash('synthetic-denied-state');
+  final.binding.intent_sha256=digest({Domain:'sifruno-apply-completion-v1',Version:1,Kind:'apply',OperationID:later,OriginalRevision:2,NativeBaseRevision:2,Before:denied,After:selective,AdmittedStateSHA256:final.binding.admitted_state_sha256,InputsSHA256:final.binding.inputs_sha256,BootID:final.binding.boot_id});
   const rb={operation_id:op,attempt_id:attempt,original_revision:0,base_revision:1,before,after,source:after,target:denied,intent_sha256:'',admitted_state_sha256:stateSHA};
   rb.intent_sha256=digest({Domain:'sifruno-denied-repair-v1',OperationID:op,OriginalRevision:0,AttemptID:attempt,BaseRevision:1,Before:before,After:after,Source:after,Target:denied});
   const checkpoint={completion:completed,inspected_state_sha256:stateSHA,counter_advance_only:true,counter_advanced:true};
@@ -37,7 +39,7 @@ export function synthetic() {
     const p={account_id:j===4?'':a.id,kind:stage+(j===4?'/foreign.test':j%2===0?'/index.html':'/probe.php'),status:403,bytes:1,sha256:hash('synthetic-denied-body'),contract_passed:true,namespace_pid:0};
     if(i===5||i===6){const b=i===5?'SIFRUNO_STATIC_webalpha\n':'SIFRUNO_PHP_webalpha\nSELF=readable\nHOST=denied\nSIBLING=denied\nPID=7\n';p.status=200;p.bytes=Buffer.byteLength(b);p.sha256=hash(b);p.namespace_pid=i===6?7:0;}return p;
   });
-  const r={schema_version:2,fixture_only:true,execution_kind:'native-linux-controller-crash-driver',run_id:hash('sifruno-crash:'+nonce).slice(0,32),nonce:'b'.repeat(32),driver_sha256:hash('synthetic-driver'),input_sha256:hash('synthetic-input'),profile_sha256:f.profileSHA,intended_generations:[before,after,denied,selective],observations:[{stage:'before_kill',identity:after},...stages.slice(5).map(stage=>({stage,identity:stage==='selective_apply'?selective:denied}))],probes,crash:{boundary:{nonce:'b'.repeat(32),pid:101,start:'123',operation_id:op,before,after,native:{...native,observed:after}},parent_pid:100,child_pid:101,child_start:'123',owned_child:true,signal:9,wait_signaled:true,native_metadata_stable:true,journal_before_sha256:hash('synthetic-db'),journal_after_sha256:hash('synthetic-db'),strict_observe_rejected:true,listeners_extinct:true,namespaces_extinct:true},checkpoints,history:h,inventory_sha256:f.currentSHA,source_catalog_sha256:hash('synthetic-catalog'),prerequisites:{selinux_enforce:'1',NoNewPrivs:'0',CapEff:'0'.repeat(16),CapPrm:'0'.repeat(16),CapBnd:'0'.repeat(16),CapAmb:'0'.repeat(16),CapInh:'0'.repeat(16),network_admin_raw_absent:'true',kernel_release:'synthetic-no-native-run'},stage:'complete',passed:true,shutdown_passed:true,close_passed:true,listeners_extinct:true,input_stable:true,selinux_stable:true,worker_evidence:[{account_id:f.active[0].id,host_pid:200,namespace_pid:7,namespace:1005,uid:[20001,20001,20001,20001],gid:[20001,20001,20001,20001],groups:null,capabilities:{CapEff:'0'.repeat(16),CapPrm:'0'.repeat(16),CapInh:'0'.repeat(16),CapAmb:'0'.repeat(16)},root:'/opt/sifruno-runtime-fixture/backend-jails/'+f.active[0].id,start:'456'}],observed_namespace_ids:[1001,1002,1003,1004,1005],namespaces_extinct:true};
+  const r={schema_version:2,fixture_only:true,execution_kind:'native-linux-controller-crash-driver',run_id:hash('sifruno-crash:'+nonce).slice(0,32),nonce:'b'.repeat(32),driver_sha256:hash('synthetic-driver'),input_sha256:hash('synthetic-input'),profile_sha256:f.profileSHA,intended_generations:[before,after,denied,selective],observations:[{stage:'before_kill',identity:after},...stages.slice(5).map(stage=>({stage,identity:stage==='selective_apply'?selective:denied}))],probes,crash:{boundary:{nonce:'b'.repeat(32),pid:101,start:'123',operation_id:op,before,after,native:{...native,observed:after}},parent_pid:100,child_pid:101,child_start:'123',owned_child:true,signal:9,wait_signaled:true,native_metadata_stable:true,journal_before_sha256:hash('synthetic-db'),journal_after_sha256:hash('synthetic-db'),strict_observe_rejected:true,listeners_extinct:true,namespaces_extinct:true},checkpoints,history:h,inventory_sha256:f.currentSHA,source_catalog_sha256:hash('synthetic-catalog'),prerequisites:{selinux_enforce:'1',NoNewPrivs:'0',CapEff:'0'.repeat(16),CapPrm:'0'.repeat(16),CapBnd:'0'.repeat(16),CapAmb:'0'.repeat(16),CapInh:'0'.repeat(16),network_admin_raw_absent:'true',kernel_release:'synthetic-no-native-run'},stage:'complete',passed:true,shutdown_passed:true,close_passed:true,listeners_extinct:true,input_stable:true,selinux_stable:true,worker_evidence:[{account_id:f.active[0].id,host_pid:200,namespace_pid:7,namespace:1005,uid:[20001,20001,20001,20001],gid:[20001,20001,20001,20001],groups:null,capabilities:{CapEff:'0'.repeat(16),CapPrm:'0'.repeat(16),CapInh:'0'.repeat(16),CapAmb:'0'.repeat(16)},root:'/opt/sifruno-runtime-fixture/backend-jails/'+f.active[0].id,start:'456'}],observed_namespace_ids:[1001,1002,1003,1004,1005,1006,1007,1008,1009],namespaces_extinct:true};
   return {r:clone(r),pins:{nonce,driverSHA:r.driver_sha256,catalogSHA:r.source_catalog_sha256,inputSHA:r.input_sha256}};
 }
 test('synthetic complete success schema passes; does not execute a guest',()=>{const {r,pins}=synthetic();assert.equal(auditDriver(r,pins),r);});
@@ -70,11 +72,14 @@ const mutations={
   'final worker root leaked':r=>r.worker_evidence[0].root='/',
   'final worker UID leaked':r=>r.worker_evidence[0].uid[3]=0,
   'final worker capability leaked':r=>r.worker_evidence[0].capabilities.CapAmb='0'.repeat(15)+'1',
-  'worker namespace not retained':r=>r.observed_namespace_ids=[1,2,3,4,5],
+  'worker namespace not retained':r=>r.observed_namespace_ids=[1,2,3,4,5,6,7,8,9],
   'duplicate namespace':r=>r.observed_namespace_ids.push(r.observed_namespace_ids[0]),
   'cleanup failed':r=>r.namespaces_extinct=false,
   'crash namespace remained':r=>r.crash.namespaces_extinct=false,
   'network capability inherited':r=>r.prerequisites.CapBnd='0000000000001000',
+  'configured dead identity forged':r=>r.checkpoints[2].native.configured=r.intended_generations[2],
+  'dead operation forged':r=>r.checkpoints[3].native.last_operation_id='f'.repeat(32),
+  'missing namespace':r=>r.observed_namespace_ids.pop(),
 };
 for(const [name,mutation]of Object.entries(mutations))test('reject '+name,()=>{const {r,pins}=synthetic();mutation(r);assert.throws(()=>auditDriver(r,pins));});
 function rechain(r) {

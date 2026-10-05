@@ -209,7 +209,7 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || (r.Method == http.MethodPost && (r.URL.Path == "/api/v1/session/login" || r.URL.Path == "/api/v1/session/logout"))
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedSessionMutation(r)
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)

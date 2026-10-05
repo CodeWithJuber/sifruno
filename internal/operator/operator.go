@@ -43,8 +43,10 @@ type Session struct {
 }
 
 type activeSession struct {
-	expires time.Time
-	csrf    [32]byte
+	expires      time.Time
+	csrf         [32]byte
+	managementID string
+	created      time.Time
 }
 
 type Manager struct {
@@ -370,6 +372,9 @@ func (m *Manager) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/session/login", m.login)
 	mux.HandleFunc("GET /api/v1/session", m.getSession)
 	mux.HandleFunc("POST /api/v1/session/logout", m.logout)
+	mux.HandleFunc("GET /api/v1/session/sessions", m.getSessions)
+	mux.HandleFunc("POST /api/v1/session/sessions/{id}/revoke", m.revokeSession)
+	mux.HandleFunc("POST /api/v1/session/revoke-others", m.revokeOthers)
 }
 
 func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
@@ -409,9 +414,14 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 503, "operator_unavailable", "Operator session unavailable")
 		return
 	}
-	expires := m.now().UTC().Add(sessionLifetime).Truncate(time.Second)
 	m.mu.Lock()
 	m.pruneLocked()
+	managementID, err := m.newManagementIDLocked()
+	if err != nil {
+		m.mu.Unlock()
+		WriteError(w, 503, "operator_unavailable", "Operator session unavailable")
+		return
+	}
 	if oldID != "" {
 		delete(m.active, oldID)
 	}
@@ -420,7 +430,9 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 429, "rate_limited", "Active session limit reached")
 		return
 	}
-	m.active[id] = activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf))}
+	created := m.now().UTC().Truncate(time.Second)
+	expires := created.Add(sessionLifetime)
+	m.active[id] = activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf)), managementID: managementID, created: created}
 	m.mu.Unlock()
 	s := sessions.NewSession(m.cookies, cookieName)
 	s.Values = map[any]any{"id": id, "csrf": csrf, "expires": expires.Unix()}
@@ -457,12 +469,17 @@ func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input, true) {
 		return
 	}
-	s, id, _, ok := m.session(r)
+	s, id, a, ok := m.session(r)
 	if !ok {
 		WriteError(w, 401, "unauthorized", "Operator session required")
 		return
 	}
 	m.mu.Lock()
+	if !m.authorizingSessionLocked(id, a) {
+		m.mu.Unlock()
+		WriteError(w, 401, "unauthorized", "Operator session required")
+		return
+	}
 	delete(m.active, id)
 	m.mu.Unlock()
 	options := *m.cookies.Options

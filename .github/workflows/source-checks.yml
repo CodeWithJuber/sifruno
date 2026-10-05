@@ -51,6 +51,8 @@ jobs:
         run: |
           npm run panel:typecheck
           npm run panel:build
+      - name: Operator session UI contract checks
+        run: node --test web/src/lib/access-api.test.mjs
       - name: Approved brand integrity
         run: npm run brand:check
       - name: Python fixture checks

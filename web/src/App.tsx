@@ -3,7 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { SideNav, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
-import { Archive, CircleDollarSign, Clock3, FileCheck2, Folder, Globe, HardDrive, Home, Info, Layers, Menu, Moon, Network, RefreshCw, Search, Server, Sun, Users, X } from "lucide-react";
+import { Archive, CircleDollarSign, Clock3, FileCheck2, Folder, Globe, HardDrive, Home, Info, Layers, LockKeyhole, Menu, Moon, Network, RefreshCw, Search, Server, Sun, Users, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Overview, ServiceInventory } from "@/Dashboard";
@@ -18,11 +18,12 @@ const Websites = lazy(() => import("@/Websites"));
 const Accounts = lazy(() => import("@/Accounts"));
 const Backups = lazy(() => import("@/Backups"));
 const FileManager = lazy(() => import("@/FileManager"));
+const Access = lazy(() => import("@/Access"));
 const Storage = lazy(() => import("@/HostResources").then((m) => ({ default: m.Storage })));
 const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ default: m.NetworkResources })));
 const PanelPreview = lazy(() => import("@/PanelPreview"));
 
-type View = "overview" | "services" | "storage" | "network" | "panel-preview" | "websites" | "accounts" | "backups" | "files" | "evidence" | "trail" | "budget" | "platform";
+type View = "overview" | "services" | "storage" | "network" | "panel-preview" | "websites" | "accounts" | "backups" | "files" | "access" | "evidence" | "trail" | "budget" | "platform";
 const views = [
   { id: "overview", label: "Overview", title: "Server overview", subtitle: "A clear view of your server, in real time.", icon: Home },
   { id: "services", label: "Services", title: "Services", subtitle: "Inspect the services installed on your server.", icon: Server },
@@ -34,6 +35,7 @@ const views = [
   { id: "backups", label: "Backups", title: "Website backups", subtitle: "Create, export and restore native static-site ZIP snapshots.", icon: Archive },
   { id: "files", label: "File Manager", title: "File Manager", subtitle: "Browse actual static-site paths and edit saved UTF-8 files.", icon: Folder },
   { id: "evidence", label: "Compatibility", title: "Compatibility evidence", subtitle: "Track the workflows that still need to be verified.", icon: FileCheck2 },
+  { id: "access", label: "Access", title: "Access & sessions", subtitle: "Review local operator sessions and control access to this server.", icon: LockKeyhole },
   { id: "trail", label: "Change trail", title: "Change trail", subtitle: "Follow scoped file changes and their recovery history.", icon: Clock3 },
   { id: "budget", label: "AI budget", title: "AI spending controls", subtitle: "Keep paid AI work within a fixed monthly allowance.", icon: CircleDollarSign },
   { id: "platform", label: "Platforms", title: "Platform profiles", subtitle: "Review native targets and hosting runtime requirements.", icon: Layers },
@@ -68,6 +70,7 @@ export function App() {
   const [accountsResource, setAccountsResource] = useState<Resource<unknown>>({ loading: false });
   const [backupsResource, setBackupsResource] = useState<Resource<unknown>>({ loading: false });
   const [filesResource, setFilesResource] = useState<Resource<unknown>>({ loading: false });
+  const [accessResource, setAccessResource] = useState<Resource<unknown>>({ loading: false });
   const publicPreview = Boolean(document.querySelector('meta[name="sifruno-public-preview"]'));
   const status = useResource("/api/v1/status", validStatus, revision);
   const platform = useResource("/api/v1/platform", validPlatform, revision);
@@ -76,13 +79,13 @@ export function App() {
   const server = useResource(`/api/v1/server?range_seconds=${range}`, validServer, revision, 5000);
   const services = useResource("/api/v1/services", validServices, revision, 30000);
   const refresh = () => setRevision((v) => v + 1);
-  const visibleViews = views.filter((v) => v.id === "panel-preview" ? publicPreview : !publicPreview || (v.id !== "websites" && v.id !== "accounts" && v.id !== "backups" && v.id !== "files" && v.id !== "trail" && v.id !== "budget"));
+  const visibleViews = views.filter((v) => v.id === "panel-preview" ? publicPreview : !publicPreview || (v.id !== "websites" && v.id !== "accounts" && v.id !== "backups" && v.id !== "files" && v.id !== "access" && v.id !== "trail" && v.id !== "budget"));
   const active = views.find((v) => v.id === view)!;
-  const activeResource = ["overview", "storage", "network"].includes(view) ? server : view === "services" ? services : view === "websites" ? websitesResource : view === "accounts" ? accountsResource : view === "backups" ? backupsResource : view === "files" ? filesResource : view === "evidence" ? status : view === "trail" ? trail : view === "budget" ? budget : platform;
+  const activeResource = ["overview", "storage", "network"].includes(view) ? server : view === "services" ? services : view === "websites" ? websitesResource : view === "accounts" ? accountsResource : view === "backups" ? backupsResource : view === "files" ? filesResource : view === "access" ? accessResource : view === "evidence" ? status : view === "trail" ? trail : view === "budget" ? budget : platform;
   const connected = Boolean(server.data && !server.error);
   const partial = server.data?.collector.status === "partial";
   const unavailable = server.data?.collector.status === "unavailable";
-  const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "trail", "budget"].includes(next))) return; if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
+  const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "access", "trail", "budget"].includes(next))) return; if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? {
@@ -148,6 +151,7 @@ export function App() {
           {accountsVisited && !publicPreview && <div hidden={view !== "accounts"}><Accounts revision={revision} active={view === "accounts"} onStatus={setAccountsResource} /></div>}
           {backupsVisited && !publicPreview && <div hidden={view !== "backups"}><Backups revision={revision} active={view === "backups"} onStatus={setBackupsResource} /></div>}
           {filesVisited && !publicPreview && <div hidden={view !== "files"}><FileManager revision={revision} active={view === "files"} onStatus={setFilesResource} /></div>}
+          {view === "access" && !publicPreview && <Access revision={revision} onStatus={setAccessResource} />}
           {view === "evidence" && <DataState resource={status} retry={refresh}>{status.data && <Evidence report={status.data} />}</DataState>}
           {view === "trail" && !publicPreview && <DataState resource={trail} retry={refresh}>{trail.data && <Trail report={trail.data} />}</DataState>}
           {view === "budget" && !publicPreview && <DataState resource={budget} retry={refresh}>{budget.data && <Budget report={budget.data} />}</DataState>}

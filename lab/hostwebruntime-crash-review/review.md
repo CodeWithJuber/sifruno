@@ -114,6 +114,45 @@ scans; initial measured errors or members may drain within the bound. The old
 strict-nine schema is rejected. These are synthetic parser checks, not a second
 native result.
 
+## Accepted third actual native result
+
+Root executed frozen source HEAD `cc72a5bbc9a4d65ae9bf312551325c77b8007651`
+including product fix `fcdb93b`, under fresh catalog
+`210656d6e062c7eea64122f5316f05712580136890d586900084869e71d12121`.
+The focused regression's final prerequisites include five admitted temporary
+roots, mechanics-only CA bytes and the actual test-binary/module input digest;
+these were source-reviewed before freeze. Actual native run
+`crash-1791220756529-4988ff3a904a72d7c23db277` exited 0 with QEMU exit 0.
+
+From the review worktree, the command
+`node lab/hostwebruntime-crash-review/audit_result.mjs
+C:/Users/Administrator/Documents/Codex/2026-10-04/hi
+C:/Users/Administrator/Documents/Codex/2026-10-04/hi/.worktrees/web-crash-integration
+C:/Users/Administrator/Documents/Codex/2026-10-04/hi/.worktrees/web-crash-integration/.cache/hostwebruntime-crash-host/crash-1791220756529-4988ff3a904a72d7c23db277`
+exited 0. It re-admitted 2544 current source/tool inputs and 16 runner sources,
+checked exact report/serial hashes and framing, independently applied the
+receipt authority, and rehashed all 30 payloads. A separate read-only Python312
+`-I -B .cache/hostweb-crash-review/actual_iso.py` command with the same three path
+arguments exited 0 after actual 30-entry ISO readback. Neither launched native
+work. `third-native-review.json` retains the exact report/serial/catalog/ELF/ISO
+hashes and acceptance scope.
+
+Actual evidence includes the owned and reaped signal 9, 14 driver native tests,
+one focused product test (`TestNamespaceReopenedHandlesReapOriginalChild`,
+1.81 seconds), nine durable history events and counter checkpoints
+`0,1,1,1,1,2,2,2,3`. Ten HTTP receipts separately cover all-denied repair and
+current selective serving. Exact alpha static/PHP body hashes were independently
+reconstructed. Epochs have 5/1/3 process pins and a five-ID union reflecting
+recorded cross-epoch inode reuse. Both crash and final namespace scans were
+empty/error-free on their first attempt; the final scan took 8 ms. The guest's
+independent post-driver scan, listener and mount cleanup also passed.
+
+This accepts the narrow requested adapted-fixture controller-death/recovery and
+same-process reaping behavior. The preceding two failed results remain failed
+and preserved; the first and second reports did not measure State/PPID, so their
+precise process-state cause is still inferred from source and the corrected
+regression rather than retroactively claimed as directly observed.
+
 ## Limits and recovery
 
 ### Second actual native attempt: failed, retained
@@ -176,8 +215,8 @@ namespace IDs after driver exit. Fixture inventory uses a sequential root-file
 byte guard, not production broker reservation, native account mutations, or a
 concurrent adversarial root-writer qualification.
 
-The requested native death/recovery behavior remains unqualified until root
-executes the reviewed freeze and preserves actual serial/reports. No claim of
+The requested adapted-fixture native death/recovery behavior is qualified by the
+accepted third run and retained serial/reports. No claim of
 stock policy, reboot, other OS, cPanel parity or production API activation is
 made. Revert additive lab commits to remove the lab; preserve failed ignored
 guest artifacts and receipts for diagnosis.

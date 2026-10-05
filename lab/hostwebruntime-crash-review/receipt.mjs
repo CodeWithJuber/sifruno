@@ -23,7 +23,7 @@ function namespaceDrain(d, ids) {
     if(!s.error){assert.equal(s.error_pid,0);assert.equal(s.error_errno,0);}
     assert(Array.isArray(s.matching)&&s.matching.length<=1024);
     let last=0;
-    for(const p of s.matching){exact(p,['pid','start','namespace']);integer(p.pid,2,4194304);assert(p.pid>last);last=p.pid;startIdentity(p.start);integer(p.namespace,1);assert(ids.includes(p.namespace));}
+    for(const p of s.matching){exact(p,['pid','start','namespace','state','ppid']);integer(p.pid,2,4194304);assert(p.pid>last);last=p.pid;startIdentity(p.start);integer(p.namespace,1);assert(ids.includes(p.namespace));assert(typeof p.state==='string'&&/^[RSDZTtXxKWPI]$/.test(p.state));integer(p.ppid,0,4194304);}
   }
   assert.equal(d.final.error,'');same(d.final.matching,[]);
   if(d.attempts===1)same(d.initial,d.final);

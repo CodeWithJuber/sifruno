@@ -116,6 +116,51 @@ native result.
 
 ## Limits and recovery
 
+### Second actual native attempt: failed, retained
+
+`second-native-failure.json` preserves root run
+`crash-1791219476709-03b8aec1833696f1cbbbdfaa` under catalog `d841cc69...9019`.
+Independent raw report/serial inspection exited 0 and found real signal 9 and
+the same nine counter checkpoints. Both initial and final measured scans retained
+PID 1597/start 22598/namespace 4026532184, exactly the denial-front epoch pin;
+120 scans over 8053 ms reported no read errors but no extinction. Raw guest
+cleanup after driver exit independently reported all four cleanup gates true.
+That later cleanup does not turn failed driver exit into success. State and PPID
+were not measured in this receipt, so zombie/parent ownership remains an inference.
+The initial diagnostic reader guessed an absent RESULT_BEGIN marker and exited 1
+before changing evidence; the corrected exact CRASH_BEGIN/END reader exited 0.
+
+Source inspection found `Runtime.Close` leaves serving children while a new
+`Open` starts with an empty child-handle map. Existing stop waited exact pidfds
+but reaped only entries still present in that map. Root's proposed narrow fix
+reaps a missing-map child using that same already admitted/polled pidfd through
+nonblocking `Waitid(P_PIDFD, WEXITED|WNOHANG)`. It bounds EINTR, permits ECHILD,
+requires actual SIGCHLD with zero errno and exited/killed/dumped code, and keeps
+metadata uncertain on other outcomes. It uses no numeric-PID or wildcard wait.
+Review accepted this source change and its Close/Open regression, conditional
+on new linked-source pins and actual native execution. The third fixture will
+add a separately pinned test ELF and exact focused regression frame: 14 driver
+tests plus one product reaping test, 30 payloads. It has not executed at this
+review-note point.
+
+The strengthened receipt diagnostic schema requires measured process state and
+parent PID. Its independent synthetic suite passes 71/71, exit 0. The renewed
+Forge preflight attempt returned an EPERM scanning unrelated primary debug state;
+impact remained unknown. Explicit owned scope and candidate source inspection
+were used without reading or mutating that state.
+
+The final assembled synthetic command with explicit integration root passes
+100/100, exit 0, zero skips/TODO. It adds independent challenge closure for the
+separate product reaping test receipt and REGRESSION frame (exit, skip, stderr,
+wrong name, missing receipt, false contract, duplicate and alias markers).
+Root's run/freeze/guest/make-ISO/parser changes were inspected together: new
+read-only linked-source enumeration includes the product test, 30 actual payloads
+include its distinct ELF, and execution is anchored to the one required test with
+native mechanics opt-in, isolated temporary state and bounded process capture.
+The read-only prepared/result helpers now require that new payload count and
+separate driver/product test evidence. Guest-side catalog reaping hash/name
+binding was sent to root before freeze as a concrete provenance tightening.
+
 `receipt.mjs` validates an exact success schema under explicit source/input/nonce
 pins and rejects unknown fields. It independently reconstructs PHP/static body
 hashes and Go intent/event digests; its synthetic values are never execution

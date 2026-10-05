@@ -53,8 +53,8 @@ def main():
     for entry in report['payload']:
         b = below(work, entry['name']).read_bytes()
         assert len(b) == entry['bytes'] and digest(b) == entry['sha256'], entry['name']
-    assert len(report['payload']) == 29 and len(report['iso_readback']) == 29
-    assert len({x['name'] for x in report['payload']}) == 29
+    assert len(report['payload']) == 30 and len(report['iso_readback']) == 30
+    assert len({x['name'] for x in report['payload']}) == 30
     iso = below(work, 'payload.iso')
     assert digest(iso.read_bytes()) == report['iso_sha256']
     wheel = below(primary, '.tools/linuxguest/downloads/pycdlib-1.21.0-py3-none-any.whl')
@@ -72,6 +72,9 @@ def main():
     assert digest((work / 'source_catalog.json').read_bytes()) == admission['source_catalog_sha256']
     assert digest((work / 'qualification-driver').read_bytes()) == admission['driver_sha256']
     assert digest((work / 'serving-linux.test').read_bytes()) == admission['test_sha256']
+    assert digest((work / 'reaping-linux.test').read_bytes()) == admission['reaping_test_sha256']
+    catalog = strict((work / 'source_catalog.json').read_bytes())
+    assert catalog['required_reaping_tests'] == ['TestNamespaceReopenedHandlesReapOriginalChild']
     print(json.dumps({'kind': 'independent-prepared-crash-payload-audit', 'passed': True,
                       'native_execution_performed': False, 'prepared_run': work.name,
                       'prepared_report_sha256': digest(raw), 'source_inputs': len(report['source_inputs']),

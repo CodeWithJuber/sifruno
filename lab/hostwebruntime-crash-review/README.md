@@ -41,6 +41,8 @@ policy, reboot recovery, cPanel compatibility, or another operating system.
   HTTP response hashes (same-driver requests),
   current inventory revisions, and owned cleanup.
 
-Recovery path: all edits are additive lab-only commits. Revert those commits to
-remove the new lab; failed guest disks/reports remain ignored artifacts for
-diagnosis. No live state, daemon, firewall or dependencies are changed here.
+Recovery path: the lab is additive. Root's separate runtime change reaps an
+already exited admitted child by its held pidfd after same-process Close/Open.
+Revert the lab commits and that runtime fix separately if removing this work;
+failed guest disks/reports remain ignored artifacts for diagnosis. No live state,
+daemon, firewall or dependencies are changed here.

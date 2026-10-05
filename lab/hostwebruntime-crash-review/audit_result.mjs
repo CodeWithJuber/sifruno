@@ -27,7 +27,7 @@ assert.equal(r.source_catalog_sha256,state.pins.catalog.sha256);
 const serial=fs.readFileSync(path.join(work,'serial.log'));assert.equal(serial.length,r.serial_bytes);assert.equal(hash(serial),r.serial_sha256);
 const guest=parseCrashSerial(serial.toString('utf8'),r.nonce,state.pins,r.admission,state.packages);assert.deepEqual(guest,r.guest);
 assert.equal(hash(fs.readFileSync(path.join(work,'payload.iso'))),r.iso_sha256);
-assert.equal(r.payload.length,29);assert.equal(r.iso_readback.length,29);
+assert.equal(r.payload.length,30);assert.equal(r.iso_readback.length,30);
 for(const entry of r.payload){const bytes=fs.readFileSync(path.join(work,...entry.name.split('/')));assert.equal(bytes.length,entry.bytes);assert.equal(hash(bytes),entry.sha256);}
 const lines=serial.toString('utf8').replaceAll('\r\n','\n').split('\n');
 const begin=lines.indexOf('SIFRUNO_RUNTIME_CRASH_DRIVER_BEGIN '+r.nonce),raw=lines[begin+1];
@@ -38,7 +38,8 @@ console.log(JSON.stringify({kind:'independent-actual-controller-crash-receipt-au
   native_execution_performed_by_reviewer:false,run:r.run,report_sha256:hash(reportRaw),serial_sha256:hash(serial),
   iso_sha256:r.iso_sha256,catalog_sha256:r.source_catalog_sha256,driver_report_sha256:hash(raw),
   source_inputs:r.source_inputs.length,runner_sources:r.runner_sources.length,payloads:r.payload.length,
-  controller_signal:driver.crash.signal,native_unit_tests:state.catalog.required_tests.length,
+  controller_signal:driver.crash.signal,native_driver_unit_tests:state.catalog.required_tests.length,
+  native_product_reaping_tests:state.catalog.required_reaping_tests.length,
   history_events:driver.history.length,checkpoint_revisions:driver.checkpoints.map(c=>c.coordinator.revision),
   observed_namespaces:driver.observed_namespace_ids.length,http_probes:driver.probes.length,
   limits:['same-driver HTTP measurements','adapted fixture inventory guard','no stock-policy reboot cPanel all-OS production-API claim']}));

@@ -104,13 +104,13 @@ const mutations={
   'namespace drain false':r=>r.namespace_drain.extinct=false,
   'namespace drain scan error':r=>r.namespace_drain.final.error='proc_namespace_read',
   'namespace drain hidden errno':r=>r.namespace_drain.final.error_errno=13,
-  'namespace drain terminal member':r=>r.namespace_drain.final.matching=[{pid:312,start:'3120',namespace:1005}],
+  'namespace drain terminal member':r=>r.namespace_drain.final.matching=[{pid:312,start:'3120',namespace:1005,state:'Z',ppid:100}],
   'namespace drain unknown reason':r=>r.namespace_drain.initial.error='ignored_permission',
   'namespace drain zero attempts':r=>r.namespace_drain.attempts=0,
   'namespace drain unbounded attempts':r=>r.namespace_drain.attempts=163,
   'namespace drain unbounded time':r=>r.namespace_drain.elapsed_ms=10001,
   'namespace drain impossible timing':r=>r.namespace_drain.attempts=2,
-  'namespace single scan contradictory':r=>r.namespace_drain.initial.matching=[{pid:312,start:'3120',namespace:1005}],
+  'namespace single scan contradictory':r=>r.namespace_drain.initial.matching=[{pid:312,start:'3120',namespace:1005,state:'Z',ppid:100}],
   'crash drain error':r=>r.crash.namespace_drain.final.error='proc_stat_read',
 };
 for(const [name,mutation]of Object.entries(mutations))test('reject '+name,()=>{const {r,pins}=synthetic();mutation(r);assert.throws(()=>auditDriver(r,pins));});
@@ -132,11 +132,11 @@ test('distinct namespace epochs also pass with exact nine-ID union',()=>{
 });
 test('bounded observed drain retains initial member and error diagnostics',()=>{
   const {r,pins}=synthetic();r.namespace_drain.attempts=3;r.namespace_drain.elapsed_ms=102;
-  r.namespace_drain.initial={matching:[{pid:200,start:'456',namespace:1005}],error:'proc_namespace_read',error_pid:900,error_errno:13};auditDriver(r,pins);
+  r.namespace_drain.initial={matching:[{pid:200,start:'456',namespace:1005,state:'S',ppid:312}],error:'proc_namespace_read',error_pid:900,error_errno:13};auditDriver(r,pins);
 });
 test('initial drain member outside admitted namespace union refused',()=>{
   const {r,pins}=synthetic();r.namespace_drain.attempts=2;r.namespace_drain.elapsed_ms=51;
-  r.namespace_drain.initial.matching=[{pid:200,start:'456',namespace:999}];assert.throws(()=>auditDriver(r,pins));
+  r.namespace_drain.initial.matching=[{pid:200,start:'456',namespace:999,state:'S',ppid:312}];assert.throws(()=>auditDriver(r,pins));
 });
 test('legacy strict-nine schema lacks measured epochs and drain and is refused',()=>{
   const {r,pins}=synthetic();delete r.namespace_epochs;delete r.namespace_drain;delete r.crash.namespace_drain;
@@ -144,11 +144,21 @@ test('legacy strict-nine schema lacks measured epochs and drain and is refused',
 });
 test('unbounded initial scan member inventory refused',()=>{
   const {r,pins}=synthetic();r.namespace_drain.attempts=2;r.namespace_drain.elapsed_ms=51;
-  r.namespace_drain.initial.matching=Array.from({length:1025},(_,i)=>({pid:1000+i,start:'456',namespace:1005}));
+  r.namespace_drain.initial.matching=Array.from({length:1025},(_,i)=>({pid:1000+i,start:'456',namespace:1005,state:'S',ppid:312}));
   assert.throws(()=>auditDriver(r,pins));
 });
 test('duplicate initial scan process identity refused',()=>{
   const {r,pins}=synthetic();r.namespace_drain.attempts=2;r.namespace_drain.elapsed_ms=51;
-  r.namespace_drain.initial.matching=[{pid:200,start:'456',namespace:1005},{pid:200,start:'456',namespace:1005}];
+  r.namespace_drain.initial.matching=[{pid:200,start:'456',namespace:1005,state:'S',ppid:312},{pid:200,start:'456',namespace:1005,state:'S',ppid:312}];
+  assert.throws(()=>auditDriver(r,pins));
+});
+for(const [label,change] of Object.entries({
+  'unknown process state':p=>p.state='?',
+  'unbounded parent PID':p=>p.ppid=4194305,
+  'negative parent PID':p=>p.ppid=-1,
+  'missing parent identity':p=>delete p.ppid,
+}))test('reject drain '+label,()=>{
+  const {r,pins}=synthetic();r.namespace_drain.attempts=2;r.namespace_drain.elapsed_ms=51;
+  const p={pid:200,start:'456',namespace:1005,state:'Z',ppid:100};change(p);r.namespace_drain.initial.matching=[p];
   assert.throws(()=>auditDriver(r,pins));
 });

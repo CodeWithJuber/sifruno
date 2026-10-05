@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "kind": "preserved-second-native-crash-failure",
+  "native_execution_performed_by_reviewer": false,
+  "root_run": "crash-1791219476709-03b8aec1833696f1cbbbdfaa",
+  "passed": false,
+  "host_report_sha256": "8f906b2e50db58b40822f6cdf807f7db7022bdcfe110e48214675503a95aefa9",
+  "serial_sha256": "8209151f8d99f2c3611c2386f47c07c0d1c4a66d452a0fe45dc665dfed360c37",
+  "driver_report_sha256": "f48b2090ed5854b90eeaba6947d092e62d00beab0acf39800cb9c4daefdd90d5",
+  "catalog_sha256": "d841cc699c86750375ecfb955598818c8ee81f3b8e815fdb85ace2d7c57f9019",
+  "driver_stage": "cleanup_or_stability:contract_or_runtime_rejected",
+  "signal": 9,
+  "checkpoint_revisions": [
+    0,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    3
+  ],
+  "namespace_epochs": [
+    {
+      "stage": "before_kill",
+      "state_sha256": "aea349e92f21e813a09171f2af7ed3e179cc72ba57ff769b392e8875941a0e23",
+      "processes": [
+        {
+          "role": "fpm",
+          "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pid": 1338,
+          "start": "20896",
+          "namespace": 4026532184
+        },
+        {
+          "role": "backend",
+          "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pid": 1340,
+          "start": "20918",
+          "namespace": 4026532185
+        },
+        {
+          "role": "fpm",
+          "account_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pid": 1341,
+          "start": "20937",
+          "namespace": 4026532186
+        },
+        {
+          "role": "backend",
+          "account_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pid": 1342,
+          "start": "21051",
+          "namespace": 4026532187
+        },
+        {
+          "role": "front",
+          "account_id": "",
+          "pid": 1343,
+          "start": "21080",
+          "namespace": 4026532188
+        }
+      ]
+    },
+    {
+      "stage": "repair_denied",
+      "state_sha256": "130bbe70daf778468ec8befcdc2899c67b4f74b48196fbbce2bb48a1f0556ee5",
+      "processes": [
+        {
+          "role": "front",
+          "account_id": "",
+          "pid": 1597,
+          "start": "22598",
+          "namespace": 4026532184
+        }
+      ]
+    },
+    {
+      "stage": "selective",
+      "state_sha256": "bc9c2540bdc682ce102127cf88dc2922db25a1763fd9577cf2caad694f363ab2",
+      "processes": [
+        {
+          "role": "fpm",
+          "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pid": 1685,
+          "start": "23582",
+          "namespace": 4026532185
+        },
+        {
+          "role": "backend",
+          "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pid": 1686,
+          "start": "23604",
+          "namespace": 4026532186
+        },
+        {
+          "role": "front",
+          "account_id": "",
+          "pid": 1687,
+          "start": "23618",
+          "namespace": 4026532187
+        }
+      ]
+    }
+  ],
+  "namespace_drain": {
+    "attempts": 120,
+    "elapsed_ms": 8053,
+    "initial": {
+      "matching": [
+        {
+          "pid": 1597,
+          "start": "22598",
+          "namespace": 4026532184
+        }
+      ],
+      "error": "",
+      "error_pid": 0,
+      "error_errno": 0
+    },
+    "final": {
+      "matching": [
+        {
+          "pid": 1597,
+          "start": "22598",
+          "namespace": 4026532184
+        }
+      ],
+      "error": "",
+      "error_pid": 0,
+      "error_errno": 0
+    },
+    "extinct": false
+  },
+  "guest_cleanup": {
+    "driver_reaped": true,
+    "listeners_extinct": true,
+    "mounts_removed": true,
+    "observed_worker_namespaces_extinct": true
+  },
+  "inference": "Persistent matching identity equals denial front metadata after same-process Runtime Close/Open lost children map. Zombie state and parent ownership were not measured in this receipt; no verified cause or successful qualification.",
+  "followup": "Retain exact failed run. Add State/PPID diagnostics and review exact-owned-pid reaping fallback before another native attempt."
+}

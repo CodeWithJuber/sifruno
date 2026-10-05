@@ -28,6 +28,16 @@ test("session timestamps and flag fail closed", () => {
     (v) => { delete v.id; }, (v) => { v.expires_at = "2026-99-99T10:15:00Z"; },
   ]) { const value = item(); change(value); assert.equal(api.validAccessSession(value), false); }
 });
+test("exact 15-minute lifetime and canonical UTC calendar timestamps required", () => {
+  assert(api.validAccessSession({ ...item(), created_at: "2024-02-29T23:50:00Z", expires_at: "2024-03-01T00:05:00Z" }));
+  for (const change of [
+    (v) => { v.expires_at = "2026-10-05T10:14:59Z"; }, (v) => { v.expires_at = "2026-10-05T10:15:01Z"; },
+    (v) => { v.created_at = "2026-02-30T10:00:00Z"; v.expires_at = "2026-02-30T10:15:00Z"; },
+    (v) => { v.created_at = "2026-02-29T10:00:00Z"; v.expires_at = "2026-02-29T10:15:00Z"; },
+    (v) => { v.created_at = "2026-10-05T24:00:00Z"; v.expires_at = "2026-10-06T00:15:00Z"; },
+    (v) => { v.created_at = "2026-10-05T10:00:00+00:00"; }, (v) => { v.expires_at = "2026-10-05T10:15:00.000Z"; },
+  ]) { const value = item(); change(value); assert.equal(api.validAccessSession(value), false); }
+});
 test("revocation result bounds and exact fields", () => {
   for (const revoked_count of [0, 1, 127]) assert(api.validRevocation({ revoked_count }));
   for (const revoked_count of [-1, 128, 0.5, "1", null]) assert.equal(api.validRevocation({ revoked_count }), false);

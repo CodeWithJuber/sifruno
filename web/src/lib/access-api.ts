@@ -7,10 +7,10 @@ export interface Revocation { revoked_count: number }
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const exact = (value: Record<string, unknown>, fields: string[]) => Object.keys(value).length === fields.length && fields.every((field) => Object.hasOwn(value, field));
 const handle = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{32}$/.test(value);
-const isoDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value));
+const isoDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value.replace(/Z$/, ".000Z");
 
 export function validAccessSession(value: unknown): value is AccessSession {
-  return object(value) && exact(value, ["id", "created_at", "expires_at", "current"]) && handle(value.id) && isoDate(value.created_at) && isoDate(value.expires_at) && Date.parse(value.expires_at) > Date.parse(value.created_at) && typeof value.current === "boolean";
+  return object(value) && exact(value, ["id", "created_at", "expires_at", "current"]) && handle(value.id) && isoDate(value.created_at) && isoDate(value.expires_at) && Date.parse(value.expires_at) - Date.parse(value.created_at) === 900000 && typeof value.current === "boolean";
 }
 export function validAccessInventory(value: unknown): value is AccessInventory {
   return object(value) && exact(value, ["items", "capacity", "lifetime_seconds"]) && value.capacity === 128 && value.lifetime_seconds === 900 && Array.isArray(value.items) && value.items.length >= 1 && value.items.length <= 128 && value.items.every(validAccessSession) && new Set(value.items.map((item) => item.id)).size === value.items.length && value.items.filter((item) => item.current).length === 1;

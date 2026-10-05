@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "kind": "independent-operator-session-browser-artifact-review",
+  "passed": true,
+  "baseline_commit": "1b3e88eacff899c207bec0cbeeb442a8f095e5c7",
+  "root_run": "20261005T184230380-b8410d0f",
+  "root_report_sha256": "ca3feb33aa2e94ea2fd162397e257a751a12ca06ae77c5ffad439d16420564fc",
+  "command": "Python312/python.exe -I -B lab/operator-session-review/audit_browser.py <session-controls-integration>",
+  "exit_code": 0,
+  "read_only_audit_elapsed_seconds": 2.217,
+  "integrated_handler_source_pins_matched": 10,
+  "current_report_source_files_matched": 11,
+  "binary_sha256": "b8a3480a28a9bd20693489772b5b8a62cbd9bdb01155fa469307fba93cb8bbf5",
+  "ui_assets": 91,
+  "ui_bytes": 1418236,
+  "ui_catalog_sha256": "2d229f7fbe96f887c036858acd2240ba9f34fa2e43551e7cd53903797c224840",
+  "all_screenshot_hashes_and_dimensions_matched": 18,
+  "private_viewports": 6,
+  "public_mode_viewports": 6,
+  "widths": [390, 768, 1440],
+  "themes": ["light", "dark"],
+  "representative_images_independently_viewed": [
+    "private-390-light.png", "dialog-390-light.png",
+    "private-1440-dark.png", "public-390-dark.png"
+  ],
+  "visual_observations": "Representative controls wrap and dialogs stay contained. Current row offers logout instead of revoke; no credential or management handle is visible. Brand loads and public mode hides Access. Public service inventory is unavailable in this capture, an existing monitoring limitation outside the Access flow.",
+  "authorities": {
+    "actual_root_owned_tcp_browser": "Login, confirmation cancel/Escape focus, single and bulk revocation, removed-cookie replay 401, current retention, logout replay, external revocation refresh, and delayed actual mutation response after programmatic component unmount.",
+    "synthetic_browser_challenges": "One intercepted 503 refresh and client-clock expiry; neither is server expiry or a second native runtime proof.",
+    "public_mode": "Local HTML declaration and read-only metrics fixture; six production proxy paths/upstream-zero are separately executed in root Go tests.",
+    "independent_reviewer": "Actual isolated Manager/api.New handler challenges plus read-only exact current source/binary/UI/report/screenshot rehash and four-image inspection. No additional browser/native execution."
+  },
+  "cleanup": {"browser_closed": true, "public_fixture_closed": true, "owned_child_stopped": true, "owned_listener_closed": true},
+  "source_binary_ui_stable": true,
+  "source_review": [
+    "Core/API bytes equal the independently tested immutable overlay.",
+    "Added OpenAPI and public-preview tests are meaningful and do not transform Manager responses.",
+    "UI action ref/epoch/unmount/expiry checks and current-row controls preserve guarded behavior.",
+    "UI metadata validator now rejects noncanonical UTC dates and any lifetime other than 900 seconds.",
+    "Shared shell consumes status metadata and does not render, serialize or persist session DTOs; browser storage remains theme only.",
+    "Runner bounds paths/files/catalog/outputs and preserves real versus synthetic measurement labels."
+  ],
+  "preflight": "Forge check invoked before helper edit; failed EPERM scanning unrelated primary accounts-native-debug state. No state read or changed. Explicit owned scope and read-only artifact inputs retained.",
+  "limits": [
+    "Windows loopback single-operator feature evidence, not roles or remote production authentication.",
+    "No native Linux/new stock provisioning, physical phone, ingress/tunnel, all-OS or original compatibility acceptance.",
+    "No live activation, dependency addition or global credential access.",
+    "Broad root tests/race/vet are root-executed evidence, not independently rerun by this reviewer.",
+    "Final documentation/status/source ZIP audit is separate from this accepted browser artifact stage."
+  ]
+}

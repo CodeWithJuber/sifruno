@@ -39,6 +39,10 @@ hashes, command, stdout/stderr digests and the precise scope are in
 An earlier identical narrow run also passed, but its console display was
 truncated, so the retained run closes that output-capture gap.
 
-This lab stage is complete for those source bytes. Root's assembled source
-comparison and actual complete API/browser proof receive a separate audit;
-this receipt does not imply that those later gates passed.
+The integrated source matched all ten tested inputs. The separate read-only
+`audit_browser.py` run passed the actual root report and rehashed its executable,
+91 complete UI assets, 11 source files and 18 screenshots. Four representative
+images were independently inspected. `browser-review.json` records the real
+TCP/browser flows separately from synthetic 503, browser-clock and public-mode
+fixture checks. Root's final documentation/status/source archive receives a
+separate audit; these receipts do not qualify that later delivery gate.

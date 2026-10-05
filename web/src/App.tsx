@@ -3,7 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { SideNav, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
-import { CircleDollarSign, Clock3, FileCheck2, Globe, Home, Info, Layers, Menu, Moon, RefreshCw, Search, Server, Sun, Users, X } from "lucide-react";
+import { Archive, CircleDollarSign, Clock3, FileCheck2, Globe, HardDrive, Home, Info, Layers, Menu, Moon, Network, RefreshCw, Search, Server, Sun, Users, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Overview, ServiceInventory } from "@/Dashboard";
@@ -16,13 +16,19 @@ const Budget = lazy(() => import("@/Tools").then((m) => ({ default: m.Budget }))
 const Platforms = lazy(() => import("@/Tools").then((m) => ({ default: m.Platforms })));
 const Websites = lazy(() => import("@/Websites"));
 const Accounts = lazy(() => import("@/Accounts"));
+const Backups = lazy(() => import("@/Backups"));
+const Storage = lazy(() => import("@/HostResources").then((m) => ({ default: m.Storage })));
+const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ default: m.NetworkResources })));
 
-type View = "overview" | "services" | "websites" | "accounts" | "evidence" | "trail" | "budget" | "platform";
+type View = "overview" | "services" | "storage" | "network" | "websites" | "accounts" | "backups" | "evidence" | "trail" | "budget" | "platform";
 const views = [
   { id: "overview", label: "Overview", title: "Server overview", subtitle: "A clear view of your server, in real time.", icon: Home },
   { id: "services", label: "Services", title: "Services", subtitle: "Inspect the services installed on your server.", icon: Server },
+  { id: "storage", label: "Storage", title: "Storage", subtitle: "Inspect real host volumes, capacity and available space.", icon: HardDrive },
+  { id: "network", label: "Network", title: "Network", subtitle: "Follow measured traffic rates and host transfer counters.", icon: Network },
   { id: "websites", label: "Websites", title: "Websites", subtitle: "Manage your actual app-owned static sites locally.", icon: Globe },
   { id: "accounts", label: "Accounts", title: "Linux accounts", subtitle: "Manage local Linux identities and home directories.", icon: Users },
+  { id: "backups", label: "Backups", title: "Website backups", subtitle: "Create, export and restore native static-site ZIP snapshots.", icon: Archive },
   { id: "evidence", label: "Compatibility", title: "Compatibility evidence", subtitle: "Track the workflows that still need to be verified.", icon: FileCheck2 },
   { id: "trail", label: "Change trail", title: "Change trail", subtitle: "Follow scoped file changes and their recovery history.", icon: Clock3 },
   { id: "budget", label: "AI budget", title: "AI spending controls", subtitle: "Keep paid AI work within a fixed monthly allowance.", icon: CircleDollarSign },
@@ -52,8 +58,10 @@ export function App() {
   const [range, setRange] = useState("60");
   const [websitesVisited, setWebsitesVisited] = useState(false);
   const [accountsVisited, setAccountsVisited] = useState(false);
+  const [backupsVisited, setBackupsVisited] = useState(false);
   const [websitesResource, setWebsitesResource] = useState<Resource<unknown>>({ loading: false });
   const [accountsResource, setAccountsResource] = useState<Resource<unknown>>({ loading: false });
+  const [backupsResource, setBackupsResource] = useState<Resource<unknown>>({ loading: false });
   const publicPreview = Boolean(document.querySelector('meta[name="sifruno-public-preview"]'));
   const status = useResource("/api/v1/status", validStatus, revision);
   const platform = useResource("/api/v1/platform", validPlatform, revision);
@@ -62,13 +70,13 @@ export function App() {
   const server = useResource(`/api/v1/server?range_seconds=${range}`, validServer, revision, 5000);
   const services = useResource("/api/v1/services", validServices, revision, 30000);
   const refresh = () => setRevision((v) => v + 1);
-  const visibleViews = views.filter((v) => !publicPreview || (v.id !== "websites" && v.id !== "accounts" && v.id !== "trail" && v.id !== "budget"));
+  const visibleViews = views.filter((v) => !publicPreview || (v.id !== "websites" && v.id !== "accounts" && v.id !== "backups" && v.id !== "trail" && v.id !== "budget"));
   const active = views.find((v) => v.id === view)!;
-  const activeResource = view === "overview" ? server : view === "services" ? services : view === "websites" ? websitesResource : view === "accounts" ? accountsResource : view === "evidence" ? status : view === "trail" ? trail : view === "budget" ? budget : platform;
+  const activeResource = ["overview", "storage", "network"].includes(view) ? server : view === "services" ? services : view === "websites" ? websitesResource : view === "accounts" ? accountsResource : view === "backups" ? backupsResource : view === "evidence" ? status : view === "trail" ? trail : view === "budget" ? budget : platform;
   const connected = Boolean(server.data && !server.error);
   const partial = server.data?.collector.status === "partial";
   const unavailable = server.data?.collector.status === "unavailable";
-  const navigate = (next: View) => { if (next === "websites" && !publicPreview) setWebsitesVisited(true); if (next === "accounts" && !publicPreview) setAccountsVisited(true); if (next === "accounts" && publicPreview) return; setView(next); setMenuOpen(false); setSearch(""); };
+  const navigate = (next: View) => { if (publicPreview && ["websites", "accounts", "backups", "trail", "budget"].includes(next)) return; if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? {
@@ -99,8 +107,8 @@ export function App() {
           header={<button className="brand-link" aria-label="Sifruno server overview" onClick={() => navigate("overview")}>{logo}</button>}
           footer={<div className="sidebar-status"><i className={`status-dot ${!connected || unavailable ? "status-muted" : ""}`} /><div>Local server<small>{server.error ? "Connection lost" : connected ? partial ? "Partial monitoring" : unavailable ? "Measurements unavailable" : `Sampling every ${server.data!.collector.interval_seconds}s` : "Connecting…"}</small></div></div>}
           footerIcons={<div className="theme-switch"><Button label={`Switch to ${theme === "light" ? "dark" : "light"} theme`} variant="ghost" size="lg" icon={theme === "light" ? <Moon /> : <Sun />} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>{theme === "light" ? "Dark theme" : "Light theme"}</Button></div>}>
-          <SideNavSection title="Server" isHeaderHidden className="primary-nav">{visibleViews.filter((v) => ["overview", "services", "websites", "accounts"].includes(v.id)).map(navItem)}</SideNavSection>
-          <SideNavSection title="Tools" className="tools-nav">{visibleViews.filter((v) => !["overview", "services", "websites", "accounts"].includes(v.id)).map(navItem)}</SideNavSection>
+          <SideNavSection title="Server" isHeaderHidden className="primary-nav">{visibleViews.filter((v) => ["overview", "services", "storage", "network", "websites", "accounts", "backups"].includes(v.id)).map(navItem)}</SideNavSection>
+          <SideNavSection title="Tools" className="tools-nav">{visibleViews.filter((v) => !["overview", "services", "storage", "network", "websites", "accounts", "backups"].includes(v.id)).map(navItem)}</SideNavSection>
           {publicPreview && <p className="sidebar-preview">Private tools are available in the local panel.</p>}
         </SideNav>
       </aside>
@@ -127,8 +135,11 @@ export function App() {
           {view === "overview" && <div className="content-stack dashboard-stack"><DataState resource={server} retry={refresh}>{server.data && <Overview report={server.data} platform={platform.data} range={range} setRange={setRange} />}</DataState><DataState resource={services} retry={refresh}>{services.data && <ServiceInventory report={services.data} compact query={serviceQuery} setQuery={setServiceQuery} viewAll={() => navigate("services")} />}</DataState></div>}
           {view === "services" && <DataState resource={services} retry={refresh}>{services.data && <ServiceInventory report={services.data} query={serviceQuery} setQuery={setServiceQuery} />}</DataState>}
           <Suspense fallback={<div className="loading-state" role="status" aria-label="Loading panel tool"><Skeleton className="h-64 w-full" /></div>}>
+          {view === "storage" && <DataState resource={server} retry={refresh}>{server.data && <Storage report={server.data} />}</DataState>}
+          {view === "network" && <DataState resource={server} retry={refresh}>{server.data && <NetworkResources report={server.data} range={range} setRange={setRange} />}</DataState>}
           {websitesVisited && !publicPreview && <div hidden={view !== "websites"}><Websites revision={revision} active={view === "websites"} onStatus={setWebsitesResource} /></div>}
           {accountsVisited && !publicPreview && <div hidden={view !== "accounts"}><Accounts revision={revision} active={view === "accounts"} onStatus={setAccountsResource} /></div>}
+          {backupsVisited && !publicPreview && <div hidden={view !== "backups"}><Backups revision={revision} active={view === "backups"} onStatus={setBackupsResource} /></div>}
           {view === "evidence" && <DataState resource={status} retry={refresh}>{status.data && <Evidence report={status.data} />}</DataState>}
           {view === "trail" && !publicPreview && <DataState resource={trail} retry={refresh}>{trail.data && <Trail report={trail.data} />}</DataState>}
           {view === "budget" && !publicPreview && <DataState resource={budget} retry={refresh}>{budget.data && <Budget report={budget.data} />}</DataState>}

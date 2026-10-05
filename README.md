@@ -70,6 +70,11 @@ Native Sifruno v1 ZIP export/import uses the same authenticated API from the loc
 
 Development uses isolated Git worktrees for UI, CLI and review. The session permits four concurrent agents including the integrating root; the [twenty-four workstreams](docs/parallel-development.md) run in batches. This base checkout is connected to [CodeWithJuber/sifruno](https://github.com/CodeWithJuber/sifruno), with reviewed changes proposed on feature branches. Running private state is excluded from Git and source snapshots.
 
+The [full delivery plan](docs/DELIVERY-PLAN.md) maps42focused PR scopes to
+service, compatibility, migration, vendor, AI, platform and release gates.
+[Machine-readable status](docs/WORKSTREAM-STATUS.json) tracks evidence and
+dependencies separately from implementation or qualification claims.
+
 ## Branding
 
 Open `assets/brand/index.html` directly, or run `npm run brand:preview` and visit `http://127.0.0.1:4173`. Download `deliverables/sifruno-brand-kit.zip`. The ZIP includes the complete `assets` directory, brand guide and visual direction; keep that directory structure when extracting. The archive preview hides its self-download link when opened as a file.

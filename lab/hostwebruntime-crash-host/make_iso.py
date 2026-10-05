@@ -9,7 +9,7 @@ import stat
 import sys
 
 FIXED = {"user-data", "meta-data", "network-config", "crash_guest.py", "serving_guest_library.py", "web_runtime_fixture.py",
-         "qualification-driver", "serving-linux.test", "source_catalog.json", "prepared-packages.json", "admission.json"}
+         "qualification-driver", "serving-linux.test", "reaping-linux.test", "source_catalog.json", "prepared-packages.json", "admission.json"}
 WHEEL_SHA = "1a82cd735542921d0dd7bc40381e7b7b9cbc70bd4c03e4f67a0531d59d2f518e"
 
 
@@ -35,8 +35,8 @@ def inventory(plan, packages):
     if len(set(filenames)) != 18 or any(not re.fullmatch(r"[A-Za-z0-9_.+-]+\.rpm", p) for p in filenames):
         raise ValueError("fixed RPM basenames required")
     expected = FIXED | {"packages/" + p for p in filenames}
-    if len(plan["entries"]) != 29 or {e["name"] for e in plan["entries"]} != expected:
-        raise ValueError("fixed29 payload inventory required")
+    if len(plan["entries"]) != 30 or {e["name"] for e in plan["entries"]} != expected:
+        raise ValueError("fixed30 payload inventory required")
     for entry in plan["entries"]:
         if set(entry) != {"name", "bytes", "sha256"} or type(entry["bytes"]) is not int or not 0 < entry["bytes"] <= 64 * 1024 * 1024 or not re.fullmatch(r"[a-f0-9]{64}", entry["sha256"]):
             raise ValueError("invalid payload entry")
@@ -45,8 +45,8 @@ def inventory(plan, packages):
 
 def verify_iso(pycdlib, image, entries):
     names = [entry["name"] for entry in entries]
-    if len(names) != 29 or len(set(names)) != 29 or not FIXED <= set(names) or any(not re.fullmatch(r"packages/[A-Za-z0-9_.+-]+\.rpm", name) for name in set(names) - FIXED):
-        raise ValueError("ISO fixed29 inventory required")
+    if len(names) != 30 or len(set(names)) != 30 or not FIXED <= set(names) or any(not re.fullmatch(r"packages/[A-Za-z0-9_.+-]+\.rpm", name) for name in set(names) - FIXED):
+        raise ValueError("ISO fixed30 inventory required")
     iso = pycdlib.PyCdlib()
     iso.open(str(image))
     records = []
@@ -123,7 +123,7 @@ def main():
     for entry in plan["entries"]:
         if hashlib.sha256(regular(work / entry["name"], 64 * 1024 * 1024)).hexdigest() != entry["sha256"]:
             raise ValueError("payload changed")
-    print(json.dumps({"entries": 29, "bytes": total, "iso_readback": records}))
+    print(json.dumps({"entries": 30, "bytes": total, "iso_readback": records}))
 
 
 if __name__ == "__main__":

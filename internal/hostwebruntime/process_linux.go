@@ -363,14 +363,39 @@ func (r *Runtime) stop(v *record) error {
 			return ErrRecovery
 		}
 	}
-	for _, pid := range pids {
+	for i, pid := range pids {
 		if child := r.children[pid]; child != nil {
 			_, _ = child.Wait()
 			delete(r.children, pid)
+		} else if e := reapExitedPIDFD(int(fds[i].Fd)); e != nil {
+			return e
 		}
 	}
 	v.Processes = nil
 	return nil
+}
+
+// Close/Open in the same controller loses os.Process handles without changing
+// Linux parent ownership. Reap only the exact admitted exited pidfd, never a
+// numeric PID that could be reused. ECHILD also covers adoption from a different
+// parent or an already reaped child; other outcomes retain uncertain state.
+func reapExitedPIDFD(fd int) error {
+	for attempts := 0; attempts < 3; attempts++ {
+		var info unix.Siginfo
+		e := unix.Waitid(unix.P_PIDFD, fd, &info, unix.WEXITED|unix.WNOHANG, nil)
+		if e == unix.EINTR {
+			continue
+		}
+		if e == unix.ECHILD {
+			return nil
+		}
+		// Linux CLD_EXITED, CLD_KILLED and CLD_DUMPED are 1, 2 and 3.
+		if e != nil || info.Signo != int32(unix.SIGCHLD) || info.Errno != 0 || info.Code < 1 || info.Code > 3 {
+			return ErrRecovery
+		}
+		return nil
+	}
+	return ErrRecovery
 }
 func (r *Runtime) launch(ctx context.Context, v *record, g hostwebgeneration.Generation) error {
 	p := r.opts.Profile

@@ -55,7 +55,7 @@ export function build(primary) {
   }
   for(const file of ['go.mod','go.sum'])add(path.join(owner,file));add(go);
   for(const tool of ['compile.exe','link.exe','asm.exe'])add(path.join(authority[2],tool));
-  const raw=command(go,['list','-deps','-test','-json','./lab/hostwebruntime-crash-driver'],env);
+  const raw=command(go,['list','-deps','-test','-json','./lab/hostwebruntime-crash-driver','./internal/hostwebruntime'],env);
   fs.writeFileSync(path.join(work,'dependencies.json'),raw);
   const packages=jsonObjects(raw);for(const p of packages){assert(!p.Error&&!p.Incomplete);if(!p.Dir)continue;
     for(const field of ['GoFiles','CgoFiles','CFiles','CXXFiles','MFiles','HFiles','FFiles','SFiles','SysoFiles','EmbedFiles','TestGoFiles','XTestGoFiles'])for(const f of p[field]||[])add(path.resolve(p.Dir,f));
@@ -67,12 +67,18 @@ export function build(primary) {
   const driver=path.join(work,'qualification-driver'),test=path.join(work,'serving-linux.test');
   command(go,['build','-trimpath','-o',driver,'./lab/hostwebruntime-crash-driver'],env);
   command(go,['test','-c','-trimpath','-o',test,'./lab/hostwebruntime-crash-driver'],env);verify();
+  const reapingTest=path.join(work,'reaping-linux.test');
+  command(go,['test','-c','-trimpath','-o',reapingTest,'./internal/hostwebruntime'],env);verify();
   const artifact=p=>{const b=fs.readFileSync(regular(work,path.basename(p),32*1024*1024));assert.deepEqual([...b.subarray(0,5)],[127,69,76,70,2]);assert.equal(b.readUInt16LE(18),62);return {path:path.relative(owner,p).replaceAll('\\','/'),sha256:digest(b),bytes:b.length};};
   const target=packages.find(p=>p.ImportPath==='sifruno/lab/hostwebruntime-crash-driver');
   assert(target&&target.TestGoFiles.length>=3);
   const testSources=target.TestGoFiles.map(f=>fs.readFileSync(regular(target.Dir,f,128*1024)));
   const tests=[...Buffer.concat(testSources).toString().matchAll(/^func (Test[A-Za-z0-9_]+)\(/gm)].map(v=>v[1]).sort();assert(tests.length>=6&&new Set(tests).size===tests.length);
+  const reapingNames=['TestNamespaceReopenedHandlesReapOriginalChild'];
+  assert(packages.some(p=>p.ImportPath==='sifruno/internal/hostwebruntime'&&p.TestGoFiles.some(f=>fs.readFileSync(path.join(p.Dir,f),'utf8').includes('func '+reapingNames[0]+'('))));
   const catalog={schema_version:1,kind:'current-native-web-controller-crash-build',baseline_commit:'18a97432be0c843ea8a26c76bf04047b0efa5a88',source_inputs:pinned,package_count:packages.length,dependency_metadata_sha256:digest(raw),go_version:authority[0],go_tool_sha256:digest(fs.readFileSync(go)),build_environment:{GOOS:'linux',GOARCH:'amd64',CGO_ENABLED:'0',GOPROXY:'off',GOSUMDB:'off',GOFLAGS:'-mod=readonly'},commands:[['env','GOVERSION','GOROOT','GOTOOLDIR'],['list','-deps','-test','-json','./lab/hostwebruntime-crash-driver'],['build','-trimpath','-o','<owned-driver>','./lab/hostwebruntime-crash-driver'],['test','-c','-trimpath','-o','<owned-test>','./lab/hostwebruntime-crash-driver']],wrapper_cache_exception:'Read-only primary wrapper establishes installed tool authority; pinned canonical tool uses an owned build cache and read-only offline module inputs.',driver:artifact(driver),test:artifact(test),required_tests:tests,native_execution:false,original_compatibility_certified:false};
+  catalog.reaping_test=artifact(reapingTest);catalog.required_reaping_tests=reapingNames;
+  catalog.commands[1].push('./internal/hostwebruntime');catalog.commands.push(['test','-c','-trimpath','-o','<owned-reaping-test>','./internal/hostwebruntime']);
   const output=path.join(work,'source_catalog.json');fs.writeFileSync(output,JSON.stringify(catalog)+'\n');
   return {path:output,sha256:digest(fs.readFileSync(output)),inputs:pinned.length,tests};
 }

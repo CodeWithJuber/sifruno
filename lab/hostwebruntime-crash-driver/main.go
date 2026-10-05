@@ -277,6 +277,8 @@ type namespaceMember struct {
 	PID       int    `json:"pid"`
 	Start     string `json:"start"`
 	Namespace uint64 `json:"namespace"`
+	State     string `json:"state"`
+	PPID      int    `json:"ppid"`
 }
 type namespaceScan struct {
 	Matching   []namespaceMember `json:"matching"`

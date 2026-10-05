@@ -66,7 +66,7 @@ def initial_file(p, mode, maximum):
     return b
 
 def admission(value):
-    fields = set('schema_version kind nonce prepared_image_sha256 fixture_sha256 library_sha256 helper_sha256 source_catalog_sha256 package_report_sha256 driver_sha256 test_sha256 zero_external_nics'.split())
+    fields = set('schema_version kind nonce prepared_image_sha256 fixture_sha256 library_sha256 helper_sha256 source_catalog_sha256 package_report_sha256 driver_sha256 test_sha256 reaping_test_sha256 zero_external_nics'.split())
     a = exact(value, fields)
     require(type(a['schema_version']) is int and a['schema_version'] == 2 and a['kind'] == 'trusted-disposable-alma9-controller-crash' and a['zero_external_nics'] is True and isinstance(a['nonce'], str) and re.fullmatch(r'[a-f0-9]{24}', a['nonce']), 'admission_required')
     require(all(isinstance(a[k], str) and HEX.fullmatch(a[k]) for k in fields if k.endswith('sha256')), 'admission_digest')
@@ -113,22 +113,25 @@ def valid_driver(r, a, input_sha):
     return r
 
 def execute(lib, h, kind, nonce, tests):
-    require(kind in ('test','driver') and signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL and len(threading.enumerate()) == 1, 'exclusive_child_wait_required')
-    name = 'serving-linux.test' if kind == 'test' else 'qualification-driver'
-    args = ['-test.v','-test.count=1','-test.timeout=60s'] if kind == 'test' else ['--input',str(ROOT / 'qualification-input.json')]
+    require(kind in ('test','regression','driver') and signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL and len(threading.enumerate()) == 1, 'exclusive_child_wait_required')
+    name = {'test':'serving-linux.test','regression':'reaping-linux.test','driver':'qualification-driver'}[kind]
+    args = ['-test.v','-test.count=1','-test.timeout=60s'] if kind != 'driver' else ['--input',str(ROOT / 'qualification-input.json')]
+    if kind == 'regression':args.append('-test.run=^TestNamespaceReopenedHandlesReapOriginalChild$')
     argv = ['/usr/bin/setpriv','--bounding-set=-net_admin,-net_raw,-net_bind_service,-net_broadcast','--',str(ROOT / name),*args]
     env = h.clean_env(); env.update({'HOME':str(ROOT / 'work'),'TMPDIR':str(ROOT / 'test-tmp')})
-    deadline = min(h.RUN_DEADLINE, time.monotonic() + (70 if kind == 'test' else 195))
+    if kind == 'regression':env['SIFRUNO_NATIVE_RUNTIME_TEST'] = '1'
+    deadline = min(h.RUN_DEADLINE, time.monotonic() + (70 if kind != 'driver' else 195))
     child = subprocess.Popen(argv, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     receipt, out = lib.capture_child(child, deadline)
-    if kind == 'test':
+    if kind != 'driver':
         safe = len(out) <= 128 << 10 and all(b in (9,10,13) or 32 <= b <= 126 for b in out)
-        print(f'SIFRUNO_RUNTIME_CRASH_TEST_BEGIN {nonce}', flush=True)
+        tag = 'TEST' if kind == 'test' else 'REGRESSION'
+        print(f'SIFRUNO_RUNTIME_CRASH_{tag}_BEGIN {nonce}', flush=True)
         if safe:
             sys.stdout.write(out.decode('ascii'))
             if out and not out.endswith(b'\n'):
                 sys.stdout.write('\n')
-        print(f'SIFRUNO_RUNTIME_CRASH_TEST_END {nonce}', flush=True)
+        print(f'SIFRUNO_RUNTIME_CRASH_{tag}_END {nonce}', flush=True)
         names = sorted(re.findall(r'^--- PASS: (Test\w+) \(',out.decode('ascii'),re.MULTILINE)) if safe else []
         receipt['passed_names'] = names
         receipt['contract_passed'] = safe and receipt['exit_code'] == 0 and not receipt['timed_out'] and not receipt['output_bound_exceeded'] and names == tests and b'\nPASS\n' in out and not re.search(rb'--- SKIP:|--- FAIL:|^FAIL$|^panic:',out,re.MULTILINE)
@@ -141,13 +144,14 @@ def main():
     require(Path(__file__).absolute() == ROOT / 'crash_guest.py', 'fixed_entry_required')
     st = ROOT.lstat();require(stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and st.st_gid == 0 and stat.S_IMODE(st.st_mode) == 0o700,'private_fixture_root_required')
     lib = load_library()
-    result = {'schema_version':2,'kind':'alma9-controller-crash-qualification','nonce':a['nonce'],'driver_run_id':run_id(a['nonce']),'fixture_only':True,'passed':False,'failure_code':None,'checks':[],'cleanup':{'driver_reaped':False,'listeners_extinct':False,'observed_worker_namespaces_extinct':False,'mounts_removed':False},'provenance':{},'environment':{},'policy_adaptations':{},'packages':[],'system_inputs':[],'tls_public_inputs':[],'accounts':[],'sentinels':[],'binds':[],'tests':None,'driver':None}
+    result = {'schema_version':2,'kind':'alma9-controller-crash-qualification','nonce':a['nonce'],'driver_run_id':run_id(a['nonce']),'fixture_only':True,'passed':False,'failure_code':None,'checks':[],'cleanup':{'driver_reaped':False,'listeners_extinct':False,'observed_worker_namespaces_extinct':False,'mounts_removed':False},'provenance':{},'environment':{},'policy_adaptations':{},'packages':[],'system_inputs':[],'tls_public_inputs':[],'accounts':[],'sentinels':[],'binds':[],'tests':None,'reaping_test':None,'driver':None}
     h, owned, source_pins, package_pins, policy_hashes, driver = None, [], {}, [], {}, None
     try:
-        for name,field,mode,limit in [('crash_guest.py','fixture_sha256',0o600,128<<10),('serving_guest_library.py','library_sha256',0o600,128<<10),('web_runtime_fixture.py','helper_sha256',0o600,128<<10),('source_catalog.json','source_catalog_sha256',0o600,2<<20),('prepared-packages.json','package_report_sha256',0o600,64<<10),('qualification-driver','driver_sha256',0o700,32<<20),('serving-linux.test','test_sha256',0o700,32<<20)]:
+        for name,field,mode,limit in [('crash_guest.py','fixture_sha256',0o600,128<<10),('serving_guest_library.py','library_sha256',0o600,128<<10),('web_runtime_fixture.py','helper_sha256',0o600,128<<10),('source_catalog.json','source_catalog_sha256',0o600,2<<20),('prepared-packages.json','package_report_sha256',0o600,64<<10),('qualification-driver','driver_sha256',0o700,32<<20),('serving-linux.test','test_sha256',0o700,32<<20),('reaping-linux.test','reaping_test_sha256',0o700,32<<20)]:
             data = lib.root_file(ROOT / name,mode,limit);require(digest(data) == a[field],'payload_digest_mismatch');source_pins[name] = (digest(data),mode,limit)
         catalog = strict_json(lib.root_file(ROOT / 'source_catalog.json',0o600,2<<20))
         require(catalog['schema_version'] == 1 and catalog['kind'] == 'current-native-web-controller-crash-build' and catalog['driver']['sha256'] == a['driver_sha256'] and catalog['test']['sha256'] == a['test_sha256'] and catalog['native_execution'] is False,'current_catalog_required')
+        require(catalog['reaping_test']['sha256'] == a['reaping_test_sha256'] and catalog['required_reaping_tests'] == ['TestNamespaceReopenedHandlesReapOriginalChild'],'reaping_catalog_required')
         tests = catalog['required_tests'];require(isinstance(tests,list) and tests == sorted(set(tests)) and len(tests) >= 3 and all(isinstance(t,str) and re.fullmatch(r'Test\w{1,100}',t) for t in tests),'test_inventory_required')
         require(not lib.mounted(),'fixture_mounts_not_fresh')
         for name in ['guest-report.json','qualification-input.json','qualification-report.json','fixture-inventory.json','coordinator','managed','homes','front-jail','backend-jails','runtime','tls','work','test-tmp','gpg-check']:
@@ -173,7 +177,7 @@ def main():
         result['checks'].append(CHECKS[5])
         value = {'schema_version':1,'fixture_only':True,'run_id':run_id(a['nonce']),'root':str(ROOT),'profile':p,'accounts':items}
         raw_input = lib.encoded(value);h.write_exact(ROOT / 'qualification-input.json',raw_input);source_pins['qualification-input.json'] = (digest(raw_input),0o600,32768)
-        result['tests'],_ = execute(lib,h,'test',a['nonce'],tests);require(result['tests']['contract_passed'],'native_test_failed');result['checks'].append(CHECKS[6])
+        result['tests'],_ = execute(lib,h,'test',a['nonce'],tests);require(result['tests']['contract_passed'],'native_test_failed');result['reaping_test'],_ = execute(lib,h,'regression',a['nonce'],['TestNamespaceReopenedHandlesReapOriginalChild']);require(result['reaping_test']['contract_passed'],'native_reaping_regression_failed');result['checks'].append(CHECKS[6])
         result['driver'],_ = execute(lib,h,'driver',a['nonce'],tests);result['cleanup']['driver_reaped'] = result['driver']['reaped']
         raw = lib.root_file(ROOT / 'qualification-report.json',0o600,64<<10);driver = driver_header(strict_json(raw),a,digest(raw_input))
         print(f"SIFRUNO_RUNTIME_CRASH_DRIVER_BEGIN {a['nonce']}",flush=True);sys.stdout.write(raw.decode('utf-8')+'\n');print(f"SIFRUNO_RUNTIME_CRASH_DRIVER_END {a['nonce']}",flush=True)

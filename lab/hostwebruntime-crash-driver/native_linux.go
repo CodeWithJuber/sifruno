@@ -1083,6 +1083,12 @@ func scanNamespaces(ids []uint64) (out namespaceScan) {
 					out.Error, out.ErrorPID = "proc_process_identity", pid
 					return out
 				}
+				parts := strings.Fields(string(b)[strings.LastIndex(string(b), ")")+1:])
+				ppid, e := strconv.Atoi(parts[1])
+				if e != nil || ppid < 0 || ppid > 4194304 || len(parts[0]) != 1 || !strings.Contains("RSDZTtXxKWPI", parts[0]) {
+					out.Error, out.ErrorPID = "proc_process_identity", pid
+					return out
+				}
 				var again unix.Stat_t
 				e = unix.Stat("/proc/"+entry.Name()+"/ns/pid", &again)
 				if e == unix.ENOENT || e == unix.ESRCH {
@@ -1100,7 +1106,7 @@ func scanNamespaces(ids []uint64) (out namespaceScan) {
 						out.Error = "proc_matching_bound"
 						return out
 					}
-					out.Matching = append(out.Matching, namespaceMember{pid, start, ns})
+					out.Matching = append(out.Matching, namespaceMember{PID: pid, Start: start, Namespace: ns, State: parts[0], PPID: ppid})
 				}
 				break
 			}

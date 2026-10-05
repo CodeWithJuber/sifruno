@@ -11,7 +11,7 @@ spec.loader.exec_module(guest)
 class AdmissionTests(unittest.TestCase):
     def value(self):
         a = dict(schema_version=2,kind='trusted-disposable-alma9-controller-crash',nonce='a'*24,zero_external_nics=True)
-        for k in ['prepared_image','fixture','library','helper','source_catalog','package_report','driver','test']:
+        for k in ['prepared_image','fixture','library','helper','source_catalog','package_report','driver','test','reaping_test']:
             a[k+'_sha256'] = 'b'*64
         a['library_sha256'] = guest.LIBRARY_SHA
         a['helper_sha256'] = guest.HELPER_SHA

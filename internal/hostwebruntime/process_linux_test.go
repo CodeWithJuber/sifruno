@@ -140,3 +140,64 @@ func TestNamespaceStoppedChildReapedOnRegistrationFailure(t *testing.T) {
 		t.Fatal("failed registration replaced prior metadata")
 	}
 }
+
+func TestNamespaceReopenedHandlesReapOriginalChild(t *testing.T) {
+	r, v, conf := mechanics(t)
+	// Unlike the smaller in-memory mechanics seam, this regression actually
+	// reopens installation handles and therefore supplies admitted temp roots
+	// and the current binary/module/input digest. The CA bytes are a mechanics
+	// fixture only; this helper never serves HTTP or claims TLS qualification.
+	for _, p := range []string{r.opts.Profile.ManagedHomeRoot, r.opts.Profile.FrontChroot, r.opts.Profile.BackendChrootRoot, r.opts.Profile.RuntimeRoot, r.opts.Profile.TLSRoot} {
+		if e := os.Mkdir(p, 0755); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e := os.WriteFile(r.opts.Profile.CAFile, []byte("MECHANICS_ONLY_NOT_TLS\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	var e error
+	r.inputsSHA, e = r.inputDigest()
+	if e != nil {
+		t.Fatal(e)
+	}
+	v.InputsSHA256 = r.inputsSHA
+	if e = r.persist(v); e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if e := r.gatedLaunch(ctx, &v, "front", "", r.opts.Profile.ApacheBinary, conf, []string{"-DFOREGROUND", "-f", conf, "-d", r.opts.Profile.FrontChroot}); e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = r.stop(&v) })
+	if e := retry(ctx, func() error {
+		_, e := os.Stat(filepath.Join(r.opts.Profile.ManagedRoot, "mechanics.descendant"))
+		return e
+	}); e != nil {
+		t.Fatal(e)
+	}
+	ids, e := namespaceMembers(v.Processes[0])
+	if e != nil || len(ids) < 2 {
+		t.Fatal("fixture descendant required", e)
+	}
+	opts := r.opts
+	if e = r.Close(); e != nil {
+		t.Fatal(e)
+	}
+	reopened, e := Open(opts)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = reopened.stop(&v); _ = reopened.Close() })
+	if len(reopened.children) != 0 {
+		t.Fatal("test must exercise missing child handles")
+	}
+	if e = reopened.stop(&v); e != nil {
+		t.Fatal(e)
+	}
+	for _, pid := range ids {
+		if _, e = startIdentity(pid); !os.IsNotExist(e) {
+			t.Fatal("reopened controller left original child or descendant", pid, e)
+		}
+	}
+}

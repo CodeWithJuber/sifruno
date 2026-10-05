@@ -129,7 +129,10 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o .cache/hostweb-crash/qualifi
 Windows admission/contract and canonical recovery unit suites passed; Linux ELF
 and native unit ELF compiled. These checks do not establish native behavior.
 Actual Linux unit and crash qualification execution belong to the root-owned
-fresh disposable QEMU harness. No Linux success receipt is claimed here.
+fresh disposable QEMU harness. The later accepted actual run, its exact hashes,
+independent review, two retained failures and narrow limits are recorded in
+[the controller-death guide](../../docs/native-web-crash-recovery.md); the source
+checks above are not that native receipt.
 
 Source review caught an initial candidate event-name mismatch (`applying` status
 versus `intended` journal event) before any native run. It was corrected in this

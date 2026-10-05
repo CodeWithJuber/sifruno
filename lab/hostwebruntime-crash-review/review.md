@@ -155,6 +155,19 @@ regression rather than retroactively claimed as directly observed.
 
 ## Limits and recovery
 
+The staged publication receipt is 15396 bytes with SHA256
+`6c9638d2801c6cddb3bb9f8381b39e201815726e3ca1016dc5ea4772f2433d7d`.
+Read-only Python312 `-I -B .cache/hostweb-crash-review/public_receipt_audit.py
+<integration-root>` exited 0 after strict duplicate-free decoding and comparison
+of every copied observation, artifact hash, counter sequence, native test name,
+environment, cleanup and namespace field with the accepted raw run. Its retained
+Go/vet/Linux-vet/protocol/audit output hashes matched their actual local files.
+The reviewed projection contains fixture identities, safe hashes and process
+observations; it reads no private key or credential source and contains no PEM
+private key, bearer value or credential-token pattern. The narrow qualified scope
+and false production/original compatibility flags remain accurate. Attachment
+to a future source PR is still a publication action, not completed by this audit.
+
 ### Second actual native attempt: failed, retained
 
 `second-native-failure.json` preserves root run

@@ -9,6 +9,7 @@
   "serial_sha256": "40dc95772d81ebce76e4f8d629d0521c3fde23e273df3c9a53eb5df60c596e77",
   "iso_sha256": "1cdea5c54a98d3fc00d0aef950551a4a24345897cfcc494fedf0cda97abe0573",
   "driver_report_sha256": "3bcdf16a0f4a405878231e34119b0ad302894fadd124b12897e5d9eb94d27c53",
+  "staged_publication_receipt_sha256": "6c9638d2801c6cddb3bb9f8381b39e201815726e3ca1016dc5ea4772f2433d7d",
   "catalog_sha256": "210656d6e062c7eea64122f5316f05712580136890d586900084869e71d12121",
   "driver_elf_sha256": "bb58807296e6cbea2a9a5352d27cff1f321c344160c4f4fccb994e67cd78caf1",
   "driver_test_elf_sha256": "dabe81d5134eeddf4a872aa9f33127a160bc91ccb652dbeaa726dd9664d94803",
@@ -34,7 +35,8 @@
   "independent_guest_cleanup": true,
   "checks": [
     {"command": "node lab/hostwebruntime-crash-review/audit_result.mjs <primary> <candidate> <root-run>", "exit_code": 0},
-    {"command": "Python312 -I -B .cache/hostweb-crash-review/actual_iso.py <primary> <candidate> <root-run>", "exit_code": 0}
+    {"command": "Python312 -I -B .cache/hostweb-crash-review/actual_iso.py <primary> <candidate> <root-run>", "exit_code": 0},
+    {"command": "Python312 -I -B .cache/hostweb-crash-review/public_receipt_audit.py <candidate>", "exit_code": 0}
   ],
   "preserved_failures": ["first-native-failure.json", "second-native-failure.json"],
   "limits": ["same-driver HTTP requests with independently reconstructed alpha body hashes", "adapted fixture account snapshot guard", "no stock-policy, reboot, cPanel, all-OS or production-API qualification"]

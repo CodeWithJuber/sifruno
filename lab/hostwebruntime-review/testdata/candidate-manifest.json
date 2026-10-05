@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "package": "hostwebruntime",
+  "freeze": "worker-freeze-2",
+  "source": "sifruno/internal/hostwebruntime (worker-freeze-2)",
+  "files": [
+    {
+      "name": "files_linux_test.go",
+      "sha256": "c5504788e6a30f73f9ef43db928063d826133836669da1388ee6efcc99da43dd"
+    },
+    {
+      "name": "files_linux.go",
+      "sha256": "e3b9d4c8a588a3cca63b44badda91992b19c98a0c9cd1e94c62953626509323c"
+    },
+    {
+      "name": "observe_linux.go",
+      "sha256": "2f8c50456f1b935e94de639c8431aa36e1d00fae2e0d3d1cd0567456cc6c4594"
+    },
+    {
+      "name": "process_linux_test.go",
+      "sha256": "7cdec4970464ec8cc26c8784835faef12949a9cd7a721e0ecfe166cb702a2060"
+    },
+    {
+      "name": "process_linux.go",
+      "sha256": "e01a461377ae41519caa63a21e8b654b48fc239142b7172fb2f4dd916417aeba"
+    },
+    {
+      "name": "README.md",
+      "sha256": "1390897bb74b96af798c6942492de6d7e64e8e5f7062d73d4b632795fc3d6ef8"
+    },
+    {
+      "name": "runtime_linux.go",
+      "sha256": "11aa210a1ca4e5fade49c6c3eab141e51d40a7e4f3e124855c9673b05b467d36"
+    },
+    {
+      "name": "runtime_test.go",
+      "sha256": "ff1a2272cc6885520623355dd06011adfe74f266547e3ef3725a6aeaab723834"
+    },
+    {
+      "name": "runtime.go",
+      "sha256": "3a7c322515e951282e62f2de7c0353a0a51070073c577a983fca00df318aba97"
+    },
+    {
+      "name": "unavailable.go",
+      "sha256": "c1a7bb4e494f7162c363de2e378db87c41bc052e1bc624b281979a87036bbee0"
+    }
+  ]
+}

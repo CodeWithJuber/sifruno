@@ -1,0 +1,2 @@
+# Preserve approved brand asset hash bytes on every checkout.
+assets/brand/** -text

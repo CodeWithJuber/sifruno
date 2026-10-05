@@ -261,6 +261,36 @@ type workerEvidence struct {
 	Root         string            `json:"root"`
 	Start        string            `json:"start"`
 }
+type namespaceProcess struct {
+	Role      string `json:"role"`
+	AccountID string `json:"account_id"`
+	PID       int    `json:"pid"`
+	Start     string `json:"start"`
+	Namespace uint64 `json:"namespace"`
+}
+type namespaceEpoch struct {
+	Stage       string             `json:"stage"`
+	StateSHA256 string             `json:"state_sha256"`
+	Processes   []namespaceProcess `json:"processes"`
+}
+type namespaceMember struct {
+	PID       int    `json:"pid"`
+	Start     string `json:"start"`
+	Namespace uint64 `json:"namespace"`
+}
+type namespaceScan struct {
+	Matching   []namespaceMember `json:"matching"`
+	Error      string            `json:"error"`
+	ErrorPID   int               `json:"error_pid"`
+	ErrorErrno int               `json:"error_errno"`
+}
+type namespaceDrain struct {
+	Attempts      int           `json:"attempts"`
+	ElapsedMillis int64         `json:"elapsed_ms"`
+	Initial       namespaceScan `json:"initial"`
+	Final         namespaceScan `json:"final"`
+	Extinct       bool          `json:"extinct"`
+}
 type report struct {
 	SchemaVersion       int                          `json:"schema_version"`
 	FixtureOnly         bool                         `json:"fixture_only"`
@@ -289,6 +319,8 @@ type report struct {
 	Workers             []workerEvidence             `json:"worker_evidence"`
 	ObservedNamespaces  []uint64                     `json:"observed_namespace_ids"`
 	NamespacesExtinct   bool                         `json:"namespaces_extinct"`
+	NamespaceEpochs     []namespaceEpoch             `json:"namespace_epochs"`
+	NamespaceDrain      namespaceDrain               `json:"namespace_drain"`
 }
 
 func servingClient() *http.Client {

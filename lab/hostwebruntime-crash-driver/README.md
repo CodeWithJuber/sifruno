@@ -102,8 +102,16 @@ selective_apply
 
 There are four `intended_generations` (bootstrap, crash After, fresh denial,
 separate selective Apply), ten `probes` (five denial then five selective), one
-final `worker_evidence` entry for alpha, and nine observed namespace IDs (5 old,
-1 denial, 3 selective). Probe stages contain both tenant `/index.html` and
+final `worker_evidence` entry for alpha, and three `namespace_epochs` with
+5 old, 1 denial and 3 selective process pins. Namespace inodes may be reused
+between epochs; `observed_namespace_ids` is their sorted unique union (5 to 9),
+not a claim that nine distinct IDs must be allocated. Each epoch binds the exact
+native state hash and role/account/PID/start/namespace pins. `namespace_drain`
+at death and final Shutdown retains initial and terminal `/proc` scan matches,
+errors, bounded attempts and elapsed time. Success requires an empty error-free
+terminal scan within eight seconds and a separate guest namespace scan. These
+diagnostics do not infer the cause of an earlier failed immediate scan.
+Probe stages contain both tenant `/index.html` and
 `/probe.php` entries then `/foreign.test` in that order. The history must have
 one original `apply_checkpoint` and no original `committed` event.
 

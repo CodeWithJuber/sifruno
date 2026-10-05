@@ -23,7 +23,7 @@ ADMISSION = Path('/run/sifruno-runtime-crash-admission')
 LIBRARY_SHA = '99705157a37d290f6c5a3ed87c8f042ed45169b1c98c57f0017c99cc627acd9e'
 HELPER_SHA = '73ef86f95b34d255b4ab5c6145caae718ad1578efba7f1c0d24f5712c57fc9ed'
 HEX = re.compile(r'^[a-f0-9]{64}$')
-DRIVER_FIELDS = set('schema_version fixture_only execution_kind run_id nonce driver_sha256 input_sha256 profile_sha256 intended_generations observations probes crash checkpoints history inventory_sha256 source_catalog_sha256 prerequisites stage passed shutdown_passed close_passed listeners_extinct input_stable selinux_stable worker_evidence observed_namespace_ids namespaces_extinct'.split())
+DRIVER_FIELDS = set('schema_version fixture_only execution_kind run_id nonce driver_sha256 input_sha256 profile_sha256 intended_generations observations probes crash checkpoints history inventory_sha256 source_catalog_sha256 prerequisites stage passed shutdown_passed close_passed listeners_extinct input_stable selinux_stable worker_evidence observed_namespace_ids namespaces_extinct namespace_epochs namespace_drain'.split())
 CHECKS = ['fixed_current_payload_admission','alma9_enforcing_no_external_nics','signed18_installed_exact_nevras','guest_policy_adapted_declared','two_fixture_accounts_and_private_receipts','disjoint_jail_nss_and_exact_bind_mappings','current_driver_negative_tests','controller_death_checkpoint_denial_selective_apply','owned_driver_reaped_listeners_namespaces_extinct','owned_mounts_removed','input_source_package_policy_stable']
 
 class Failure(RuntimeError):
@@ -101,6 +101,15 @@ def valid_driver(r, a, input_sha):
     require(c['owned_child'] is True and c['signal'] == 9 and c['wait_signaled'] is True and c['native_metadata_stable'] is True and c['strict_observe_rejected'] is True and c['listeners_extinct'] is True and c['namespaces_extinct'] is True and c['journal_before_sha256'] == c['journal_after_sha256'], 'controller_death_unproven')
     require([x['stage'] for x in r['checkpoints']] == ['after_kill','apply_checkpoint','repeated_checkpoint','reopened_checkpoint','stale_refused','denied_repaired','healthy_repair_refused','reopened_denied','selective_apply'], 'checkpoint_order')
     require([x['coordinator']['revision'] for x in r['checkpoints']] == [0,1,1,1,1,2,2,2,3], 'counter_progression')
+    require([x['stage'] for x in r['namespace_epochs']] == ['before_kill','repair_denied','selective'] and [len(x['processes']) for x in r['namespace_epochs']] == [5,1,3], 'namespace_epochs_required')
+    ids = sorted(set(p['namespace'] for x in r['namespace_epochs'] for p in x['processes']))
+    require(r['observed_namespace_ids'] == ids and 5 <= len(ids) <= 9, 'namespace_epoch_union')
+    for value in [r['namespace_drain'],r['crash']['namespace_drain']]:
+        exact(value,set('attempts elapsed_ms initial final extinct'.split()))
+        require(value['extinct'] is True and type(value['attempts']) is int and 1 <= value['attempts'] <= 162 and type(value['elapsed_ms']) is int and 0 <= value['elapsed_ms'] <= 10000,'namespace_drain_bound')
+        for scan in [value['initial'],value['final']]:exact(scan,set('matching error error_pid error_errno'.split()))
+        require(value['final'] == dict(matching=[],error='',error_pid=0,error_errno=0),'namespace_drain_failed')
+        require(value['attempts'] != 1 or value['initial'] == value['final'],'namespace_drain_contradiction')
     return r
 
 def execute(lib, h, kind, nonce, tests):
@@ -168,11 +177,13 @@ def main():
         result['driver'],_ = execute(lib,h,'driver',a['nonce'],tests);result['cleanup']['driver_reaped'] = result['driver']['reaped']
         raw = lib.root_file(ROOT / 'qualification-report.json',0o600,64<<10);driver = driver_header(strict_json(raw),a,digest(raw_input))
         print(f"SIFRUNO_RUNTIME_CRASH_DRIVER_BEGIN {a['nonce']}",flush=True);sys.stdout.write(raw.decode('utf-8')+'\n');print(f"SIFRUNO_RUNTIME_CRASH_DRIVER_END {a['nonce']}",flush=True)
-        result['driver']['report_sha256'] = digest(raw);result['driver']['passed'] = driver['passed'];valid_driver(driver,a,digest(raw_input))
-        require(result['driver']['exit_code'] == 0 and not result['driver']['timed_out'] and not result['driver']['output_bound_exceeded'],'driver_exit_failed');result['checks'].append(CHECKS[7])
+        result['driver']['report_sha256'] = digest(raw);result['driver']['passed'] = driver['passed']
         result['cleanup']['listeners_extinct'] = lib.listener_extinction()
         ids = driver['observed_namespace_ids'];require(all(type(n) is int and n > 0 for n in ids) and len(set(ids)) == len(ids),'namespace_inventory_invalid')
-        result['cleanup']['observed_worker_namespaces_extinct'] = lib.namespace_extinction([{'namespace':n} for n in ids]);result['checks'].append(CHECKS[8])
+        result['cleanup']['observed_worker_namespaces_extinct'] = lib.namespace_extinction([{'namespace':n} for n in ids])
+        valid_driver(driver,a,digest(raw_input))
+        require(result['driver']['exit_code'] == 0 and not result['driver']['timed_out'] and not result['driver']['output_bound_exceeded'],'driver_exit_failed');result['checks'].append(CHECKS[7])
+        result['checks'].append(CHECKS[8])
     except Exception as error:
         code = str(error) if isinstance(error,(Failure,lib.Failure,getattr(h,'FixtureError',Failure))) else 'unexpected_fixture_failure'
         result['failure_code'] = code if re.fullmatch(r'[a-z0-9_]{1,80}',code) else 'unexpected_fixture_failure'

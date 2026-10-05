@@ -18,19 +18,20 @@ type boundary struct {
 	Native      hostwebgeneration.RecoveryInspection `json:"native"`
 }
 type crashEvidence struct {
-	Boundary              boundary `json:"boundary"`
-	ParentPID             int      `json:"parent_pid"`
-	ChildPID              int      `json:"child_pid"`
-	ChildStart            string   `json:"child_start"`
-	OwnedChild            bool     `json:"owned_child"`
-	Signal                int      `json:"signal"`
-	WaitSignaled          bool     `json:"wait_signaled"`
-	NativeMetadataStable  bool     `json:"native_metadata_stable"`
-	JournalBeforeSHA256   string   `json:"journal_before_sha256"`
-	JournalAfterSHA256    string   `json:"journal_after_sha256"`
-	StrictObserveRejected bool     `json:"strict_observe_rejected"`
-	ListenersExtinct      bool     `json:"listeners_extinct"`
-	NamespacesExtinct     bool     `json:"namespaces_extinct"`
+	Boundary              boundary       `json:"boundary"`
+	ParentPID             int            `json:"parent_pid"`
+	ChildPID              int            `json:"child_pid"`
+	ChildStart            string         `json:"child_start"`
+	OwnedChild            bool           `json:"owned_child"`
+	Signal                int            `json:"signal"`
+	WaitSignaled          bool           `json:"wait_signaled"`
+	NativeMetadataStable  bool           `json:"native_metadata_stable"`
+	JournalBeforeSHA256   string         `json:"journal_before_sha256"`
+	JournalAfterSHA256    string         `json:"journal_after_sha256"`
+	StrictObserveRejected bool           `json:"strict_observe_rejected"`
+	ListenersExtinct      bool           `json:"listeners_extinct"`
+	NamespacesExtinct     bool           `json:"namespaces_extinct"`
+	NamespaceDrain        namespaceDrain `json:"namespace_drain"`
 }
 type checkpoint struct {
 	Stage         string                               `json:"stage"`

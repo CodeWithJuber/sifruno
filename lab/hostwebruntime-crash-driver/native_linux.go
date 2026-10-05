@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -450,7 +451,10 @@ func run() (result error) {
 			e := rt.Shutdown(ctx)
 			r.ShutdownPassed = e == nil
 			r.ListenersExtinct = e == nil && extinct(ctx, in)
-			r.NamespacesExtinct = e == nil && namespacesExtinct(r.ObservedNamespaces)
+			if e == nil {
+				r.NamespaceDrain = drainNamespaces(ctx, r.ObservedNamespaces, scanNamespaces)
+				r.NamespacesExtinct = r.NamespaceDrain.Extinct
+			}
 			cancel()
 			r.ClosePassed = rt.Close() == nil
 		}
@@ -572,7 +576,7 @@ func run() (result error) {
 	if e != nil || hash(nativeBefore) != b.Native.StateSHA256 {
 		return errContract
 	}
-	if e = collectNamespaces(nativeBefore, &r); e != nil {
+	if e = collectNamespaces(nativeBefore, "before_kill", in, &r); e != nil {
 		return e
 	}
 	journalBefore, e := readOwned(fd, "coordinator/generations.db", 0600, 8<<20)
@@ -616,7 +620,8 @@ func run() (result error) {
 		}
 	}
 	r.Crash.ListenersExtinct = extinct(ctx, in)
-	r.Crash.NamespacesExtinct = namespacesExtinct(r.ObservedNamespaces)
+	r.Crash.NamespaceDrain = drainNamespaces(ctx, r.ObservedNamespaces, scanNamespaces)
+	r.Crash.NamespacesExtinct = r.Crash.NamespaceDrain.Extinct
 	if !r.Crash.ListenersExtinct || !r.Crash.NamespacesExtinct {
 		return errContract
 	}
@@ -733,7 +738,7 @@ func run() (result error) {
 		return errContract
 	}
 	r.Generations = append(r.Generations, *cp.Coordinator.Current)
-	if e = collectCurrentNamespaces(fd, cp.Native.StateSHA256, &r); e != nil {
+	if e = collectCurrentNamespaces(fd, cp.Native.StateSHA256, "repair_denied", in, &r); e != nil {
 		return e
 	}
 	if e = probes(ctx, fd, in, "repair_denied", true, &r); e != nil {
@@ -792,7 +797,7 @@ func run() (result error) {
 		return errContract
 	}
 	r.Generations = append(r.Generations, *cp.Coordinator.Current)
-	if e = collectCurrentNamespaces(fd, cp.Native.StateSHA256, &r); e != nil {
+	if e = collectCurrentNamespaces(fd, cp.Native.StateSHA256, "selective", in, &r); e != nil {
 		return e
 	}
 	if e = probes(ctx, fd, in, "selective", false, &r); e != nil {
@@ -957,15 +962,47 @@ func actualWorker(fd int, a hostaccounts.Account, p phpIdentity, root string) (w
 	return out, nil
 }
 
-func collectNamespaces(raw []byte, r *report) error {
-	var v struct{ Processes []struct{ Namespace uint64 } }
+func collectNamespaces(raw []byte, stage string, in fixtureInput, r *report) error {
+	var v struct {
+		Processes []struct {
+			Role, AccountID string
+			PID             int
+			Start           string
+			Namespace       uint64
+		}
+	}
 	if json.Unmarshal(raw, &v) != nil || len(v.Processes) < 1 || len(v.Processes) > hostwebruntime.MaxProcesses {
 		return errContract
 	}
-	for _, p := range v.Processes {
-		if p.Namespace == 0 {
+	counts := map[string]int{"before_kill": 5, "repair_denied": 1, "selective": 3}
+	if counts[stage] != len(v.Processes) || len(r.NamespaceEpochs) != map[string]int{"before_kill": 0, "repair_denied": 1, "selective": 2}[stage] {
+		return errContract
+	}
+	epoch := namespaceEpoch{Stage: stage, StateSHA256: hash(raw)}
+	if len(in.Accounts) != 2 {
+		return errContract
+	}
+	expected := []namespaceProcess{}
+	if stage != "repair_denied" {
+		for i, a := range in.Accounts {
+			if stage == "selective" && i == 1 {
+				continue
+			}
+			expected = append(expected, namespaceProcess{Role: "fpm", AccountID: a.ID}, namespaceProcess{Role: "backend", AccountID: a.ID})
+		}
+	}
+	expected = append(expected, namespaceProcess{Role: "front"})
+	pids, namespaces := map[int]bool{}, map[uint64]bool{}
+	for i, p := range v.Processes {
+		start, e := strconv.ParseUint(p.Start, 10, 64)
+		if p.Namespace == 0 || namespaces[p.Namespace] || p.PID < 2 || pids[p.PID] || e != nil || start == 0 || strconv.FormatUint(start, 10) != p.Start || (p.Role != "front" && p.Role != "backend" && p.Role != "fpm") || (p.Role == "front") != (p.AccountID == "") || p.Role != "front" && !idRE.MatchString(p.AccountID) {
 			return errContract
 		}
+		if p.Role != expected[i].Role || p.AccountID != expected[i].AccountID {
+			return errContract
+		}
+		pids[p.PID], namespaces[p.Namespace] = true, true
+		epoch.Processes = append(epoch.Processes, namespaceProcess{p.Role, p.AccountID, p.PID, p.Start, p.Namespace})
 		found := false
 		for _, ns := range r.ObservedNamespaces {
 			if ns == p.Namespace {
@@ -976,40 +1013,120 @@ func collectNamespaces(raw []byte, r *report) error {
 			r.ObservedNamespaces = append(r.ObservedNamespaces, p.Namespace)
 		}
 	}
+	sort.Slice(r.ObservedNamespaces, func(i, j int) bool { return r.ObservedNamespaces[i] < r.ObservedNamespaces[j] })
+	r.NamespaceEpochs = append(r.NamespaceEpochs, epoch)
 	return nil
 }
-func collectCurrentNamespaces(fd int, wantSHA string, r *report) error {
+func collectCurrentNamespaces(fd int, wantSHA, stage string, in fixtureInput, r *report) error {
 	b, e := readOwned(fd, "managed/state.json", 0600, hostwebruntime.MaxMetadataBytes)
 	if e != nil || hash(b) != wantSHA {
 		return errContract
 	}
-	return collectNamespaces(b, r)
+	return collectNamespaces(b, stage, in, r)
 }
-func namespacesExtinct(ids []uint64) bool {
+
+// Namespace inode numbers are reusable after destruction. Record separate
+// metadata epochs, then measure the union after owned Shutdown. This acceptance
+// check allows at most eight seconds and retains its first and terminal scan;
+// those measurements, not an assumed first-failure cause, govern success.
+func scanNamespaces(ids []uint64) (out namespaceScan) {
+	out = namespaceScan{Matching: []namespaceMember{}}
+	defer func() {
+		sort.Slice(out.Matching, func(i, j int) bool { return out.Matching[i].PID < out.Matching[j].PID })
+	}()
 	if len(ids) == 0 || len(ids) > 3*hostwebruntime.MaxProcesses {
-		return false
+		out.Error = "namespace_inventory"
+		return out
 	}
 	entries, e := os.ReadDir("/proc")
 	if e != nil || len(entries) > 65536 {
-		return false
+		out.Error = "proc_inventory"
+		var errno syscall.Errno
+		if errors.As(e, &errno) {
+			out.ErrorErrno = int(errno)
+		}
+		return out
 	}
 	for _, entry := range entries {
-		if _, e := strconv.Atoi(entry.Name()); e != nil {
+		pid, e := strconv.Atoi(entry.Name())
+		if e != nil {
 			continue
 		}
 		var s unix.Stat_t
-		e := unix.Stat("/proc/"+entry.Name()+"/ns/pid", &s)
+		e = unix.Stat("/proc/"+entry.Name()+"/ns/pid", &s)
 		if e == unix.ENOENT || e == unix.ESRCH {
 			continue
 		}
 		if e != nil {
-			return false
+			out.Error, out.ErrorPID = "proc_namespace_read", pid
+			if errno, ok := e.(syscall.Errno); ok {
+				out.ErrorErrno = int(errno)
+			}
+			return out
 		}
 		for _, ns := range ids {
 			if s.Ino == ns {
-				return false
+				b, e := os.ReadFile("/proc/" + entry.Name() + "/stat")
+				if errors.Is(e, os.ErrNotExist) || errors.Is(e, unix.ESRCH) {
+					break
+				}
+				if e != nil || len(b) > 8192 {
+					out.Error, out.ErrorPID = "proc_stat_read", pid
+					var errno syscall.Errno
+					if errors.As(e, &errno) {
+						out.ErrorErrno = int(errno)
+					}
+					return out
+				}
+				start, e := processStart(b)
+				if e != nil {
+					out.Error, out.ErrorPID = "proc_process_identity", pid
+					return out
+				}
+				var again unix.Stat_t
+				e = unix.Stat("/proc/"+entry.Name()+"/ns/pid", &again)
+				if e == unix.ENOENT || e == unix.ESRCH {
+					break
+				}
+				if e != nil {
+					out.Error, out.ErrorPID = "proc_namespace_read", pid
+					if errno, ok := e.(syscall.Errno); ok {
+						out.ErrorErrno = int(errno)
+					}
+					return out
+				}
+				if again.Ino == ns {
+					if len(out.Matching) >= 1024 {
+						out.Error = "proc_matching_bound"
+						return out
+					}
+					out.Matching = append(out.Matching, namespaceMember{pid, start, ns})
+				}
+				break
 			}
 		}
 	}
-	return true
+	return out
+}
+func drainNamespaces(ctx context.Context, ids []uint64, scan func([]uint64) namespaceScan) namespaceDrain {
+	started := time.Now()
+	deadline := started.Add(8 * time.Second)
+	var out namespaceDrain
+	for {
+		out.Final = scan(ids)
+		out.Attempts++
+		if out.Attempts == 1 {
+			out.Initial = out.Final
+		}
+		out.ElapsedMillis = time.Since(started).Milliseconds()
+		out.Extinct = out.Final.Error == "" && len(out.Final.Matching) == 0
+		if out.Extinct || !time.Now().Before(deadline) {
+			return out
+		}
+		select {
+		case <-ctx.Done():
+			return out
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }

@@ -425,7 +425,7 @@ func (c *Coordinator) Recover(ctx context.Context, in RecoverInput) error {
 			return ErrRecovery
 		}
 		target := before
-		if target.ID == "" || target.SnapshotSHA256 != current.SnapshotSHA256 {
+		if target.ID == "" || target.SnapshotSHA256 != current.SnapshotSHA256 || target.SnapshotSHA256 != after.SnapshotSHA256 {
 			target = current
 			if intent.Recovery != "" {
 				prior, e := c.persistence.generation(intent.Recovery, c)

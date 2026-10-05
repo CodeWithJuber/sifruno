@@ -17,6 +17,17 @@ The new Websites section manages actual app-owned static files: persisted sites,
 
 Portable builds target Windows/Linux/macOS amd64/arm64: `npm run runtime:build`. Build verification and runtime qualification are separate. Historical systems remain connector/remote candidates, not guaranteed native targets. See [platform scope](docs/platform-support.md) and [archive contract](docs/runtime-builds.md).
 
+Accounts adds an optional local Linux root broker, private operator UI/API and
+authenticated CLI. It creates native identities, private primary groups, homes
+and `public_html`, with locked passwords, `nologin`, revision-checked account
+expiry and visible recovery. Actual disposable AlmaLinux9.8/XFS/SELinux Enforcing
+execution passed creation, expiry/resume, broker restart, conflict and peer
+admission checks. The fixture explicitly adapted NSS and mail-default policies;
+stock zero-configuration Alma support is not qualified. Domain is metadata and
+web/PHP/DNS/TLS/mail/databases remain required. Windows/macOS account brokers are
+unavailable. See [operation guide](docs/hosting-accounts.md) and
+[independent review](docs/hosting-accounts-review.md).
+
 The delivered source is `deliverables/sifruno-source.zip` with a file manifest and sibling SHA256. Source packaging excludes private state, tooling caches and dependencies and compares inputs locally against inherited credential values without printing them. Windows native archive verification is `node scripts/verify-runtime.mjs`; its report is `artifacts/runtime/native-windows.json`. Other OS archives remain build-verified only.
 
 Native Sifruno v1 ZIP export/import uses the same authenticated API from the local UI and CLI. Imports create a new static site after full bounded validation; downloads retain the recorded backup hash. Original cPanel account restoration and migration remain unimplemented. A separate `panelctl backup inspect --from ORIGINAL.tar.gz --out NEW.jsonl` streams original-format TAR/gzip hashes and metadata for migration characterization, without extracting files or exposing their contents. See [native transfers](docs/native-transfers.md) and [original backup inspection](docs/cpanel-backup-inspection.md).
@@ -50,7 +61,7 @@ Actual packaged runtime slices have executed on Windows Server2025 and trusted A
 
 The first original-hosting targets remain AlmaLinux 9 / CloudLinux 9 x86_64 on a fresh server, followed by a 100-account pilot. Existing API/CLI clients, original installers, plugins, hooks, paths and WHMCS cPanel integrations must work with zero compatibility-related user edits. Existing hosting daemons, SDKs and tools are reused where they match observable behavior.
 
-Full compatibility cannot be certified from these open source repositories. The next external evidence required is a disposable Linux test host with legitimately licensed cPanel and the seven launch-vendor test environments: WHMCS, Cloudflare, CloudLinux, LiteSpeed, JetBackup, Softaculous and Imunify360. Pin the exact cPanel build, OS, packages, enabled features and artifact hashes before differential testing. Current reference fields intentionally remain empty and unverified. No hosting account lifecycle or privileged broker is shipped yet.
+Full compatibility cannot be certified from these open source repositories. The next external evidence required is a disposable Linux test host with legitimately licensed cPanel and the seven launch-vendor test environments: WHMCS, Cloudflare, CloudLinux, LiteSpeed, JetBackup, Softaculous and Imunify360. Pin the exact cPanel build, OS, packages, enabled features and artifact hashes before differential testing. Current reference fields intentionally remain empty and unverified. The limited native account broker does not implement the original hosting account/runtime contract.
 
 `internal/evidence` and `lab/` implement bounded hash-checked bundles, a fixed read-only Linux collector and differential comparison. Two synthetic fixtures produce one match and one detected difference; neither certifies compatibility.
 

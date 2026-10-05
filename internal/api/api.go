@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
+	"sifruno/internal/hostaccounts"
 	"sifruno/internal/operator"
 	"sifruno/internal/platform"
 	"sifruno/internal/serverinfo"
@@ -32,6 +34,7 @@ type Options struct {
 	Server         *serverinfo.Collector
 	Sites          *sites.Store
 	Operator       *operator.Manager
+	Accounts       hostaccounts.Service
 	// nil preserves older UI callers; zero explicitly disables local previews.
 	SitePreviewPort *uint16
 }
@@ -57,6 +60,7 @@ func New(o Options) http.Handler {
 	cfg.SchemasPath = "" // Local spec, no third-party documentation CDN.
 	api := humago.New(mux, cfg)
 	registerSites(api, o)
+	registerAccounts(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	if o.Operator != nil {
@@ -183,7 +187,7 @@ func New(o Options) http.Handler {
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !origins[origin] {
-			if isSitePath(r.URL.Path) || isSessionPath(r.URL.Path) {
+			if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 				operator.WriteError(w, 403, "origin_not_allowed", "Origin not allowed")
 				return
 			}
@@ -205,13 +209,13 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || (r.Method == http.MethodPost && (r.URL.Path == "/api/v1/session/login" || r.URL.Path == "/api/v1/session/logout"))
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || (r.Method == http.MethodPost && (r.URL.Path == "/api/v1/session/login" || r.URL.Path == "/api/v1/session/logout"))
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if isSitePath(r.URL.Path) || isSessionPath(r.URL.Path) {
+		if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 			if o.Operator == nil {
 				operator.WriteError(w, 503, "operator_unavailable", "Operator authentication unavailable")
 				return
@@ -230,6 +234,17 @@ func New(o Options) http.Handler {
 			if mutation && r.URL.Path != "/api/v1/sites/import" && !prepareSiteJSON(w, r) {
 				return
 			}
+		}
+		if isAccountPath(r.URL.Path) {
+			actor, ok := o.Operator.Authorize(w, r, mutation)
+			if !ok {
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
+			if mutation && !prepareAccountJSON(w, r) {
+				return
+			}
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
 		}
 		mux.ServeHTTP(w, r)
 	})

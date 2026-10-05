@@ -76,7 +76,7 @@ func documentOperator(a huma.API) {
 	add(&huma.Operation{OperationID: "operator-logout", Method: http.MethodPost, Path: "/api/v1/session/logout", Summary: "Invalidate the active session and expire its cookie", Description: "A revoked cookie cannot be replayed. Send an empty JSON object (an empty body with application/json is also accepted).", Security: writeSecurity, Parameters: []*huma.Param{origin(), csrf()}, RequestBody: &huma.RequestBody{Required: false, Content: map[string]*huma.MediaType{"application/json": {Schema: ref("OperatorLogout")}}}, Responses: responses("OperatorSignedOut", 400, 401, 403, 413, 415, 503)})
 	storeProblem := spec.Components.Schemas.Schema(reflect.TypeOf(huma.ErrorModel{}), true, "ErrorModel")
 	for path, item := range spec.Paths {
-		if !isSitePath(path) {
+		if !isSitePath(path) && !isAccountPath(path) {
 			continue
 		}
 		for _, op := range []*huma.Operation{item.Get, item.Post, item.Put} {
@@ -84,6 +84,9 @@ func documentOperator(a huma.API) {
 				continue
 			}
 			op.Description = "Authenticated app-owned static website operation. Loopback only; OS accounts, DNS, TLS, PHP, mail, databases and full host backups are outside this slice."
+			if isAccountPath(path) {
+				op.Description = "Authenticated native Linux identity/home operation through a separate root broker. Domain is reserved metadata only. No web, DNS, mail or full cPanel provisioning. Suspension sets account expiry for new PAM-aware access; existing processes are unaffected. A timed-out create must be reconciled by refreshing the list before retrying."
+			}
 			op.Security = readSecurity
 			if op.Method != http.MethodGet {
 				op.Security = writeSecurity

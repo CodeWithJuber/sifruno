@@ -37,7 +37,7 @@ const cli=join(work,'bin/panelctl.exe'), state=join(work,'private-state');
 function command(args,{fail=false,json=true}={}){
  const r=spawnSync(cli,args,{cwd:work,env:environment,windowsHide:true,shell:false,encoding:'utf8',timeout:15000,maxBuffer:2<<20});
  if(r.error)throw new Error('Native CLI could not execute');
- if(fail){assert.notEqual(r.status,0,'Expected failure escaped guard');return}
+ if(fail){assert.notEqual(r.status,0,'Expected failure escaped guard');return r}
  assert.equal(r.status,0,'Native CLI failed');return json?JSON.parse(r.stdout):r.stdout;
 }
 const run=args=>command(['--state',state,...args]);
@@ -99,6 +99,15 @@ try{
  const trail=await(await fetch(url+'/api/v1/trail')).json();assert.equal(trail.items.length,1);assert.equal(trail.items[0].state,'rolled_back');
  const costs=await(await fetch(url+'/api/v1/budget')).json();assert.equal(costs.reconciliation_required,true);assert.equal(costs.remaining_usd_micros,0);
  const platform=await(await fetch(url+'/api/v1/platform')).json();assert.equal(platform.os,'windows');assert.equal(platform.profiles.length,6);
+ phase='native Windows account capability and admission';
+ assert.equal((await fetch(url+'/api/v1/accounts/capability')).status,401);
+ assert.equal((await fetch(url+'/api/v1/accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"username":"nativeuser","domain":"native.example.test","reason":"Unauthenticated fixture"}'})).status,401);
+ const accountCommand=argv=>command(['--state',state,'--panel-url',url,'accounts',...argv]);
+ const accountCapability=accountCommand(['capability']);
+ assert.equal(accountCapability.available,false);assert.equal(accountCapability.reason,'linux_broker_not_configured');
+ for(const argv of [['list'],['create','--username','nativeuser','--domain','native.example.test','--reason','Unavailable Windows fixture']]){
+  const failed=command(['--state',state,'--panel-url',url,'accounts',...argv],{fail:true});assert.match(failed.stderr,/HTTP 503/);assert(!failed.stderr.includes('access_key')&&!failed.stderr.includes('csrf_token'),'Session material in account diagnostic');
+ }
  phase='native authenticated website create edit backup restore and serving';
  assert.equal((await fetch(url+'/api/v1/sites')).status,401);
  const siteCommand=argv=>command(['--state',state,'--panel-url',url,'sites',...argv]);
@@ -142,13 +151,28 @@ try{
  const {chromium}=await import('playwright');const browser=await chromium.launch({headless:true,env:environment});
  phase='native UI fixture states';
  try{
-  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',()=>errors.push('pageerror'));page.on('console',m=>{if(m.type()==='error')errors.push('consoleerror')});
+  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];let expectedSignedOutResponses=0;
+  page.on('pageerror',()=>errors.push('pageerror'));
+  page.on('console',m=>{
+   if(m.type()!=='error')return;
+   let expected=false;
+   try{const location=new URL(m.location().url);expected=location.origin===url && location.pathname==='/api/v1/session' && /^Failed to load resource: the server responded with a status of 401\b/.test(m.text())}catch{}
+   if(!expected)errors.push('consoleerror');
+  });
+  page.on('response',r=>{if(r.status()===401&&r.request().method()==='GET'&&r.url()===url+'/api/v1/session')expectedSignedOutResponses++});
   await page.goto(url);await page.getByRole('heading',{name:'Server overview',exact:true}).waitFor();
+  await page.getByTestId('nav-accounts').click();await page.getByRole('heading',{name:'Local operator sign-in',exact:true}).waitFor();
+  const isolatedKey=(await readFile(join(state,'operator/access.key'),'utf8')).trim();
+  await page.getByLabel('Operator access key',{exact:true}).fill(isolatedKey);await page.getByRole('button',{name:'Sign in locally',exact:true}).click();
+  await page.getByText('Linux account creation requires a local Linux broker. This host currently has no configured broker.',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Create Linux account',exact:true}).count(),0,'Unavailable host offers account creation');
+  await page.getByRole('button',{name:'Sign out locally',exact:true}).click();await page.getByRole('heading',{name:'Local operator sign-in',exact:true}).waitFor();
   await page.getByTestId('nav-trail').click();await page.getByText('Native archive verification fixture',{exact:true}).waitFor();
   await page.getByTestId('nav-budget').click();await page.getByText('Spending needs attention',{exact:true}).waitFor();
-  const artifacts=join(root,'artifacts/runtime');await mkdir(artifacts,{recursive:true});await page.screenshot({path:join(artifacts,'native-budget-alert.png'),fullPage:true});assert.equal(errors.length,0,'Native UI errors');
+  const artifacts=join(root,'artifacts/runtime');await mkdir(artifacts,{recursive:true});await page.screenshot({path:join(artifacts,'native-budget-alert.png'),fullPage:true});assert.equal(errors.length,0,'Unexpected native UI errors');assert.equal(expectedSignedOutResponses,1,'Expected initial private-session admission probe');
  }finally{await browser.close()}
- const evidence={checked_at:new Date().toISOString(),host:os.version(),os:'windows',arch:'amd64',run_id:latest.run_id,archive_sha256:archived.sha256,source_fingerprint:index.source_fingerprint,verifier_sha256:hash(await readFile(fileURLToPath(import.meta.url))),archive_integrity:true,manifest_files:manifest.files.length,original_backup_characterization:true,original_backup_fixture_kind:'synthetic',independent_tar_producer:'Python standard tarfile/gzip',original_backup_producer_sha256:hash(await readFile(join(root,'lab/cpanel_backup_fixture.py'))),original_backup_source_fixture_sha256:originalExpected.source_sha256,original_backup_tar_gzip_hashes:true,original_backup_metadata_fidelity:true,original_backup_private_payload_excluded:true,original_backup_bad_stream_cleanup:true,original_backup_no_state_creation:true,original_backup_restore_implemented:false,original_backup_reference_observed:false,server_startup:true,read_only_http_guards:true,cli_recovery:true,approval_replay_rejected:true,budget_reconciliation_guard:true,authenticated_website_cli:true,website_backup_restore_bytes:true,native_zip_cli_export_import:true,native_zip_hash_match:true,native_zip_output_overwrite_refused:true,native_zip_import_http_restart:true,website_suspend_resume:true,website_process_restart_persistence:true,populated_trail_ui:true,budget_alert_ui:true,paid_provider_calls:0,compatibility_certified:false,other_os_runtime_verified:false};
+ const verifiedBinaryHashes=Object.fromEntries(['sifruno','panelctl','panelpreview','hostbroker'].map(name=>[name,hash(extracted.get(`bin/${name}.exe`))]));
+ const evidence={checked_at:new Date().toISOString(),host:os.version(),os:'windows',arch:'amd64',run_id:latest.run_id,archive_sha256:archived.sha256,source_fingerprint:index.source_fingerprint,verified_binary_sha256:verifiedBinaryHashes,verifier_sha256:hash(await readFile(fileURLToPath(import.meta.url))),archive_integrity:true,manifest_files:manifest.files.length,native_account_private_admission:true,native_account_windows_unavailable:true,native_account_unavailable_ui:true,native_account_linux_provisioning_verified:false,original_backup_characterization:true,original_backup_fixture_kind:'synthetic',independent_tar_producer:'Python standard tarfile/gzip',original_backup_producer_sha256:hash(await readFile(join(root,'lab/cpanel_backup_fixture.py'))),original_backup_source_fixture_sha256:originalExpected.source_sha256,original_backup_tar_gzip_hashes:true,original_backup_metadata_fidelity:true,original_backup_private_payload_excluded:true,original_backup_bad_stream_cleanup:true,original_backup_no_state_creation:true,original_backup_restore_implemented:false,original_backup_reference_observed:false,server_startup:true,read_only_http_guards:true,cli_recovery:true,approval_replay_rejected:true,budget_reconciliation_guard:true,authenticated_website_cli:true,website_backup_restore_bytes:true,native_zip_cli_export_import:true,native_zip_hash_match:true,native_zip_output_overwrite_refused:true,native_zip_import_http_restart:true,website_suspend_resume:true,website_process_restart_persistence:true,populated_trail_ui:true,budget_alert_ui:true,paid_provider_calls:0,compatibility_certified:false,other_os_runtime_verified:false};
  const runEvidence=join(root,'artifacts/runtime/native-runs',latest.run_id);await mkdir(runEvidence,{recursive:true});
  await writeFile(join(runEvidence,'native-windows.json'),JSON.stringify(evidence,null,2)+'\n');
  await mkdir(join(root,'artifacts/runtime'),{recursive:true});await writeFile(join(root,'artifacts/runtime/native-windows.json'),JSON.stringify(evidence,null,2)+'\n');console.log(JSON.stringify(evidence,null,2));

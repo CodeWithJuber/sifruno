@@ -40,7 +40,12 @@ const usage = `panelctl [--state .state/sifruno] [--panel-url http://127.0.0.1:8
  sites export --id ID --backup ID --out NEW.zip
  sites import --name NAME --domain DOMAIN --from NATIVE.zip
  backup inspect --from FILE --out NEW.jsonl
+ accounts capability | list
+ accounts create --username USER --domain DOMAIN --reason TEXT
+ accounts state --id ID --state active|suspended --revision N --reason TEXT
 Local operator commands; sites require the running panel and its private access.key.
+Accounts require the local panel, its access.key and a separately installed Linux broker.
+Account suspension restricts new PAM-aware access; existing processes and mail are unaffected.
 Sites manage app-owned static files only. Original WHM/cPanel compatibility is unverified.
 ZIP transfer supports native Sifruno v1 static-site archives only, not cPanel host backups.
 Backup inspect catalogs an original TAR/TAR.GZ without extracting files or contacting a panel.
@@ -76,6 +81,8 @@ func run(args []string, out, errs io.Writer) error {
 	switch args[0] {
 	case "sites":
 		return runSites(args[1:], *state, *panelURL, out, errs)
+	case "accounts":
+		return runAccounts(args[1:], *state, *panelURL, out, errs)
 	case "status":
 		f := flag.NewFlagSet("status", flag.ContinueOnError)
 		f.SetOutput(errs)

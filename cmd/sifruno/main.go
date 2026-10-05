@@ -18,6 +18,7 @@ import (
 	"sifruno/internal/api"
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
+	"sifruno/internal/hostaccounts"
 	"sifruno/internal/operator"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
@@ -36,6 +37,7 @@ func run() error {
 	sitesListen := flag.String("sites-listen", "127.0.0.1:8082", "Loopback static website address; empty disables serving")
 	state := flag.String("state", ".state/sifruno", "Private application-owned state directory")
 	ui := flag.String("ui", "web/dist", "Built panel directory")
+	accountsSocket := flag.String("accounts-socket", "", "Absolute Unix socket of the separately installed Linux account broker; empty disables accounts")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -106,7 +108,7 @@ func run() error {
 		servers = append(servers, &http.Server{Addr: *sitesListen, Handler: websiteStore.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10})
 		listeners = append(listeners, websiteListener)
 	}
-	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, SitePreviewPort: &previewPort, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), SitePreviewPort: &previewPort, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, len(servers))

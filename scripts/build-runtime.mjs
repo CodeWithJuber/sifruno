@@ -120,7 +120,7 @@ async function notices(destination, target) {
     index.push({ ...metadata, files: copied });
   }
   await licenses(join(root, '.tools/go'), 'go', { name: 'Go', source: 'https://go.dev' });
-  const mods = run(go, ['list', '-mod=readonly', '-buildvcs=false', '-deps', '-f', '{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}', './cmd/sifruno', './cmd/panelctl'], environment(target));
+  const mods = run(go, ['list', '-mod=readonly', '-buildvcs=false', '-deps', '-f', '{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}', './cmd/sifruno', './cmd/panelctl', './cmd/hostbroker'], environment(target));
   for (const line of [...new Set(mods.split(/\r?\n/).filter(Boolean))].sort()) {
     const [name, version, directory] = line.split('|');
     if (!version) continue;
@@ -171,7 +171,7 @@ function quickstart(target) {
   const cli = windows ? '.\\bin\\panelctl.exe' : './bin/panelctl';
   return `# Sifruno local workbench — ${target}
 
-This archive contains a CGO-free monitoring panel, CLI and read-only preview proxy, built for ${target}.
+This archive contains a CGO-free monitoring panel, CLI, read-only preview proxy and optional account broker, built for ${target}.
 Minimum Go 1.27 OS runtime: ${minimum[os]}. CPU baseline: ${target.endsWith('amd64') ? 'GOAMD64=v1' : 'GOARM64=v8.0'}.
 Reference: ${minimumSource}
 
@@ -184,7 +184,7 @@ native targets. Original cPanel/vendor hosting execution requires a qualified
 Linux host or guest; ARM hosting translation is unverified.
 
 Extract into a directory you own. Open a terminal in this extracted root.
-${windows ? 'Use PowerShell. If your system blocks unsigned downloads, review its policy and these hashes before making a local execution decision.' : 'If your archive extractor did not preserve executable modes, run chmod +x bin/sifruno bin/panelctl bin/panelpreview.'}
+${windows ? 'Use PowerShell. If your system blocks unsigned downloads, review its policy and these hashes before making a local execution decision.' : 'If your archive extractor did not preserve executable modes, run chmod +x bin/sifruno bin/panelctl bin/panelpreview bin/hostbroker.'}
 
 \`\`\`${windows ? 'powershell' : 'sh'}
 ${cli} status
@@ -196,6 +196,13 @@ ${server} --listen 127.0.0.1:8080 --ui web/dist --state .state/sifruno
 Open http://127.0.0.1:8080 on the same machine. Stop the server with Ctrl+C.
 The server requires loopback binding. It creates private local state on first
 use; no state, encryption keys, credentials or real host capture is included.
+Accounts requires an explicitly configured local Linux root broker and a separate
+nonroot controller identity. Windows/macOS broker execution is unavailable. The
+native account slice creates an OS identity/home only; domain is reserved metadata.
+It requires declared dedicated directories and files-only passwd/group/shadow NSS.
+Root-owned /etc/default/useradd must explicitly set CREATE_MAIL_SPOOL=no.
+No host policy is rewritten automatically. Account expiry is not full hosting
+suspension. No production installer, remote connector or cPanel parity is supplied.
 Overview shows native CPU, memory, volumes, uptime and aggregate network data.
 Services are read-only Windows SCM / Linux systemd observations; macOS service
 inventory is explicitly unavailable. Unknown measurements stay unavailable.
@@ -310,7 +317,7 @@ async function main() {
     const [os, arch] = target.split('-');
     const directory = join(staging, target);
     await mkdir(join(directory, 'bin'), { recursive: true });
-    for (const command of ['sifruno', 'panelctl', 'panelpreview']) {
+    for (const command of ['sifruno', 'panelctl', 'panelpreview', 'hostbroker']) {
       const binary = join(directory, 'bin', command + (os === 'windows' ? '.exe' : ''));
       run(go, ['build', '-mod=readonly', '-trimpath', '-buildvcs=false', '-ldflags=-s -w', '-o', binary, `./cmd/${command}`], environment(target));
       const info = run(go, ['version', '-m', binary], environment(target));

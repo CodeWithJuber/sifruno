@@ -111,6 +111,9 @@ func (c *siteClient) request(method, path string, body any) (json.RawMessage, er
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
+		if strings.HasPrefix(path, "/api/v1/accounts") {
+			return nil, errors.New("account request result is unknown; refresh accounts and reconcile any interrupted creation before retrying")
+		}
 		return nil, errors.New("local panel request failed; check the running panel and loopback URL")
 	}
 	defer resp.Body.Close()
@@ -135,6 +138,18 @@ func (c *siteClient) request(method, path string, body any) (json.RawMessage, er
 			message = "operator login rate limit reached"
 		case 503:
 			message = "website store unavailable"
+		}
+		if strings.HasPrefix(path, "/api/v1/accounts") {
+			switch resp.StatusCode {
+			case 404:
+				message = "managed account not found"
+			case 409:
+				message = "account identity, domain or revision changed; refresh and review before retrying"
+			case 422:
+				message = "invalid native account operation"
+			case 503:
+				message = "account broker or recovery unavailable; refresh the account list before retrying creation"
+			}
 		}
 		return nil, fmt.Errorf("%s (HTTP %d)", message, resp.StatusCode)
 	}

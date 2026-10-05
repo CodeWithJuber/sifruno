@@ -1,0 +1,167 @@
+package hostaccounts
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"mime"
+	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+func handler(s *store) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Host != "unix" || r.URL.RawQuery != "" || r.Header.Get("Origin") != "" {
+			writeError(w, ErrInvalid)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/v1/capability":
+			if r.ContentLength != 0 {
+				writeError(w, ErrInvalid)
+				return
+			}
+			cap, err := s.capability(ctx)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(cap)
+		case r.Method == "GET" && r.URL.Path == "/v1/accounts":
+			if r.ContentLength != 0 {
+				writeError(w, ErrInvalid)
+				return
+			}
+			items, err := s.list(ctx)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(struct {
+				Items []Account `json:"items"`
+			}{items})
+		case r.Method == "POST" && r.URL.Path == "/v1/accounts":
+			var in struct {
+				Input CreateInput `json:"input"`
+				Actor string      `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"username", "domain", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			item, err := s.create(ctx, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(item)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/state"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/state")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input StateInput `json:"input"`
+				Actor string     `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"state", "expected_revision", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			item, err := s.setState(ctx, id, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(item)
+		default:
+			writeError(w, ErrNotFound)
+		}
+	})
+}
+func writeError(w http.ResponseWriter, err error) {
+	code, status := "unavailable", 503
+	switch {
+	case errors.Is(err, ErrInvalid):
+		code, status = "invalid", 400
+	case errors.Is(err, ErrConflict):
+		code, status = "conflict", 409
+	case errors.Is(err, ErrNotFound):
+		code, status = "not_found", 404
+	case errors.Is(err, ErrRecovery):
+		code, status = "recovery", 503
+	}
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(struct {
+		Error string `json:"error"`
+	}{code})
+}
+func decodeBody(w http.ResponseWriter, r *http.Request, out any, inputKeys []string) error {
+	media, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || media != "application/json" || params["charset"] != "" && strings.ToLower(params["charset"]) != "utf-8" {
+		return ErrInvalid
+	}
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBytes))
+	if err != nil || !utf8.Valid(b) {
+		return ErrInvalid
+	}
+	keys := map[string]bool{}
+	for _, key := range inputKeys {
+		keys[key] = true
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
+	if strictObject(d, map[string]bool{"input": true, "actor": true}, keys) != nil {
+		return ErrInvalid
+	}
+	if _, err = d.Token(); err != io.EOF {
+		return ErrInvalid
+	}
+	d = json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	if d.Decode(out) != nil {
+		return ErrInvalid
+	}
+	return nil
+}
+func strictObject(d *json.Decoder, allowed, nested map[string]bool) error {
+	token, err := d.Token()
+	if err != nil || token != json.Delim('{') {
+		return ErrInvalid
+	}
+	seen := map[string]bool{}
+	for d.More() {
+		token, err = d.Token()
+		key, ok := token.(string)
+		if err != nil || !ok || !allowed[key] || seen[key] {
+			return ErrInvalid
+		}
+		seen[key] = true
+		if key == "input" && nested != nil {
+			if strictObject(d, nested, nil) != nil {
+				return ErrInvalid
+			}
+		} else {
+			var raw json.RawMessage
+			if d.Decode(&raw) != nil || bytes.Equal(raw, []byte("null")) {
+				return ErrInvalid
+			}
+		}
+	}
+	token, err = d.Token()
+	if err != nil || token != json.Delim('}') {
+		return ErrInvalid
+	}
+	if len(seen) != len(allowed) {
+		return ErrInvalid
+	}
+	return nil
+}

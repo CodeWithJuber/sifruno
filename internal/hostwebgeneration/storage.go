@@ -31,15 +31,16 @@ var eventBucket = []byte("web-generation-events-v1")
 var stateKey = []byte("current")
 
 type pending struct {
-	OperationID string         `json:"operation_id"`
-	AtRevision  uint64         `json:"at_revision"`
-	Before      Identity       `json:"before"`
-	After       string         `json:"after"`
-	Recovery    string         `json:"recovery,omitempty"`
-	Phase       string         `json:"phase"`
-	Actor       string         `json:"actor"`
-	Reason      string         `json:"reason"`
-	Repair      *repairAttempt `json:"repair,omitempty"`
+	OperationID     string           `json:"operation_id"`
+	AtRevision      uint64           `json:"at_revision"`
+	Before          Identity         `json:"before"`
+	After           string           `json:"after"`
+	Recovery        string           `json:"recovery,omitempty"`
+	Phase           string           `json:"phase"`
+	Actor           string           `json:"actor"`
+	Reason          string           `json:"reason"`
+	Repair          *repairAttempt   `json:"repair,omitempty"`
+	ApplyCheckpoint *applyCheckpoint `json:"apply_checkpoint,omitempty"`
 }
 
 type state struct {
@@ -56,18 +57,19 @@ type state struct {
 // contents or host backups. Hash chaining detects accidental journal damage;
 // it is not authentication against the root owner of this database.
 type Event struct {
-	Sequence    uint64         `json:"sequence"`
-	OperationID string         `json:"operation_id"`
-	Phase       string         `json:"phase"`
-	Revision    uint64         `json:"revision"`
-	Before      Identity       `json:"before"`
-	After       Identity       `json:"after"`
-	Actor       string         `json:"actor"`
-	Reason      string         `json:"reason"`
-	At          time.Time      `json:"at"`
-	PreviousSHA string         `json:"previous_sha256"`
-	SHA         string         `json:"sha256"`
-	Repair      *repairAttempt `json:"repair,omitempty"`
+	Sequence        uint64           `json:"sequence"`
+	OperationID     string           `json:"operation_id"`
+	Phase           string           `json:"phase"`
+	Revision        uint64           `json:"revision"`
+	Before          Identity         `json:"before"`
+	After           Identity         `json:"after"`
+	Actor           string           `json:"actor"`
+	Reason          string           `json:"reason"`
+	At              time.Time        `json:"at"`
+	PreviousSHA     string           `json:"previous_sha256"`
+	SHA             string           `json:"sha256"`
+	Repair          *repairAttempt   `json:"repair,omitempty"`
+	ApplyCheckpoint *applyCheckpoint `json:"apply_checkpoint,omitempty"`
 }
 
 type persistence struct {
@@ -244,13 +246,13 @@ func (p *persistence) read(c *Coordinator) (state, error) {
 }
 
 func verifyEvents(tx *bolt.Tx, st state, identities map[string]Identity, c *Coordinator) error {
-	advanced := st.Pending != nil && st.Pending.Repair != nil
+	advanced := st.Pending != nil && (st.Pending.Repair != nil || st.Pending.ApplyCheckpoint != nil)
 	if err := tx.Bucket(eventBucket).ForEach(func(_, raw []byte) error {
 		var e Event
 		if decode(raw, &e, maxMetadataBytes) != nil {
 			return ErrRecovery
 		}
-		advanced = advanced || e.Repair != nil || e.Phase == "repair_intended" || e.Phase == "repair_completed" || e.Phase == "repair_checkpoint" || e.Phase == "reconfirmed"
+		advanced = advanced || e.ApplyCheckpoint != nil || e.Phase == "apply_checkpoint" || e.Repair != nil || e.Phase == "repair_intended" || e.Phase == "repair_completed" || e.Phase == "repair_checkpoint" || e.Phase == "reconfirmed"
 		return nil
 	}); err != nil {
 		return err
@@ -413,7 +415,7 @@ func writeState(tx *bolt.Tx, st *state, phase string, actor, reason string, afte
 	if st.Pending == nil || st.Sequence >= MaxEvents {
 		return ErrLimit
 	}
-	event := Event{Sequence: st.Sequence + 1, OperationID: st.Pending.OperationID, Phase: phase, Revision: st.Revision, Before: st.Pending.Before, After: after, Actor: actor, Reason: reason, At: time.Now().UTC(), PreviousSHA: st.LastEventSHA, Repair: st.Pending.Repair}
+	event := Event{Sequence: st.Sequence + 1, OperationID: st.Pending.OperationID, Phase: phase, Revision: st.Revision, Before: st.Pending.Before, After: after, Actor: actor, Reason: reason, At: time.Now().UTC(), PreviousSHA: st.LastEventSHA, Repair: st.Pending.Repair, ApplyCheckpoint: st.Pending.ApplyCheckpoint}
 	event.SHA = digest(event)
 	raw, _ := json.Marshal(event)
 	if len(raw) > maxMetadataBytes {

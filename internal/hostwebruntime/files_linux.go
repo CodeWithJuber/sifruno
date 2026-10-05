@@ -228,6 +228,10 @@ func metadataCopy(v record) record {
 		t.Before = strip(t.Before)
 		t.After = strip(t.After)
 		t.Target = strip(t.Target)
+		if t.ApplyIntent != nil {
+			b := *t.ApplyIntent
+			t.ApplyIntent = &b
+		}
 		v.Pending = &t
 	}
 	if v.Repair != nil {
@@ -253,6 +257,13 @@ func metadataCopy(v record) record {
 			n.Retained[i] = strip(n.Retained[i])
 		}
 		v.CompletedRepair = &n
+	}
+	if v.CompletedApply != nil {
+		n := *v.CompletedApply
+		n.Original = copyTransition(n.Original)
+		n.Original.Before = strip(n.Original.Before)
+		n.Original.After = strip(n.Original.After)
+		v.CompletedApply = &n
 	}
 	return v
 }
@@ -355,6 +366,11 @@ func (r *Runtime) load() (record, error) {
 			if hydrate(&v.CompletedRepair.Retained[i], true) != nil {
 				return record{}, ErrRecovery
 			}
+		}
+	}
+	if v.CompletedApply != nil {
+		if hydrate(&v.CompletedApply.Original.Before, true) != nil || hydrate(&v.CompletedApply.Original.After, true) != nil {
+			return record{}, ErrRecovery
 		}
 	}
 	if validateRecord(r.opts.Profile, v) != nil || v.InputsSHA256 != r.inputsSHA {

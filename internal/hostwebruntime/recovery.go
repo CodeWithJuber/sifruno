@@ -120,6 +120,9 @@ func sameRepair(q hostwebgeneration.DeniedRepairRequest, b hostwebgeneration.Rec
 	return want == b
 }
 func validateRecoveryRecord(p hostweb.Profile, v record) error {
+	if validateApplyRecord(p, v) != nil {
+		return ErrRecovery
+	}
 	// Validate every reference before path/ID deduplication can conceal a
 	// different snapshot under an already-known logical generation ID.
 	known := map[string]hostwebgeneration.Identity{}
@@ -193,6 +196,9 @@ func recordGenerationReferences(v record) []hostwebgeneration.Generation {
 		out = append(out, v.CompletedRepair.Request.Original.Before, v.CompletedRepair.Request.Original.After, v.CompletedRepair.Request.Target)
 		out = append(out, v.CompletedRepair.Retained...)
 	}
+	if v.CompletedApply != nil {
+		out = append(out, v.CompletedApply.Original.Before, v.CompletedApply.Original.After)
+	}
 	return out
 }
 
@@ -243,6 +249,9 @@ func repairRequestAdmission(v record, stateSHA string, q hostwebgeneration.Denie
 			return ErrConflict
 		}
 		return nil
+	}
+	if v.CompletedApply != nil && q.Original.OperationID == v.CompletedApply.Original.OperationID {
+		return completedApplyRequestAdmission(v, q)
 	}
 	// Clean controller-death entry or coordinator intent created before native
 	// Apply ran. The source must be the exact current configured generation.

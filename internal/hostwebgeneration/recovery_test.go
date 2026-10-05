@@ -15,11 +15,13 @@ import (
 // Durable protocol model: real isolated JSON/bbolt state and counters, no
 // daemons, PID ownership or Linux qualification inferred from these tests.
 type nativeModelState struct {
-	Revision      uint64
-	LastOperation string
-	Configured    Identity
-	Pending       *RecoveryPending
-	Completed     *RecoveryBinding
+	StateEpoch     uint64
+	Revision       uint64
+	LastOperation  string
+	Configured     Identity
+	Pending        *RecoveryPending
+	Completed      *RecoveryBinding
+	CompletedApply *ApplyCompletion
 }
 type repairModel struct {
 	*testExecutor
@@ -89,7 +91,7 @@ func (m *repairModel) InspectRecovery(ctx context.Context) (RecoveryInspection, 
 	}
 	s := m.read()
 	raw, _ := os.ReadFile(m.file)
-	in := RecoveryInspection{StateSHA256: digest(json.RawMessage(raw)), Revision: s.Revision, LastOperationID: s.LastOperation, Configured: s.Configured, Pending: s.Pending, Completed: s.Completed}
+	in := RecoveryInspection{StateSHA256: digest(json.RawMessage(raw)), Revision: s.Revision, LastOperationID: s.LastOperation, Configured: s.Configured, Pending: s.Pending, Completed: s.Completed, CompletedApply: s.CompletedApply}
 	if m.alive {
 		x := s.Configured
 		in.Observed = &x
@@ -121,13 +123,14 @@ func (m *repairModel) RepairDenied(ctx context.Context, req DeniedRepairRequest)
 	}
 	if m.partial {
 		m.partial = false
-		s.Pending = &RecoveryPending{req.Original.OperationID, req.BaseRevision, req.Original.Before.Identity(), req.Original.After.Identity(), req.Target.Identity(), &b}
+		s.Pending = &RecoveryPending{req.Original.OperationID, req.BaseRevision, req.Original.Before.Identity(), req.Original.After.Identity(), req.Target.Identity(), &b, nil}
 		m.write(s)
 		m.alive = false
 		return DeniedRepairReceipt{}, ErrRecovery
 	}
 	s.Pending = nil
 	s.Completed = &b
+	s.CompletedApply = nil
 	s.Revision = req.BaseRevision + 1
 	s.LastOperation = req.Original.OperationID
 	s.Configured = req.Target.Identity()

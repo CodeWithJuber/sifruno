@@ -1,0 +1,68 @@
+name: Source checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: Go, UI and fixture source checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: go.sum
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - name: Go tests
+        run: go test ./... -count=1
+      - name: Go vet
+        run: go vet ./...
+      - name: Install pinned development dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm --prefix web ci --ignore-scripts --no-audit --no-fund
+      - name: UI typecheck and build
+        run: |
+          npm run panel:typecheck
+          npm run panel:build
+      - name: Approved brand integrity
+        run: npm run brand:check
+      - name: Python fixture checks
+        run: |
+          python3 -m unittest discover -s lab -p test_capture.py
+          python3 -m unittest discover -s lab/hostweb-review -p test_web_runtime_fixture.py
+          python3 -m unittest discover -s lab -p test_web_package_prepare.py
+      - name: Packaging and whitespace checks
+        run: |
+          node scripts/build-runtime.mjs --self-check
+          node scripts/package-source.mjs
+          git diff --check
+
+# These checks run on a disposable hosted runner. They do not activate hosting,
+# call paid providers, deploy a preview, qualify native daemons or certify parity.

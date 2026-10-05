@@ -20,6 +20,10 @@ func clonePending(in *pending) *pending {
 		r := *in.Repair
 		out.Repair = &r
 	}
+	if in.ApplyCheckpoint != nil {
+		cp := *in.ApplyCheckpoint
+		out.ApplyCheckpoint = &cp
+	}
 	return &out
 }
 
@@ -48,6 +52,16 @@ func (c *Coordinator) inspectRecovery(ctx context.Context, executor DeniedRepair
 		if !idPattern.MatchString(p.OperationID) || p.Revision != in.Revision || !validIdentity(p.Before) || !validIdentity(p.After) || !validIdentity(p.Target) {
 			return RecoveryInspection{}, ErrConflict
 		}
+		if p.Repair != nil && p.Apply != nil {
+			return RecoveryInspection{}, ErrConflict
+		}
+		if p.Apply != nil {
+			b := *p.Apply
+			if !validApplyBinding(b) || p.OperationID != b.OperationID || p.Revision != b.NativeBaseRevision || p.Before != b.Before || p.After != b.After || p.Target != b.After {
+				return RecoveryInspection{}, ErrConflict
+			}
+			p.Apply = &b
+		}
 		if p.Repair != nil {
 			b := *p.Repair
 			if !validRecoveryBinding(b) || p.Target != b.Target || p.OperationID != b.OperationID || p.Revision != b.BaseRevision || p.Before != b.Before || p.After != b.After {
@@ -63,6 +77,19 @@ func (c *Coordinator) inspectRecovery(ctx context.Context, executor DeniedRepair
 			return RecoveryInspection{}, ErrConflict
 		}
 		in.Completed = &b
+	}
+	if in.CompletedApply != nil {
+		a := *in.CompletedApply
+		if !validApplyCompletion(a) || in.Completed != nil || in.Revision != a.ResultRevision || in.LastOperationID != a.Binding.OperationID || in.Configured != a.Binding.After {
+			return RecoveryInspection{}, ErrConflict
+		}
+		if in.Pending != nil {
+			p := in.Pending
+			if p.Apply != nil || p.Repair == nil || p.OperationID != a.Binding.OperationID || p.Revision != a.ResultRevision || p.Before != a.Binding.Before || p.After != a.Binding.After || p.Repair.OriginalRevision != a.Binding.OriginalRevision || p.Repair.Source != a.Binding.After {
+				return RecoveryInspection{}, ErrConflict
+			}
+		}
+		in.CompletedApply = &a
 	}
 	if in.Observed != nil {
 		if *in.Observed != in.Configured && (in.Pending == nil || *in.Observed != in.Pending.Target) {
@@ -162,13 +189,19 @@ func (c *Coordinator) RepairDenied(ctx context.Context, in RepairInput) error {
 				return e
 			}
 			if len(events) == 0 {
-				if observed.LastOperationID != "" || observed.Completed != nil {
+				if observed.LastOperationID != "" || observed.Completed != nil || observed.CompletedApply != nil {
 					return ErrConflict
 				}
 			} else {
 				terminal := events[len(events)-1]
 				if observed.LastOperationID != terminal.OperationID {
 					return ErrConflict
+				}
+				if observed.CompletedApply != nil {
+					b := observed.CompletedApply.Binding
+					if terminal.Phase != "committed" || b.OperationID != terminal.OperationID || b.Before != terminal.Before || b.After != terminal.After || observed.CompletedApply.ResultRevision != terminal.Revision {
+						return ErrConflict
+					}
 				}
 				if observed.Completed != nil && (terminal.Repair == nil || terminal.Repair.Binding != *observed.Completed) {
 					return ErrConflict
@@ -198,6 +231,29 @@ func (c *Coordinator) RepairDenied(ctx context.Context, in RepairInput) error {
 			if e != nil {
 				return e
 			}
+		}
+		if st.Pending != nil && observed.CompletedApply != nil {
+			if !applyMatchesOriginal(*observed.CompletedApply, original) {
+				return ErrConflict
+			}
+			if st.Pending.ApplyCheckpoint != nil {
+				if st.Pending.ApplyCheckpoint.Completion != *observed.CompletedApply {
+					return ErrConflict
+				}
+			} else {
+				if st.Pending.Repair != nil || observed.Pending != nil {
+					return ErrConflict
+				}
+				if e = lease.Verify(ctx); e != nil || ctx.Err() != nil {
+					return ErrRecovery
+				}
+				if e = c.persistence.checkpointApply(&st, *observed.CompletedApply, observed.StateSHA256, original, in.Actor, in.Reason, c); e != nil {
+					return e
+				}
+				begun = true
+			}
+		} else if st.Pending != nil && st.Pending.ApplyCheckpoint != nil && observed.Completed == nil {
+			return ErrRecovery // Never replace a retained original completion with guessed metadata.
 		}
 		if st.Pending != nil && st.Pending.Repair != nil {
 			prior := st.Pending.Repair.Binding
@@ -342,6 +398,7 @@ func (c *Coordinator) RepairDenied(ctx context.Context, in RepairInput) error {
 			begun = true
 		}
 		intent = clonePending(st.Pending)
+		begun = true
 		if st.Sequence > MaxEvents-2 {
 			return ErrLimit
 		}

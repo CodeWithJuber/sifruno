@@ -61,6 +61,7 @@ type transaction struct {
 	Revision      uint64
 	Before, After hostwebgeneration.Generation
 	Target        hostwebgeneration.Generation
+	ApplyIntent   *hostwebgeneration.ApplyCompletionBinding `json:",omitempty"`
 }
 
 type record struct {
@@ -71,9 +72,10 @@ type record struct {
 	Pending         *transaction
 	Processes       []processPin
 	InputsSHA256    string
-	BootID          string            `json:",omitempty"`
-	Repair          *nativeRepair     `json:",omitempty"`
-	CompletedRepair *nativeCompletion `json:",omitempty"`
+	BootID          string                 `json:",omitempty"`
+	Repair          *nativeRepair          `json:",omitempty"`
+	CompletedRepair *nativeCompletion      `json:",omitempty"`
+	CompletedApply  *nativeApplyCompletion `json:",omitempty"`
 }
 
 var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)

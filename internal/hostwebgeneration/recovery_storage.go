@@ -112,6 +112,8 @@ func verifyRepairEvents(tx *bolt.Tx, st state, identities map[string]Identity, c
 	seenOps, seenAttempts := map[string]bool{}, map[string]bool{}
 	confirmed := map[string]uint64{}
 	var repair *repairAttempt
+	var apply *applyCheckpoint
+	var originalCommitted bool
 	actor, reason := "", ""
 	start := func(e Event) error {
 		if !completed || seenOps[e.OperationID] || e.Before.GenerationID != current || e.After.GenerationID == current {
@@ -126,6 +128,8 @@ func verifyRepairEvents(tx *bolt.Tx, st state, identities map[string]Identity, c
 		reason = e.Reason
 		completed = false
 		repair = nil
+		apply = nil
+		originalCommitted = false
 		recovering = Identity{}
 		if current == "" {
 			g, err := loadGeneration(tx, e.After.GenerationID, c)
@@ -165,6 +169,15 @@ func verifyRepairEvents(tx *bolt.Tx, st state, identities map[string]Identity, c
 		} else if operation != e.OperationID || before != e.Before {
 			return ErrRecovery
 		}
+		if e.Phase != "apply_checkpoint" {
+			if apply == nil {
+				if e.ApplyCheckpoint != nil {
+					return ErrRecovery
+				}
+			} else if e.ApplyCheckpoint == nil || *e.ApplyCheckpoint != *apply {
+				return ErrRecovery
+			}
+		}
 		switch e.Phase {
 		case "intended":
 		case "committed":
@@ -177,6 +190,7 @@ func verifyRepairEvents(tx *bolt.Tx, st state, identities map[string]Identity, c
 			revision++
 			current = e.After.GenerationID
 			completed = true
+			originalCommitted = true
 		case "recovering":
 			if completed || e.Repair != nil || repair != nil {
 				return ErrRecovery
@@ -192,11 +206,33 @@ func verifyRepairEvents(tx *bolt.Tx, st state, identities map[string]Identity, c
 			revision++
 			current = e.After.GenerationID
 			completed = true
+		case "apply_checkpoint":
+			cp := e.ApplyCheckpoint
+			if completed || repair != nil || apply != nil || cp == nil || !cp.CounterAdvanceOnly || !validHash(cp.InspectedStateSHA256) || !validApplyCompletion(cp.Completion) {
+				return ErrRecovery
+			}
+			b := cp.Completion.Binding
+			if b.OperationID != operation || b.OriginalRevision != originalRevision || b.Before != before || b.After != desired || e.After != desired {
+				return ErrRecovery
+			}
+			if cp.CounterAdvanced {
+				if revision != b.NativeBaseRevision || revision == math.MaxUint64 || originalCommitted {
+					return ErrRecovery
+				}
+				revision = cp.Completion.ResultRevision
+			} else if revision != cp.Completion.ResultRevision || !originalCommitted || current != desired.GenerationID {
+				return ErrRecovery
+			}
+			copy := *cp
+			apply = &copy // Current deliberately unchanged; pending remains uncertain.
 		case "repair_intended":
 			if completed || e.Repair == nil {
 				return ErrRecovery
 			}
 			b := e.Repair.Binding
+			if apply != nil && repair == nil && (b.BaseRevision != apply.Completion.ResultRevision || b.Source != apply.Completion.Binding.After) {
+				return ErrRecovery
+			}
 			if !validRecoveryBinding(b) || seenAttempts[b.AttemptID] || b.OperationID != operation || b.OriginalRevision != originalRevision || b.BaseRevision != revision || b.Before != before || b.After != desired || b.Target != e.After || !b.Target.Denied || !validHash(b.AdmittedStateSHA256) || !validIdentity(b.Source) || e.Repair.CommittedRevision != 0 || e.Repair.CounterAdvanceOnly {
 				return ErrRecovery
 			}
@@ -294,6 +330,13 @@ func verifyRepairEvents(tx *bolt.Tx, st state, identities map[string]Identity, c
 		return nil
 	}
 	p := st.Pending
+	if apply == nil {
+		if p.ApplyCheckpoint != nil {
+			return ErrRecovery
+		}
+	} else if p.ApplyCheckpoint == nil || *p.ApplyCheckpoint != *apply {
+		return ErrRecovery
+	}
 	if completed || p.OperationID != operation || p.AtRevision != revision || p.Before != before || p.After != desired.GenerationID || p.Actor != actor || p.Reason != reason {
 		return ErrRecovery
 	}
@@ -307,7 +350,7 @@ func verifyRepairEvents(tx *bolt.Tx, st state, identities map[string]Identity, c
 	} else if p.Repair == nil || *p.Repair != *repair || p.Recovery != repair.Binding.Target.GenerationID {
 		return ErrRecovery
 	}
-	if p.Phase == "applying" && last.Phase != "intended" || p.Phase == "recovering" && last.Phase != "recovering" && last.Phase != "repair_intended" || p.Phase == "recovery_required" && last.Phase != "recovery_required" && last.Phase != "repair_checkpoint" {
+	if p.Phase == "applying" && last.Phase != "intended" || p.Phase == "recovering" && last.Phase != "recovering" && last.Phase != "repair_intended" || p.Phase == "recovery_required" && last.Phase != "recovery_required" && last.Phase != "repair_checkpoint" && last.Phase != "apply_checkpoint" {
 		return ErrRecovery
 	}
 	return nil

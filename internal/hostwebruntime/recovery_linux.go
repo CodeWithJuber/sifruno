@@ -325,6 +325,10 @@ func (r *Runtime) InspectRecovery(ctx context.Context) (hostwebgeneration.Recove
 	if v.Pending != nil {
 		p := v.Pending
 		out.Pending = &hostwebgeneration.RecoveryPending{OperationID: p.OperationID, Revision: p.Revision, Before: p.Before.Identity(), After: p.After.Identity(), Target: p.Target.Identity()}
+		if p.ApplyIntent != nil {
+			b := *p.ApplyIntent
+			out.Pending.Apply = &b
+		}
 	}
 	if v.Repair != nil {
 		b := v.Repair.Binding
@@ -333,6 +337,10 @@ func (r *Runtime) InspectRecovery(ctx context.Context) (hostwebgeneration.Recove
 	if v.CompletedRepair != nil {
 		b := v.CompletedRepair.Binding
 		out.Completed = &b
+	}
+	if v.CompletedApply != nil {
+		c := v.CompletedApply.Completion
+		out.CompletedApply = &c
 	}
 	if observed, err := r.observe(ctx, v); err == nil {
 		out.Observed = &observed
@@ -358,6 +366,9 @@ func ownedGenerations(v record) []hostwebgeneration.Generation {
 	if v.CompletedRepair != nil {
 		out = append(out, v.CompletedRepair.Retained...)
 		out = append(out, v.CompletedRepair.Request.Target)
+	}
+	if v.CompletedApply != nil {
+		out = append(out, v.CompletedApply.Original.Before, v.CompletedApply.Original.After)
 	}
 	seen := map[string]bool{}
 	unique := make([]hostwebgeneration.Generation, 0, len(out))
@@ -436,6 +447,9 @@ func (r *Runtime) RepairDenied(ctx context.Context, q hostwebgeneration.DeniedRe
 	prospective.BootID = boot
 	prospective.Pending = nil
 	prospective.Repair = n
+	if prospective.CompletedApply != nil && !transitionMatches(q.Original, prospective.CompletedApply.Original) {
+		prospective.CompletedApply = nil
+	}
 	if e = repairMetadataCapacity(r.opts.Profile, prospective, q, n); e != nil {
 		return hostwebgeneration.DeniedRepairReceipt{}, e
 	}
@@ -455,6 +469,9 @@ func (r *Runtime) RepairDenied(ctx context.Context, q hostwebgeneration.DeniedRe
 	v.BootID = boot
 	v.Pending = nil
 	v.Repair = n
+	if v.CompletedApply != nil && !transitionMatches(q.Original, v.CompletedApply.Original) {
+		v.CompletedApply = nil
+	}
 	if e = r.persist(v); e != nil {
 		return hostwebgeneration.DeniedRepairReceipt{}, e
 	}
@@ -485,6 +502,7 @@ func (r *Runtime) RepairDenied(ctx context.Context, q hostwebgeneration.DeniedRe
 	v.Revision = q.BaseRevision + 1
 	v.LastOperation = q.Original.OperationID
 	v.CompletedRepair = &nativeCompletion{Request: copyRepairRequest(q), Binding: n.Binding, ResultRevision: v.Revision, Retained: n.Retained}
+	v.CompletedApply = nil
 	if e = r.persist(v); e != nil {
 		return hostwebgeneration.DeniedRepairReceipt{}, ErrRecovery
 	}
@@ -501,26 +519,32 @@ func (r *Runtime) RepairDenied(ctx context.Context, q hostwebgeneration.DeniedRe
 }
 
 func repairMetadataCapacity(profile hostweb.Profile, v record, q hostwebgeneration.DeniedRepairRequest, n *nativeRepair) error {
-	if validateRecord(profile, v) != nil {
-		return ErrRecovery
-	}
-	data, e := json.Marshal(metadataCopy(v))
-	if e != nil || len(data) > MaxMetadataBytes {
+	return repairMetadataCapacityLimit(profile, v, q, n, MaxMetadataBytes)
+}
+
+func repairMetadataCapacityLimit(profile hostweb.Profile, v record, q hostwebgeneration.DeniedRepairRequest, n *nativeRepair, limit int) error {
+	if limit <= 0 || limit > MaxMetadataBytes {
 		return ErrLimit
 	}
-	v.Current = copyGeneration(q.Target)
-	v.Processes = nil
-	v.Repair = nil
-	v.Pending = nil
-	v.Revision = q.BaseRevision + 1
-	v.LastOperation = q.Original.OperationID
-	v.CompletedRepair = &nativeCompletion{Request: copyRepairRequest(q), Binding: n.Binding, ResultRevision: v.Revision, Retained: n.Retained}
-	if validateRecord(profile, v) != nil {
-		return ErrRecovery
-	}
-	data, e = json.Marshal(metadataCopy(v))
-	if e != nil || len(data) > MaxMetadataBytes {
-		return ErrLimit
+	maximalPending := v
+	maximalPending.Processes = maxStoragePins(profile, q.Target, v.BootID)
+	terminal := v
+	terminal.Current = copyGeneration(q.Target)
+	terminal.Processes = maxStoragePins(profile, q.Target, v.BootID)
+	terminal.Repair = nil
+	terminal.Pending = nil
+	terminal.Revision = q.BaseRevision + 1
+	terminal.LastOperation = q.Original.OperationID
+	terminal.CompletedRepair = &nativeCompletion{Request: copyRepairRequest(q), Binding: n.Binding, ResultRevision: terminal.Revision, Retained: n.Retained}
+	terminal.CompletedApply = nil
+	for _, candidate := range []record{v, maximalPending, terminal} {
+		if validateRecord(profile, candidate) != nil {
+			return ErrRecovery
+		}
+		data, e := json.Marshal(metadataCopy(candidate))
+		if e != nil || len(data) > limit {
+			return ErrLimit
+		}
 	}
 	return nil
 }

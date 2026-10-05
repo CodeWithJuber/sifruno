@@ -279,7 +279,13 @@ func (r *Runtime) Apply(ctx context.Context, t hostwebgeneration.Transition) err
 	if got != t.Before.Identity() {
 		return ErrConflict
 	}
-	return r.replace(ctx, &v, transaction{t.OperationID, t.Revision, t.Before, t.After, t.After})
+	boot, err := r.recoveryAdmission(ctx, v, t.Before, t.After)
+	if err != nil {
+		return err
+	}
+	v.BootID = boot
+	binding := applyBinding(t, r.stateSHA, r.inputsSHA, boot)
+	return r.replace(ctx, &v, transaction{OperationID: t.OperationID, Revision: t.Revision, Before: t.Before, After: t.After, Target: t.After, ApplyIntent: &binding})
 }
 
 // Rollback also serves as the explicit trusted repair primitive for an
@@ -341,9 +347,15 @@ func (r *Runtime) Rollback(ctx context.Context, t hostwebgeneration.Transition, 
 			return err
 		}
 	}
-	return r.replace(ctx, &v, transaction{t.OperationID, t.Revision, t.Before, t.After, target})
+	return r.replace(ctx, &v, transaction{OperationID: t.OperationID, Revision: t.Revision, Before: t.Before, After: t.After, Target: target})
 }
 func (r *Runtime) replace(ctx context.Context, v *record, t transaction) error {
+	if _, err := r.recoveryAdmission(ctx, *v, t.Before, t.After, t.Target); err != nil {
+		return err
+	}
+	if err := replacementMetadataCapacity(r.opts.Profile, *v, t); err != nil {
+		return err
+	}
 	for _, a := range t.Target.Accounts {
 		if a.State == "active" && !t.Target.Denied {
 			if r.prepared(a) != nil {
@@ -360,8 +372,16 @@ func (r *Runtime) replace(ctx context.Context, v *record, t transaction) error {
 	if err := r.syntax(ctx, t.Target); err != nil {
 		return err
 	}
+	if _, err := r.recoveryAdmission(ctx, *v, t.Before, t.After, t.Target); err != nil {
+		return err
+	}
 	v.Pending = &t
+	v.CompletedApply = nil
+	v.CompletedRepair = nil
 	if err := r.persist(*v); err != nil {
+		return err
+	}
+	if _, err := r.recoveryAdmission(ctx, *v); err != nil {
 		return err
 	}
 	if err := r.stop(v); err != nil {
@@ -388,12 +408,11 @@ func (r *Runtime) replace(ctx context.Context, v *record, t transaction) error {
 		_ = r.persist(*v)
 		return ErrRecovery
 	}
-	v.Current = t.Target
-	v.Pending = nil
-	v.Revision = t.Revision + 1
-	v.LastOperation = t.OperationID
-	v.CompletedRepair = nil
-	return r.persist(*v)
+	*v = replacementState(*v, t)
+	if err := r.persist(*v); err != nil {
+		return r.failedRepair(v, err)
+	}
+	return r.finishReplacement(ctx, v, t)
 }
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	ctx, cancel, err := bounded(ctx)

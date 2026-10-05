@@ -127,7 +127,8 @@ is not changed by this recovery-specific admission check.
 
 Old-record admission does not mean old-binary rollback compatibility. The new
 reader can admit an unchanged legacy record with usable same-boot pins. An older
-binary's strict decoder rejects new `BootID`, `Repair` and `CompletedRepair`
+binary's strict decoder rejects new `BootID`, `Repair`, `CompletedRepair`,
+`CompletedApply` and pending `ApplyIntent`
 fields even though the experimental record version remains 1. Rollback therefore
 needs a matched source/state snapshot, or preservation and quarantine of new
 records; there is no implicit downconversion. Current qualification state is
@@ -152,10 +153,40 @@ Native pending precedes stop/start, and completion follows a denied observation.
 The final persisted record is reread and observed again before returning a
 receipt. Cancellation after final persistence stops owned work and preserves a
 historical, potentially dead completion for explicit reconciliation. Metadata
-and generation capacity are checked before destructive action. An original
-Apply that already consumed a revision requires a separately admitted coordinator
-counter checkpoint; the initial coordinator slice explicitly refuses that branch.
+and generation capacity are checked before destructive action.
 There is no broker/API/CLI wiring or automatic account-to-runtime suspension.
+
+Apply now carries an Apply-only intent with version/kind, original operation,
+equal original/native base revisions, full before/after identities, original
+admitted native state SHA, installation input SHA and same-boot ID. Both original
+generations remain canonically recompiled and disk-checked. Only `Apply` creates
+this intent; `Rollback` and legacy records cannot infer or mint a completion from
+LastOperation/Current. The final atomic state write promotes the exact intent to
+historical `CompletedApply` together with Current=After, base+1, LastOperation
+and Pending=nil. Final reread, ownership admission and fresh strict observation
+precede success; cancellation/dead processes cannot return cached success.
+
+Capacity is reserved before immutable staging and syntax checks. This preserves
+the existing staging-before-Pending discipline: the Apply intent is durably
+persisted before daemon stop/start or serving changes, not before every staging
+file write. The reservation covers pending old pins, pending maximal target pins
+and final maximal target pins, with exact paths/roles and worst-case admitted
+numeric fields. Budget-only inventories are never launched or persisted.
+Denied repair uses the same reservation for its future front master, including
+the dead/no-pins completed-Apply checkpoint entry before staging or signaling.
+
+An original Apply completion can authorize a separately journaled coordinator
+counter-only checkpoint while Current remains the last committed coordinator
+identity and recovery stays required. Subsequent explicit denial must match the
+exact historical original operation/before/after/revision, use result revision as
+its native base, Source=After and the current native CAS. Historical Apply remains
+only during this exact same-original pending denial for retry validation; terminal
+denial clears it. A new Apply/Rollback or unrelated repair clears the old marker
+when its new intent is durably admitted. Inspection can expose the historical fact
+with Observed=nil; it never attests that a dead target is serving. Old records
+without the marker keep the consumed-original-counter branch fail-closed. These
+new Apply/checkpoint/fault paths have portable/source evidence only; earlier
+mechanics and serving qualification does not qualify their native execution.
 
 Calls use a cancellable serialization gate and a 25-second operation context.
 Cancellation of started work stops/reaps owned namespace inits; cleanup has one

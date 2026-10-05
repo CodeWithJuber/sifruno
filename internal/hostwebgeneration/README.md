@@ -132,8 +132,7 @@ history before action; polling is not a prerequisite.
 This slice deliberately refuses an original (non-repair) `Apply` that committed
 native base+1 but died before coordinator completion, when native `Completed` is
 nil and the coordinator still has the original base. It performs no native
-repair, signal or counter increment in that divergent state. Dedicated original
-apply reconciliation remains necessary; this is not general crash recovery.
+repair, signal or counter increment in that divergent state. Markerless original Apply reconciliation remains refused; this is not general crash recovery.
 Foreign ownership, corrupt stores, missing capabilities, unavailable account
 reservations and exhausted bounds likewise fail closed. Existing bounds remain
 16 generations/128 events; terminal and quarantine event capacity is reserved
@@ -156,3 +155,57 @@ version; an older binary's strict decoder must refuse those records. There is
 no implicit downgrade or state rollback. This unactivated package changes no
 live product state. Preserve the private database and run the matching reviewed
 binary for retry; do not erase a pending record to escape quarantine.
+
+
+## Apply-only consumption checkpoint (unactivated)
+
+The optional inspection now carries a separate `CompletedApply` historical
+record. Its version 1/kind `apply` binding identifies the original operation,
+original/native base (equal in this slice), exact Before/After identities,
+versioned intent digest, originally admitted state CAS, installation inputs and
+boot identity. The native implementation must mint it only from a persisted
+Apply intent and atomically promote it with native completion. Rollback and old
+clean LastOperation/Configured tuples cannot synthesize this proof. Inspection
+may retain it during an exact same-original denied repair pending; generic Apply
+pending or completed repair coexistence is refused. Metadata does not attest
+fresh health, authenticate root edits or prove actual Linux execution.
+
+With original coordinator intent at R and exact native Apply consumption at
+R+1, `apply_checkpoint` advances only the coordinator counter, once. `Current`
+remains the previous committed generation; pending recovery and the entire
+immutable completion marker survive reopen and subsequent denial attempts.
+The original revision comes from the original journal intent, not the advanced
+pending AtRevision. If the coordinator already committed R+1 before provider
+postcallback quarantine, the exact original committed journal event permits
+recording the checkpoint without another increment. These are distinct semantic
+replay paths, tracked by the counter-advanced flag. A healthy observed original
+After is insufficient for automatic active completion: the exact persisted
+Apply marker permits only a newly reserved denial in this recovery route.
+
+A separate durable repair attempt uses native base R+1 and Source=original
+After. It recompiles denial from current accounts, including suspension/removal.
+The historical checkpoint's inspected state digest is retained for audit, not
+future CAS admission: owned cleanup can change state bytes before the first
+repair intent. A freshly re-inspected native CAS admits the new attempt; that
+attempt's original admitted CAS then stays immutable across partial retries.
+The saved Apply completion must continue to match exactly. A native denied
+completion clears its native Apply marker; the coordinator journal retains it
+through completion, quarantine and reconfirmation.
+
+All existing lease verification boundaries remain, including verified checkpoint
+admission, verification before intent/native action and after strict observation,
+and provider postcallback quarantine. Reused partial attempts explicitly retain
+quarantine authority even when their successful callback clears pending state
+before a provider failure. No old active rollback, unobserved active success,
+implicit downgrade or automatic state pruning is introduced. Legacy Recover
+refuses advanced checkpoint records; retry needs this matching reader.
+
+Tests use isolated real Bolt/JSON stores and counter-bearing trusted executor
+models. They cover native-before-coordinator completion, exact healthy/dead
+After, once-only/reopened checkpoints, pre-native failures, partial retries,
+postcallback reconfirmation, already-committed quarantine, changed current
+inventory, refreshed CAS, malformed/missing markers, duplicate/rehashed semantic
+corruption, unknown fields, capacity and cancellation/lease boundaries. These are
+source/protocol checks. Actual Linux Apply/repair/controller death, disk/fsync
+failure, stock-host/reboot/capacity and authenticated product integration remain
+separate gates. No running product state or API has been changed.

@@ -20,13 +20,15 @@ const Backups = lazy(() => import("@/Backups"));
 const FileManager = lazy(() => import("@/FileManager"));
 const Storage = lazy(() => import("@/HostResources").then((m) => ({ default: m.Storage })));
 const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ default: m.NetworkResources })));
+const PanelPreview = lazy(() => import("@/PanelPreview"));
 
-type View = "overview" | "services" | "storage" | "network" | "websites" | "accounts" | "backups" | "files" | "evidence" | "trail" | "budget" | "platform";
+type View = "overview" | "services" | "storage" | "network" | "panel-preview" | "websites" | "accounts" | "backups" | "files" | "evidence" | "trail" | "budget" | "platform";
 const views = [
   { id: "overview", label: "Overview", title: "Server overview", subtitle: "A clear view of your server, in real time.", icon: Home },
   { id: "services", label: "Services", title: "Services", subtitle: "Inspect the services installed on your server.", icon: Server },
   { id: "storage", label: "Storage", title: "Storage", subtitle: "Inspect real host volumes, capacity and available space.", icon: HardDrive },
   { id: "network", label: "Network", title: "Network", subtitle: "Follow measured traffic rates and host transfer counters.", icon: Network },
+  { id: "panel-preview", label: "Panel preview", title: "Panel preview", subtitle: "Explore File Manager, Backups and Websites with sample content.", icon: Layers },
   { id: "websites", label: "Websites", title: "Websites", subtitle: "Manage your actual app-owned static sites locally.", icon: Globe },
   { id: "accounts", label: "Accounts", title: "Linux accounts", subtitle: "Manage local Linux identities and home directories.", icon: Users },
   { id: "backups", label: "Backups", title: "Website backups", subtitle: "Create, export and restore native static-site ZIP snapshots.", icon: Archive },
@@ -74,13 +76,13 @@ export function App() {
   const server = useResource(`/api/v1/server?range_seconds=${range}`, validServer, revision, 5000);
   const services = useResource("/api/v1/services", validServices, revision, 30000);
   const refresh = () => setRevision((v) => v + 1);
-  const visibleViews = views.filter((v) => !publicPreview || (v.id !== "websites" && v.id !== "accounts" && v.id !== "backups" && v.id !== "files" && v.id !== "trail" && v.id !== "budget"));
+  const visibleViews = views.filter((v) => v.id === "panel-preview" ? publicPreview : !publicPreview || (v.id !== "websites" && v.id !== "accounts" && v.id !== "backups" && v.id !== "files" && v.id !== "trail" && v.id !== "budget"));
   const active = views.find((v) => v.id === view)!;
   const activeResource = ["overview", "storage", "network"].includes(view) ? server : view === "services" ? services : view === "websites" ? websitesResource : view === "accounts" ? accountsResource : view === "backups" ? backupsResource : view === "files" ? filesResource : view === "evidence" ? status : view === "trail" ? trail : view === "budget" ? budget : platform;
   const connected = Boolean(server.data && !server.error);
   const partial = server.data?.collector.status === "partial";
   const unavailable = server.data?.collector.status === "unavailable";
-  const navigate = (next: View) => { if (publicPreview && ["websites", "accounts", "backups", "files", "trail", "budget"].includes(next)) return; if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
+  const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "trail", "budget"].includes(next))) return; if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? {
@@ -111,8 +113,8 @@ export function App() {
           header={<button className="brand-link" aria-label="Sifruno server overview" onClick={() => navigate("overview")}>{logo}</button>}
           footer={<div className="sidebar-status"><i className={`status-dot ${!connected || unavailable ? "status-muted" : ""}`} /><div>Local server<small>{server.error ? "Connection lost" : connected ? partial ? "Partial monitoring" : unavailable ? "Measurements unavailable" : `Sampling every ${server.data!.collector.interval_seconds}s` : "Connecting…"}</small></div></div>}
           footerIcons={<div className="theme-switch"><Button label={`Switch to ${theme === "light" ? "dark" : "light"} theme`} variant="ghost" size="lg" icon={theme === "light" ? <Moon /> : <Sun />} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>{theme === "light" ? "Dark theme" : "Light theme"}</Button></div>}>
-          <SideNavSection title="Server" isHeaderHidden className="primary-nav">{visibleViews.filter((v) => ["overview", "services", "storage", "network", "websites", "accounts", "backups", "files"].includes(v.id)).map(navItem)}</SideNavSection>
-          <SideNavSection title="Tools" className="tools-nav">{visibleViews.filter((v) => !["overview", "services", "storage", "network", "websites", "accounts", "backups", "files"].includes(v.id)).map(navItem)}</SideNavSection>
+          <SideNavSection title="Server" isHeaderHidden className="primary-nav">{visibleViews.filter((v) => ["overview", "services", "storage", "network", "panel-preview", "websites", "accounts", "backups", "files"].includes(v.id)).map(navItem)}</SideNavSection>
+          <SideNavSection title="Tools" className="tools-nav">{visibleViews.filter((v) => !["overview", "services", "storage", "network", "panel-preview", "websites", "accounts", "backups", "files"].includes(v.id)).map(navItem)}</SideNavSection>
           {publicPreview && <p className="sidebar-preview">Private tools are available in the local panel.</p>}
         </SideNav>
       </aside>
@@ -134,11 +136,12 @@ export function App() {
         </header>
         <main id="panel-main" tabIndex={-1}>
           <div className="page-heading"><h1>{active.title}</h1><p>{active.subtitle}</p></div>
-          {publicPreview && <div className="hosting-notice public-preview-notice" role="status"><Info /><span>Public preview · real host monitoring. Private websites, trail and spending records stay in the local panel.</span></div>}
+          {publicPreview && <div className="hosting-notice public-preview-notice" role="status"><Info /><span>{view === "panel-preview" ? "Public panel tour · sample content. Private module actions stay in the local panel." : "Public preview · real host monitoring. Private websites, trail and spending records stay in the local panel."}</span>{view === "overview" && <Button label="Explore panel" variant="secondary" size="sm" icon={<Layers aria-hidden="true" />} onClick={() => navigate("panel-preview")} data-testid="open-panel-preview" />}</div>}
           {(view === "overview" || view === "services") && <div className="hosting-notice"><Info aria-hidden="true" /><span>Hosting engine in development. Compatibility is {status.data?.ready ? "reported ready by the service; review its evidence." : "not verified."}</span>{!publicPreview && <Button label="Review compatibility" variant="ghost" size="sm" onClick={() => navigate("evidence")}>Review</Button>}</div>}
           {view === "overview" && <div className="content-stack dashboard-stack"><DataState resource={server} retry={refresh}>{server.data && <Overview report={server.data} platform={platform.data} range={range} setRange={setRange} />}</DataState><DataState resource={services} retry={refresh}>{services.data && <ServiceInventory report={services.data} compact query={serviceQuery} setQuery={setServiceQuery} viewAll={() => navigate("services")} />}</DataState></div>}
           {view === "services" && <DataState resource={services} retry={refresh}>{services.data && <ServiceInventory report={services.data} query={serviceQuery} setQuery={setServiceQuery} />}</DataState>}
           <Suspense fallback={<div className="loading-state" role="status" aria-label="Loading panel tool"><Skeleton className="h-64 w-full" /></div>}>
+          {view === "panel-preview" && publicPreview && <PanelPreview />}
           {view === "storage" && <DataState resource={server} retry={refresh}>{server.data && <Storage report={server.data} />}</DataState>}
           {view === "network" && <DataState resource={server} retry={refresh}>{server.data && <NetworkResources report={server.data} range={range} setRange={setRange} />}</DataState>}
           {websitesVisited && !publicPreview && <div hidden={view !== "websites"}><Websites revision={revision} active={view === "websites"} onStatus={setWebsitesResource} /></div>}
@@ -150,7 +153,7 @@ export function App() {
           {view === "budget" && !publicPreview && <DataState resource={budget} retry={refresh}>{budget.data && <Budget report={budget.data} />}</DataState>}
           {view === "platform" && <DataState resource={platform} retry={refresh}>{platform.data && <Platforms report={platform.data} />}</DataState>}
           </Suspense>
-          <footer className="panel-footer"><span>{activeResource.loadedAt ? `Last checked ${activeResource.loadedAt.toLocaleTimeString()}` : "Waiting for server data"}</span><span>Sifruno</span></footer>
+          <footer className="panel-footer"><span>{view === "panel-preview" ? "Sample workspace · read-only" : activeResource.loadedAt ? `Last checked ${activeResource.loadedAt.toLocaleTimeString()}` : "Waiting for server data"}</span><span>Sifruno</span></footer>
         </main>
       </div>
     </div>

@@ -1,0 +1,18 @@
+{
+  "name": "Sifruno Display",
+  "purpose": "Original logo lettering for Sifruno; seven glyphs, not a general-purpose text font",
+  "grid": 64,
+  "baseline": 57,
+  "ascender": 7,
+  "xHeightTop": 19,
+  "stem": 10,
+  "glyphs": [
+    {"letter": "S", "advance": 52, "transform": "translate(-8 0)", "path": "M56 7H26a15 15 0 0 0 0 30h12a5 5 0 0 1 0 10H12L8 57h30a15 15 0 0 0 0-30H26a5 5 0 0 1 0-10h26Z"},
+    {"letter": "i", "advance": 22, "path": "M0 7h14l-4 10H0ZM0 21h10v36H0Z"},
+    {"letter": "f", "advance": 34, "path": "M5 57V22A15 15 0 0 1 20 7h14l-4 10H20a5 5 0 0 0-5 5v5h15l-4 10H15v20ZM0 27h5v10H0Z"},
+    {"letter": "r", "advance": 34, "path": "M0 57V38c0-10.49 8.51-19 19-19h11l-4 10h-7a9 9 0 0 0-9 9v19Z"},
+    {"letter": "u", "advance": 44, "path": "M0 19h10v19a9 9 0 0 0 18 0V19h10v19a19 19 0 0 1-38 0Z"},
+    {"letter": "n", "advance": 44, "path": "M0 57V38a19 19 0 0 1 38 0v19H28V38a9 9 0 0 0-18 0v19Z"},
+    {"letter": "o", "advance": 38, "fillRule": "evenodd", "path": "M19 19a19 19 0 1 0 0 38 19 19 0 1 0 0-38ZM19 29a9 9 0 1 0 0 18 9 9 0 1 0 0-18Z"}
+  ]
+}

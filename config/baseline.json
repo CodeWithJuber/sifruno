@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "product": "Sifruno feasibility workbench",
+  "reference": {
+    "family": "cPanel & WHM",
+    "documentation_version": "138",
+    "exact_build": "",
+    "os": "",
+    "artifact_sha256": "",
+    "licensed_reference_verified": false
+  },
+  "targets": ["AlmaLinux 9 x86_64", "CloudLinux 9 x86_64"],
+  "control_plane_targets": ["Windows amd64", "Windows arm64", "Linux amd64", "Linux arm64", "macOS amd64", "macOS arm64"],
+  "legacy_os_requirement": "Old and new OS families are requested. Native runtime minimums apply; historical versions require separately qualified remote or connector profiles, currently unimplemented.",
+  "inventory_complete": false,
+  "pilot_accounts": 100,
+  "ai_monthly_cap_usd_micros": 10000000,
+  "ai_execution": "operator_approval",
+  "installation_contract": "fresh_server_original_ecosystem_unchanged",
+  "vendors": ["WHMCS", "Cloudflare", "CloudLinux", "LiteSpeed", "JetBackup", "Softaculous", "Imunify360"]
+}

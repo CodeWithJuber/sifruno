@@ -1,0 +1,28 @@
+{
+  "name": "Sifruno",
+  "short_name": "Sifruno",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#F4F8F7",
+  "theme_color": "#142F35",
+  "icons": [
+    {
+      "src": "icons/sifruno-app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/sifruno-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/sifruno-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

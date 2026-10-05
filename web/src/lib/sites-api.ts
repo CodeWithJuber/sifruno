@@ -1,0 +1,264 @@
+export interface Site {
+  id: string;
+  name: string;
+  domain: string;
+  preview_host: string;
+  state: "active" | "suspended" | "recovery_required";
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+export interface SiteFile { path: string; bytes: number; sha256: string }
+export interface SiteFileContent { path: string; content: string; sha256: string; revision: number }
+export interface SiteBackup {
+  id: string; site_id: string; created_at: string; bytes: number;
+  files: number; sha256: string; revision: number;
+}
+export type OperatorSession =
+  | { authenticated: true; csrf_token: string; expires_at: string }
+  | { authenticated: false };
+
+type ObjectValue = Record<string, unknown>;
+const object = (v: unknown): v is ObjectValue => typeof v === "object" && v !== null && !Array.isArray(v);
+const text = (v: unknown): v is string => typeof v === "string";
+const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
+const date = (v: unknown) => text(v) && Number.isFinite(Date.parse(v));
+const sha = (v: unknown) => text(v) && /^[a-f0-9]{64}$/.test(v);
+const id = (v: unknown) => text(v) && /^[a-f0-9]{32}$/.test(v);
+const path = (v: unknown) => text(v) && v.length > 0 && !v.startsWith("/") && !v.includes("\\") && !v.split("/").some((part) => part === "." || part === ".." || !part);
+
+export function validSite(v: unknown): v is Site {
+  return object(v) && id(v.id) && text(v.name) && text(v.domain) &&
+    v.preview_host === `site-${v.id}.localhost` &&
+    ["active", "suspended", "recovery_required"].includes(String(v.state)) &&
+    count(v.revision) && date(v.created_at) && date(v.updated_at);
+}
+export function validSiteList(v: unknown): v is { items: Site[] } {
+  return object(v) && Array.isArray(v.items) && v.items.every(validSite);
+}
+export function validFileList(v: unknown): v is { items: SiteFile[] } {
+  return object(v) && Array.isArray(v.items) && v.items.every((f) => object(f) && path(f.path) && count(f.bytes) && sha(f.sha256));
+}
+export function validFileContent(v: unknown): v is SiteFileContent {
+  return object(v) && path(v.path) && text(v.content) && sha(v.sha256) && count(v.revision);
+}
+export function validBackup(v: unknown): v is SiteBackup {
+  return object(v) && text(v.id) && v.id.length > 0 && v.id.length <= 256 && id(v.site_id) && date(v.created_at) &&
+    count(v.bytes) && count(v.files) && sha(v.sha256) && count(v.revision);
+}
+export function validBackupList(v: unknown): v is { items: SiteBackup[] } {
+  return object(v) && Array.isArray(v.items) && v.items.every(validBackup);
+}
+export function validSession(v: unknown): v is OperatorSession {
+  return object(v) && (v.authenticated === false || (v.authenticated === true && text(v.csrf_token) && v.csrf_token.length > 0 && date(v.expires_at)));
+}
+
+export class SiteApiError extends Error {
+  constructor(public status: number, public code: string, message: string) { super(message); }
+}
+function message(status: number): string {
+  if (status === 401) return "Operator authentication is required. Sign in again; your editor draft is kept.";
+  if (status === 403) return "The session or request origin was rejected. Refresh your session and try again.";
+  if (status === 404) return "This website, file or backup could not be found. Your editor draft is kept.";
+  if (status === 409) return "The website changed on the server. Your editor draft is kept; compare the latest version before saving.";
+  if (status === 422) return "Check the values and static-file limits. No successful result was confirmed.";
+  if (status === 429) return "Too many sign-in attempts. Wait before trying again.";
+  if (status === 503) return "This local capability is unavailable. No successful result was confirmed.";
+  return `The local service returned HTTP ${status}. No successful result was confirmed.`;
+}
+
+/* Called only by the lazy, local Websites view. Credentials and CSRF remain
+   in this browser session; no bodies, tokens or keys are logged or persisted. */
+export async function siteRequest<T>(
+  url: string,
+  validate: (value: unknown) => value is T,
+  options: { method?: "GET" | "POST" | "PUT"; body?: unknown; csrf?: string; unauthenticatedSession?: boolean } = {},
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  const method = options.method ?? "GET";
+  try {
+    const response = await fetch(url, {
+      method, credentials: "same-origin", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "application/json", ...(method !== "GET" ? { "Content-Type": "application/json" } : {}), ...(options.csrf ? { "X-CSRF-Token": options.csrf } : {}) },
+      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+    });
+    const value: unknown = await response.json().catch(() => undefined);
+    if (!response.ok && !(options.unauthenticatedSession && response.status === 401 && validSession(value) && !value.authenticated)) {
+      const code = object(value) && text(value.error) && /^[a-z_]+$/.test(value.error) ? value.error : "request_failed";
+      throw new SiteApiError(response.status, code, message(response.status));
+    }
+    if (!validate(value)) throw new SiteApiError(0, "invalid_response", "The response did not match the website data contract. No successful result was confirmed.");
+    return value;
+  } catch (error) {
+    if (error instanceof SiteApiError) throw error;
+    throw new SiteApiError(0, "connection_failed", "The request did not confirm its result. Your draft is kept. Refresh records before trying again.");
+  } finally { clearTimeout(timer); }
+}
+
+export const siteURL = (siteId: string, suffix = "") => `/api/v1/sites/${encodeURIComponent(siteId)}${suffix}`;
+export function sitePreviewPort(): number | undefined {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="sifruno-sites-port"]');
+  if (!meta) return 8082;
+  const value = meta.content.trim();
+  if (!/^\d{1,5}$/.test(value)) return undefined;
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
+}
+export const previewURL = (site: Site) => {
+  const port = sitePreviewPort();
+  return validSite(site) && port ? `http://${site.preview_host}:${port}/` : undefined;
+};
+
+const maxTransferArchive = 34 * 1024 * 1024;
+
+function transferMessage(status: number): string {
+  if (status === 401) return message(401);
+  if (status === 403) return message(403);
+  if (status === 404) return message(404);
+  if (status === 409) return message(409);
+  if (status === 413) return "The ZIP archive exceeds the 34 MiB transfer limit.";
+  if (status === 422) return "This is not a valid native Sifruno site archive, or its site values are invalid.";
+  if (status === 503) return message(503);
+  return `The local transfer returned HTTP ${status}. No successful result was confirmed.`;
+}
+
+async function transferError(response: Response): Promise<SiteApiError> {
+  // Transfer failures are JSON problems; successful transfer bodies stay binary.
+  await response.body?.cancel().catch(() => undefined);
+  return new SiteApiError(response.status, "website_transfer_failed", transferMessage(response.status));
+}
+
+async function readBoundedJson(response: Response, limit: number): Promise<unknown> {
+  const contentType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+  const body = response.body;
+  if (contentType !== "application/json" || !body) {
+    await body?.cancel().catch(() => undefined);
+    throw new SiteApiError(0, "invalid_response", "The import did not return a readable JSON website record.");
+  }
+  const lengthHeader = response.headers.get("Content-Length");
+  let expectedLength: number | undefined;
+  if (lengthHeader !== null) {
+    if (!/^\d+$/.test(lengthHeader)) {
+      await body.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The import response has an invalid length header.");
+    }
+    expectedLength = Number(lengthHeader);
+    if (!Number.isSafeInteger(expectedLength) || expectedLength > limit) {
+      await body.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The import response exceeds the 16 KiB response limit.");
+    }
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The import response exceeds the 16 KiB response limit.");
+    }
+    chunks.push(value);
+  }
+  if (expectedLength !== undefined && size !== expectedLength) {
+    throw new SiteApiError(0, "invalid_response", "The import response did not match its length header.");
+  }
+  const data = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { data.set(chunk, offset); offset += chunk.byteLength; }
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(data)); }
+  catch { throw new SiteApiError(0, "invalid_response", "The import response was not valid JSON."); }
+}
+
+export async function downloadSiteBackup(siteId: string, backupId: string, expectedSha256: string): Promise<Blob> {
+  if (!sha(expectedSha256)) throw new SiteApiError(0, "invalid_response", "The backup hash is invalid.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetch(siteURL(siteId, `/backups/${encodeURIComponent(backupId)}/download`), {
+      method: "GET", credentials: "same-origin", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "application/zip" },
+    });
+    if (!response.ok) throw await transferError(response);
+    const contentType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
+    const body = response.body;
+    if (contentType !== "application/zip" || !body) {
+      await body?.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The download did not return a readable application/zip stream.");
+    }
+    const lengthHeader = response.headers.get("Content-Length");
+    let expectedLength: number | undefined;
+    if (lengthHeader !== null) {
+      if (!/^\d+$/.test(lengthHeader)) {
+        await body.cancel().catch(() => undefined);
+        throw new SiteApiError(0, "invalid_response", "The ZIP download has an invalid length header.");
+      }
+      expectedLength = Number(lengthHeader);
+      if (!Number.isSafeInteger(expectedLength) || expectedLength <= 0 || expectedLength > maxTransferArchive) {
+        await body.cancel().catch(() => undefined);
+        throw new SiteApiError(0, "invalid_response", "The ZIP download exceeds the 34 MiB transfer limit.");
+      }
+    }
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > maxTransferArchive) {
+        await reader.cancel().catch(() => undefined);
+        throw new SiteApiError(0, "invalid_response", "The ZIP download exceeds the 34 MiB transfer limit.");
+      }
+      chunks.push(value);
+    }
+    if (size === 0 || (expectedLength !== undefined && size !== expectedLength)) {
+      throw new SiteApiError(0, "invalid_response", "The ZIP download was empty or did not match its length header.");
+    }
+    const archive = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { archive.set(chunk, offset); offset += chunk.byteLength; }
+    const digest = await crypto.subtle.digest("SHA-256", archive);
+    const actualSha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (actualSha256 !== expectedSha256) throw new SiteApiError(0, "invalid_response", "The downloaded ZIP hash does not match the selected backup record.");
+    return new Blob([archive], { type: "application/zip" });
+  } catch (error) {
+    if (error instanceof SiteApiError) throw error;
+    throw new SiteApiError(0, "connection_failed", "The ZIP download could not be confirmed. Refresh the backup list before trying again.");
+  } finally { clearTimeout(timer); }
+}
+
+export async function importSiteArchive(input: { name: string; domain: string; archive: File; csrf: string }): Promise<Site> {
+  const nameBytes = new TextEncoder().encode(input.name.trim()).length;
+  const domainBytes = new TextEncoder().encode(input.domain.trim()).length;
+  if (!input.name.trim() || nameBytes > 80 || !input.domain.trim() || input.domain.trim().length > 253 || domainBytes > 253 || !input.csrf) {
+    throw new SiteApiError(422, "invalid_request", "Check the website name, domain and operator session before importing.");
+  }
+  if (!input.archive || input.archive.size === 0 || input.archive.size > maxTransferArchive) {
+    throw new SiteApiError(413, "invalid_request", "Choose a nonempty ZIP archive up to 34 MiB.");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  const form = new FormData();
+  form.append("name", input.name);
+  form.append("domain", input.domain);
+  form.append("archive", input.archive, input.archive.name || "site.zip");
+  try {
+    const response = await fetch("/api/v1/sites/import", {
+      method: "POST", credentials: "same-origin", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "application/json", "X-CSRF-Token": input.csrf },
+      body: form,
+    });
+    if (!response.ok) throw await transferError(response);
+    const value = await readBoundedJson(response, 16 * 1024);
+    if (!validSite(value)) throw new SiteApiError(0, "invalid_response", "The import response did not confirm a persisted website.");
+    return value;
+  } catch (error) {
+    if (error instanceof SiteApiError) throw error;
+    throw new SiteApiError(0, "connection_failed", "The import result could not be confirmed. Refresh websites before trying again.");
+  } finally { clearTimeout(timer); }
+}

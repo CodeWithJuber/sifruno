@@ -1,0 +1,38 @@
+{
+  "brand": "Sifruno",
+  "version": "1.0.0",
+  "identity": {
+    "status": "approved",
+    "direction": "v3-custom-lettering",
+    "approvedOn": "2026-10-04",
+    "colorSplit": "sifr-uno",
+    "primaryLogo": "logos/sifruno-logo-primary.svg",
+    "darkLogo": "logos/sifruno-logo-on-dark.svg"
+  },
+  "colors": {
+    "ink": "#142F35",
+    "teal": "#087F6F",
+    "mint": "#B9E5D5",
+    "paper": "#F4F8F7",
+    "white": "#FFFFFF",
+    "muted": "#52666B",
+    "line": "#D5DEDB",
+    "darkSurface": "#1D3B41",
+    "darkMuted": "#BDD0CD",
+    "darkLine": "#496168"
+  },
+  "typography": {
+    "family": "Inter",
+    "fallback": "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+    "bodyWeight": 400,
+    "labelWeight": 500,
+    "wordmarkV1Weight": 600,
+    "wordmarkV2Weight": 700,
+    "logoLetteringV3": "Sifruno Display (seven original vector glyphs)",
+    "bodySizePx": 16,
+    "bodyLineHeight": 1.6
+  },
+  "spacingPx": [4, 8, 12, 16, 24, 32, 48, 64, 96],
+  "radiusPx": {"control": 0, "surface": 0, "appIcon": 13},
+  "icon": {"gridPx": 24, "strokePx": 2, "family": "Lucide", "role": "interface only"}
+}

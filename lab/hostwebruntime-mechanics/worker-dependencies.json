@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "kind": "worker-freeze2-local-dependencies",
+  "provenance": "Worker confirmed offline in-place compilation without overlay against base 12e4d3f; these current source bytes observed independently before native execution.",
+  "files": [
+    {
+      "path": "go.mod",
+      "sha256": "1082d590f04ae0f44e29fd20d1d55f199be166f396ae608ae9ec6fd650d6227d",
+      "bytes": 822
+    },
+    {
+      "path": "go.sum",
+      "sha256": "75870928880ec30f71a1e66110caed018505a8ac53477bbf1eb8f3d1126dd611",
+      "bytes": 4946
+    },
+    {
+      "path": "internal/hostaccounts/broker_linux.go",
+      "sha256": "259e4e7cd165e2f78becd08f8169ec94c42d031a3debffe0db11b2f5968d2d3d",
+      "bytes": 5392
+    },
+    {
+      "path": "internal/hostaccounts/client_other.go",
+      "sha256": "8643af0ee3b9212461b6a79bf53a630414e16d8f867babacb585471b57102c5b",
+      "bytes": 263
+    },
+    {
+      "path": "internal/hostaccounts/client.go",
+      "sha256": "87cb2ab5f958d9409d27352cc9c86a8ef31b6d87dfd3bbbd7e3a4f3b5d860b43",
+      "bytes": 3713
+    },
+    {
+      "path": "internal/hostaccounts/http.go",
+      "sha256": "3901b27c52143e605561605f87ef3246510972201cb156726d03a442cc30fb95",
+      "bytes": 4555
+    },
+    {
+      "path": "internal/hostaccounts/journal.go",
+      "sha256": "1241795bb3a5145f1403b955ee973322335d4ac391d931ebb867403a88be355b",
+      "bytes": 6728
+    },
+    {
+      "path": "internal/hostaccounts/native_linux_test.go",
+      "sha256": "46cb3315f12b952adbc3705503abf308f2cfb09d47415c6b9bea9e3db5d92e08",
+      "bytes": 4604
+    },
+    {
+      "path": "internal/hostaccounts/native_linux.go",
+      "sha256": "9bb0b208403cfb21d69635f0f5a7d55cdf14e1161ad1b11470f186d8f9f6d431",
+      "bytes": 19901
+    },
+    {
+      "path": "internal/hostaccounts/snapshot_test.go",
+      "sha256": "84152d31b66d6ade2cf53de49564f7c655588792412db9aaa272183f2c78db0d",
+      "bytes": 9528
+    },
+    {
+      "path": "internal/hostaccounts/snapshot.go",
+      "sha256": "aed1c575bfd4270b76cd96c6d9917a8b02389a957f34a0128bb437c37e4c2ef4",
+      "bytes": 5700
+    },
+    {
+      "path": "internal/hostaccounts/store_test.go",
+      "sha256": "65d95867b45a796aa8e69b2f1ce769ff26d6142d256b4e29dcaccac14e63aa58",
+      "bytes": 13357
+    },
+    {
+      "path": "internal/hostaccounts/store.go",
+      "sha256": "fd2094e5ba57bb379546040d779ed379e7ad0ef430e0687e35bfec0985dfbd56",
+      "bytes": 14563
+    },
+    {
+      "path": "internal/hostaccounts/types.go",
+      "sha256": "e167456a9aa613d6f40efe9280da4bdb70bf5d2a77bde194a3122e71501f083c",
+      "bytes": 4325
+    },
+    {
+      "path": "internal/hostweb/compiler_test.go",
+      "sha256": "ba757daee188a4d49114c3906ccb5c5cdb63b2d1ed9b400254dc05b0a552fb91",
+      "bytes": 7901
+    },
+    {
+      "path": "internal/hostweb/compiler.go",
+      "sha256": "17f862ea61fd2d87a1cb89bbbb144ea9dc186b82556b3f416875b294285d5ede",
+      "bytes": 20828
+    },
+    {
+      "path": "internal/hostwebgeneration/coordinator_test.go",
+      "sha256": "b365703e11d0d0f7c6214660599c7fa9f36bd8c37e2b5dd274d2677f54bb9e30",
+      "bytes": 17208
+    },
+    {
+      "path": "internal/hostwebgeneration/coordinator.go",
+      "sha256": "2be4b3adf122fad1ecd27e2ede59c26a6988487724b5a4ae482d258d142eb41b",
+      "bytes": 13863
+    },
+    {
+      "path": "internal/hostwebgeneration/guard_unix.go",
+      "sha256": "b2ac9603cccbdaf81d692cf21c0e78b5afc30447aea5e2bc575e9f73bfea0899",
+      "bytes": 696
+    },
+    {
+      "path": "internal/hostwebgeneration/guard_windows.go",
+      "sha256": "6d9257e1a0e2a2d33423c3e15429402688c87a0a69d1bebd73b1f5a101f69461",
+      "bytes": 1111
+    },
+    {
+      "path": "internal/hostwebgeneration/storage.go",
+      "sha256": "9e07fe51854ac18d667f0a855d38a3bb000c0dcd71b852312b61cca23524bbed",
+      "bytes": 16351
+    },
+    {
+      "path": "internal/securestate/dir_test.go",
+      "sha256": "5262ba4eee628c26155f790f1b53fc47acc538207158dbc4dede7233b5dba808",
+      "bytes": 1730
+    },
+    {
+      "path": "internal/securestate/dir_unix.go",
+      "sha256": "c5a42dec2dd4c0c0698ade2459a9ce56189313c6326e6e57d94cf8f186cfd59d",
+      "bytes": 126
+    },
+    {
+      "path": "internal/securestate/dir_windows.go",
+      "sha256": "cad828e2146d1b0214582fdd101138d8e0804da381ae32eebc90642b8d555d5e",
+      "bytes": 699
+    },
+    {
+      "path": "internal/securestate/dir.go",
+      "sha256": "d510613ffc1288aa08676960d63a2e2a008c44fe95c263622b539aeb40ba2ec2",
+      "bytes": 2258
+    }
+  ]
+}

@@ -44,8 +44,10 @@ Status polling is not required for corruption detection.
 Pending operations survive close/crash/reopen and block new Plan/Apply calls.
 Recover requires the exact pending operation ID and coordinator revision. It
 first freshly observes the runtime; unknown third-party identities are never
-overwritten. A previous generation is restored only if its full snapshot equals
-the newly reserved accounts. Otherwise a new exact denied bundle is persisted
+overwritten. A serving previous generation is restored only if its full snapshot
+equals both the failed After generation and the newly reserved accounts.
+Matching Before to current accounts alone cannot authorize serving rollback
+across a different failed snapshot. Otherwise a new exact denied bundle is persisted
 and passed to Rollback. The denied observation must match that bundle and the
 current snapshot before recovery completes. A provider's postcallback failure
 after provisional commit durably reopens recovery at the current revision.

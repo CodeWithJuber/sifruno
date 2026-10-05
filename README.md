@@ -34,6 +34,12 @@ tools require the local operator session and are excluded from the approved
 public monitoring preview. See [File Manager](docs/file-manager-ui.md),
 [Backups](docs/backups-ui.md) and [host resources](docs/host-resources.md).
 
+The approved public dashboard now offers **Explore panel** on Overview and
+**Panel preview** in navigation. Its Files, Backups and Websites tour uses
+clearly labelled sample content with local selection/search only. It exposes
+no customer files, operator login, write actions or private APIs. Six actual
+HTTPS viewport/theme checks pass. See [public panel tour](docs/public-panel-preview.md).
+
 Portable builds target Windows/Linux/macOS amd64/arm64: `npm run runtime:build`. Build verification and runtime qualification are separate. Historical systems remain connector/remote candidates, not guaranteed native targets. See [platform scope](docs/platform-support.md) and [archive contract](docs/runtime-builds.md).
 
 Accounts adds an optional local Linux root broker, private operator UI/API and
@@ -63,6 +69,11 @@ The delivered source is `deliverables/sifruno-source.zip` with a file manifest a
 Native Sifruno v1 ZIP export/import uses the same authenticated API from the local UI and CLI. Imports create a new static site after full bounded validation; downloads retain the recorded backup hash. Original cPanel account restoration and migration remain unimplemented. A separate `panelctl backup inspect --from ORIGINAL.tar.gz --out NEW.jsonl` streams original-format TAR/gzip hashes and metadata for migration characterization, without extracting files or exposing their contents. See [native transfers](docs/native-transfers.md) and [original backup inspection](docs/cpanel-backup-inspection.md).
 
 Development uses isolated Git worktrees for UI, CLI and review. The session permits four concurrent agents including the integrating root; the [twenty-four workstreams](docs/parallel-development.md) run in batches. This base checkout is connected to [CodeWithJuber/sifruno](https://github.com/CodeWithJuber/sifruno), with reviewed changes proposed on feature branches. Running private state is excluded from Git and source snapshots.
+
+The [full delivery plan](docs/DELIVERY-PLAN.md) maps42focused PR scopes to
+service, compatibility, migration, vendor, AI, platform and release gates.
+[Machine-readable status](docs/WORKSTREAM-STATUS.json) tracks evidence and
+dependencies separately from implementation or qualification claims.
 
 ## Branding
 

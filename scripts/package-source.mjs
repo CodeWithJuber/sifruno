@@ -7,7 +7,7 @@ import { configure, Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } f
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const hash=x=>createHash('sha256').update(x).digest('hex');
-const excluded=new Set(['node_modules','dist','__pycache__','.state','.cache','.forge','.git','.aws','.codex']);
+const excluded=new Set(['node_modules','dist','__pycache__','artifacts','.worktrees','.state','.cache','.forge','.git','.aws','.codex']);
 // Compare locally, without logging names/values or writing the environment.
 const privateValues=Object.entries(process.env).filter(([name,value])=>/key|token|secret|password/i.test(name)&&value?.length>=12).map(([,value])=>Buffer.from(value));
 async function main(){

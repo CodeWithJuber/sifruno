@@ -81,6 +81,11 @@ func TestCompileDeterministicAndRestricted(t *testing.T) {
 		}
 	}
 	for _, config := range []string{front, backend} {
+		mpm := strings.Index(config, "LoadModule mpm_event_module ")
+		listen := strings.Index(config, "Listen ")
+		if mpm < 0 || listen < mpm {
+			t.Fatal("standalone Apache uses Listen before loading its MPM")
+		}
 		module := strings.Index(config, "LoadModule unixd_module ")
 		for _, directive := range []string{"User #", "Group #", "ChrootDir "} {
 			position := strings.Index(config, directive)

@@ -1,0 +1,56 @@
+.file-manager-page .hosting-notice { margin-bottom: 0; }
+.fm-picker.astryx-card { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; padding: 16px; }
+.fm-picker > div { flex: 1; min-width: 0; max-width: 560px; }
+.fm-picker label { display: block; margin-bottom: 8px; }
+.fm-picker [data-slot="native-select-wrapper"] { width: 100%; }
+.fm-picker [data-slot="native-select"] { color: var(--foreground); }
+.fm-context { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; font-size: 11px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.fm-status { font-size: 12px; }
+.fm-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 16px; align-items: start; }
+.fm-browser .compact-search { margin: 0 16px; }
+.fm-breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 12px; }
+.fm-breadcrumb .astryx-button { font-size: 11px; overflow-wrap: anywhere; white-space: normal; }
+.fm-file-list { padding: 0 12px 12px; max-height: 360px; overflow-y: auto; }
+.fm-file-list > button { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; background: transparent; color: var(--foreground); padding: 12px; text-align: left; font-size: 12px; border-radius: 4px; }
+.fm-file-list > button > svg { width: 16px; height: 16px; color: var(--muted-foreground); }
+.fm-file-list > button > span { min-width: 0; overflow-wrap: anywhere; }
+.fm-file-list > button > small { margin-left: auto; color: var(--muted-foreground); font-size: 10px; flex-shrink: 0; }
+.fm-file-list > button[aria-pressed="true"] { color: var(--primary); background: var(--secondary); }
+.fm-file-list > button:hover:not(:disabled) { background: var(--muted); }
+.fm-file-list > button:disabled { opacity: .65; }
+.fm-facts dl { padding: 0 16px 16px; display: grid; gap: 16px; }
+.fm-facts dt { font-size: 10px; color: var(--muted-foreground); }
+.fm-facts dd { font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+.fm-facts code { font-size: 11px; }
+.fm-facts > p { font-size: 12px; padding: 0 16px 16px; }
+.fm-editor .card-heading { border-bottom: 1px solid var(--border); }
+.fm-editor .card-heading > div { min-width: 0; }
+.fm-editor h2 { overflow-wrap: anywhere; }
+.fm-editor .card-heading p { margin-top: 4px; font-size: 11px; }
+.fm-editor-body { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.fm-path-field { display: flex; flex-direction: column; gap: 8px; }
+.file-manager-page .fm-editor textarea { width: 100%; min-height: 300px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.fm-editor textarea:focus-visible, .fm-conflict summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+.fm-editor-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.fm-editor-footer p { font-size: 10px; overflow-wrap: anywhere; }
+.fm-editor-footer .astryx-button { flex-shrink: 0; }
+.fm-conflict { padding: 16px; border: 1px solid var(--input); border-radius: 6px; background: var(--muted); display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+.fm-conflict p { font-size: 11px; overflow-wrap: anywhere; }
+.fm-conflict details { width: 100%; }
+.fm-conflict summary { cursor: pointer; font-size: 12px; color: var(--muted-foreground); }
+.fm-conflict pre { padding: 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); max-height: 240px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; margin: 12px 0 0; }
+@media (max-width: 960px) {
+  .fm-layout { grid-template-columns: 1fr; }
+  .fm-facts dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .fm-picker.astryx-card { flex-direction: column; align-items: stretch; }
+  .fm-picker > div { width: 100%; }
+  .fm-browser .card-heading { flex-wrap: wrap; align-items: flex-start; }
+  .fm-browser .card-heading .astryx-button { margin-left: auto; }
+  .fm-file-list > button { padding: 12px 8px; gap: 8px; }
+  .fm-facts dl { grid-template-columns: 1fr; }
+  .fm-editor textarea { min-height: 240px; }
+  .fm-editor-footer { align-items: flex-start; }
+  .fm-editor-footer .astryx-button { min-width: 80px; }
+}

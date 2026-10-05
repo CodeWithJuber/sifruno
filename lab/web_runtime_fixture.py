@@ -10,6 +10,8 @@ bytes, reads private key contents into Python, or touches a live host state.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import argparse
 import hashlib
 import http.client
@@ -25,12 +27,14 @@ import ssl
 import stat
 import subprocess
 import time
+from urllib.parse import urlsplit
 
 
 MAX_ACCOUNTS = 2
 COMMAND_TIMEOUT = 45
 TOTAL_TIMEOUT = 360
 MAX_OUTPUT = 256 * 1024
+MAX_RUNTIME_REPORT = 64 * 1024
 UID_MIN, UID_MAX = 20000, 60000
 ACCOUNT_ID = re.compile(r"^[a-f0-9]{32}$")
 USERNAME = re.compile(r"^[a-z][a-z0-9_]{2,31}$")
@@ -41,9 +45,10 @@ RUN_DEADLINE: float | None = None
 
 
 class FixtureError(RuntimeError):
-    def __init__(self, code: str):
+    def __init__(self, code: str, observations: list[dict] | None = None):
         super().__init__(code)
         self.code = code
+        self.observations = observations
 
 
 def guard_deadline() -> None:
@@ -187,6 +192,24 @@ def exclusive_path(path: Path, parent: Path) -> None:
         die("report_path_not_exclusive")
 
 
+def write_runtime_report(path: Path, parent: Path, result: dict) -> None:
+    # Serialize and bound before exclusively creating the admitted output.
+    exclusive_path(path, parent)
+    data = (json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False,
+                       allow_nan=False) + "\n").encode("utf-8")
+    if len(data) > MAX_RUNTIME_REPORT:
+        die("runtime_report_bound_exceeded")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "wb") as output:
+        if hasattr(os, "fchmod"):
+            os.fchmod(output.fileno(), 0o600)
+        else:
+            os.chmod(path, 0o600)
+        output.write(data)
+        output.flush()
+        os.fsync(output.fileno())
+
+
 def read_json(path: Path, max_bytes: int = 2 << 20) -> object:
     if not path.is_file() or path.is_symlink() or path.stat().st_size > max_bytes:
         die("json_input_invalid")
@@ -288,12 +311,36 @@ def helper_profile(profile: dict) -> dict:
             "frontGID": profile["FrontGID"], "controllerUID": profile["ControllerUID"]}
 
 
-def accounts_from(path: Path, profile: dict, allow_suspended: bool = False) -> list[dict]:
-    value = read_json(path)
-    if isinstance(value, dict) and set(value) == {"items"}:
+def account_items(value: object, *, allow_raw_list: bool = False) -> list[dict]:
+    if isinstance(value, dict):
+        if set(value) not in ({"items"}, {"items", "$schema"}):
+            die("account_list_schema_invalid")
+        if "$schema" in value:
+            schema = value["$schema"]
+            if (not isinstance(schema, str) or not 1 <= len(schema) <= 2048 or
+                    not schema.isascii() or any(not 33 <= ord(c) <= 126 for c in schema)):
+                die("account_list_metadata_invalid")
+            try:
+                parsed = urlsplit(schema)
+                port = parsed.port
+                if (parsed.scheme not in ("http", "https") or not parsed.hostname or
+                        parsed.username is not None or parsed.password is not None or
+                        not parsed.path.endswith("/AccountListBody.json") or parsed.query or parsed.fragment or
+                        (port is not None and not 1 <= port <= 65535)):
+                    die("account_list_metadata_invalid")
+            except ValueError:
+                die("account_list_metadata_invalid")
+            # Metadata is never fetched or passed into the strict Go helper.
         value = value["items"]
+    elif not allow_raw_list:
+        die("account_list_schema_invalid")
     if not isinstance(value, list) or not (1 <= len(value) <= MAX_ACCOUNTS):
         die("account_count_invalid")
+    return value
+
+
+def accounts_from(path: Path, profile: dict, allow_suspended: bool = False) -> list[dict]:
+    value = account_items(read_json(path), allow_raw_list=True)
     keys = {"ID", "Username", "Domain", "Home", "PublicHTML", "State", "UID", "GID",
             "Revision", "CreatedAt", "UpdatedAt"}
     result: list[dict] = []
@@ -442,19 +489,25 @@ def replace_exact(path: Path, data: bytes, mode: int = 0o600) -> None:
         die("staged_replace_failed")
 
 
-def backend_tls_probe(account: dict, profile: dict, ca_file: Path) -> None:
+def backend_tls_probe(account: dict, profile: dict, ca_file: Path) -> dict:
     ip = f"127.73.{account['UID'] >> 8}.{account['UID'] & 255}"
     context = ssl.create_default_context(cafile=str(ca_file))
     context.check_hostname = True
+    connection = http.client.HTTPSConnection(ip, profile["BackendPort"], context=context, timeout=3)
     try:
-        with socket.create_connection((ip, profile["BackendPort"]), timeout=3) as raw:
-            with context.wrap_socket(raw, server_hostname=ip) as conn:
-                conn.sendall((f"GET /index.html HTTP/1.1\r\nHost: {account['Domain']}\r\nConnection: close\r\n\r\n").encode())
-                data = conn.recv(4096)
-    except (OSError, ssl.SSLError):
+        connection.request("GET", "/index.html", headers={"Host": account["Domain"], "Connection": "close"})
+        response = connection.getresponse()
+        body = response.read(128 * 1024 + 1)
+        if len(body) > 128 * 1024:
+            die("http_body_bound_exceeded")
+    except (OSError, ssl.SSLError, http.client.HTTPException):
         die("backend_tls_identity_invalid")
-    if b"200" not in data.split(b"\r\n", 1)[0]:
+    finally:
+        connection.close()
+    if response.status != 200 or f"SIFRUNO_STATIC_{account['Username']}".encode() not in body:
         die("backend_probe_invalid")
+    return {"account_id": account["ID"], "status": response.status, "bytes": len(body),
+            "body_sha256": hashlib.sha256(body).hexdigest(), "expected_marker_observed": True}
 
 
 def inspect_wrong_backend_certificate(proc: subprocess.Popen[bytes], account: dict,
@@ -488,7 +541,8 @@ def inspect_wrong_backend_certificate(proc: subprocess.Popen[bytes], account: di
                 with context.wrap_socket(raw, server_hostname=ip) as conn:
                     if conn.getpeercert(binary_form=True) != expected_der:
                         die("wrong_backend_presented_certificate_mismatch")
-                    if conn.getpeercert().get("subjectAltName") != (("IP Address", wrong_ip),):
+                    if conn.getpeercert().get("subjectAltName") != (
+                            ("DNS", "wrong-backend.example.invalid"), ("IP Address", wrong_ip)):
                         die("wrong_backend_presented_san_invalid")
                     conn.sendall((f"GET /index.html HTTP/1.1\r\nHost: {account['Domain']}\r\nConnection: close\r\n\r\n").encode())
                     response = http.client.HTTPResponse(conn)
@@ -620,12 +674,32 @@ def process_context(pid: int) -> str:
 def diagnostic_lines(stderr: bytes) -> list[str]:
     lines: list[str] = []
     for raw in stderr.decode("utf-8", "replace").splitlines():
-        line = raw.replace("\x00", "")[:256]
-        if any(token in line.lower() for token in ("error", "syntax", "failed", "cannot")):
+        raw = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
+        line = "".join(c for c in raw if c.isprintable())[:256]
+        lowered = line.lower()
+        if any(token in lowered for token in ("private key", "begin ", "end ", "traceback", "password", "token=", "secret=", "cookie", "authorization")):
+            continue
+        if (any(token in lowered for token in ("error", "syntax", "failed", "cannot", "denied", "unable", "could not", "invalid", "requires")) or
+                re.search(r"\bAH[0-9]{5}\b", line) or line.startswith("Invalid command '")):
             lines.append(line)
-        if len(lines) == 4:
-            break
-    return lines
+    return lines[-4:]
+
+
+def owned_log_diagnostics(path: Path) -> list[str]:
+    # Paths come only from this fixture's exclusive stderr files or generated
+    # fixed Apache/FPM log references. Never consume an arbitrary host log.
+    try:
+        if path.is_symlink():
+            return []
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or getattr(info, "st_uid", 0) != 0:
+                return []
+            source.seek(max(0, info.st_size - 4096))
+            return diagnostic_lines(source.read(4096))
+    except OSError:
+        return []
 
 
 def ensure_dir(path: Path, mode: int = 0o700) -> None:
@@ -663,62 +737,201 @@ def children(pid: int) -> list[int]:
     return result
 
 
-def proc_identity(pid: int) -> tuple[int, int, str]:
-    values: dict[str, str] = {}
-    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+def parse_proc_identity(status: str, root: str) -> dict:
+    wanted = ("Uid", "Gid", "Groups", "CapEff", "CapPrm", "CapAmb", "CapInh")
+    values = {}
+    if len(status.encode("ascii")) > 8192:
+        raise ValueError("process status bound")
+    for line in status.splitlines():
         key, _, value = line.partition(":")
-        if key in ("Uid", "Gid"):
-            values[key] = value.split()[0]
-    root = os.path.realpath(f"/proc/{pid}/root")
-    return int(values["Uid"]), int(values["Gid"]), root
+        if key in wanted:
+            if key in values:
+                raise ValueError("duplicate process identity field")
+            values[key] = value.strip()
+    if set(values) != set(wanted):
+        raise ValueError("missing process identity field")
+    ids = {}
+    for key in ("Uid", "Gid"):
+        fields = values[key].split()
+        if len(fields) != 4 or any(not field.isdecimal() for field in fields):
+            raise ValueError("invalid process identity")
+        ids[key] = [int(field) for field in fields]
+        if any(value > 0xFFFFFFFE for value in ids[key]):
+            raise ValueError("process identity bound")
+    fields = values["Groups"].split()
+    if len(fields) > 32 or any(not field.isdecimal() for field in fields):
+        raise ValueError("invalid supplementary groups")
+    groups = [int(field) for field in fields]
+    if len(set(groups)) != len(groups) or any(value > 0xFFFFFFFE for value in groups):
+        raise ValueError("supplementary groups bound")
+    caps = {}
+    for key, name in (("CapEff", "effective"), ("CapPrm", "permitted"), ("CapAmb", "ambient"), ("CapInh", "inheritable")):
+        if not re.fullmatch(r"[0-9a-fA-F]{1,16}", values[key]):
+            raise ValueError("invalid process capabilities")
+        caps[name + "_capabilities"] = int(values[key], 16)
+    return {"uid": ids["Uid"][0], "gid": ids["Gid"][0], "uids": ids["Uid"],
+            "gids": ids["Gid"], "groups": groups, "root": root, **caps}
+
+
+def process_identity(pid: int) -> dict:
+    with Path(f"/proc/{pid}/status").open("r", encoding="ascii") as source:
+        status = source.read(8193)
+    return parse_proc_identity(status, os.path.realpath(f"/proc/{pid}/root"))
+
+
+def worker_matches(identity: dict, uid: int, gid: int, root: str) -> bool:
+    return (identity["uids"] == [uid] * 4 and identity["gids"] == [gid] * 4 and
+            set(identity["groups"]).issubset({gid}) and identity["root"] == root and
+            all(identity[name + "_capabilities"] == 0 for name in
+                ("effective", "permitted", "ambient", "inheritable")))
 
 
 def assert_worker(proc: subprocess.Popen[bytes], account: dict, jail: Path) -> None:
-    time.sleep(0.4)
-    pids = children(proc.pid)
-    if not pids:
-        die("worker_not_observed")
-    found = False
-    for pid in pids:
-        try:
-            uid, gid, root = proc_identity(pid)
-        except (OSError, KeyError, ValueError):
-            continue
-        if uid == account["UID"] and gid == account["GID"] and root == str(jail):
-            found = True
-            break
-    if not found:
-        die("worker_identity_or_chroot_invalid")
+    deadline = time.monotonic() + 10
+    observed = False
+    while time.monotonic() < deadline:
+        guard_deadline()
+        if proc.poll() is not None:
+            die("owned_daemon_exited_before_workers")
+        pids = children(proc.pid)
+        identities = []
+        for pid in pids:
+            try:
+                identities.append(process_identity(pid))
+            except (OSError, KeyError, ValueError, UnicodeError):
+                pass
+        observed = observed or bool(pids)
+        if identities and len(identities) == len(pids) and all(
+                worker_matches(identity, account["UID"], account["GID"], str(jail)) for identity in identities):
+            return
+        time.sleep(.1)
+    raise FixtureError("worker_identity_or_chroot_invalid" if observed else "worker_not_observed",
+                       observations=identities[:8])
 
 
 def assert_front_has_no_tenant_worker(proc: subprocess.Popen[bytes], accounts: list[dict]) -> None:
     tenant_uids = {account["UID"] for account in accounts}
-    observed = False
-    for pid in children(proc.pid):
-        try:
-            uid, _gid, root = proc_identity(pid)
-        except (OSError, KeyError, ValueError):
-            continue
-        if uid in tenant_uids or uid == 2000 or "/backend-jails/" in root:
-            die("shared_front_tenant_authority")
-        if uid == 48 and _gid == 48 and root == "/":
-            observed = True
-    if not observed:
-        die("shared_front_identity_not_apache")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        guard_deadline()
+        if proc.poll() is not None:
+            die("owned_daemon_exited_before_workers")
+        pids = children(proc.pid)
+        identities = []
+        for pid in pids:
+            try:
+                identity = process_identity(pid)
+            except (OSError, KeyError, ValueError, UnicodeError):
+                continue
+            if set(identity["uids"]) & (tenant_uids | {2000}) or identity["root"] != "/":
+                die("shared_front_tenant_authority")
+            identities.append(identity)
+        if identities and len(identities) == len(pids) and all(
+                worker_matches(identity, 48, 48, "/") for identity in identities):
+            return
+        time.sleep(.1)
+    raise FixtureError("shared_front_identity_not_apache", observations=identities[:8])
 
 
-def stop_process(proc: subprocess.Popen[bytes] | None) -> None:
-    if proc is None or proc.poll() is not None:
-        return
+def linux_start_identity(pid: int) -> str | None:
     try:
-        os.killpg(proc.pid, signal.SIGTERM)
-        proc.wait(timeout=8)
-    except (OSError, subprocess.TimeoutExpired):
+        with Path(f"/proc/{pid}/stat").open("r", encoding="ascii") as source:
+            value = source.read(8193)
+    except FileNotFoundError:
+        return None
+    if len(value) > 8192:
+        raise FixtureError("owned_process_identity_invalid")
+    # comm is parenthesized and may contain spaces or ')'; split at its last ')'.
+    close = value.rfind(")")
+    if not value.startswith(f"{pid} (") or close < 0 or value[close:close+2] != ") ":
+        raise FixtureError("owned_process_identity_invalid")
+    fields = value[close + 2:].split()
+    if len(fields) < 20 or not fields[19].isdecimal():
+        raise FixtureError("owned_process_identity_invalid")
+    return fields[19] # field22 starttime, relative to field3 state
+
+
+@dataclass(frozen=True)
+class OwnedProcess:
+    process: subprocess.Popen
+    pgid: int
+    fixture_pgid: int
+    start_identity: str
+
+    def __getattr__(self, name):
+        return getattr(self.process, name)
+
+
+def owned_launch(argv, **kwargs) -> OwnedProcess:
+    # Popen's POSIX start_new_session creates PGID=SID=PID before exec. No shell
+    # or caller-supplied preexec_fn is admitted. All fixture daemons use this.
+    if kwargs.get("start_new_session", True) is not True or kwargs.get("preexec_fn") is not None or kwargs.get("shell", False):
+        raise FixtureError("owned_launch_contract_invalid")
+    fixture_pgid = os.getpgrp()
+    kwargs["start_new_session"] = True
+    process = subprocess.Popen(argv, **kwargs)
+    try:
+        if process.pid <= 1 or process.pid == fixture_pgid:
+            raise FixtureError("owned_process_group_invalid")
+        identity = linux_start_identity(process.pid)
+        if identity is None or os.getpgid(process.pid) != process.pid or os.getsid(process.pid) != process.pid:
+            raise FixtureError("owned_process_admission_failed")
+        return OwnedProcess(process, process.pid, fixture_pgid, identity)
+    except (OSError, FixtureError):
+        # Admission failed: never signal an unproven/foreign process group.
+        # Reap the exact Popen leader; disposable guest must be rejected.
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=3)
+        raise FixtureError("owned_process_admission_failed")
+
+
+def stop_process(owned: OwnedProcess | None, *, term_timeout: float = 8,
+                 kill_timeout: float = 3, poll_interval: float = .05) -> None:
+    if owned is None:
+        return
+    if not isinstance(owned, OwnedProcess) or owned.pgid <= 1 or owned.pgid != owned.pid or owned.pgid in (owned.fixture_pgid, os.getpgrp()):
+        raise FixtureError("owned_process_group_invalid")
+    if not (0 < term_timeout <= 8 and 0 < kill_timeout <= 3 and 0 < poll_interval <= .1):
+        raise FixtureError("owned_cleanup_bound_invalid")
+
+    def check_identity():
+        current = linux_start_identity(owned.pid)
+        if current is not None and current != owned.start_identity:
+            raise FixtureError("owned_process_identity_changed")
+        if owned.poll() is None and (current is None or os.getpgid(owned.pid) != owned.pgid or os.getsid(owned.pid) != owned.pgid):
+            raise FixtureError("owned_process_group_changed")
+
+    def signal_group(sig) -> bool:
+        check_identity()
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=3)
-        except (OSError, subprocess.TimeoutExpired):
-            die("owned_process_cleanup_failed")
+            os.killpg(owned.pgid, sig)
+            return True
+        except ProcessLookupError:
+            return False
+        except OSError as error:
+            raise FixtureError("owned_process_cleanup_failed") from error
+
+    def wait_extinction(timeout):
+        deadline = time.monotonic() + timeout
+        while True:
+            owned.poll() # reap leader so its zombie cannot keep the group alive
+            if not signal_group(0):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(min(poll_interval, max(0, deadline-time.monotonic())))
+
+    # Cleanup has independent bounded grace periods even when the fixture's
+    # global deadline/cancellation has fired. Never abandon owned children.
+    if signal_group(0):
+        if signal_group(signal.SIGTERM) and not wait_extinction(term_timeout):
+            if signal_group(signal.SIGKILL) and not wait_extinction(kill_timeout):
+                raise FixtureError("owned_process_cleanup_failed")
+    try:
+        owned.wait(timeout=kill_timeout)
+    except subprocess.TimeoutExpired as error:
+        raise FixtureError("owned_process_cleanup_failed") from error
 
 
 def http_request(port: int, host: str, path: str) -> tuple[int, bytes]:
@@ -736,10 +949,24 @@ def http_request(port: int, host: str, path: str) -> tuple[int, bytes]:
         connection.close()
 
 
+def assert_traversal_denied(status: int, body: bytes) -> None:
+    # Apache rejects malformed encoded dot segments as400 before routing. An
+    # unavailable service/redirect cannot count as a successful isolation probe.
+    if (type(status) is not int or status not in (400, 403, 404) or
+            b"SIFRUNO_PRIVATE_SENTINEL" in body):
+        die("sibling_path_not_denied")
+
+
 def issue_backend_certificate(account: dict, cert: Path, key: Path, ca_cert: Path,
-                              ca_key: Path, work: Path, ip: str, suffix: str) -> None:
+                              ca_key: Path, work: Path, ip: str, suffix: str,
+                              peer_domain: str | None = None) -> None:
     ext = work / (account["ID"] + suffix + ".ext")
-    write_exact(ext, f"subjectAltName=IP:{ip}\n".encode())
+    # ProxyPreserveHost makes Apache use the original domain for peer-name/SNI;
+    # direct loopback probes independently verify the account's IP identity.
+    peer_domain = account["Domain"] if peer_domain is None else peer_domain
+    if peer_domain not in (account["Domain"], "wrong-backend.example.invalid"):
+        die("backend_certificate_domain_invalid")
+    write_exact(ext, f"subjectAltName=DNS:{peer_domain},IP:{ip}\n".encode())
     csr = work / (account["ID"] + suffix + ".csr")
     serial = work / (account["ID"] + suffix + ".srl")
     run_cmd(["/usr/bin/openssl", "req", "-new", "-key", str(key), "-subj", f"/CN={ip}", "-out", str(csr)])
@@ -797,6 +1024,15 @@ def main() -> int:
     procs: list[subprocess.Popen[bytes]] = []
     mounts: list[Path] = []
     log_handles: list[object] = []
+    daemon_logs: list[tuple[str, str | None, Path]] = []
+
+    def daemon_stderr(role: str, account_id: str | None = None):
+        path = run_root / (role + ("-" + account_id if account_id else "") + "-startup.log")
+        handle = path.open("xb")
+        os.chmod(path, 0o600)
+        log_handles.append(handle)
+        daemon_logs.append((role, account_id, path))
+        return handle
     try:
         if os.geteuid() != 0 or not args.disposable_alma_guest:
             die("root_disposable_guest_required")
@@ -861,7 +1097,7 @@ def main() -> int:
         for log in logs:
             os.chmod(log, 0o600)
         log_handles.extend((broker_log, panel_log))
-        broker = subprocess.Popen([str(broker_binary), "--state", str(broker_state), "--socket", str(socket_path),
+        broker = owned_launch([str(broker_binary), "--state", str(broker_state), "--socket", str(socket_path),
                                    "--homes", str(homes), "--controller-uid", "2000"], cwd=str(qualification_root),
                                   env=clean_env(), stdout=broker_log, stderr=broker_log, start_new_session=True)
         procs.append(broker)
@@ -871,7 +1107,7 @@ def main() -> int:
             time.sleep(.1)
         if not socket_path.exists() or broker.poll() is not None:
             die("broker_start_failed")
-        panel = subprocess.Popen(["/usr/bin/setpriv", "--reuid", "2000", "--regid", "2000", "--clear-groups", "--",
+        panel = owned_launch(["/usr/bin/setpriv", "--reuid", "2000", "--regid", "2000", "--clear-groups", "--",
                                   str(panel_binary), "--listen", "127.0.0.1:18080", "--sites-listen", "", "--state", str(panel_state),
                                   "--ui", str(ui_root), "--accounts-socket", str(socket_path)], cwd=str(qualification_root), env=clean_env(),
                                  stdout=panel_log, stderr=panel_log, start_new_session=True)
@@ -906,16 +1142,15 @@ def main() -> int:
         rows = run_cmd([*panelctl, "accounts", "list"], uid=2000).stdout
         replace_exact(accounts_json, rows)
         accounts = accounts_from(accounts_json, profile)
-        account_value = json.loads(rows)
-        if not isinstance(account_value, dict) or set(account_value) != {"items"}:
-            die("account_list_schema_invalid")
+        account_rows = account_items(json.loads(rows))
         helper_input = json.dumps({"schemaVersion": 1, "compatibility": False, "activation": False,
-                                   "profile": helper_profile(profile), "accounts": account_value["items"]},
+                                   "profile": helper_profile(profile), "accounts": account_rows},
                                   separators=(",", ":")).encode() + b"\n"
         rendered = run_cmd([str(web_render_binary)], input_data=helper_input)
         bundle_path = run_root / "bundle.json"
         write_exact(bundle_path, rendered.stdout)
         bundle, files = bundle_from(bundle_path, profile, accounts)
+        result["checks"].append("exact_bundle_admission")
         result["bundle_sha256"] = sha256(bundle_path)
         result["accounts"] = [{"id": a["ID"], "uid": a["UID"], "gid": a["GID"], "domain": a["Domain"]} for a in accounts]
         # The following steps deliberately require root-prepared, disjoint mounts.
@@ -928,12 +1163,15 @@ def main() -> int:
         for path in (Path(profile["ManagedRoot"]) / "apache",
                      Path(profile["ManagedRoot"]) / "backend",
                      Path(profile["ManagedRoot"]) / "logs",
-                     Path(profile["ManagedRoot"]) / "fpm"):
+                     Path(profile["ManagedRoot"]) / "fpm",
+                     Path(profile["ManagedRoot"]) / "front-mutex"):
             path.mkdir(mode=0o700, parents=False, exist_ok=False)
         write_exact(Path(profile["ManagedRoot"]) / "controller-private-sentinel", b"SIFRUNO_CONTROLLER_PRIVATE\n", 0o600)
         for rel, data in files.items():
             write_exact(Path(profile["ManagedRoot"]) / rel, data)
         for account in accounts:
+            (Path(profile["ManagedRoot"]) / "backend" / (account["ID"] + "-mutex")).mkdir(
+                mode=0o700, parents=False, exist_ok=False)
             home = Path(account["Home"])
             if not home.is_dir() or home.is_symlink() or home.stat().st_uid != account["UID"] or home.stat().st_gid != account["GID"]:
                 die("broker_home_identity_invalid")
@@ -1006,26 +1244,44 @@ def main() -> int:
             if syntax.returncode != 0:
                 result["diagnostics"] = {"kind": "fpm_config_syntax", "account_id": account["ID"], "lines": diagnostic_lines(syntax.stderr)}
                 die("fpm_config_syntax_invalid")
-            fpm = subprocess.Popen([profile["FPMBinary"], "-y", str(fpm_conf), "-F"], env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            fpm = owned_launch([profile["FPMBinary"], "-y", str(fpm_conf), "-F"], env=clean_env(), stdout=subprocess.DEVNULL, stderr=daemon_stderr("fpm", account["ID"]), start_new_session=True)
             procs.append(fpm); fpm_procs.append(fpm)
-            backend = subprocess.Popen([profile["ApacheBinary"], "-DFOREGROUND", "-f", str(backend_conf), "-d", str(Path(profile["BackendChrootRoot"]) / account["ID"])], env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            daemon_logs.append(("fpm", account["ID"], Path(profile["ManagedRoot"]) / "logs" / (account["ID"] + "-fpm.log")))
+            backend = owned_launch([profile["ApacheBinary"], "-DFOREGROUND", "-f", str(backend_conf), "-d", str(Path(profile["BackendChrootRoot"]) / account["ID"])], env=clean_env(), stdout=subprocess.DEVNULL, stderr=daemon_stderr("backend", account["ID"]), start_new_session=True)
             procs.append(backend); backend_procs.append(backend)
+            daemon_logs.append(("backend", account["ID"], Path(profile["ManagedRoot"]) / "logs" / (account["ID"] + "-apache.log")))
             assert_worker(backend, account, Path(profile["BackendChrootRoot"]) / account["ID"])
-            backend_tls_probe(account, profile, Path(profile["CAFile"]))
-        front = subprocess.Popen([profile["ApacheBinary"], "-DFOREGROUND", "-f", str(front_conf), "-d", str(profile["FrontChroot"])], env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            result.setdefault("backend_probes", []).append(backend_tls_probe(account, profile, Path(profile["CAFile"])))
+        front = owned_launch([profile["ApacheBinary"], "-DFOREGROUND", "-f", str(front_conf), "-d", str(profile["FrontChroot"])], env=clean_env(), stdout=subprocess.DEVNULL, stderr=daemon_stderr("front"), start_new_session=True)
         procs.append(front)
+        daemon_logs.append(("front", None, Path(profile["ManagedRoot"]) / "front-error.log"))
         time.sleep(.5)
         assert_front_has_no_tenant_worker(front, accounts)
         private_probe = run_cmd(["/usr/bin/test", "-r", str(panel_state / "operator/access.key")], uid=48, check=False)
         if private_probe.returncode == 0:
             die("shared_front_can_read_controller_state")
+        result["serving_probes"] = []
         for account, fpm in zip(accounts, fpm_procs):
             status, body = http_request(profile["FrontendPort"], account["Domain"], "/index.html")
+            result["serving_probes"].append({"kind": "static", "account_id": account["ID"],
+                "status": status, "bytes": len(body), "body_sha256": hashlib.sha256(body).hexdigest(),
+                "expected_marker_observed": f"SIFRUNO_STATIC_{account['Username']}".encode() in body})
             if status != 200 or f"SIFRUNO_STATIC_{account['Username']}".encode() not in body:
+                result["http_probe"] = {"kind": "static", "account_id": account["ID"], "status": status,
+                    "bytes": len(body), "body_sha256": hashlib.sha256(body).hexdigest(),
+                    "expected_marker_observed": f"SIFRUNO_STATIC_{account['Username']}".encode() in body}
                 die("static_probe_failed")
             status, body = http_request(profile["FrontendPort"], account["Domain"], "/probe.php")
+            result["serving_probes"].append({"kind": "php", "account_id": account["ID"],
+                "status": status, "bytes": len(body), "body_sha256": hashlib.sha256(body).hexdigest(),
+                "expected_marker_observed": f"SIFRUNO_PHP_{account['Username']}".encode() in body,
+                "self_readable": b"SELF=readable" in body, "host_denied": b"HOST=denied" in body,
+                "sibling_denied": b"SIBLING=denied" in body})
             if (status != 200 or f"SIFRUNO_PHP_{account['Username']}".encode() not in body or
                     b"SELF=readable" not in body or b"HOST=denied" not in body or b"SIBLING=denied" not in body):
+                result["http_probe"] = {"kind": "php", "account_id": account["ID"], "status": status,
+                    "bytes": len(body), "body_sha256": hashlib.sha256(body).hexdigest(),
+                    "expected_marker_observed": f"SIFRUNO_PHP_{account['Username']}".encode() in body}
                 die("php_isolation_probe_failed")
             assert_worker(fpm, account, Path(profile["BackendChrootRoot"]) / account["ID"])
         contexts: list[dict[str, object]] = []
@@ -1033,11 +1289,11 @@ def main() -> int:
             for process in process_list:
                 for pid in [process.pid, *children(process.pid)][:8]:
                     try:
-                        uid, gid, root = proc_identity(pid)
-                    except (OSError, KeyError, ValueError):
+                        identity = process_identity(pid)
+                    except (OSError, KeyError, ValueError, UnicodeError):
                         continue
-                    contexts.append({"role": role, "pid": pid, "uid": uid, "gid": gid,
-                                     "root": root, "selinux_context": process_context(pid)})
+                    contexts.append({"role": role, "pid": pid, **identity,
+                                     "selinux_context": process_context(pid)})
         result["process_contexts"] = contexts[:32]
         status, _ = http_request(profile["FrontendPort"], "unknown.example.test", "/index.html")
         if status not in (400, 403, 421):
@@ -1045,21 +1301,31 @@ def main() -> int:
         status, _ = http_request(profile["FrontendPort"], accounts[0]["Domain"], "/missing.html")
         if status != 404:
             die("missing_static_status_invalid")
-        status, _ = http_request(profile["FrontendPort"], accounts[0]["Domain"], f"/%2e%2e/{accounts[1]['Username']}/private.txt")
-        if status not in (403, 404):
-            die("sibling_path_not_denied")
+        status, body = http_request(profile["FrontendPort"], accounts[0]["Domain"], f"/%2e%2e/{accounts[1]['Username']}/private.txt")
+        result["traversal_probe"] = {"status": status, "bytes": len(body),
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "private_marker_observed": b"SIFRUNO_PRIVATE_SENTINEL" in body}
+        assert_traversal_denied(status, body)
+        status, body = http_request(profile["FrontendPort"], accounts[0]["Domain"],
+                                    f"/{accounts[1]['Username']}/private.txt")
+        result["sibling_mapping_probe"] = {"status": status, "bytes": len(body),
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "private_marker_observed": b"SIFRUNO_PRIVATE_SENTINEL" in body}
+        if status not in (403, 404) or b"SIFRUNO_PRIVATE_SENTINEL" in body:
+            die("sibling_mapping_not_denied")
         # Replace one backend certificate with a CA-valid certificate for the wrong IP.
         # The front must reject the connection by required peer-name verification.
         wrong_cert = Path(profile["TLSRoot"]) / accounts[0]["ID"] / "cert.pem"
         issue_backend_certificate(accounts[0], wrong_cert, Path(profile["TLSRoot"]) / accounts[0]["ID"] / "key.pem",
                                   Path(profile["CAFile"]), run_root / "ca.key", run_root,
-                                  "127.73.255.254", "-wrong")
+                                  "127.73.255.254", "-wrong", "wrong-backend.example.invalid")
         stop_process(backend_procs[0])
-        backend_procs[0] = subprocess.Popen([profile["ApacheBinary"], "-DFOREGROUND", "-f",
+        backend_procs[0] = owned_launch([profile["ApacheBinary"], "-DFOREGROUND", "-f",
                                               str(Path(profile["ManagedRoot"]) / f"apache/backends/{accounts[0]['ID']}.conf"),
                                               "-d", str(Path(profile["BackendChrootRoot"]) / accounts[0]["ID"])],
                                              env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
         procs.append(backend_procs[0])
+        assert_worker(backend_procs[0], accounts[0], Path(profile["BackendChrootRoot"]) / accounts[0]["ID"])
         if backend_procs[0].stderr is not None:
             log_handles.append(backend_procs[0].stderr)
         try:
@@ -1081,18 +1347,19 @@ def main() -> int:
                                   Path(profile["CAFile"]), run_root / "ca.key", run_root,
                                   f"127.73.{accounts[0]['UID'] >> 8}.{accounts[0]['UID'] & 255}", "-restore")
         stop_process(backend_procs[0])
-        backend_procs[0] = subprocess.Popen([profile["ApacheBinary"], "-DFOREGROUND", "-f",
+        backend_procs[0] = owned_launch([profile["ApacheBinary"], "-DFOREGROUND", "-f",
                                               str(Path(profile["ManagedRoot"]) / f"apache/backends/{accounts[0]['ID']}.conf"),
                                               "-d", str(Path(profile["BackendChrootRoot"]) / accounts[0]["ID"])],
                                              env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         procs.append(backend_procs[0])
+        assert_worker(backend_procs[0], accounts[0], Path(profile["BackendChrootRoot"]) / accounts[0]["ID"])
         backend_tls_probe(accounts[0], profile, Path(profile["CAFile"]))
-        result["checks"] = ["exact_bundle_admission", "front_proxy_backend_tls_peer_verification", "wrong_backend_certificate_refused", "static_and_php_results", "uid_gid_chroot_workers", "jail_files_only_nss", "unknown_missing_and_sibling_denial"]
+        result["checks"] = ["exact_bundle_admission", "front_proxy_backend_tls_peer_verification", "wrong_backend_certificate_refused", "static_and_php_results", "uid_gid_groups_capabilities_chroot_workers", "jail_files_only_nss", "unknown_missing_and_sibling_denial"]
         # Suspend the second account through the non-root controller, recompile,
         # and activate the exact new front bytes. Its backend is stopped first.
         updated_rows = run_cmd([*panelctl, "accounts", "list"], uid=2000).stdout
         updated_accounts = accounts_from(accounts_json, profile, allow_suspended=True)
-        listed = json.loads(updated_rows)
+        listed = {"items": account_items(json.loads(updated_rows))}
         write_json_rows = json.dumps(listed, separators=(",", ":")).encode()
         replace_exact(accounts_json, write_json_rows)
         updated_accounts = accounts_from(accounts_json, profile, allow_suspended=True)
@@ -1102,18 +1369,18 @@ def main() -> int:
         replace_exact(accounts_json, run_cmd([*panelctl, "accounts", "list"], uid=2000).stdout)
         suspended_accounts = accounts_from(accounts_json, profile, allow_suspended=True)
         suspended_bundle_path = run_root / "bundle-suspended.json"
-        account_value = json.loads(accounts_json.read_bytes())
+        account_rows = account_items(read_json(accounts_json))
         suspended_input = json.dumps({"schemaVersion": 1, "compatibility": False, "activation": False,
-                                      "profile": helper_profile(profile), "accounts": account_value["items"]},
+                                      "profile": helper_profile(profile), "accounts": account_rows},
                                      separators=(",", ":")).encode() + b"\n"
         write_exact(suspended_bundle_path, run_cmd([str(web_render_binary)], input_data=suspended_input).stdout)
         _suspended_bundle, suspended_files = bundle_from(suspended_bundle_path, profile, suspended_accounts)
         stop_process(backend_procs[1]); stop_process(fpm_procs[1])
         stop_process(front)
         replace_exact(front_conf, suspended_files["apache/front.conf"])
-        front = subprocess.Popen([profile["ApacheBinary"], "-DFOREGROUND", "-f", str(front_conf), "-d", str(profile["FrontChroot"])], env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        front = owned_launch([profile["ApacheBinary"], "-DFOREGROUND", "-f", str(front_conf), "-d", str(profile["FrontChroot"])], env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         procs.append(front)
-        time.sleep(.5)
+        assert_front_has_no_tenant_worker(front, accounts)
         status, _ = http_request(profile["FrontendPort"], second["Domain"], "/index.html")
         if status != 403:
             die("suspended_domain_not_denied")
@@ -1129,6 +1396,8 @@ def main() -> int:
         result["passed"] = True
     except FixtureError as error:
         result["failure"] = error.code
+        if error.observations is not None:
+            result["worker_observations"] = error.observations
     except (OSError, ValueError, json.JSONDecodeError):
         result["failure"] = "fixture_io_or_validation_error"
     finally:
@@ -1143,6 +1412,16 @@ def main() -> int:
             except FixtureError:
                 result["failure"] = result["failure"] or "owned_mount_cleanup_failed"
                 result["passed"] = False
+        if result["failure"] is not None:
+            startup = []
+            for role, account_id, path in daemon_logs:
+                lines = owned_log_diagnostics(path)
+                if lines:
+                    startup.append({"role": role, "account_id": account_id, "lines": lines})
+                if len(startup) == 8:
+                    break
+            if startup:
+                result["startup_diagnostics"] = startup
         for handle in log_handles:
             try:
                 handle.close()
@@ -1152,17 +1431,18 @@ def main() -> int:
         if result["failure"] is not None:
             result["passed"] = False
         result["duration_ms"] = int((time.monotonic() - started) * 1000)
-        if run_root.exists() and not report_path.exists():
+        if run_root.exists():
             try:
-                with report_path.open("xb") as output:
-                    json.dump(result, output, indent=2, sort_keys=True)
-                    output.write("\n")
-                    output.flush()
-                    os.fsync(output.fileno())
-                os.chmod(report_path, 0o600)
-            except OSError:
+                write_runtime_report(report_path, qualification_root, result)
+            except (OSError, FixtureError, ValueError, TypeError):
+                result["report_write_failure"] = "report_write_failed"
                 result["failure"] = result["failure"] or "report_write_failed"
-    print(json.dumps({"passed": result["passed"], "complete": result["complete"], "failure": result["failure"]}))
+                result["passed"] = False
+    summary = {key: result[key] for key in ("passed", "complete", "failure")}
+    for key in ("report_write_failure", "diagnostics", "startup_diagnostics"):
+        if key in result:
+            summary[key] = result[key]
+    print(json.dumps(summary))
     return 0 if result["passed"] and result["failure"] is None else 1
 
 

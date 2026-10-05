@@ -15,6 +15,16 @@ Open `http://127.0.0.1:8080`. The compact dashboard shows real CPU, memory, loca
 
 The new Websites section manages actual app-owned static files: persisted sites, explicit file saves with revision/hash checks, suspend/resume, bounded ZIP backups and validated restores using scoped Ponytrail checkpoints. It requires the private operator key at `.state/sifruno/operator/access.key`; open it privately on the server and never post it in chat. Signed/encrypted cookies and CSRF protect local writes. Static previews use `http://site-<id>.localhost:8082/`. Native Windows filesystem/API/CLI tests and isolated real browser workflows pass; Linux/macOS native execution remains unverified. It does not provision Linux users, PHP, DNS, TLS, mail or databases. Public monitoring previews hide Websites and block its APIs. See [website scope and evidence](docs/sites-slice.md).
 
+Storage and Network have dedicated views backed by real collector values.
+Private File Manager adds folder navigation, search, hash-checked UTF-8 editing,
+nested new files and revision-conflict comparison for app-owned static sites.
+Private Backups adds actual ZIP creation, hash-matched downloads and confirmed
+restore with conflict handling. Real isolated browser/API tests and actual
+public HTTPS privacy checks pass at390/768/1440px in both themes. These private
+tools require the local operator session and are excluded from the approved
+public monitoring preview. See [File Manager](docs/file-manager-ui.md),
+[Backups](docs/backups-ui.md) and [host resources](docs/host-resources.md).
+
 Portable builds target Windows/Linux/macOS amd64/arm64: `npm run runtime:build`. Build verification and runtime qualification are separate. Historical systems remain connector/remote candidates, not guaranteed native targets. See [platform scope](docs/platform-support.md) and [archive contract](docs/runtime-builds.md).
 
 Accounts adds an optional local Linux root broker, private operator UI/API and
@@ -28,11 +38,22 @@ web/PHP/DNS/TLS/mail/databases remain required. Windows/macOS account brokers ar
 unavailable. See [operation guide](docs/hosting-accounts.md) and
 [independent review](docs/hosting-accounts-review.md).
 
+The next hosting layer contains a bounded Apache/PHP-FPM configuration compiler,
+an account snapshot reservation and a persisted web-generation recovery library.
+Independent snapshot/generation challenges pass against canonical source. The
+generation library is not connected to production broker operations or public
+API/CLI routes yet. Actual signed AlmaLinux Apache/PHP packages are installed in
+a disposable guest; two-account static/PHP serving, identity/chroot, backend TLS
+refusal and suspended-domain checks pass there. This remains separate from
+production hosting activation and original compatibility. See
+[generation protocol](docs/hostweb-generation.md) and
+[native web evidence](docs/web-runtime-review.md).
+
 The delivered source is `deliverables/sifruno-source.zip` with a file manifest and sibling SHA256. Source packaging excludes private state, tooling caches and dependencies and compares inputs locally against inherited credential values without printing them. Windows native archive verification is `node scripts/verify-runtime.mjs`; its report is `artifacts/runtime/native-windows.json`. Other OS archives remain build-verified only.
 
 Native Sifruno v1 ZIP export/import uses the same authenticated API from the local UI and CLI. Imports create a new static site after full bounded validation; downloads retain the recorded backup hash. Original cPanel account restoration and migration remain unimplemented. A separate `panelctl backup inspect --from ORIGINAL.tar.gz --out NEW.jsonl` streams original-format TAR/gzip hashes and metadata for migration characterization, without extracting files or exposing their contents. See [native transfers](docs/native-transfers.md) and [original backup inspection](docs/cpanel-backup-inspection.md).
 
-Development now uses isolated Git worktrees for UI, CLI and review. The session permits four concurrent agents including the integrating root; the [twenty-four workstreams](docs/parallel-development.md) run in batches. No Git remote or publication is configured, and running private state is excluded from source snapshots.
+Development uses isolated Git worktrees for UI, CLI and review. The session permits four concurrent agents including the integrating root; the [twenty-four workstreams](docs/parallel-development.md) run in batches. This base checkout is connected to [CodeWithJuber/sifruno](https://github.com/CodeWithJuber/sifruno), with reviewed changes proposed on feature branches. Running private state is excluded from Git and source snapshots.
 
 ## Branding
 

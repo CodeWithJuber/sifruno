@@ -253,6 +253,10 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 }
 func targetRecord(r record, state string) record { r.Account.State = state; return r }
 func (s *store) capability(ctx context.Context) (Capability, error) {
+	if snapshotReentry(ctx, s) {
+		return Capability{}, ErrConflict
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ctx == nil {
@@ -276,6 +280,10 @@ func (s *store) capability(ctx context.Context) (Capability, error) {
 	return Capability{Available: true, Backend: "linux_shadow_utils", Restrictions: restrictions()}, nil
 }
 func (s *store) list(ctx context.Context) ([]Account, error) {
+	if snapshotReentry(ctx, s) {
+		return nil, ErrConflict
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ctx == nil {
@@ -327,6 +335,10 @@ func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 	return items, nil
 }
 func (s *store) create(ctx context.Context, in CreateInput, actor string) (Account, error) {
+	if snapshotReentry(ctx, s) {
+		return Account{}, ErrConflict
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !validCreate(in, actor) {
@@ -389,6 +401,10 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	return r.Account, nil
 }
 func (s *store) setState(ctx context.Context, id string, in StateInput, actor string) (Account, error) {
+	if snapshotReentry(ctx, s) {
+		return Account{}, ErrConflict
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !idPattern.MatchString(id) || !validState(in, actor) {

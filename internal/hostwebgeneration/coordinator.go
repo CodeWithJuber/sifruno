@@ -381,6 +381,9 @@ func (c *Coordinator) Recover(ctx context.Context, in RecoverInput) error {
 	if st.Pending == nil || in.ExpectedRevision != st.Revision || in.OperationID != st.Pending.OperationID || st.Revision == math.MaxUint64 {
 		return ErrConflict
 	}
+	if st.Pending.Repair != nil || st.Pending.ApplyCheckpoint != nil {
+		return ErrRecovery
+	}
 	var committed bool
 	intent := *st.Pending
 	err = c.provider.WithSnapshot(ctx, func(lease SnapshotLease) error {

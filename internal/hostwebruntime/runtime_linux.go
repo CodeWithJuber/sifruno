@@ -111,6 +111,11 @@ func (r *Runtime) acquire(ctx context.Context) error {
 }
 func (r *Runtime) release() { <-r.gate }
 func (r *Runtime) guard() error {
+	base, e := checkedDir(r.opts.Root, true)
+	if e != nil {
+		return ErrRecovery
+	}
+	unix.Close(base)
 	var st unix.Stat_t
 	if unix.Fstat(r.fd, &st) != nil || st.Uid != 0 || st.Mode&0777 != 0700 {
 		return ErrRecovery
@@ -154,7 +159,7 @@ func (r *Runtime) Bootstrap(ctx context.Context, g hostwebgeneration.Generation)
 	}
 	v, loadErr := r.load()
 	if loadErr == nil {
-		if v.Current.Identity() != g.Identity() || v.Pending != nil || v.Revision != 0 {
+		if v.Current.Identity() != g.Identity() || v.Pending != nil || v.Repair != nil || v.Revision != 0 {
 			return ErrConflict
 		}
 		if _, e := r.observe(ctx, v); e == nil {
@@ -179,7 +184,11 @@ func (r *Runtime) Bootstrap(ctx context.Context, g hostwebgeneration.Generation)
 	if err = r.prepareOutputs(g); err != nil {
 		return err
 	}
-	v = record{Version: 1, Current: g, InputsSHA256: r.inputsSHA}
+	boot, err := bootID()
+	if err != nil {
+		return err
+	}
+	v = record{Version: 1, Current: g, InputsSHA256: r.inputsSHA, BootID: boot}
 	if err = r.persist(v); err != nil {
 		return err
 	}
@@ -219,6 +228,9 @@ func (r *Runtime) observe(ctx context.Context, v record) (hostwebgeneration.Iden
 	if v.Pending != nil && v.Pending.Target.Identity() != v.Current.Identity() {
 		candidates = append(candidates, v.Pending.Target)
 	}
+	if v.Repair != nil && v.Repair.Request.Target.Identity() != v.Current.Identity() {
+		candidates = append(candidates, v.Repair.Request.Target)
+	}
 	for _, g := range candidates {
 		if ctx.Err() != nil {
 			return hostwebgeneration.Identity{}, ctx.Err()
@@ -254,7 +266,7 @@ func (r *Runtime) Apply(ctx context.Context, t hostwebgeneration.Transition) err
 	if err != nil {
 		return ErrRecovery
 	}
-	if v.Pending != nil {
+	if v.Pending != nil || v.Repair != nil {
 		return ErrRecovery
 	}
 	if v.Revision != t.Revision || v.LastOperation == t.OperationID {
@@ -267,7 +279,13 @@ func (r *Runtime) Apply(ctx context.Context, t hostwebgeneration.Transition) err
 	if got != t.Before.Identity() {
 		return ErrConflict
 	}
-	return r.replace(ctx, &v, transaction{t.OperationID, t.Revision, t.Before, t.After, t.After})
+	boot, err := r.recoveryAdmission(ctx, v, t.Before, t.After)
+	if err != nil {
+		return err
+	}
+	v.BootID = boot
+	binding := applyBinding(t, r.stateSHA, r.inputsSHA, boot)
+	return r.replace(ctx, &v, transaction{OperationID: t.OperationID, Revision: t.Revision, Before: t.Before, After: t.After, Target: t.After, ApplyIntent: &binding})
 }
 
 // Rollback also serves as the explicit trusted repair primitive for an
@@ -303,6 +321,9 @@ func (r *Runtime) Rollback(ctx context.Context, t hostwebgeneration.Transition, 
 	if err != nil {
 		return ErrRecovery
 	}
+	if v.Repair != nil {
+		return ErrRecovery
+	}
 	if t.Revision != v.Revision && !(t.Revision+1 == v.Revision && v.LastOperation == t.OperationID) {
 		return ErrConflict
 	}
@@ -326,9 +347,15 @@ func (r *Runtime) Rollback(ctx context.Context, t hostwebgeneration.Transition, 
 			return err
 		}
 	}
-	return r.replace(ctx, &v, transaction{t.OperationID, t.Revision, t.Before, t.After, target})
+	return r.replace(ctx, &v, transaction{OperationID: t.OperationID, Revision: t.Revision, Before: t.Before, After: t.After, Target: target})
 }
 func (r *Runtime) replace(ctx context.Context, v *record, t transaction) error {
+	if _, err := r.recoveryAdmission(ctx, *v, t.Before, t.After, t.Target); err != nil {
+		return err
+	}
+	if err := replacementMetadataCapacity(r.opts.Profile, *v, t); err != nil {
+		return err
+	}
 	for _, a := range t.Target.Accounts {
 		if a.State == "active" && !t.Target.Denied {
 			if r.prepared(a) != nil {
@@ -345,8 +372,16 @@ func (r *Runtime) replace(ctx context.Context, v *record, t transaction) error {
 	if err := r.syntax(ctx, t.Target); err != nil {
 		return err
 	}
+	if _, err := r.recoveryAdmission(ctx, *v, t.Before, t.After, t.Target); err != nil {
+		return err
+	}
 	v.Pending = &t
+	v.CompletedApply = nil
+	v.CompletedRepair = nil
 	if err := r.persist(*v); err != nil {
+		return err
+	}
+	if _, err := r.recoveryAdmission(ctx, *v); err != nil {
 		return err
 	}
 	if err := r.stop(v); err != nil {
@@ -373,11 +408,11 @@ func (r *Runtime) replace(ctx context.Context, v *record, t transaction) error {
 		_ = r.persist(*v)
 		return ErrRecovery
 	}
-	v.Current = t.Target
-	v.Pending = nil
-	v.Revision = t.Revision + 1
-	v.LastOperation = t.OperationID
-	return r.persist(*v)
+	*v = replacementState(*v, t)
+	if err := r.persist(*v); err != nil {
+		return r.failedRepair(v, err)
+	}
+	return r.finishReplacement(ctx, v, t)
 }
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	ctx, cancel, err := bounded(ctx)
@@ -464,6 +499,12 @@ func (r *Runtime) checkPins(v record) error {
 		add(v.Pending.Before)
 		add(v.Pending.After)
 		add(v.Pending.Target)
+	}
+	if v.Repair != nil {
+		add(v.Repair.Request.Target)
+		for _, g := range v.Repair.Retained {
+			add(g)
+		}
 	}
 	for _, pin := range v.Processes {
 		if allowed[pin.Config] != pin.Role+":"+pin.AccountID || !hex64.MatchString(pin.ExecutableSHA256) || !decimal.MatchString(pin.Start) || !bootPattern.MatchString(pin.Boot) || pin.Namespace == 0 || pin.ExecutableIno == 0 {

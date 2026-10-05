@@ -88,7 +88,7 @@ async function fingerprint() {
       listing.push({ path: normalized(relative(root, path)), sha256: sha256(await readFile(path)) });
     }
   }
-  for (const name of ['go.mod', 'go.sum', 'package.json', 'package-lock.json', 'web/package.json', 'web/package-lock.json', 'web/vite.config.ts', 'web/NOTICE.md', 'scripts/build-runtime.mjs', 'scripts/build-runtime.ps1']) listing.push({ path: name, sha256: sha256(await readFile(join(root, name))) });
+  for (const name of ['LICENSE', 'LICENSING.md', 'go.mod', 'go.sum', 'package.json', 'package-lock.json', 'web/package.json', 'web/package-lock.json', 'web/vite.config.ts', 'web/NOTICE.md', 'scripts/build-runtime.mjs', 'scripts/build-runtime.ps1']) listing.push({ path: name, sha256: sha256(await readFile(join(root, name))) });
   listing.sort((a, b) => a.path.localeCompare(b.path, 'en'));
   return { sha256: sha256(JSON.stringify(listing)), files: listing };
 }
@@ -333,6 +333,7 @@ async function main() {
     await mkdir(join(directory, 'fixtures'), { recursive: true });
     for (const name of ['synthetic-reference.json', 'synthetic-candidate.json']) await copyFile(join(root, 'lab/fixtures', name), join(directory, 'fixtures', name));
     await copyFile(join(root, 'web/NOTICE.md'), join(directory, 'NOTICE.md'));
+    for (const name of ['LICENSE', 'LICENSING.md']) await copyFile(join(root, name), join(directory, name));
     await notices(join(directory, 'licenses'), target);
     await writeFile(join(directory, 'QUICKSTART.md'), quickstart(target));
     await writeFile(join(directory, 'verification-matrix.json'), JSON.stringify(matrix, null, 2) + '\n');

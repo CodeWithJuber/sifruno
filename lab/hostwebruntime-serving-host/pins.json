@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "scope": "disposable-alma9-native-runtime-serving-only",
+  "mechanics_admission_sha256": "482836508b1097500ebdebd8cb0e0035a5947812f0e79ea35d8c35a3e673354e",
+  "mechanics_tool_catalog_sha256": "df4cf91a14f1b4e36372084d4b8a8ca9e2f2c0c25f34dfcd0ad5b9d7e6181fa5",
+  "prepared_image": {
+    "path": ".cache/alma-web-runtime/web-install-1791171040494-b6fc674b/guest.qcow2",
+    "sha256": "f362d8658bb7981b151b63110c41ffa71b09ec742a777bb3ca731e2d96b65c86"
+  },
+  "prepared_host_report": {
+    "path": "artifacts/runtime/alma-web-runs/web-install-1791171040494-b6fc674b/host-report.json",
+    "sha256": "7ae52365e2f4d0fb6c6751ffd3093ecaa23a59ce1fa7c991957e93f9afb1e0e1"
+  },
+  "prepared_install_report": {
+    "path": ".cache/alma-web-runtime/web-install-1791171040494-b6fc674b/install-report.json",
+    "sha256": "75c0311ccda8880f6fc0f8a4efb4c1316ac7a47d73902ab291fe74491c66b1f9"
+  },
+  "package_manifest": {
+    "path": ".cache/alma-web-repositories/webrepo-20261005-php83/payload/package-manifest.json",
+    "sha256": "ff13a63fa4c09047ff2c32edea8ebfb866ba2fb0aa847ed0c2364325f431ea3c"
+  },
+  "serving_manifest": {
+    "path": ".worktrees/native-web-executor-sol/.cache/hostwebruntime-serving/manifest.json",
+    "sha256": "74e6aab996033480ffbfb63b86a4a2c6b937d78e08ac6ff262909727ddbb8e35"
+  },
+  "driver": {
+    "path": ".worktrees/native-web-executor-sol/.cache/hostwebruntime-serving/qualification-driver",
+    "sha256": "21b9b146674aa6e286cad0e8f180e263cb014bfa2d87efeb994ecc0cca7163f1"
+  },
+  "test_elf": {
+    "path": ".worktrees/native-web-executor-sol/.cache/hostwebruntime-serving/serving-linux.test",
+    "sha256": "431e2717f0919591c864b23792381fd9d4f81ca92ca72e76bb78a953a497865d"
+  },
+  "helper": {
+    "path": "lab/web_runtime_fixture.py",
+    "sha256": "73ef86f95b34d255b4ab5c6145caae718ad1578efba7f1c0d24f5712c57fc9ed"
+  },
+  "required_tests": [
+    "TestStrictInput",
+    "TestCLIExact",
+    "TestGenerationSnapshotAndCopy",
+    "TestPHPCoreContract",
+    "TestClientNoProxyRedirectBound",
+    "TestClientActuallyRefusesRedirect",
+    "TestOwnedInputRejectLinksModesAndEscape",
+    "TestReportExclusiveBoundedJSON",
+    "TestProcessStartIgnoresMutableCounters"
+  ],
+  "guest_manifest": {
+    "path": ".worktrees/native-web-executor-sol/.cache/hostwebruntime-serving-guest/manifest.json",
+    "sha256": "54236c90fd96d04eb093429490cf6317a08f7c3fa3098abdfc1c3bf736e2ae97"
+  },
+  "fixture": {
+    "bytes": 42336,
+    "sha256": "99705157a37d290f6c5a3ed87c8f042ed45169b1c98c57f0017c99cc627acd9e",
+    "path": ".worktrees/native-web-executor-sol/lab/hostwebruntime-serving-guest/serving_guest.py"
+  }
+}

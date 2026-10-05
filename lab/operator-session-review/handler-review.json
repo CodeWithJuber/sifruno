@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "kind": "independent-operator-session-handler-challenge",
+  "passed": true,
+  "baseline_commit": "1b3e88eacff899c207bec0cbeeb442a8f095e5c7",
+  "platform": "windows",
+  "actual_execution": "Isolated actual operator.Manager and api.New ServeHTTP with httptest requests; no live state or listener",
+  "source_inputs": [
+    {
+      "path": "internal/operator/operator.go",
+      "sha256": "921d4bf26390996f972fba16cfb6e45e5255e67b3b02ecc317bab81c18758f53"
+    },
+    {
+      "path": "internal/operator/private_unix.go",
+      "sha256": "0de2d4d24dce2e5bb20c035a8afc341da7b5823b0605d8e21be94f474ce768ee"
+    },
+    {
+      "path": "internal/operator/private_windows.go",
+      "sha256": "a36a3e262c5bdf5d8d3f15598730745201db35c1d6ce416ca3776b1289579f2f"
+    },
+    {
+      "path": "internal/operator/sessions.go",
+      "sha256": "07e15690624d046bfe0a903496116a710b6daa513bd99bc8ceb2bcaec79d29ba"
+    },
+    {
+      "path": "internal/api/accounts.go",
+      "sha256": "4cd99d9a731962c4549a21aed2ab07040590f968d2380c3cf71bef403dd0afd4"
+    },
+    {
+      "path": "internal/api/api.go",
+      "sha256": "e4a96e5400ef267eb5c04877a062164020f83fd73e4e176a91b58efa662e0225"
+    },
+    {
+      "path": "internal/api/session_controls.go",
+      "sha256": "cf21cbfb535beea5950967a38fc96a4ba97c8f2e99a3601c02e96cc18854b619"
+    },
+    {
+      "path": "internal/api/session_spec.go",
+      "sha256": "6aaea46a14f7d22c0749854c16225dd68ea4571cfc38006d8c622f58bd626328"
+    },
+    {
+      "path": "internal/api/site_transfers.go",
+      "sha256": "f64cbc8c825090c35dbb08f084f6ab0c165e01c0aad4bcf128c6c8e085aee066"
+    },
+    {
+      "path": "internal/api/sites.go",
+      "sha256": "02bf019b80a95f47e78278139d1fc2bfff11f9b58897eab59ff85bb5c4f5139f"
+    }
+  ],
+  "sources_unchanged_after_execution": true,
+  "command": "primary scripts/go.ps1 test -mod=readonly -overlay .cache/operator-session-review/candidate-1/overlay.json -json -count=1 -timeout=45s ./lab/operator-session-review",
+  "environment": {
+    "GOPROXY": "off",
+    "GOSUMDB": "off"
+  },
+  "exit_code": 0,
+  "passed_top_level": 4,
+  "passed_subtests": 38,
+  "failed": 0,
+  "skipped": 0,
+  "elapsed_seconds": 0.312,
+  "stdout_sha256": "40b0811dd8b2cdbcb0c969fb76cb72bfefc62f8365a296cb9e971a7226255e27",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "preceding_checks": [
+    {
+      "qualification": false,
+      "kind": "compile_only",
+      "command": "primary scripts/go.ps1 test -mod=readonly -run ^$ -count=1 ./lab/operator-session-review",
+      "exit_code": 0
+    },
+    {
+      "raw_display_truncated": true,
+      "elapsed_seconds": 0.321,
+      "kind": "same_narrow_challenges",
+      "exit_code": 0,
+      "note": "Repeated only this narrow lab to retain full machine-readable output after first console display exceeded tool budget."
+    }
+  ],
+  "preflight": {
+    "ran": true,
+    "advisory": "Heuristic reported missing constraints and empty impact; explicit disjoint scope/dependency/live-state/compatibility constraints from root and AGENTS resolve this advice. Inspected actual sources; no inferred safe impact."
+  },
+  "source_review": [
+    "Bounded independent32hex metadata IDs; exact exported fields; created/expiry900s; capacity128",
+    "Authorizing activeSession equality and expiry pruning under inventory/deletion lock",
+    "Strict new{} bodies; fixed invalid/current/unknown errors; current retained by revoke-others",
+    "Legacy login DTO/cookie/rate/cap/restart preserved; logout gains same lock recheck",
+    "API exact mutation allowance and OpenAPI auth/empty-body/response bounds; public preview existing exact read allowlist excludes new session routes"
+  ],
+  "limits": [
+    "Windows in-process handler execution; not actual TCP/browser or native Linux proof",
+    "Advertised bounds tested independently; full128 seed and clock-driven expiry are core test/source evidence",
+    "Root actual complete API/browser proof pending separate audit",
+    "No roles, remote authentication, stock/allOS/cPanel compatibility or live activation claims"
+  ]
+}

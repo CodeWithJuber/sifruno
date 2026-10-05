@@ -20,7 +20,7 @@ async function main(){
   const bytes=await readFile(path);if(privateValues.some(value=>bytes.includes(value)))throw new Error('Source contains an inherited credential value; packaging stopped without disclosure');
   listing.push({path:name,bytes:bytes.length,sha256:hash(bytes)});await writer.add(name,new Uint8ArrayReader(bytes));
  }
- for(const name of ['assets','cmd','config','internal','lab','scripts','web','docs','README.md','DESIGN.md','go.mod','go.sum','package.json','package-lock.json','.gitignore'])await add(join(root,name));
+ for(const name of ['assets','cmd','config','internal','lab','scripts','web','docs','README.md','DESIGN.md','LICENSE','LICENSING.md','go.mod','go.sum','package.json','package-lock.json','.gitignore'])await add(join(root,name));
  try{await lstat(join(root,'AGENTS.md'));await add(join(root,'AGENTS.md'))}catch(error){if(error.code!=='ENOENT')throw error}
  const manifest={product:'Sifruno source',version:'0.1.0',compatibility_certified:false,includes_private_state:false,files:listing};
  await writer.add('SOURCE-MANIFEST.json',new Uint8ArrayReader(Buffer.from(JSON.stringify(manifest,null,2)+'\n')));const bytes=await writer.close();

@@ -2,6 +2,15 @@
 
 Sifruno is a modern hosting-panel project with the original WHM/cPanel ecosystem compatibility contract. The approved V3 brand and local engineering panel are implemented. The hosting engine remains incomplete; this is not a production cPanel replacement.
 
+## Community and Pro
+
+Original Sifruno Community code uses [AGPL-3.0-only](LICENSE), with commercial
+use permitted under its terms. Paid hosting, support and managed-service plans
+can coexist with Community. A future Pro commercial license requires a separate
+written agreement and sufficient rights to the covered code; this repository
+does not grant that agreement. Third-party libraries, fonts, icons and tools
+retain their own licenses. See [licensing and contribution policy](LICENSING.md).
+
 ## Local panel
 
 ```powershell

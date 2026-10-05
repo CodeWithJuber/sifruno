@@ -1,0 +1,67 @@
+{
+  "files": [
+    {
+      "admitted": true,
+      "path": "internal/hostwebgeneration/coordinator_snapshot_guard_test.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebgeneration/coordinator_test.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebgeneration/coordinator.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebgeneration/guard_unix.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebgeneration/guard_windows.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebgeneration/storage.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/files_linux_test.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/files_linux.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/observe_linux.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/process_linux_test.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/process_linux.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/runtime_linux.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/runtime_test.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/runtime.go"
+    },
+    {
+      "admitted": true,
+      "path": "internal/hostwebruntime/unavailable.go"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "read-only-canonical-baseline-admission",
+  "duplicate_guard_declaration": false
+}

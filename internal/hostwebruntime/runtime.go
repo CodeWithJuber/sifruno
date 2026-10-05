@@ -64,13 +64,16 @@ type transaction struct {
 }
 
 type record struct {
-	Version       int
-	Revision      uint64
-	LastOperation string
-	Current       hostwebgeneration.Generation
-	Pending       *transaction
-	Processes     []processPin
-	InputsSHA256  string
+	Version         int
+	Revision        uint64
+	LastOperation   string
+	Current         hostwebgeneration.Generation
+	Pending         *transaction
+	Processes       []processPin
+	InputsSHA256    string
+	BootID          string            `json:",omitempty"`
+	Repair          *nativeRepair     `json:",omitempty"`
+	CompletedRepair *nativeCompletion `json:",omitempty"`
 }
 
 var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -208,6 +211,12 @@ func validateRecord(p hostweb.Profile, r record) error {
 		add(r.Pending.After)
 		add(r.Pending.Target)
 	}
+	if r.Repair != nil {
+		add(r.Repair.Request.Target)
+		for _, g := range r.Repair.Retained {
+			add(g)
+		}
+	}
 	seen := map[string]bool{}
 	seenPID := map[int]bool{}
 	seenNS := map[uint64]bool{}
@@ -234,5 +243,5 @@ func validateRecord(p hostweb.Profile, r record) error {
 			return ErrRecovery
 		}
 	}
-	return nil
+	return validateRecoveryRecord(p, r)
 }

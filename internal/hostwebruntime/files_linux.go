@@ -230,6 +230,30 @@ func metadataCopy(v record) record {
 		t.Target = strip(t.Target)
 		v.Pending = &t
 	}
+	if v.Repair != nil {
+		n := *v.Repair
+		n.Request = copyRepairRequest(n.Request)
+		n.Request.Original.Before = strip(n.Request.Original.Before)
+		n.Request.Original.After = strip(n.Request.Original.After)
+		n.Request.Target = strip(n.Request.Target)
+		n.Retained = append([]hostwebgeneration.Generation(nil), n.Retained...)
+		for i := range n.Retained {
+			n.Retained[i] = strip(n.Retained[i])
+		}
+		v.Repair = &n
+	}
+	if v.CompletedRepair != nil {
+		n := *v.CompletedRepair
+		n.Request = copyRepairRequest(n.Request)
+		n.Request.Original.Before = strip(n.Request.Original.Before)
+		n.Request.Original.After = strip(n.Request.Original.After)
+		n.Request.Target = strip(n.Request.Target)
+		n.Retained = append([]hostwebgeneration.Generation(nil), n.Retained...)
+		for i := range n.Retained {
+			n.Retained[i] = strip(n.Retained[i])
+		}
+		v.CompletedRepair = &n
+	}
 	return v
 }
 func (r *Runtime) persist(v record) error {
@@ -279,7 +303,7 @@ func (r *Runtime) load() (record, error) {
 	if d.Decode(&extra) != io.EOF {
 		return record{}, ErrRecovery
 	}
-	hydrate := func(g *hostwebgeneration.Generation) error {
+	hydrate := func(g *hostwebgeneration.Generation, owned bool) error {
 		if !hex64.MatchString(g.SnapshotSHA256) || !hex64.MatchString(g.ProfileSHA256) || g.ID != "" && !idPattern.MatchString(g.ID) || len(g.Accounts) > hostweb.MaxManagedAccounts {
 			return ErrRecovery
 		}
@@ -300,17 +324,47 @@ func (r *Runtime) load() (record, error) {
 			}
 			g.Bundle.Files[i].Data = f.Data
 		}
-		return r.disk(*g)
+		if owned {
+			return r.disk(*g)
+		}
+		return nil
 	}
-	if hydrate(&v.Current) != nil {
+	if hydrate(&v.Current, true) != nil {
 		return record{}, ErrRecovery
 	}
 	if v.Pending != nil {
-		if hydrate(&v.Pending.Before) != nil || hydrate(&v.Pending.After) != nil || hydrate(&v.Pending.Target) != nil {
+		if hydrate(&v.Pending.Before, true) != nil || hydrate(&v.Pending.After, true) != nil || hydrate(&v.Pending.Target, true) != nil {
 			return record{}, ErrRecovery
 		}
 	}
+	if v.Repair != nil {
+		if hydrate(&v.Repair.Request.Original.Before, false) != nil || hydrate(&v.Repair.Request.Original.After, false) != nil || hydrate(&v.Repair.Request.Target, true) != nil {
+			return record{}, ErrRecovery
+		}
+		for i := range v.Repair.Retained {
+			if hydrate(&v.Repair.Retained[i], true) != nil {
+				return record{}, ErrRecovery
+			}
+		}
+	}
+	if v.CompletedRepair != nil {
+		if hydrate(&v.CompletedRepair.Request.Original.Before, false) != nil || hydrate(&v.CompletedRepair.Request.Original.After, false) != nil || hydrate(&v.CompletedRepair.Request.Target, true) != nil {
+			return record{}, ErrRecovery
+		}
+		for i := range v.CompletedRepair.Retained {
+			if hydrate(&v.CompletedRepair.Retained[i], true) != nil {
+				return record{}, ErrRecovery
+			}
+		}
+	}
 	if validateRecord(r.opts.Profile, v) != nil || v.InputsSHA256 != r.inputsSHA {
+		return record{}, ErrRecovery
+	}
+	// Native metadata is written in one canonical encoding. This also rejects
+	// duplicate known keys, aliases and extra whitespace on a reopened record,
+	// rather than letting Decoder silently pick the last duplicate value.
+	canonical, err := json.Marshal(metadataCopy(v))
+	if err != nil || !bytes.Equal(canonical, data) {
 		return record{}, ErrRecovery
 	}
 	if err = r.checkPins(v); err != nil {

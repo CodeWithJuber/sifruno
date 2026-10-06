@@ -12,9 +12,16 @@ root; primary module/dependency/tool/image inputs remain read-only. Build flags
 are offline `-mod=readonly -trimpath -buildvcs=false`, Linux amd64 and CGO off;
 TEMP/TMP and the baseline ELF/manifest are owned. Transitive linked Go sources,
 standard library, modules, Go compiler/linker tools and source files are catalogued.
-The candidate's separately supplied complete tracked Go/mod file manifest is
-checked against every declared file; it is not confused with the smaller
+The candidate's separately supplied tracked Go/mod file manifest at the
+historical binary-build freeze (248 files) is checked against every declared
+file; later unlinked reviewer lab source has separate checks. It is not confused with the smaller
 cmd/internal source catalogue digest emitted by check-only mode.
+
+The catalog covers enumerated Go-list inputs and compiler/linker tools; it does
+not establish exhaustive Go distribution provenance. The five installed
+`pkg/include` assembler headers were not explicitly pinned before these builds.
+A separately retained post-run hash observation of them cannot prove their
+pre-build invariance or extend the exact-ELF native behavior qualification.
 
 From the assigned worktree, using existing primary Node/Python binaries:
 

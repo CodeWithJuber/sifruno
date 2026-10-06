@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Archive, ArrowDownToLine, ArrowUpRight, File, Folder, Globe, Info, LockKeyhole, LogOut, RefreshCw, Save, Search, Upload } from "lucide-react";
+import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
+import { Archive, ArrowDownToLine, ArrowUpRight, File, Folder, Globe, Info, LockKeyhole, LogOut, Plus, RefreshCw, Save, Search, Upload } from "lucide-react";
 import { bytes } from "@/Dashboard";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
@@ -24,6 +25,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
   const [session, setSession] = useState<OperatorSession>();
   const [accessKey, setAccessKey] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
+  const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [selected, setSelected] = useState<Site>();
   const [files, setFiles] = useState<SiteFile[]>([]);
   const [backups, setBackups] = useState<SiteBackup[]>([]);
@@ -39,19 +41,24 @@ export default function Websites({ revision, active, onStatus }: { revision: num
   const [loadedAt, setLoadedAt] = useState<Date>();
   const [restore, setRestore] = useState<{ site: Site; backup: SiteBackup }>();
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [section, setSection] = useState("files");
   const [importOpen, setImportOpen] = useState(false);
   const [importName, setImportName] = useState("");
   const [importDomain, setImportDomain] = useState("");
   const [importArchive, setImportArchive] = useState<File>();
   const [discardDraftForImport, setDiscardDraftForImport] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
+  const createDialog = useRef<HTMLDialogElement>(null);
   const importDialog = useRef<HTMLDialogElement>(null);
+  const dialogReturnFocus = useRef<HTMLElement | null>(null);
   const latestEditor = useRef(editor);
   const latestSelected = useRef(selected);
   latestEditor.current = editor;
   latestSelected.current = selected;
   const dirty = Boolean(editor && (editor.isNew || editor.draft !== editor.savedContent));
   const nameBytes = new TextEncoder().encode(name.trim()).length;
+  const domainBytes = new TextEncoder().encode(domain.trim()).length;
   const importNameBytes = new TextEncoder().encode(importName.trim()).length;
   const importDomainLength = importDomain.trim().length;
   const importDomainBytes = new TextEncoder().encode(importDomain.trim()).length;
@@ -102,6 +109,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
           const list = await siteRequest("/api/v1/sites", validSiteList);
           if (!live) return;
           setSites(list.items);
+          setInventoryLoaded(true);
           const previous = latestSelected.current;
           const draft = latestEditor.current;
           if (previous && draft && (draft.isNew || draft.draft !== draft.savedContent) && !list.items.some((s) => s.id === previous.id)) throw new SiteApiError(404, "not_found", "The selected website is no longer in the inventory. Your draft is kept.");
@@ -119,6 +127,12 @@ export default function Websites({ revision, active, onStatus }: { revision: num
   useEffect(() => { onStatus({ data: session, loading: Boolean(busy), error, loadedAt }); }, [session, busy, error, loadedAt, onStatus]);
   useEffect(() => { if (!active) setAccessKey(""); }, [active]);
   useEffect(() => {
+    if (active && authenticated) return;
+    for (const ref of [createDialog, importDialog, dialog]) if (ref.current?.open) ref.current.close();
+    setCreateOpen(false); setImportOpen(false); setRestore(undefined); setRestoreConfirmed(false);
+    dialogReturnFocus.current = null;
+  }, [active, authenticated]);
+  useEffect(() => {
     if (!session?.authenticated) return;
     const timer = setTimeout(() => { setSession({ authenticated: false }); setRestore(undefined); setNotice(undefined); setError("Your operator session expired. Sign in again; your editor draft is kept."); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
     return () => clearTimeout(timer);
@@ -130,12 +144,23 @@ export default function Websites({ revision, active, onStatus }: { revision: num
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
   useEffect(() => {
-    if (restore && dialog.current && !dialog.current.open) dialog.current.showModal();
-  }, [restore]);
+    if (active && authenticated && restore && dialog.current && !dialog.current.open) dialog.current.showModal();
+  }, [restore, active, authenticated]);
   useEffect(() => {
-    if (importOpen && importDialog.current && !importDialog.current.open) importDialog.current.showModal();
+    if (active && authenticated && importOpen && importDialog.current && !importDialog.current.open) importDialog.current.showModal();
     else if (!importOpen && importDialog.current?.open) importDialog.current.close();
-  }, [importOpen]);
+  }, [importOpen, active, authenticated]);
+  useEffect(() => {
+    if (active && authenticated && createOpen && createDialog.current && !createDialog.current.open) createDialog.current.showModal();
+    else if (!createOpen && createDialog.current?.open) createDialog.current.close();
+  }, [createOpen, active, authenticated]);
+  useEffect(() => {
+    if (active && authenticated && !busy && !createOpen && !importOpen && !restore && dialogReturnFocus.current) {
+      if (dialogReturnFocus.current.isConnected) dialogReturnFocus.current.focus();
+      dialogReturnFocus.current = null;
+    }
+  }, [active, authenticated, busy, createOpen, importOpen, restore]);
+  const rememberDialogTrigger = () => { dialogReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; };
 
   async function run(label: string, action: () => Promise<void>) {
     if (busy) return;
@@ -145,7 +170,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
   }
   const requireClean = () => {
     if (!dirty) return true;
-    setError("Save or discard your editor draft before switching websites, changing state, restoring or signing out.");
+    setError("Save or discard your editor draft before switching websites, creating a website, changing state, restoring or signing out.");
     return false;
   };
   async function login(event: React.FormEvent) {
@@ -159,6 +184,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
       setSession(next);
       const list = await siteRequest("/api/v1/sites", validSiteList);
       setSites(list.items);
+      setInventoryLoaded(true);
       if (dirty && latestSelected.current && !list.items.some((s) => s.id === latestSelected.current?.id)) throw new SiteApiError(404, "not_found", "The selected website is no longer in the inventory. Your draft is kept.");
       const chosen = list.items.find((s) => s.id === latestSelected.current?.id) ?? list.items[0];
       if (chosen) await loadSite(chosen.id, dirty);
@@ -166,12 +192,15 @@ export default function Websites({ revision, active, onStatus }: { revision: num
   }
   async function create(event: React.FormEvent) {
     event.preventDefault();
+    if (busy || !active) return;
     if (nameBytes > 80) { setError("The website name must fit within 80 UTF-8 bytes."); return; }
+    if (domain.trim().length > 253 || domainBytes > 253) { setError("The domain must fit within 253 UTF-8 bytes."); return; }
     if (!session?.authenticated || !requireClean()) return;
     await run("Creating website", async () => {
       const site = await siteRequest("/api/v1/sites", validSite, { method: "POST", csrf: session.csrf_token, body: { name: name.trim(), domain: domain.trim() } });
-      updateSite(site); setName(""); setDomain(""); setEditor(undefined); latestEditor.current = undefined;
+      updateSite(site); setEditor(undefined); latestEditor.current = undefined;
       await loadSite(site.id);
+      setName(""); setDomain(""); setCreateOpen(false); setSection("files");
       setNotice(`Created ${site.name}.`);
     });
   }
@@ -200,6 +229,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
       updateSite(site);
       await loadSite(site.id);
       setImportOpen(false); setImportName(""); setImportDomain(""); setImportArchive(undefined); setDiscardDraftForImport(false);
+      setSection("files");
       setNotice(`Imported native Sifruno ZIP as ${site.name}.`);
     });
   }
@@ -230,8 +260,9 @@ export default function Websites({ revision, active, onStatus }: { revision: num
     });
   }
   const filtered = sites.filter((s) => `${s.name} ${s.domain}`.toLowerCase().includes(query.toLowerCase().trim()));
+  const stateCounts = (state: Site["state"]) => sites.filter((site) => site.state === state).length;
 
-  return <section data-testid="websites-view" className="websites-view">
+  return <section data-testid="websites-view" className="websites-view website-workspace">
     {error && <div className="website-message website-error" role="alert"><Info /><span>{error}</span></div>}
     {notice && <div className="website-message" role="status"><Info /><span>{notice}</span></div>}
     {!session ? <Card className="dashboard-card website-auth" padding={0}><p role="status">{busy || (error ? "Operator session could not be checked." : "Checking operator session…")}</p>{error && <Button label="Retry operator session" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)} />}</Card> : !authenticated ? <Card className="dashboard-card website-auth" padding={0}>
@@ -246,24 +277,33 @@ export default function Websites({ revision, active, onStatus }: { revision: num
       <div className="website-session"><span><LockKeyhole />Signed in locally · expires {dateLabel(session.expires_at)}</span><Button label="Sign out locally" icon={<LogOut />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => { if (!requireClean()) return; void run("Signing out", async () => {
         const next = await siteRequest("/api/v1/session/logout", validSession, { method: "POST", csrf: session.csrf_token, body: {} });
         if (next.authenticated) throw new SiteApiError(0, "invalid_response", "Sign-out was not confirmed.");
-        setSession(next); setSites([]); setSelected(undefined); setFiles([]); setBackups([]); setEditor(undefined); setConflict(undefined); setRestore(undefined);
+        setSession(next); setSites([]); setInventoryLoaded(false); setSelected(undefined); setFiles([]); setBackups([]); setEditor(undefined); setConflict(undefined); setRestore(undefined);
       }); }} /></div>
-      <div className="hosting-notice"><Info /><span>App-owned static websites · local HTTP preview. DNS, TLS, PHP, mail, databases and full server backups are not provided by this slice.</span></div>
-      <Card className="dashboard-card website-create" padding={0}><div className="card-heading"><div><h2>Create website</h2><span>{sites.length} actual {sites.length === 1 ? "website" : "websites"}</span></div><Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={Boolean(busy)} onClick={() => { setError(undefined); setImportOpen(true); }} /></div>
-        <form onSubmit={create}><div><label htmlFor="website-name">Website name</label><input id="website-name" value={name} onChange={(e) => setName(e.target.value)} required maxLength={80} aria-invalid={nameBytes > 80} aria-describedby={nameBytes > 80 ? "website-name-help" : undefined} disabled={Boolean(busy)} />{nameBytes > 80 && <p id="website-name-help" className="website-help website-error">Name is too long ({nameBytes}/80 UTF-8 bytes).</p>}</div><div><label htmlFor="website-domain">Domain</label><input id="website-domain" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="example.test" required maxLength={253} autoCapitalize="none" spellCheck={false} disabled={Boolean(busy)} /></div><Button label="Create website" type="submit" variant="primary" isLoading={busy === "Creating website"} isDisabled={Boolean(busy) || dirty || sites.length >= 100 || nameBytes > 80 || !name.trim() || !domain.trim()} /></form>
+      <Card className="dashboard-card website-inventory-toolbar" padding={0}>
+        <div className="website-inventory-heading"><h2>Website inventory</h2><p>{inventoryLoaded ? <><strong>{sites.length}</strong> {sites.length === 1 ? "website" : "websites"}<span> · {stateCounts("active")} active · {stateCounts("suspended")} suspended{stateCounts("recovery_required") > 0 && <> · {stateCounts("recovery_required")} need recovery</>}</span></> : busy ? "Loading inventory…" : "Inventory could not be loaded. Refresh to try again."}</p></div>
+        <div className="website-inventory-actions">
+          <Button label="Refresh websites" icon={<RefreshCw />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)} />
+          <Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={Boolean(busy) || sites.length >= 100} onClick={() => { rememberDialogTrigger(); setError(undefined); setImportOpen(true); }} />
+          <Button label="Create website" icon={<Plus />} variant="primary" size="sm" isDisabled={Boolean(busy) || dirty || sites.length >= 100} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }} />
+        </div>
       </Card>
+      <div className="hosting-notice website-scope-notice"><Info aria-hidden="true" /><span>Static websites and native site ZIPs · local HTTP preview. DNS, TLS, PHP, mail and databases are unavailable.</span></div>
+      {dirty && <p className="website-draft-notice" role="status"><Save aria-hidden="true" />Unsaved file draft kept. You can switch between Files and ZIP backups; save or discard before changing websites or their state.</p>}
+      {sites.length >= 100 && <p className="website-help">This local inventory has reached its 100-website limit.</p>}
       <div className="website-layout">
-        <Card className="dashboard-card website-list" padding={0}><div className="card-heading"><h2>Websites</h2><span>{filtered.length}</span></div><label className="compact-search"><Search /><input type="search" aria-label="Search websites" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name or domain…" /></label>
-          <div className="website-list-items">{filtered.map((site) => <button key={site.id} className="website-list-item" aria-label={`Open website ${site.name}`} aria-current={selected?.id === site.id ? "true" : undefined} disabled={Boolean(busy)} onClick={() => { if (site.id === selected?.id || !requireClean()) return; void run("Loading website", () => loadSite(site.id)); }}><Globe /><span>{site.name}<small>{site.domain}</small><small>{site.state.replaceAll("_", " ")}</small></span></button>)}{!filtered.length && <p className="website-empty">{sites.length ? "No matching websites." : "No websites yet. Create your first site above."}</p>}</div>
+        <Card className="dashboard-card website-list" padding={0}><div className="card-heading"><h2>Websites</h2>{inventoryLoaded && <span>{filtered.length}{query.trim() && <> of {sites.length}</>}</span>}</div><label className="compact-search"><Search aria-hidden="true" /><input type="search" aria-label="Search websites" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name or domain…" /></label>
+          <div className="website-list-items">{filtered.map((site) => <button key={site.id} type="button" className="website-list-item" aria-label={`Open website ${site.name}`} aria-current={selected?.id === site.id ? "true" : undefined} disabled={Boolean(busy)} onClick={() => { if (site.id === selected?.id || !requireClean()) return; void run("Loading website", () => loadSite(site.id)); }}><Globe aria-hidden="true" /><span className="website-list-identity"><strong>{site.name}</strong><small>{site.domain}</small></span><span className={`website-state website-state-${site.state}`}>{site.state.replaceAll("_", " ")}</span></button>)}{!filtered.length && <div className="website-empty">{!inventoryLoaded ? <p>{busy ? "Loading website records…" : "Website inventory is unavailable. Use Refresh websites to retry."}</p> : sites.length ? <><p>No matching websites.</p><button className="website-text-action" type="button" onClick={() => setQuery("")}>Clear search</button></> : <p>No websites yet. Create a website or import a native site ZIP to get started.</p>}</div>}</div>
         </Card>
         {selected ? <div className="website-detail-stack">
-          <Card className="dashboard-card website-details" padding={0} data-testid="website-details" data-site-id={selected.id} data-revision={selected.revision}><div className="card-heading"><div><h2>{selected.name}</h2><p>{selected.domain}</p></div><span className={`website-state website-state-${selected.state}`}>{selected.state.replaceAll("_", " ")}</span></div>
+          <Card className="dashboard-card website-details" padding={0} data-testid="website-details" data-site-id={selected.id} data-revision={selected.revision}><div className="card-heading"><div className="website-selected-identity"><span className="website-selected-label">Selected website</span><h2>{selected.name}</h2><p>{selected.domain}</p></div><span className={`website-state website-state-${selected.state}`}>{selected.state.replaceAll("_", " ")}</span></div>
             <dl><div><dt>Revision</dt><dd>{selected.revision}</dd></div><div><dt>Created</dt><dd>{dateLabel(selected.created_at)}</dd></div><div><dt>Updated</dt><dd>{dateLabel(selected.updated_at)}</dd></div></dl>
             <div className="website-actions"><Button label="Local HTTP preview" icon={<ArrowUpRight />} href={previewURL(selected)} target="_blank" rel="noopener noreferrer" isDisabled={selected.state !== "active" || !previewPort} variant="secondary" size="sm" /><Button label={selected.state === "suspended" ? "Resume website" : "Suspend website"} variant="secondary" size="sm" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!session.authenticated || !requireClean()) return; void run("Changing website state", async () => { const site = await siteRequest(siteURL(selected.id, "/state"), validSite, { method: "POST", csrf: session.csrf_token, body: { state: selected.state === "suspended" ? "active" : "suspended", expected_revision: selected.revision } }); updateSite(site); await loadSite(site.id); setNotice(`Website is ${site.state}.`); }); }} /></div>
             <p className="website-help">{previewPort ? <>Preview serves the site's actual files at {selected.preview_host}:{previewPort} using local HTTP.</> : "Preview serving is disabled in this local runtime."}</p>
             {selected.state === "recovery_required" && <p className="website-message" role="alert">This website requires scoped recovery. Serving and managed changes are disabled until its recovery is resolved.</p>}
           </Card>
-          <Card className="dashboard-card website-files" padding={0}><div className="card-heading"><h2><Folder />Files</h2><Button label="Add text file" variant="ghost" size="sm" isDisabled={Boolean(busy) || dirty || !editable || files.length >= 64} onClick={() => { if (!requireClean()) return; setEditor({ path: "", draft: "", savedContent: "", sha256: "", revision: selected.revision, isNew: true }); setConflict(undefined); setError(undefined); }} /></div>
+          <div className="website-section-toolbar"><SegmentedControl label="Website section" value={section} onChange={setSection} size="sm" className="website-section-selector"><SegmentedControlItem value="files" label="Files" icon={<Folder />} /><SegmentedControlItem value="backups" label="ZIP backups" icon={<Archive />} /></SegmentedControl><span className="website-section-count">{section === "files" ? `${files.length} files` : `${backups.length} ZIP backups`}</span></div>
+          <div className="website-section-pane" hidden={section !== "files"}>
+          <Card className="dashboard-card website-files" padding={0}><div className="card-heading"><h2><Folder aria-hidden="true" />Files</h2><Button label="Add text file" variant="ghost" size="sm" isDisabled={Boolean(busy) || dirty || !editable || files.length >= 64} onClick={() => { if (!requireClean()) return; setEditor({ path: "", draft: "", savedContent: "", sha256: "", revision: selected.revision, isNew: true }); setConflict(undefined); setError(undefined); }} /></div>
             <div className="website-file-list">{files.map((file) => <button key={file.path} aria-label={`Edit ${file.path}`} aria-pressed={editor?.path === file.path && !editor.isNew} disabled={Boolean(busy)} onClick={() => { if (editor?.path === file.path && !editor.isNew) return; if (!requireClean()) return; void run("Reading file", async () => { setEditor(fromFile(await readFile(selected, file.path))); setConflict(undefined); }); }}><File /><span>{file.path}</span><small>{bytes(file.bytes)}</small></button>)}{!files.length && <p className="website-empty">No files returned for this website.</p>}</div>
             {editor && <form className="website-editor" onSubmit={save} data-testid="website-editor">
               {editor.isNew ? <div className="new-file-path"><label htmlFor="new-file-path">Relative file path</label><input id="new-file-path" value={editor.path} onChange={(e) => { setEditor({ ...editor, path: e.target.value }); setConflict(undefined); }} placeholder="assets/style.css" required disabled={Boolean(busy)} /><p className="website-help">New UTF-8 text file. Use a relative static-file path; PHP, private and source files are rejected.</p></div> : <div className="editor-heading"><label htmlFor="site-file-content">{editor.path}</label><span>Revision {editor.revision}</span></div>}
@@ -272,14 +312,25 @@ export default function Websites({ revision, active, onStatus }: { revision: num
               {conflict && <div className="file-conflict" role="status"><h3>Draft kept · server revision {conflict.revision}</h3><p>{conflict.file ? "Compare the server content below." : "No file exists at this path in the latest inventory."} Updating the revision keeps your draft; Save remains an explicit action.</p>{conflict.file && <details><summary>Compare latest server content</summary><pre>{conflict.file.content}</pre><p className="website-help">SHA-256: {conflict.file.sha256}</p></details>}<Button label="Keep draft and use latest revision" variant="secondary" size="sm" isDisabled={Boolean(busy)} onClick={() => { setEditor({ ...editor, savedContent: conflict.file?.content ?? "", sha256: conflict.file?.sha256 ?? "", revision: conflict.revision, isNew: !conflict.file }); setConflict(undefined); setError(undefined); }} /></div>}
             </form>}
           </Card>
+          </div>
+          <div className="website-section-pane" hidden={section !== "backups"}>
           <Card className="dashboard-card website-backups" padding={0}><div className="card-heading"><div><h2><Archive />ZIP backups</h2><p>App-owned site files only · {backups.length} recorded</p></div><Button label="Create ZIP backup" icon={<Archive />} size="sm" variant="secondary" isLoading={busy === "Creating backup"} isDisabled={Boolean(busy) || !editable || dirty} onClick={() => { if (!session.authenticated) return; void run("Creating backup", async () => { const backup = await siteRequest(siteURL(selected.id, "/backups"), validBackup, { method: "POST", csrf: session.csrf_token, body: { expected_revision: selected.revision } }); await loadSite(selected.id); setNotice(`Created ZIP backup with ${backup.files} files.`); }); }} /></div>
-            {!backups.length ? <p className="website-empty">No ZIP backups recorded. Create a backup of this site's current files.</p> : <div className="website-backup-list">{backups.map((backup) => <article key={backup.id}><div><strong>{dateLabel(backup.created_at)}</strong><p>{backup.files} files · {bytes(backup.bytes)} · revision {backup.revision}</p><details><summary>Backup hash</summary><code>{backup.sha256}</code></details></div><div className="website-backup-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || !authenticated} isLoading={busy === "Downloading ZIP backup"} onClick={() => { if (authenticated) void exportBackup(selected, backup); }} /><Button label={`Restore backup ${backup.id}`} size="sm" variant="secondary" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!requireClean()) return; setRestore({ site: selected, backup }); setRestoreConfirmed(false); }}>Restore</Button></div></article>)}</div>}
+            {!backups.length ? <p className="website-empty">No ZIP backups recorded. Create a backup of this site's current files.</p> : <div className="website-backup-list">{backups.map((backup) => <article key={backup.id}><div><strong>{dateLabel(backup.created_at)}</strong><p>{backup.files} files · {bytes(backup.bytes)} · revision {backup.revision}</p><details><summary>Backup hash</summary><code>{backup.sha256}</code></details></div><div className="website-backup-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || !authenticated} isLoading={busy === "Downloading ZIP backup"} onClick={() => { if (authenticated) void exportBackup(selected, backup); }}>Download ZIP</Button><Button label={`Restore backup ${backup.id}`} size="sm" variant="secondary" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setRestore({ site: selected, backup }); setRestoreConfirmed(false); }}>Restore</Button></div></article>)}</div>}
           </Card>
-        </div> : <Card className="dashboard-card website-no-selection" padding={0}><Globe /><h2>Select a website</h2><p>Its actual files, state and ZIP backups will appear here.</p></Card>}
+          </div>
+        </div> : <Card className="dashboard-card website-no-selection" padding={0}><Globe aria-hidden="true" /><h2>{busy ? "Loading website records" : !inventoryLoaded ? "Website records unavailable" : sites.length ? "Select a website" : "Your website workspace"}</h2><p>{!inventoryLoaded ? "Check the operator session and inventory before working with website files." : sites.length ? "Choose a website to manage its files, state and native ZIP backups." : "Create a static website or import a native site ZIP. Its files and backups will appear here."}</p></Card>}
       </div>
     </>}
     {busy && session && <p className="website-busy" role="status">{busy}…</p>}
-    {authenticated && <dialog ref={importDialog} className="website-transfer-dialog" aria-labelledby="import-title" onCancel={(event) => { if (busy) event.preventDefault(); else setImportOpen(false); }}><h2 id="import-title">Import native Sifruno ZIP</h2><p>Import an app-owned static website archive into a new website. This accepts native Sifruno site ZIPs only; cPanel host backups are not compatible.</p><form onSubmit={submitImportArchive}>
+    {authenticated && <dialog ref={createDialog} className="website-transfer-dialog website-create-dialog" aria-labelledby="create-website-title" aria-describedby="create-website-description" onClose={() => setCreateOpen(false)} onCancel={(event) => { if (busy) event.preventDefault(); else setCreateOpen(false); }}>
+      <h2 id="create-website-title">Create website</h2><p id="create-website-description">Start a static website with its own files and native ZIP backups. The domain is a label; creating a website does not configure DNS or TLS.</p>
+      <form onSubmit={create} data-testid="website-create-form">
+        <div><label htmlFor="website-name">Website name</label><input id="website-name" value={name} onChange={(event) => setName(event.target.value)} required maxLength={80} autoFocus aria-invalid={nameBytes > 80} aria-describedby="website-name-help" disabled={Boolean(busy)} /><span id="website-name-help" className={`website-help${nameBytes > 80 ? " website-error" : ""}`}>{nameBytes}/80 UTF-8 bytes</span></div>
+        <div><label htmlFor="website-domain">Domain</label><input id="website-domain" value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.test" required maxLength={253} autoCapitalize="none" spellCheck={false} aria-invalid={domainBytes > 253} aria-describedby="website-domain-help" disabled={Boolean(busy)} /><span id="website-domain-help" className={`website-help${domainBytes > 253 ? " website-error" : ""}`}>{domainBytes}/253 UTF-8 bytes · no protocol or path</span></div>
+        <div className="website-transfer-actions"><Button label="Cancel creation" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setCreateOpen(false)} /><Button label="Create website" type="submit" variant="primary" isLoading={busy === "Creating website"} isDisabled={Boolean(busy) || dirty || sites.length >= 100 || nameBytes > 80 || domainBytes > 253 || !name.trim() || !domain.trim()} /></div>
+      </form>{error && <p role="alert" className="website-error">{error}</p>}
+    </dialog>}
+    {authenticated && <dialog ref={importDialog} className="website-transfer-dialog" aria-labelledby="import-title" onClose={() => setImportOpen(false)} onCancel={(event) => { if (busy) event.preventDefault(); else setImportOpen(false); }}><h2 id="import-title">Import native Sifruno ZIP</h2><p>Import an app-owned static website archive into a new website. This accepts native Sifruno site ZIPs only; cPanel host backups are not compatible.</p><form onSubmit={submitImportArchive}>
       <div><label htmlFor="import-website-name">Website name</label><input id="import-website-name" value={importName} onChange={(event) => setImportName(event.target.value)} required maxLength={80} aria-invalid={importNameBytes > 80} disabled={Boolean(busy)} /><span className="website-help">{importNameBytes}/80 UTF-8 bytes</span></div>
       <div><label htmlFor="import-website-domain">Domain</label><input id="import-website-domain" value={importDomain} onChange={(event) => setImportDomain(event.target.value)} required maxLength={253} autoCapitalize="none" spellCheck={false} disabled={Boolean(busy)} /><span className="website-help">{importDomainBytes}/253 UTF-8 bytes</span></div>
       <div><label htmlFor="import-website-archive">Native site ZIP</label><input id="import-website-archive" type="file" accept=".zip,application/zip,application/octet-stream" required disabled={Boolean(busy)} onChange={(event) => setImportArchive(event.target.files?.[0])} /><span className="website-help">Maximum 34 MiB · ZIP only</span>{importArchive && <span className="website-help">{importArchive.name} · {bytes(importArchive.size)}</span>}</div>

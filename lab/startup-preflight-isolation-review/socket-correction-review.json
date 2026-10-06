@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "verdict": "CLEAR",
+  "evidence_kind": "restricted_socket_path_and_failure_diagnostic_correction_review",
+  "guest_commit": "a35a422cb9f9d2bf7004e2c67c5f5906296c7169",
+  "previous_source_only_receipt": {
+    "path": "lab/startup-preflight-isolation-review/receipt.json",
+    "bytes": 7701,
+    "sha256": "9bc38605891234afd48842ac6037d2204a9421d71940d5a209edf811a9679c7d"
+  },
+  "previous_raw_logs_preserved": [
+    {
+      "path": ".cache/startup-preflight-isolation-review/decoder.out",
+      "bytes": 72,
+      "sha256": "2e599cd1764c0844c4e8cb3cf95c8440e76e28a2aeb339f8d123baa70c134839"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/decoder.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/isolation.out",
+      "bytes": 80,
+      "sha256": "c16a23524635dfee72f85022a93d9dc57ffffa7ba1a0b27cc717b1fd1cd0518b"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/isolation.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/fixture.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/fixture.err",
+      "bytes": 117,
+      "sha256": "ba27c4377ed119181f3aa446cb0c9e3696550d755a01c4219411fc500c99696a"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/contract.out",
+      "bytes": 931,
+      "sha256": "c14cd070c810ec3727848f4372d3520bf8644193ff7063dc018dc415f43d671c"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/contract.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "guest_source_pins": [
+    {
+      "path": "scripts/verify-startup-preflight.mjs",
+      "bytes": 49275,
+      "sha256": "1c02950723cd96c90e26941528c80a24465d2a468bf58a16a76c3305546bf770",
+      "canonical_git_sha256": "1c02950723cd96c90e26941528c80a24465d2a468bf58a16a76c3305546bf770",
+      "git_blob": "0c88177cbe040e81cc7c7714900ec30050f0df71"
+    },
+    {
+      "path": "lab/startup-preflight-guest/fixture.py",
+      "bytes": 36850,
+      "sha256": "2d3be3e986cb87709bb28c09bbcaf5de733304654ecefe8795967fbfdf5bd134",
+      "canonical_git_sha256": "2d3be3e986cb87709bb28c09bbcaf5de733304654ecefe8795967fbfdf5bd134",
+      "git_blob": "1b316cc0ccd40c1b7471817bb26a12997253b424"
+    },
+    {
+      "path": "lab/startup-preflight-guest/fixture_test.py",
+      "bytes": 19146,
+      "sha256": "2bbb9677dc36c4e2535f2baf4f74e31ab806d66f246a9ea8ed896a365d7d7fa4",
+      "canonical_git_sha256": "2bbb9677dc36c4e2535f2baf4f74e31ab806d66f246a9ea8ed896a365d7d7fa4",
+      "git_blob": "31e4e82f9d77ced1314b97c0b5732c3086bf522c"
+    },
+    {
+      "path": "lab/startup-preflight-guest/contract.test.mjs",
+      "bytes": 12664,
+      "sha256": "d8e9017030cda2a804dd8f641c0d0175d6a5b00768ccedffdf21c522ac1e8258",
+      "canonical_git_sha256": "d8e9017030cda2a804dd8f641c0d0175d6a5b00768ccedffdf21c522ac1e8258",
+      "git_blob": "ca3077325ca251fa8e89b6f408b57a7f0a1be004"
+    },
+    {
+      "path": "lab/startup-preflight-guest/README.md",
+      "bytes": 7947,
+      "sha256": "3a4218b0bb2603940396957c2263410e0b9a706e05381285b5c3cb96e08c7f94",
+      "canonical_git_sha256": "3a4218b0bb2603940396957c2263410e0b9a706e05381285b5c3cb96e08c7f94",
+      "git_blob": "ca0d55f98ac8bd19021cee4a6fd3207058be2f29"
+    }
+  ],
+  "commands": [
+    {
+      "command": [
+        "C:/Users/Administrator/AppData/Local/Programs/Python/Python312/python.exe",
+        "-I",
+        "-B",
+        "lab/startup-preflight-isolation-review/socket-correction-tests.py"
+      ],
+      "exit_code": 0,
+      "synthetic_summary": [
+        {
+          "passed": true,
+          "checks": 109,
+          "planned_socket_bytes": {
+            "stock": 78,
+            "adapted": 80,
+            "missing_uid": 76,
+            "root_uid": 76,
+            "state_file": 76,
+            "homes_file": 76,
+            "homes_symlink": 76,
+            "homes_dangling_symlink": 76,
+            "ancestor_untrusted_nontraversable": 76,
+            "setgid_parent": 76,
+            "socket_file": 76,
+            "socket_bound": 76,
+            "socket_dangling_symlink": 76,
+            "nonempty_state": 76,
+            "unknown_private_argument": 76,
+            "broker_smoke": 72
+          },
+          "synthetic": true,
+          "native_observation": false
+        }
+      ]
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "lab/startup-preflight-isolation-review/socket-failure-tests.mjs"
+      ],
+      "exit_code": 0,
+      "synthetic_summary": [
+        {
+          "passed": true,
+          "checks": 91,
+          "synthetic": true,
+          "native_observation": false
+        },
+        {
+          "passed": true,
+          "checks": 27,
+          "synthetic": true,
+          "native_observation": false
+        }
+      ]
+    }
+  ],
+  "raw_logs": [
+    {
+      "path": ".cache/startup-preflight-socket-review/python.out",
+      "bytes": 463,
+      "sha256": "b384738470a77a2a72f3166caf0d204c4a1c15a96aade9c2bcc3f1d4d09dc7bd"
+    },
+    {
+      "path": ".cache/startup-preflight-socket-review/python.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/startup-preflight-socket-review/node.out",
+      "bytes": 144,
+      "sha256": "eb95a6dae42b8c7d9ea3bacd0ac11b7992710de35cf469df83d8bb001fac025b"
+    },
+    {
+      "path": ".cache/startup-preflight-socket-review/node.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "review_source": [
+    {
+      "path": "lab/startup-preflight-isolation-review/socket-correction-tests.py",
+      "bytes": 4665,
+      "sha256": "ff9c394cd332eed92045f0f64e7012d0940fb5d7ede6db399b5b56670b978c57"
+    },
+    {
+      "path": "lab/startup-preflight-isolation-review/socket-failure-tests.mjs",
+      "bytes": 2512,
+      "sha256": "07b91b33ac43e0e3eb631c4bf84cd24085087588444c910714a861654bf0022a"
+    },
+    {
+      "path": "lab/startup-preflight-isolation-review/run-socket-review.mjs",
+      "bytes": 5779,
+      "sha256": "37bced8c5eaa559239b2071b6e7c708a8c7dc07952caca892ee26827e54e7b5e"
+    }
+  ],
+  "findings": [],
+  "source_observations": [
+    "Physical c00..c12 directory mapping preserves all thirteen public labels and order",
+    "All sixteen planned endpoints admit against the existing 100-byte UTF8 cap before guest input reads or spawning; broker command checks again",
+    "Old deterministic 106-byte endpoint refuses before mocked Popen/run_child",
+    "Nine-stage first-refusal and success schema retained; independent historical success challenge data still accepted and mutations rejected",
+    "Failure checkpoint contains fixed phase plus bounded index/status/reason; unknown raw errors/status/reason redacted; failed nonce frame cannot qualify success"
+  ],
+  "native_observation": false,
+  "limits": [
+    "Pure path/data and mocked checks only; no native execution, VM, provisioning, Go rebuild or live system action",
+    "Actual first failed run triggering case remains unknown; correlating it with the concrete 106-byte source bug remains inference",
+    "Hostile root races and atomic host-policy stability remain outside source review"
+  ],
+  "recovery": "Root may decline adoption or revert fixture correction before separately gated execution; preserve original failed run and historical source-only receipt"
+}

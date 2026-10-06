@@ -1,0 +1,14 @@
+// Synthetic decoder inputs only: never native execution evidence.
+import {createHash} from 'node:crypto';
+import {SCOPE,INPUTS,RUNTIME} from './report.mjs';
+const sha=x=>createHash('sha256').update(x).digest('hex');
+export function sample(){
+ const nonce='a'.repeat(32),h='b'.repeat(64),ids=['1'.repeat(32),'2'.repeat(32)];
+ const account=(i)=>({id:ids[i],username:(i?'wpb':'wpa')+nonce.slice(0,6),domain:(i?'wpb':'wpa')+nonce.slice(0,6)+'.example.test',home:'/run/wp'+nonce.slice(0,6)+'/homes/'+(i?'wpb':'wpa')+nonce.slice(0,6),public_html:'/run/wp'+nonce.slice(0,6)+'/homes/'+(i?'wpb':'wpa')+nonce.slice(0,6)+'/public_html',state:'active',uid:1000+i,gid:1000+i,revision:i?3:1,created_at:'2026-10-06T00:00:00Z',updated_at:'2026-10-06T00:01:00Z'});
+ const preview=(active)=>({profile:'restricted-chroot-v1',profile_sha256:h,snapshot_sha256:String(active).repeat(64),bundle_sha256:String(active+2).repeat(64),accounts:2,active_accounts:active,suspended_accounts:2-active,files:['apache/front.conf',...ids.slice(0,active).flatMap(id=>['apache/backends/'+id+'.conf','fpm/'+id+'.conf'])].map(path=>({path,mode:384,bytes:100,sha256:h}))});
+ const capture=(id,body,status=200,cli=false)=>{const raw=Buffer.from(JSON.stringify(body,null,cli?'  ':undefined)+'\n');return {...(id?{id}:{}),[cli?'exit_code':'status']:status,body,raw_sha256:sha(raw),raw_base64:raw.toString('base64')};};
+ const error=(status)=>({type:'about:blank',title:status===401?'Unauthorized':'Service Unavailable',status,detail:'Fixture failure',error:status===401?'unauthorized':'web_preview_unavailable',authenticated:false});
+ const accounts=[account(0),account(1)];
+ return {schema_version:1,scope:SCOPE,nonce,passed:true,profile:{distribution:'almalinux',version:'9.8',machine:'x86_64'},controller_uid:65534,inputs:Object.fromEntries(INPUTS.map(k=>[k,h])),nss_before_sha256:h,nss_adapted_sha256:sha('passwd: files\ngroup: files\nshadow: files\nhosts: files\n'),stock:(()=>{const body={ready:false,read_only:true,scope:'native_linux_controller_layout'},raw=Buffer.from(JSON.stringify(body)+'\n');return {exit_code:1,body,raw_sha256:sha(raw),raw_base64:raw.toString('base64'),paths_unchanged:true}})(),cases:[capture('disabled_preview',error(503),503),capture('unsigned_api',error(401),401),{id:'wrong_peer',refused:true,peer_uid:0},capture('populated',preview(1)),capture('state_changed',preview(2)),capture('cli_matches',preview(2),0,true),capture('drift_refused',error(503),503)],direct_peer:capture(null,preview(1)),accounts,native_accounts:accounts.map(a=>({id:a.id,uid:a.uid,gid:a.gid,home_mode:'0750',public_html_mode:'0750'})),runtime_paths:RUNTIME.map(path=>({path,before:'missing',after:'missing'})),stock_mail_defaults_unchanged:true,owned_children_exited:true};
+}
+export function serial(g=sample()){return Buffer.from('\nSIFRUNO_WEB_PREVIEW_BEGIN_'+g.nonce+'\n'+JSON.stringify(g)+'\nSIFRUNO_WEB_PREVIEW_END_'+g.nonce+'\nSIFRUNO_WEB_PREVIEW_EXIT_'+g.nonce+'_0\n');}

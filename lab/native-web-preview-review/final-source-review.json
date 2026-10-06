@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "verdict": "CLEAR",
+  "author_commit": "a697654b501f33fb78dd2d11ad5b31eb570b9a0d",
+  "scope": "Frozen source correctness plus pure synthetic decoder checks; no native execution",
+  "source_pins": [
+    {
+      "path": "lab/native-web-preview-guest/README.md",
+      "raw_sha256": "b18beab14c76c8ad211521a19b14aef364cdbf362c9bd181bc22c0fb21dec084",
+      "canonical_sha256": "b6fade02a5932c9c6fd42e11ae0890469a16f1a9e26cc9a63ee1cd16bf31ebc6",
+      "git_blob": "9a4a9861108aaefffe5e683d39b22471002f2ccc"
+    },
+    {
+      "path": "lab/native-web-preview-guest/fixture.py",
+      "raw_sha256": "12bd0d2a704f138c01dc5928b6369fd74ad9daf756e97579ec55c01b7ced809c",
+      "canonical_sha256": "52eb15bd188cb3389a4a545d913e788fcc6155cac75396b1b879ed38c7313f1a",
+      "git_blob": "7d645d97aa2dbff28628bbb5bbf7065d2b196d33"
+    },
+    {
+      "path": "lab/native-web-preview-guest/make_iso.py",
+      "raw_sha256": "a45cf810de5e56d5cebe77609fd23a29d6fb077340c3af0906b46628d223ecaa",
+      "canonical_sha256": "150f29ad546f1819abed5c108c46587083b72e1f33395fd74e9e17317b208daa",
+      "git_blob": "10e075134a8bdcf685113e27737a58f9271c67ea"
+    },
+    {
+      "path": "lab/native-web-preview-guest/report.mjs",
+      "raw_sha256": "5df130943eed1bc6a716df6aad693ec192d6827389436596291bd9fc89220883",
+      "canonical_sha256": "bec62f55e6dbde46ae4c9c114cbb8c69c78cc0709074cad56eae29baf6d848ca",
+      "git_blob": "304048c29fbbf276121490503270e1c30ff11f12"
+    },
+    {
+      "path": "lab/native-web-preview-guest/report.test.mjs",
+      "raw_sha256": "c425bc140ae848182701d7b3372c02d052b9ec4996bd3924c25799c2a7eadf10",
+      "canonical_sha256": "cfec0fcadbf3d4bb032d01fbcaa8b0f43b17bf64747f9bdc36ea0bde5f595eab",
+      "git_blob": "fc122cef0e3094b9de784c56517a02f123dafd51"
+    },
+    {
+      "path": "lab/native-web-preview-guest/run.mjs",
+      "raw_sha256": "ef960d12a8a1aee08e55d2e4c30968065e305db27f820c0a676bb953b9cdcbad",
+      "canonical_sha256": "f7bdeba8c58c25bcbd6eaad494bf20b662b56ced584be42cd727d5a5432f3c82",
+      "git_blob": "ee022374d11d2c72f1eaf33797bb8febf4498e4e"
+    },
+    {
+      "path": "lab/native-web-preview-guest/synthetic.mjs",
+      "raw_sha256": "5583e6aed96995cfd099dffe75e1dc16d4c11b4753f171eb3d1f8ee065777d46",
+      "canonical_sha256": "a4d168c8b4dca88d93cdb0744a73fd8237eb60907aa4d9732ebc2e4fe65eb119",
+      "git_blob": "e817c9a3ba0a3483903df07bac558782e7ba7340"
+    }
+  ],
+  "checks": {
+    "positive": 1,
+    "negative": 13,
+    "cases": [
+      "CLI divergence",
+      "original host input mismatch",
+      "case order",
+      "captured digest mismatch",
+      "raw metadata duplicate key",
+      "runtime path addition",
+      "injected root field",
+      "missing child cleanup",
+      "unpaired account path",
+      "duplicate frame",
+      "late exit duplicate",
+      "early exit",
+      "invalid UTF8"
+    ],
+    "exit": 0,
+    "log_sha256": "732ecd848bfa0c4866bb08770c0ee61f57e07675f762fba54fc024191ca75a21"
+  },
+  "observed_controls": [
+    "Explicit --run only; default and --check branch has no builds, ISO or QEMU",
+    "Four product command linked Go/assembly/embed/module input closure, config baseline/obligations embeds; stable before/after checks",
+    "Original expected ELF/Python payload map passed into strict serial decoder",
+    "Ten exact ISO entries with full readback and payload hashes",
+    "Owned nonce guest admission, bounded child deadlines/cleanup and no NIC/share QEMU args",
+    "Actual stock plan refusal before NSS adaptation; final actual NSS bytes and stock mail default check",
+    "Strict captured HTTP and CLI metadata equality; paired account paths and fixed runtime absence; final drift refusal permits existing recovery bookkeeping"
+  ],
+  "import_check": {
+    "exit": 0,
+    "log_sha256": "95350b2547fdb3beeaab667af9adc4aeb72fda7ce7126dd268c6d5b4f1aad33e"
+  },
+  "historical_finding_receipt": "import-finding.json; initial provisional CLEAR withdrawn before execution",
+  "resolved_findings": [
+    "Top-level argv import execution corrected with direct-entry identity guard; independent import--run test inert and cache unchanged",
+    "Draft omitted observed stock refusal; fixed in frozen fixture",
+    "Draft reported constant NSS hash without final readback; fixed in frozen fixture"
+  ],
+  "limits": [
+    "Source CLEAR is not native qualification or permission to execute",
+    "Root separately runs authorized guest and independent actual artifact audit follows",
+    "No generated config syntax/activation/health/installer/reboot/vendor/allOS qualification",
+    "Bounded cooperative checks do not defeat privileged interference"
+  ],
+  "recovery": "Disable explicit run; retain evidence; root owns disposable overlay lifecycle",
+  "author_commit_chain": [
+    "a6b9628d90c454c3087e55bc90a0759aafd5f539",
+    "a697654b501f33fb78dd2d11ad5b31eb570b9a0d"
+  ],
+  "precedence": "This final CLEAR supersedes source-review.json provisional CLEAR and import-finding.json withdrawal; those retained records are historical."
+}

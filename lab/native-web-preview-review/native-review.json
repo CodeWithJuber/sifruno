@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "passed": true,
+  "verdict": "CLEAR",
+  "scope": "Corrected decoder re-evaluation of original retained populated native run; no post-fix guest rerun",
+  "run_id": "preview-20261006203538515-40dee280",
+  "original_failed_report_sha256": "8f2a9418ea9dd79401db6922dc7ba3d1fb1aa8f3e6a7590fad1f742bf06acba1",
+  "serial_sha256": "ff2ecf3d904ee20863e67ec5d16619b813eb4702423a9b6956eb294b422ec4ed",
+  "decoder_commit": "19ad91e556dfbadfda4c412b9016183993467491",
+  "decoder_raw_sha256": "0cf22456a43094ff69f7780c147254ca7a0755cbca66e7492ba24e5eaf11c49c",
+  "manifest_sha256": "d85b6ff8d98bbeada8373dc6c26742b5d8a60e76ed03c024bdde33307f8a7231",
+  "pin_counts": {
+    "sources": 193,
+    "tools": 145,
+    "linked": 1506,
+    "binary": 4
+  },
+  "current_input_mismatches": 0,
+  "expected_inputs": {
+    "hostsetup": "ff7b51231e2502fd114d6d92c7e5f028cbddc611e641b0838a0a018fc153f706",
+    "hostbroker": "9a509f6e888ecc182e9de539fab8de2f10151b4caabe8278431711fa63705c2a",
+    "sifruno": "e9c61761ae8bdf220f774b674532f49e7ba82d7a4cd85b62cec3892a18ddb81c",
+    "panelctl": "7e8e8e08cd54b333c0929a221548690f5be6ef2a5c57acd9c5c376f41a4ff6af",
+    "fixture.py": "d59208352f02e24439629ef0fdf308c9b24ea24b38be733848249f67d72bffb8",
+    "startup_helpers.py": "f4ddbb78d8a33d3fc17447d0deb494d57ce544442be2befd931de6056043fc85"
+  },
+  "iso": {
+    "passed": true,
+    "entries": 10,
+    "iso_sha256": "5c0d3d1aeaa82afe40c55be26d242966eb66a0d45b5e85401b6b59fbb86159f5",
+    "wheel_sha256": "1a82cd735542921d0dd7bc40381e7b7b9cbc70bd4c03e4f67a0531d59d2f518e"
+  },
+  "guest_summary": {
+    "cases": [
+      {
+        "id": "disabled_preview",
+        "status": 503,
+        "exit_code": null
+      },
+      {
+        "id": "unsigned_api",
+        "status": 401,
+        "exit_code": null
+      },
+      {
+        "id": "wrong_peer",
+        "status": null,
+        "exit_code": null
+      },
+      {
+        "id": "populated",
+        "status": 200,
+        "exit_code": null
+      },
+      {
+        "id": "state_changed",
+        "status": 200,
+        "exit_code": null
+      },
+      {
+        "id": "cli_matches",
+        "status": null,
+        "exit_code": 0
+      },
+      {
+        "id": "drift_refused",
+        "status": 503,
+        "exit_code": null
+      }
+    ],
+    "native_accounts": 2,
+    "populated_counts": [
+      2,
+      1,
+      1
+    ],
+    "changed_counts": [
+      2,
+      2,
+      0
+    ],
+    "cli_and_direct_peer_metadata_equal": true,
+    "stock_refusal": true,
+    "runtime_paths_absent": true,
+    "owned_children_exited": true,
+    "stock_refusal_reason": "files_only_nss_required",
+    "stock_checks": [
+      {
+        "id": "layout_configuration",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "configuration",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "privilege",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "controller",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "utilities",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "nss_file",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "nss_policy",
+        "status": "refused",
+        "reason": "files_only_nss_required"
+      },
+      {
+        "id": "useradd_defaults",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "paths",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "fresh_state",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "controller_access",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "layout_directories",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "layout_preparation",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "layout_ownership",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      }
+    ]
+  },
+  "schema_provenance": "Actual Huma Account.json schema exact local guest URL, required not arbitrary extra-field acceptance",
+  "limits": [
+    "Original host report remains failed decode_failed, unchanged",
+    "Corrected strict decoder validates same nonce-bound original serial against original host expected payload map",
+    "No config apply/runtime service/health/reboot/installer/vendor/allOS qualification",
+    "Existing drift-triggered broker recovery bookkeeping allowed"
+  ],
+  "recovery": "Retain failed report, original serial, overlay and manifests; no rerun or cleanup performed"
+}

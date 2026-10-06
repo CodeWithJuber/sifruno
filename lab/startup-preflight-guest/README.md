@@ -79,8 +79,8 @@ nonce-framed evidence can be decoded separately for diagnosis but cannot qualify
 the successful guest decoder. Successful report and guest schemas stay unchanged.
 
 Native test children alone receive explicit `TMPDIR` below an exclusively
-created `/run/sp-tests-NONCE` parent0700, with separate core/review directories
-0700. Nofollow directory descriptors, same-inode checks and root-owned trusted
+created short `/run/cNNNNNN` and `/run/rNNNNNN` roots0700, using six nonce
+hexadecimal characters and separate core/review roles. Nofollow directory descriptors, same-inode checks and root-owned trusted
 ancestor metadata are verified before the child starts. Preexisting paths,
 links, untrusted owners, permissive modes and metadata drift are refused. This
 owned fixture setup occurs after the no-writes observations and stays separate
@@ -128,3 +128,18 @@ Recovery is removal of this unadopted harness commit or a later revert. Disposab
 overlay, private serial and receipts remain in owned ignored directories for
 review; no running host process cleanup is attempted. Native qualification stays
 pending until an actual approved run and independent receipt audit pass.
+
+Before review-test spawn, the fixture models all ten frozen private subcases
+using pinned Go1.27 TempDir name truncation/sanitization, maximum ten-digit
+uint32 randomness, the sole `/001` sequence and `run/broker.sock`. The longest
+socket is99 bytes; any path above the unchanged100-byte product limit refuses
+before spawning. Short-root collisions refuse without adoption or retry.
+
+Native child stdout/stderr are retained only in private serial as bounded,
+nonce-and-role-framed Base64 packets with byte counts, digests and exit flags.
+Encoding the entire packet prevents arbitrary test output from injecting report
+markers. The successful decoder joins both log digests/counts to existing test
+records and requires successful exits; public success schemas stay unchanged.
+The shell emits the public report frame only after the fixture exits, keeping
+private log frames outside that report. Historical failed runs remain retained;
+the exact private failing subcase in those runs was not observed.

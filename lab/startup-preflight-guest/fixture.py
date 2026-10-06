@@ -1,5 +1,6 @@
 """Read-only startup observations in a nonce-admitted disposable offline guest."""
 import argparse
+import base64
 from datetime import datetime, timezone, date
 import hashlib
 import json
@@ -27,6 +28,7 @@ RESTRICTIONS = ["fresh_setup_admission_only", "host_snapshot_not_startup_grant",
 PROVIDERS = {"files", "sss", "systemd", "compat", "nis", "nisplus", "db", "ldap", "winbind"}
 CASE_LABELS = ["missing_uid", "root_uid", "state_file", "homes_file", "homes_symlink", "homes_dangling_symlink", "ancestor_untrusted_nontraversable", "setgid_parent", "socket_file", "socket_bound", "socket_dangling_symlink", "nonempty_state", "unknown_private_argument"]
 PHASES = {"stock", "adapted", "host_policy", "broker_smoke", "core_tests", "review_tests", *CASE_LABELS}
+PRIVATE_SUBCASES = ["missing", "empty", "marker", "invalid_db", "socket_leaf", "homes_foreign", "mode", "identity_drift", "controller_duplicate", "nss_provider"]
 DIAGNOSTIC_STATUSES = {"pass", "refused", "not_checked", "unknown"}
 DIAGNOSTIC_REASONS = {*REASONS, "satisfied", "prerequisite_refused", "probe_context_unavailable", "linux_required", "unknown"}
 FAILURE_CODES = set(['adapted_readonly', 'ancestor_setup_metadata', 'argument_binding', 'broker_pipe_cleanup', 'broker_shutdown', 'broker_socket', 'broker_startup', 'case_index', 'child_output_limit', 'child_pipe_cleanup', 'child_timeout', 'controller_not_unique', 'controller_uid', 'duplicate_json_key', 'file_bound', 'file_kind', 'file_size_changed', 'final_host_unchanged', 'fixture_observation_failed', 'fresh_paths_created', 'guest_admission', 'guest_inputs_changed', 'guest_platform', 'guest_profile', 'host_policy_exit', 'host_policy_unchanged', 'input_binding', 'inventory_bound', 'inventory_child', 'inventory_empty', 'inventory_http', 'json_number', 'mail_dir_authority', 'mail_dir_declaration', 'mail_directory_alias', 'mail_entries_bound', 'negative_uid_present', 'nss_adaptation', 'nss_leaf_kind', 'nss_only_change', 'nss_parent_authority', 'nss_profile_bound', 'nss_profile_count', 'nss_profile_hash_binding', 'nss_write', 'owned_mail_spool', 'owned_snapshot_bound', 'owned_snapshot_kind', 'owned_subid_allocation', 'passwd_metadata_invalid', 'phase_label', 'public_identity_rows', 'socket_nonce', 'socket_path_admission', 'startup_added_or_changed_paths', 'startup_count', 'startup_exit', 'startup_fields', 'startup_grammar', 'startup_identity', 'startup_order_reason', 'stock_nss_pin', 'stock_readonly', 'subid_kind', 'test_family_execution', 'test_names_binding', 'test_temp_authority', 'test_temp_drift', 'test_temp_parent_drift', 'test_temp_path', 'test_temp_platform', 'test_temp_root_drift'])
@@ -101,9 +103,9 @@ def test_directory_info(info, dedicated=False):
 
 def trusted_test_temp(target):
     target = Path(target)
-    require(target.is_absolute() and re.fullmatch(r"/run/sp-tests-[0-9a-f]{32}(?:/(?:core|review))?", str(target)), "test_temp_path")
+    require(target.is_absolute() and re.fullmatch(r"/run/[cr][0-9a-f]{6}", str(target)), "test_temp_path")
     for current in (target, *target.parents):
-        test_directory_info(current.lstat(), current == target or current.name.startswith("sp-tests-"))
+        test_directory_info(current.lstat(), current == target)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = os.open(target, flags)
     try:
@@ -125,27 +127,45 @@ def create_test_temps(nonce):
     parent = os.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         require(os.path.samestat(before, os.fstat(parent)), "test_temp_parent_drift")
-        leaf = "sp-tests-" + nonce
-        os.mkdir(leaf, 0o700, dir_fd=parent)
+        roots = {role: Path("/run") / (prefix + nonce[:6]) for role, prefix in (("core", "c"), ("review", "r"))}
+        for root in roots.values():
+            os.mkdir(root.name, 0o700, dir_fd=parent)
     finally:
         os.close(parent)
-    root = trusted_test_temp(Path("/run") / leaf)
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        test_directory_info(os.fstat(fd), True)
-        require(os.path.samestat(root.lstat(), os.fstat(fd)), "test_temp_root_drift")
-        for role in ("core", "review"):
-            os.mkdir(role, 0o700, dir_fd=fd)
-    finally:
-        os.close(fd)
-    return {role: trusted_test_temp(root / role) for role in ("core", "review")}
+    return {role: trusted_test_temp(root) for role, root in roots.items()}
 
 
-def run_child(argv, timeout=20, limit=16384, test_temp=None):
+def private_go_socket_paths(test_temp):
+    # Pinned Go1.27 testing.go truncates c.Name to64 bytes, removes slash,
+    # appends os/tempfile.go uint32 decimal randomness (max10 digits), and
+    # makes /001 on the sole TempDir call in each frozen private subcase.
+    root = PurePosixPath(test_temp.as_posix())
+    require(re.fullmatch(r"/run/r[0-9a-f]{6}", str(root)), "test_temp_path")
+    values = {}
+    for case in PRIVATE_SUBCASES:
+        name = ("TestIndependentStartupFreshAuthority/" + case)[:64].replace("/", "")
+        values[case] = root / (name + "4294967295") / "001/run/broker.sock"
+    return values
+
+
+def emit_private_test_log(binding, result, timed_out, output_limit):
+    nonce, role = binding
+    packet = {"schema_version": 1, "nonce": nonce, "role": role, "exit_code": result["exit_code"], "timed_out": timed_out, "output_limit": output_limit, "stdout_bytes": len(result["stdout"]), "stderr_bytes": len(result["stderr"]), "stdout_sha256": sha(result["stdout"]), "stderr_sha256": sha(result["stderr"]), "stdout_base64": base64.b64encode(result["stdout"]).decode("ascii"), "stderr_base64": base64.b64encode(result["stderr"]).decode("ascii")}
+    payload = base64.b64encode(json.dumps(packet, separators=(",", ":")).encode("ascii")).decode("ascii")
+    # Entire packet is encoded so arbitrary child text cannot inject any
+    # startup or native-log marker. It is retained only in private serial.
+    print("SIFRUNO_NATIVE_LOG_BEGIN_" + nonce + "_" + role, file=sys.stderr, flush=True)
+    print(payload, file=sys.stderr, flush=True)
+    print("SIFRUNO_NATIVE_LOG_END_" + nonce + "_" + role, file=sys.stderr, flush=True)
+
+
+def run_child(argv, timeout=20, limit=16384, test_temp=None, private_test_log=None):
     """Concurrent bounded pipe readers also work in synthetic Windows tests."""
     env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
     if test_temp is not None:
         env["TMPDIR"] = str(trusted_test_temp(test_temp))
+    if private_test_log is not None:
+        require(test_temp is not None and type(private_test_log) is tuple and len(private_test_log) == 2 and re.fullmatch(r"[0-9a-f]{32}", private_test_log[0]) and private_test_log[1] in ("core", "review") and limit == 65536, "private_log_binding")
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=os.name != "nt")
     buffers = [bytearray(), bytearray()]
     lock = threading.Lock()
@@ -187,8 +207,11 @@ def run_child(argv, timeout=20, limit=16384, test_temp=None):
         for reader in readers:
             reader.join(timeout=5)
         require(not any(reader.is_alive() for reader in readers), "child_pipe_cleanup")
+    result = {"exit_code": child.returncode, "stdout": bytes(buffers[0]), "stderr": bytes(buffers[1]), "owned_child_exited": child.poll() is not None}
+    if private_test_log is not None:
+        emit_private_test_log(private_test_log, result, timed_out, exceeded.is_set())
     require(not timed_out and not exceeded.is_set(), "child_timeout" if timed_out else "child_output_limit")
-    return {"exit_code": child.returncode, "stdout": bytes(buffers[0]), "stderr": bytes(buffers[1]), "owned_child_exited": child.poll() is not None}
+    return result
 
 
 def adapt_nss(nonce, root=Path("/")):
@@ -296,8 +319,11 @@ def listeners():
     return {"count": len(rows), "sha256": sha("\n".join(sorted(rows)).encode())}
 
 
-def execute_tests(binary, names, test_temp):
-    result = run_child([str(binary), "-test.v", "-test.timeout=20s", "-test.run=^(" + "|".join(names) + ")$"], limit=65536, test_temp=test_temp)
+def execute_tests(binary, names, test_temp, nonce, role):
+    if role == "review":
+        for endpoint in private_go_socket_paths(test_temp).values():
+            admit_socket_path(endpoint)
+    result = run_child([str(binary), "-test.v", "-test.timeout=20s", "-test.run=^(" + "|".join(names) + ")$"], limit=65536, test_temp=test_temp, private_test_log=(nonce, role))
     raw = result["stdout"].decode()
     require(result["exit_code"] == 0 and result["stderr"] == b"" and "--- SKIP:" not in raw and "[no tests to run]" not in raw and raw.rstrip().endswith("PASS") and sorted(re.findall(r"^--- PASS: ([A-Za-z0-9_]+) \(", raw, re.MULTILINE)) == names, "test_family_execution")
     return {"exit_code": 0, "stdout_sha256": sha(result["stdout"]), "stdout_bytes": len(result["stdout"]), "test_names": names, "skipped": False, "owned_child_exited": True}
@@ -587,8 +613,8 @@ def observe(args):
     require(set(host_check) == {"schema_version", "scope", "platform", "supported", "read_only", "checks", "restrictions"} and host_check["scope"] == "native_linux_account_host_policy" and host_check["supported"] is True, "host_policy_unchanged")
     smoke = run_phase("broker_smoke", lambda: broker_smoke(root / paths["candidate"], args.nonce))
     test_temps = create_test_temps(args.nonce)
-    core = run_phase("core_tests", lambda: execute_tests(root / paths["core_test"], args.core_test_names.split(","), test_temps["core"]))
-    review = run_phase("review_tests", lambda: execute_tests(root / paths["review_test"], args.review_test_names.split(","), test_temps["review"]))
+    core = run_phase("core_tests", lambda: execute_tests(root / paths["core_test"], args.core_test_names.split(","), test_temps["core"], args.nonce, "core"))
+    review = run_phase("review_tests", lambda: execute_tests(root / paths["review_test"], args.review_test_names.split(","), test_temps["review"], args.nonce, "review"))
     after = policy_snapshot()
     require(after == adapted and mail_snapshot(username) == mail_before and subid_snapshot(username) == subids_before and listeners() == listen_before, "final_host_unchanged")
     unchanged = all(sha(bounded_bytes(root / leaf, 64 * 1024 * 1024)) == hashes[name] for name, leaf in paths.items())

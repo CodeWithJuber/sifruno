@@ -79,3 +79,59 @@
   .account-detail dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .account-dialog-actions { flex-wrap: wrap; }
 }
+/* Actual Accounts inventory and dialogs; shared tokens and Astryx controls. */
+.accounts-workspace { gap: 12px; }
+.accounts-workspace .account-inventory-toolbar.astryx-card { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; padding: 14px 16px; }
+.accounts-workspace .account-inventory-heading { min-width: 0; }
+.accounts-workspace .account-inventory-heading h2 { font-size: 13px; font-weight: 600; }
+.accounts-workspace .account-inventory-heading p { margin-top: 4px; font-size: 11px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.accounts-workspace .account-inventory-heading strong { color: var(--foreground); }
+.accounts-workspace .account-inventory-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.accounts-workspace .account-inventory-actions .astryx-button { flex-shrink: 0; }
+.accounts-workspace .account-layout { grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); gap: 12px; }
+.accounts-workspace .account-list .card-heading { padding: 12px; }
+.accounts-workspace .account-list .card-heading h2 { font-size: 12px; }
+.accounts-workspace .account-list .card-heading > span { font-size: 11px; color: var(--muted-foreground); }
+.accounts-workspace .account-list-items { padding: 0 6px 6px; max-height: 520px; }
+.accounts-workspace .account-list-item { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 3px 9px; padding: 10px; border-radius: 4px; }
+.accounts-workspace .account-list-item strong { font-weight: 500; line-height: 1.5; }
+.accounts-workspace .account-list-item small { line-height: 1.5; margin-top: 1px; }
+.accounts-workspace .account-list-item > .account-state { grid-column: 2; justify-self: start; font-size: 9px; margin-top: 2px; padding: 1px 5px; }
+.accounts-workspace .account-list-item[aria-current="true"] { box-shadow: inset 2px 0 var(--primary); }
+.accounts-workspace .account-text-action { border: 0; background: transparent; color: var(--primary); font-size: 12px; font-weight: 500; padding: 6px 0 0; }
+.accounts-workspace .account-selected-label { display: block; font-size: 10px; color: var(--muted-foreground); margin-bottom: 3px; }
+.accounts-workspace .account-detail .card-heading { align-items: flex-start; padding: 14px 16px 12px; }
+.accounts-workspace .account-detail .card-heading > div { min-width: 0; }
+.accounts-workspace .account-detail h2 { font-size: 17px; line-height: 1.4; overflow-wrap: anywhere; }
+.accounts-workspace .account-detail dl { gap: 12px; }
+.accounts-workspace .account-no-selection { align-items: flex-start; padding: 28px 20px !important; }
+.accounts-workspace .account-no-selection h2 { font-size: 15px; color: var(--foreground); margin-bottom: 8px; }
+.account-create-dialog { position: fixed; inset: 0; margin: auto; width: min(520px, calc(100vw - 28px)); max-width: 520px; max-height: calc(100dvh - 32px); overflow: auto; padding: 20px; border: 1px solid var(--border); border-radius: 6px; color: var(--foreground); background: var(--card); box-shadow: 0 20px 60px rgb(0 0 0 / 24%); }
+.account-create-dialog::backdrop { background: rgb(8 14 22 / 58%); }
+.account-create-dialog h2 { margin-bottom: 10px; font-size: 18px; line-height: 1.35; }
+.account-create-dialog > p { color: var(--muted-foreground); font-size: 12px; line-height: 1.6; margin-bottom: 16px; overflow-wrap: anywhere; }
+.account-create-dialog form { padding: 0; }
+.account-create-dialog .account-message { margin-bottom: 12px; }
+.account-create-dialog .account-dialog-actions { flex-wrap: wrap; }
+.account-create-dialog label { font-weight: 500; }
+@media (max-width: 1100px) {
+  .accounts-workspace .account-inventory-toolbar.astryx-card { align-items: flex-start; flex-wrap: wrap; }
+}
+@media (max-width: 980px) {
+  .accounts-workspace .account-layout { grid-template-columns: minmax(0, 1fr); }
+  .accounts-workspace .account-list-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 240px; }
+  .accounts-workspace .account-list-items > .account-empty { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .accounts-workspace .account-inventory-toolbar.astryx-card { padding: 12px; }
+  .accounts-workspace .account-inventory-actions { width: 100%; gap: 6px; }
+  .accounts-workspace .account-inventory-actions > .astryx-button { flex-grow: 1; }
+  .accounts-workspace .account-list-items { display: block; }
+  .accounts-workspace .account-list-item { grid-template-columns: 16px minmax(0, 1fr) auto; gap: 3px 8px; }
+  .accounts-workspace .account-list-item > .account-state { grid-column: 3; grid-row: 1; max-width: 92px; white-space: normal; }
+  .accounts-workspace .account-detail .card-heading { padding: 12px; }
+  .accounts-workspace .account-detail dl { padding: 0 12px 12px; }
+  .accounts-workspace .account-actions { padding: 0 12px 12px; }
+  .accounts-workspace .account-capability { flex-wrap: wrap; }
+  .accounts-workspace .account-capability > .astryx-button { margin-left: 26px; }
+}

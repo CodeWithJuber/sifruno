@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "kind": "independent_read_only_actual_startup_preflight_artifact_audit",
+  "passed": true,
+  "native_observation": true,
+  "execution_performed_by_reviewer": false,
+  "report": {
+    "path": "artifacts/startup-preflight/startup-preflight-20261006T110816812Z-8109a2b1/report.json",
+    "bytes": 443299,
+    "sha256": "31cd68a4fa71f2ce7b5de44c4da3261bcfaf2bf081450eba3fe6898a61eb5aa5"
+  },
+  "run_id": "startup-preflight-20261006T110816812Z-8109a2b1",
+  "source_catalog_entries": 1955,
+  "source_catalog_sha256": "ee62fd13a806a25417b7a9d7d15ef3d41840f3821ef3707ecdf8aa2ca3ec29c3",
+  "current_file_joins": 1963,
+  "root_source_manifest": {
+    "path": ".cache/startup-preflight/go-source-inputs.json",
+    "bytes": 44548,
+    "sha256": "617704f3c14a2828bf315de6bcef7bd243e171ceec9d0f5e8eb8d52dc57fad13"
+  },
+  "root_source_files": 258,
+  "prebuild_tool_manifest": {
+    "path": ".cache/startup-preflight/prebuild-tools.json",
+    "bytes": 2671,
+    "sha256": "918647cda53186efed5ee91543241a092da0a1fc3ad46ae2859b8cd94816826a"
+  },
+  "prebuild_tool_files": 15,
+  "root_compiled_only_authority": {
+    "path": ".cache/startup-preflight/root-build-authority.json",
+    "bytes": 5277,
+    "sha256": "a442bd7589347a44329fdbc5076d8f0ff9828ea1911fe3917b154561b3220224"
+  },
+  "original_independent_compiled_only_authority": {
+    "path": ".cache/startup-preflight/independent-authority.json",
+    "bytes": 18425,
+    "sha256": "79d3c7799a801ddf9aa73df7e8b6694d8f18322af136216b8dc4b8e3b9d708b7"
+  },
+  "baseline_manifest": {
+    "namespace": "baseline",
+    "path": ".cache/startup-preflight-build/baseline-1791280757335-fa9ed56b/manifest.json",
+    "bytes": 281440,
+    "sha256": "a1c07f834809c4b90ddeac5d86d2bed9abc9be393c2426890eceb24a2b9fef74"
+  },
+  "baseline_catalog_entries": 1459,
+  "canonical_harness_source_pins": [
+    {
+      "path": "scripts/verify-startup-preflight.mjs",
+      "bytes": 52685,
+      "sha256": "d3d1f93291975db5b4bd22dd67ef3d1c8c113521ac141abfc050392b0d743f3a",
+      "canonical_git_sha256": "da60568581dca22e12de39d3bfea1e6fe43678404883ae6ee8fe907cfc52fcb6",
+      "git_blob": "f780e70c03a4563fea2db0b53101c01f78fa7bba",
+      "retained_raw_snapshot": {
+        "path": ".cache/startup-preflight-temp-review/eb4a040/source-0",
+        "bytes": 52685,
+        "sha256": "d3d1f93291975db5b4bd22dd67ef3d1c8c113521ac141abfc050392b0d743f3a"
+      }
+    },
+    {
+      "path": "lab/startup-preflight-guest/fixture.py",
+      "bytes": 39012,
+      "sha256": "e8d71b2088e643bd20aabb2a1d6aaf2ce091e1613ec2b9e7b68dd530b76a9f3d",
+      "canonical_git_sha256": "e8d71b2088e643bd20aabb2a1d6aaf2ce091e1613ec2b9e7b68dd530b76a9f3d",
+      "git_blob": "5167279496812e7627195807adb31278f480e3d5",
+      "retained_raw_snapshot": {
+        "path": ".cache/startup-preflight-temp-review/eb4a040/source-1",
+        "bytes": 39012,
+        "sha256": "e8d71b2088e643bd20aabb2a1d6aaf2ce091e1613ec2b9e7b68dd530b76a9f3d"
+      }
+    },
+    {
+      "path": "lab/startup-preflight-guest/fixture_test.py",
+      "bytes": 22147,
+      "sha256": "56eee48d24da1ce2f2a68954a783862f75990a14ea71f794b87e001c2022e9cb",
+      "canonical_git_sha256": "56eee48d24da1ce2f2a68954a783862f75990a14ea71f794b87e001c2022e9cb",
+      "git_blob": "a25e1241a6fc1596226b25674b695992d75f97dc",
+      "retained_raw_snapshot": {
+        "path": ".cache/startup-preflight-temp-review/eb4a040/source-2",
+        "bytes": 22147,
+        "sha256": "56eee48d24da1ce2f2a68954a783862f75990a14ea71f794b87e001c2022e9cb"
+      }
+    },
+    {
+      "path": "lab/startup-preflight-guest/contract.test.mjs",
+      "bytes": 15687,
+      "sha256": "a6d98c1035d2f019728c1086439baaae80a144144138c72d80ad1911e3c3e5d4",
+      "canonical_git_sha256": "51951d3037523c1a899f0ebbc78bd1951995fae29bfa3b49e4e8e1aaa42b0674",
+      "git_blob": "893b7fc418fe8104ff546e8df6614bdc5b6ff345",
+      "retained_raw_snapshot": {
+        "path": ".cache/startup-preflight-temp-review/eb4a040/source-3",
+        "bytes": 15687,
+        "sha256": "a6d98c1035d2f019728c1086439baaae80a144144138c72d80ad1911e3c3e5d4"
+      }
+    },
+    {
+      "path": "lab/startup-preflight-guest/README.md",
+      "bytes": 8990,
+      "sha256": "a655b1abc77cf5b86b4b3241531a0379a428405955264d99fce36b3309947c47",
+      "canonical_git_sha256": "a655b1abc77cf5b86b4b3241531a0379a428405955264d99fce36b3309947c47",
+      "git_blob": "c422cdbbcc5f99d5c652d2bc8fe66b4dfecf61af",
+      "retained_raw_snapshot": {
+        "path": ".cache/startup-preflight-temp-review/eb4a040/source-4",
+        "bytes": 8990,
+        "sha256": "a655b1abc77cf5b86b4b3241531a0379a428405955264d99fce36b3309947c47"
+      }
+    }
+  ],
+  "source_review_receipt": {
+    "origin": "reviewer_worktree",
+    "path": "lab/startup-preflight-isolation-review/temp-path-review.json",
+    "bytes": 8806,
+    "sha256": "57e941d19357c5991ee1552a32c676076ade7b64db331226cc7e15d1b3f47b1d"
+  },
+  "executed_host_harness_sha256": "d3d1f93291975db5b4bd22dd67ef3d1c8c113521ac141abfc050392b0d743f3a",
+  "serial_private_sha256": "5959fd6a8be0ee8a4d1b9617e7dada21de4e3d8b597490e53365e35a817f1a41",
+  "serial_bytes": 124766,
+  "exact_nonce_framed_guest_join": true,
+  "binary_sha256": {
+    "baseline": "de6b21a60fb6a6e823f9721d9bf1ceac5328b25ac9da511ee979895d4f6276a2",
+    "candidate": "9ac100a5df9f1b358686f2323576664aaa2405c57bb51549ba28a67b0408fbcc",
+    "fixture": "e8d71b2088e643bd20aabb2a1d6aaf2ce091e1613ec2b9e7b68dd530b76a9f3d",
+    "core_test": "5464f165db6443f21064e9fd1ae44e9910538df5537bb87f86e20a003c65a644",
+    "review_test": "ab06ed2bfa699fc831e665b2de23d0bdc51cce5e6ccce79ca548a25a9e5d8781"
+  },
+  "image_sha256": "6bdab6376d46d42e4203ace3733efafc7c5d37c7cb443a6cc74750097002d74b",
+  "iso_sha256": "05f2941a6127c50d27f4de5383345f1bdebd4c92714f6091b8f2b9a920259ac2",
+  "independent_ISO_audit": {
+    "origin": "reviewer_worktree",
+    "path": ".cache/startup-preflight-native-audit/iso-audit.json",
+    "bytes": 2775,
+    "sha256": "682030b9b3eecf46dc59e0e5726d500e0ac2a62bae9e10e9084f80663da6f559"
+  },
+  "actual_ISO_entries": 8,
+  "negative_cases": [
+    {
+      "case": "missing_uid",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "root_uid",
+      "exit_code": 2,
+      "unchanged": true
+    },
+    {
+      "case": "state_file",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "homes_file",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "homes_symlink",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "homes_dangling_symlink",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "ancestor_untrusted_nontraversable",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "setgid_parent",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "socket_file",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "socket_bound",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "socket_dangling_symlink",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "nonempty_state",
+      "exit_code": 1,
+      "unchanged": true
+    },
+    {
+      "case": "unknown_private_argument",
+      "exit_code": 2,
+      "unchanged": true
+    }
+  ],
+  "stock_NSS_profile": [
+    {
+      "id": "passwd",
+      "row_count": 1,
+      "providers": [
+        "sss",
+        "files",
+        "systemd"
+      ],
+      "actions_present": false,
+      "unknown_provider": false
+    },
+    {
+      "id": "group",
+      "row_count": 1,
+      "providers": [
+        "sss",
+        "files",
+        "systemd"
+      ],
+      "actions_present": false,
+      "unknown_provider": false
+    },
+    {
+      "id": "shadow",
+      "row_count": 1,
+      "providers": [
+        "files"
+      ],
+      "actions_present": false,
+      "unknown_provider": false
+    }
+  ],
+  "NSS_only_disposable_adaptation": true,
+  "two_empty_inventory_shutdown_reopen_smokes": true,
+  "metadata_unchanged": true,
+  "account_mutation_requests": 0,
+  "accepted_account_mutations": 0,
+  "core_native_families": {
+    "exit_code": 0,
+    "stdout_sha256": "44d18ce2da299a3555bcfe29c6961d4aa053e0fb4bdbee78052d714b865c94e0",
+    "stdout_bytes": 2027,
+    "test_names": [
+      "TestStartupNativeFreshStateObservation",
+      "TestStartupNativeGuardComposition"
+    ],
+    "skipped": false,
+    "owned_child_exited": true
+  },
+  "independent_native_families": {
+    "exit_code": 0,
+    "stdout_sha256": "07c5a9378da707e5309b6924ef6e1dcc11669e1e2604049080226fc0fd5a3a47",
+    "stdout_bytes": 4603,
+    "test_names": [
+      "TestIndependentStartupCancellation",
+      "TestIndependentStartupFreshAuthority",
+      "TestIndependentStartupProtocol"
+    ],
+    "skipped": false,
+    "owned_child_exited": true
+  },
+  "owned_cleanup": {
+    "owned_qemu_exited": true,
+    "no_live_process_mutation": true,
+    "no_host_listener_created": true,
+    "disposable_overlay_retained": true
+  },
+  "bounds": {
+    "qemu_seconds": 600,
+    "qemu_output_bytes": 2097152,
+    "broker_seconds": 60,
+    "broker_output_bytes": 16384,
+    "peer_request_seconds": 10,
+    "peer_socket_seconds": 5,
+    "check_host_seconds": 20,
+    "check_host_output_bytes": 8192,
+    "startup_report_seconds": 10,
+    "startup_report_output_bytes": 8192,
+    "test_output_bytes": 65536,
+    "test_seconds": 20
+  },
+  "limits": [
+    "Read-only audit of separately executed artifacts; no reviewer native execution",
+    "Native evidence covers fresh read-only startup snapshot admission under NSS-adapted disposable image; unmodified stock NSS refused",
+    "Five named native families pass without skips; measured stdout hashes are guest data, not independently rerun logs",
+    "All catalogued source bytes and original 258 Go/15 tool provenance checked; generated test main and entire Go distribution remain uncertified",
+    "No account provisioning, persisted-state recovery, cPanel/CloudLinux/all-OS parity, reboot or atomic host-policy stability claim"
+  ],
+  "report_sha256": "31cd68a4fa71f2ce7b5de44c4da3261bcfaf2bf081450eba3fe6898a61eb5aa5",
+  "root_source_review_receipt": {
+    "origin": "root_worktree",
+    "path": "lab/startup-preflight-isolation-review/temp-path-review.json",
+    "bytes": 9028,
+    "sha256": "b754f5b39a7c28cf58f5e5336b39966c8b4cbaf04e5d4907fc25c8744477e42f"
+  },
+  "historical_source_only_receipts": [
+    {
+      "origin": "reviewer_worktree",
+      "path": "lab/startup-preflight-isolation-review/receipt.json",
+      "bytes": 7701,
+      "sha256": "9bc38605891234afd48842ac6037d2204a9421d71940d5a209edf811a9679c7d"
+    },
+    {
+      "origin": "reviewer_worktree",
+      "path": "lab/startup-preflight-isolation-review/socket-correction-review.json",
+      "bytes": 7783,
+      "sha256": "c3d514675bd90507be6d1a866290e77d55c312e904d57511a3e528ebc661ff1f"
+    },
+    {
+      "origin": "reviewer_worktree",
+      "path": "lab/startup-preflight-isolation-review/failure-audit.json",
+      "bytes": 7224,
+      "sha256": "0c818e1c6d519304689eafac7853f0674bb45dca0a169fe6172d1670c898dce4"
+    }
+  ],
+  "initial_synthetic_findings_preserved": {
+    "origin": "reviewer_worktree",
+    "path": ".cache/startup-preflight-temp-review/12a99e1/findings-review.json",
+    "bytes": 8518,
+    "sha256": "3fe4025095594f9a20e8cc954163948a3a4d63940fb4a4489ad25cbe88d90124"
+  },
+  "independently_decoded_private_tests": [
+    {
+      "role": "core",
+      "stdout_sha256": "44d18ce2da299a3555bcfe29c6961d4aa053e0fb4bdbee78052d714b865c94e0",
+      "stdout_bytes": 2027,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_bytes": 0,
+      "top_level_PASS_families": 2,
+      "fresh_authority_subcase_PASS_count": 0,
+      "no_SKIP": true,
+      "ends_PASS": true
+    },
+    {
+      "role": "review",
+      "stdout_sha256": "07c5a9378da707e5309b6924ef6e1dcc11669e1e2604049080226fc0fd5a3a47",
+      "stdout_bytes": 4603,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_bytes": 0,
+      "top_level_PASS_families": 3,
+      "fresh_authority_subcase_PASS_count": 10,
+      "no_SKIP": true,
+      "ends_PASS": true
+    }
+  ],
+  "private_test_stdout_read_but_not_published": true,
+  "retained_failed_runs": [
+    {
+      "report": {
+        "path": "artifacts/startup-preflight/startup-preflight-20261006T102031061Z-8c22ae7e/report.json",
+        "bytes": 390386,
+        "sha256": "5c4753972638c922a3b6e6e1e06335db932acc40dc63d81c7201eca0252590db"
+      },
+      "serial": {
+        "path": ".cache/alma9-qualification/startup-preflight-20261006T102031061Z-8c22ae7e/serial-private.log",
+        "bytes": 83152,
+        "sha256": "347395361c1dcebfa50722deb9b883d89eb9758c5ccbe0ea4283377542800442"
+      },
+      "qualification": false,
+      "failure": "startup_order_reason",
+      "phase": null
+    },
+    {
+      "report": {
+        "path": "artifacts/startup-preflight/startup-preflight-20261006T103748239Z-95606c04/report.json",
+        "bytes": 390752,
+        "sha256": "5434c75196dbad156813675749cbbe8e65fb2cad626025f806770896992a8e43"
+      },
+      "serial": {
+        "path": ".cache/alma9-qualification/startup-preflight-20261006T103748239Z-95606c04/serial-private.log",
+        "bytes": 80598,
+        "sha256": "e3c9e71740c0fd709debbb106ce9469e2d7ff701ef8fc55e5b42788bde7fe91b"
+      },
+      "qualification": false,
+      "failure": "test_family_execution",
+      "phase": "review_tests"
+    }
+  ],
+  "audit_helpers": [
+    {
+      "origin": "reviewer_worktree",
+      "path": "lab/startup-preflight-isolation-review/audit-native.mjs",
+      "bytes": 23309,
+      "sha256": "dcdc768d5cfa6b680a8b4d08718bf4580317b6f29bd4d97d490f80a7cfc196b4"
+    },
+    {
+      "origin": "reviewer_worktree",
+      "path": "lab/startup-preflight-isolation-review/audit-iso.py",
+      "bytes": 5288,
+      "sha256": "c1c323d02b4ac59329b46f1ca1700eb7de4b9319465284fdcef2e995b9c46deb"
+    }
+  ]
+}

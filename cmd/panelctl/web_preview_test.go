@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"sifruno/internal/api"
@@ -15,11 +16,11 @@ import (
 	"sifruno/internal/operator"
 )
 
-type cliWebPreview struct{ calls int }
+type cliWebPreview struct{ calls atomic.Int32 }
 
 func (p *cliWebPreview) Preview(context.Context) (hostaccounts.WebPreview, error) {
-	p.calls++
-	return hostaccounts.WebPreview{Profile: "restricted-chroot-v1", BundleSHA256: strings.Repeat("a", 64), Files: []hostaccounts.WebPreviewFile{}}, nil
+	p.calls.Add(1)
+	return hostaccounts.WebPreview{Profile: "restricted-chroot-v1", ProfileSHA256: strings.Repeat("b", 64), SnapshotSHA256: strings.Repeat("c", 64), BundleSHA256: strings.Repeat("a", 64), Files: []hostaccounts.WebPreviewFile{{Path: "apache/front.conf", Mode: 0600, Bytes: 99, SHA256: strings.Repeat("d", 64)}}}, nil
 }
 
 func TestAccountsWebPreviewCLI(t *testing.T) {
@@ -48,10 +49,10 @@ func TestAccountsWebPreviewCLI(t *testing.T) {
 			err = run([]string{"--state", state, "--panel-url", base, "accounts", "web-preview"}, &out, &errs)
 			if enabled {
 				var result hostaccounts.WebPreview
-				if err != nil || json.Unmarshal(out.Bytes(), &result) != nil || result.BundleSHA256 != strings.Repeat("a", 64) || spy.calls != 1 {
+				if err != nil || json.Unmarshal(out.Bytes(), &result) != nil || result.BundleSHA256 != strings.Repeat("a", 64) || spy.calls.Load() != 1 {
 					t.Fatal("CLI did not return authenticated preview")
 				}
-			} else if err == nil || out.Len() != 0 || spy.calls != 0 {
+			} else if err == nil || out.Len() != 0 || spy.calls.Load() != 0 {
 				t.Fatal("disabled preview accepted")
 			}
 			key, err := readOperatorKey(state)

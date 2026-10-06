@@ -23,7 +23,7 @@ func (s *webPreviewSpy) Preview(ctx context.Context) (hostaccounts.WebPreview, e
 }
 
 func webPreviewFixtureValue() hostaccounts.WebPreview {
-	return hostaccounts.WebPreview{Profile: "restricted-chroot-v1", ProfileSHA256: strings.Repeat("1", 64), SnapshotSHA256: strings.Repeat("2", 64), BundleSHA256: strings.Repeat("3", 64), Files: []hostaccounts.WebPreviewFile{{Path: "front/httpd.conf", Mode: 0600, Bytes: 99, SHA256: strings.Repeat("4", 64)}}}
+	return hostaccounts.WebPreview{Profile: "restricted-chroot-v1", ProfileSHA256: strings.Repeat("1", 64), SnapshotSHA256: strings.Repeat("2", 64), BundleSHA256: strings.Repeat("3", 64), Files: []hostaccounts.WebPreviewFile{{Path: "apache/front.conf", Mode: 0600, Bytes: 99, SHA256: strings.Repeat("4", 64)}}}
 }
 
 func TestWebPreviewAdmissionAndMetadata(t *testing.T) {

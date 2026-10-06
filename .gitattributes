@@ -1,2 +1,6 @@
 # Preserve approved brand asset hash bytes on every checkout.
 assets/brand/** -text
+
+# Preserve exact pinned upstream notice bytes on every checkout.
+web/licenses/astryx/LICENSE -text
+web/licenses/stylex/LICENSE -text

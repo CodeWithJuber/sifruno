@@ -53,6 +53,8 @@ jobs:
           npm run panel:build
       - name: Private session, schedule and restore preview UI contract checks
         run: node --test web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs web/src/lib/restorePreview.test.mjs
+      - name: Runtime package policy and controller layout report checks
+        run: node --test scripts/runtime-package.test.mjs lab/controller-layout-guest/report.test.mjs
       - name: Approved brand integrity
         run: npm run brand:check
       - name: Python fixture checks

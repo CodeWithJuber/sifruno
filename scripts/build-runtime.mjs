@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { chmod, copyFile, lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {commandsForTarget, commandMetadata, executableFixup, layoutQuickstart} from './runtime-package.mjs';
 import { configure, Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter } from '@zip.js/zip.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -88,7 +89,7 @@ async function fingerprint() {
       listing.push({ path: normalized(relative(root, path)), sha256: sha256(await readFile(path)) });
     }
   }
-  for (const name of ['LICENSE', 'LICENSING.md', 'go.mod', 'go.sum', 'package.json', 'package-lock.json', 'web/package.json', 'web/package-lock.json', 'web/vite.config.ts', 'web/NOTICE.md', 'scripts/build-runtime.mjs', 'scripts/build-runtime.ps1']) listing.push({ path: name, sha256: sha256(await readFile(join(root, name))) });
+  for (const name of ['.gitattributes', 'LICENSE', 'LICENSING.md', 'go.mod', 'go.sum', 'package.json', 'package-lock.json', 'web/package.json', 'web/package-lock.json', 'web/vite.config.ts', 'web/NOTICE.md', 'scripts/build-runtime.mjs', 'scripts/build-runtime.ps1', 'scripts/runtime-package.mjs']) listing.push({ path: name, sha256: sha256(await readFile(join(root, name))) });
   listing.sort((a, b) => a.path.localeCompare(b.path, 'en'));
   return { sha256: sha256(JSON.stringify(listing)), files: listing };
 }
@@ -120,7 +121,7 @@ async function notices(destination, target) {
     index.push({ ...metadata, files: copied });
   }
   await licenses(join(root, '.tools/go'), 'go', { name: 'Go', source: 'https://go.dev' });
-  const mods = run(go, ['list', '-mod=readonly', '-buildvcs=false', '-deps', '-f', '{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}', './cmd/sifruno', './cmd/panelctl', './cmd/hostbroker'], environment(target));
+  const mods = run(go, ['list', '-mod=readonly', '-buildvcs=false', '-deps', '-f', '{{if .Module}}{{.Module.Path}}|{{.Module.Version}}|{{.Module.Dir}}{{end}}', ...commandsForTarget(target).map(command => `./cmd/${command}`)], environment(target));
   for (const line of [...new Set(mods.split(/\r?\n/).filter(Boolean))].sort()) {
     const [name, version, directory] = line.split('|');
     if (!version) continue;
@@ -184,7 +185,7 @@ native targets. Original cPanel/vendor hosting execution requires a qualified
 Linux host or guest; ARM hosting translation is unverified.
 
 Extract into a directory you own. Open a terminal in this extracted root.
-${windows ? 'Use PowerShell. If your system blocks unsigned downloads, review its policy and these hashes before making a local execution decision.' : 'If your archive extractor did not preserve executable modes, run chmod +x bin/sifruno bin/panelctl bin/panelpreview bin/hostbroker.'}
+${windows ? 'Use PowerShell. If your system blocks unsigned downloads, review its policy and these hashes before making a local execution decision.' : executableFixup(target)}
 
 \`\`\`${windows ? 'powershell' : 'sh'}
 ${cli} status
@@ -203,6 +204,7 @@ It requires declared dedicated directories and files-only passwd/group/shadow NS
 Root-owned /etc/default/useradd must explicitly set CREATE_MAIL_SPOOL=no.
 No host policy is rewritten automatically. Account expiry is not full hosting
 suspension. No production installer, remote connector or cPanel parity is supplied.
+${layoutQuickstart(target)}
 Overview shows native CPU, memory, volumes, uptime and aggregate network data.
 Services are read-only Windows SCM / Linux systemd observations; macOS service
 inventory is explicitly unavailable. Unknown measurements stay unavailable.
@@ -279,6 +281,15 @@ async function main() {
     await writeFile(join(packageDir, 'manifest.json'), JSON.stringify({ synthetic: true, runtime_tested: false }));
     const result = await archive(packageDir, join(directory, 'synthetic-probe.zip'), { synthetic: true, runtime_tested: false });
     assert.equal(result.archive_entries_verified, 2);
+    for (const target of allTargets) {
+      const metadata = commandMetadata(target);
+      assert.equal(metadata.included_commands.includes('hostsetup'), target.startsWith('linux-'));
+      const guide = quickstart(target);
+      assert.equal(guide.includes('./bin/hostsetup --plan '), target.startsWith('linux-'));
+      assert.equal(guide.includes('./bin/hostsetup --apply '), target.startsWith('linux-'));
+      assert.equal(guide.includes('bin/hostsetup'), target.startsWith('linux-'));
+      assert(guide.includes('Cross-compilation and\npackage-integrity checks are not runtime tests.'));
+    }
     assert.equal(environment('linux-arm64').GOARM64, 'v8.0');
     assert.equal(environment('windows-amd64').GOAMD64, 'v1');
     assert.equal(environment('darwin-arm64').CGO_ENABLED, '0');
@@ -297,7 +308,7 @@ async function main() {
   assert(await lstat(join(root, 'web/dist/index.html')), 'Build web/dist first');
   const plan = { dry_run: options.dryRun, version, go: goversion, cgo_enabled: false,
     source_fingerprint: before.sha256, minimum_requirements_source: minimumSource,
-    targets: options.targets.map(id => ({ id, cpu_baseline: id.endsWith('amd64') ? 'v1' : 'v8.0', minimum_runtime: minimum[id.split('-')[0]], runtime_tested: false })) };
+    targets: options.targets.map(id => ({ id, cpu_baseline: id.endsWith('amd64') ? 'v1' : 'v8.0', minimum_runtime: minimum[id.split('-')[0]], ...commandMetadata(id), runtime_tested: false })) };
   if (options.dryRun) { console.log(JSON.stringify(plan, null, 2)); return; }
   const runID = new Date().toISOString().replaceAll(/[-:.TZ]/g, '') + '-' + randomBytes(4).toString('hex');
   const output = join(root, 'deliverables', 'runtime-builds', runID);
@@ -309,7 +320,7 @@ async function main() {
   const matrix = allTargets.map(id => ({ id, compiled: options.targets.includes(id), runtime_tested: false,
     verification: options.targets.includes(id) ? 'cross-compiled; embedded Go build settings and archive contents checked' : 'not built in this run',
     native_host: id === `${hostOS}-${hostArch}`, minimum_runtime: minimum[id.split('-')[0]],
-    cpu_baseline: id.endsWith('amd64') ? 'v1' : 'v8.0', compatibility_certified: false }));
+    cpu_baseline: id.endsWith('amd64') ? 'v1' : 'v8.0', ...commandMetadata(id), compatibility_certified: false }));
   const outputs = [];
   // Build the whole selected matrix before any archive can claim it compiled.
   for (const target of options.targets) {
@@ -317,7 +328,7 @@ async function main() {
     const [os, arch] = target.split('-');
     const directory = join(staging, target);
     await mkdir(join(directory, 'bin'), { recursive: true });
-    for (const command of ['sifruno', 'panelctl', 'panelpreview', 'hostbroker']) {
+    for (const command of commandsForTarget(target)) {
       const binary = join(directory, 'bin', command + (os === 'windows' ? '.exe' : ''));
       run(go, ['build', '-mod=readonly', '-trimpath', '-buildvcs=false', '-ldflags=-s -w', '-o', binary, `./cmd/${command}`], environment(target));
       const info = run(go, ['version', '-m', binary], environment(target));
@@ -339,7 +350,7 @@ async function main() {
     await writeFile(join(directory, 'verification-matrix.json'), JSON.stringify(matrix, null, 2) + '\n');
     const manifest = { schema_version: 1, product: 'Sifruno local control plane and compatibility workbench', version, target, go: goversion,
       cgo_enabled: false, cpu_baseline: arch === 'amd64' ? 'v1' : 'v8.0', input_fingerprint: before.sha256,
-      build_verified: true, runtime_tested: false, compatibility_certified: false, files: [] };
+      build_verified: true, runtime_tested: false, compatibility_certified: false, ...commandMetadata(target), files: [] };
     for (const path of await files(directory)) { const content = await readFile(path); manifest.files.push({ path: normalized(relative(directory, path)), bytes: content.length, sha256: sha256(content) }); }
     await writeFile(join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
     const packed = await archive(directory, join(output, `sifruno-${version}-${target}.zip`), manifest);

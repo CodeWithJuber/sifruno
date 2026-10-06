@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {canonicalJSON,validateGuest,parseSerial,admitted,child,digest,CASES,CORE_NAMES} from '../../scripts/verify-broker-paths.mjs';
+import {canonicalJSON,validateGuest,validateReviewAuthority,parseSerial,admitted,child,digest,CASES,CORE_NAMES} from '../../scripts/verify-broker-paths.mjs';
 const nonce='1'.repeat(32),hash='2'.repeat(64),reviewNames=['TestIndependentBrokerDirectoryIdentity','TestIndependentBrokerFreshVersusNonemptyState','TestIndependentBrokerOptionBoundary'];
 const binding={nonce,hashes:{baseline:hash,candidate:hash,fixture:hash,core_test:hash,review_test:hash},reviewNames};
 const info=(label,kind='directory',mode='0755')=>({path:label,kind,mode,uid:0,gid:0,inode:100+label.length,device:1,nlink:1,bytes:kind==='directory'?4096:123,sha256:kind==='directory'?null:hash});
@@ -29,8 +29,12 @@ const frame=value=>`opaque boot\nSIFRUNO_PATHS_REPORT_BEGIN_${nonce}\n${JSON.str
 test('full synthetic adapted join admits only explicit scope/policy/provenance',()=>{assert.equal(validateGuest(guest(),binding).passed,true);assert.equal(parseSerial(frame(guest()),binding).passed,true);});
 test('nonce and raw canonical frame reject aliases, duplicate JSON, CR/ANSI/truncation',()=>{
  const valid=frame(guest());assert.equal(parseSerial(valid.replaceAll('\n','\r\n'),binding).passed,true);assert.equal(parseSerial('\x1b[32mboot\x1b[0m\n'+valid,binding).passed,true);
- for(const value of [valid+`SIFRUNO_PATHS_FIXTURE_EXIT_${nonce}_0\n`,valid.replace('REPORT_BEGIN_','REPORT_BEG\rIN_'),valid.replace('"passed":true','"pas\rsed":true'),valid.replace(JSON.stringify(guest()),'\x1b[32m'+JSON.stringify(guest())+'\x1b[0m'),valid.replace('"passed":true','"passed":true,"passed":true'),valid.slice(0,-100),valid.replace(nonce,'f'.repeat(32))])assert.throws(()=>parseSerial(value,binding));
+ for(const value of [valid+`SIFRUNO_PATHS_FIXTURE_EXIT_${nonce}_0\n`,valid.replace('REPORT_BEGIN_','REPORT_BEG\rIN_'),valid.replace('"passed":true','"pas\rsed":true'),valid.replace(JSON.stringify(guest()),'\x1b[32m'+JSON.stringify(guest())+'\x1b[0m'),valid.replace(JSON.stringify(guest()),' \t'+JSON.stringify(guest())+'\t '),valid.replace('"passed":true','"passed":true,"passed":true'),valid.slice(0,-100),valid.replace(nonce,'f'.repeat(32))])assert.throws(()=>parseSerial(value,binding));
  for(const value of ['{"nested":{"x":1,"x":1}}','{"x":NaN}','{"x":'])assert.throws(()=>canonicalJSON(value));
+});
+test('original independent authority path is preserved and binds copied binary/names',()=>{
+ const original={passed:true,linux_challenges:{compiled:true,executed:false,test_names:[...reviewNames],binary:{path:'artifacts/broker-paths-review/build-setgid/independent.test',bytes:1234,sha256:hash}}};assert.equal(validateReviewAuthority(original,{bytes:1234,sha256:hash},reviewNames),original);
+ for(const mutate of [x=>x.linux_challenges.binary.path='.cache/broker-paths/independent.test',x=>x.linux_challenges.binary.sha256='3'.repeat(64),x=>x.linux_challenges.binary.bytes++,x=>x.linux_challenges.binary.extra=true,x=>x.linux_challenges.executed=true,x=>x.linux_challenges.compiled=false,x=>x.linux_challenges.test_names.pop()]){const value=structuredClone(original);mutate(value);assert.throws(()=>validateReviewAuthority(value,{bytes:1234,sha256:hash},reviewNames));}
 });
 test('conflict evidence requires exact earlier additions and unchanged existing identity',()=>{
  for(const mutate of [x=>x.conflicts[1].after[0].inode++,x=>x.conflicts[0].after[1].sha256='3'.repeat(64),x=>x.conflicts[0].added_paths=[],x=>x.conflicts[0].after.at(-1).mode='4700',x=>x.conflicts[11].after.push(info('state','directory','0700')),x=>x.conflicts[0].before[1].path='/root/private',x=>x.conflicts[0].before[1].inode=Number.MAX_SAFE_INTEGER+1,x=>x.conflicts.reverse(),x=>x.conflicts[3].owned_child_exited=false]){const row=guest();mutate(row);assert.throws(()=>validateGuest(row,binding));}

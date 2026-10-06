@@ -35,7 +35,7 @@ export function canonicalJSON(raw) {
  const value = JSON.parse(raw);
  // The guest emits compact ASCII JSON; exact roundtrip rejects nested duplicates,
  // alternate escapes, trailing bytes, nonfinite numbers and ambiguous encodings.
- assert.equal(JSON.stringify(value), raw.trim());
+ assert.equal(JSON.stringify(value), raw);
  return value;
 }
 export function admitted(root, file, maximum=64*1024*1024) {
@@ -149,6 +149,9 @@ export function validateCheck(value,supported=false) {
 }
 export const CASES=['homes_file','homes_symlink','homes_wrong_mode','unsafe_socket_parent','occupied_socket','fresh_shared_homes'];
 export const CORE_NAMES=[...['FreshHomesReadOnly','InvalidAndCancelledReadOnly','LateFailuresReadOnly','MissingUnderSetgidParentReadOnly','OccupiedSocketReadOnly','PositiveReadOnly','ReopenAndInterruptedBootstrap'].map(suffix=>'TestBrokerPathAdmission'+suffix),'TestDeclaredDirRejectsInheritedSetgidMode'];
+export function validateReviewAuthority(value,binary,reviewNames) {
+ assert.equal(value.passed,true);assert.equal(value.linux_challenges.compiled,true);assert.equal(value.linux_challenges.executed,false);assert.deepEqual(value.linux_challenges.test_names,reviewNames);keys(value.linux_challenges.binary,['path','bytes','sha256']);assert.deepEqual(value.linux_challenges.binary,{path:'artifacts/broker-paths-review/build-setgid/independent.test',bytes:binary.bytes,sha256:binary.sha256});return value;
+}
 const BEFORE_PATHS=[['.','homes'],['.','homes','target'],['.','homes'],['.','socket-parent'],['.','socket-parent','socket-parent/broker.sock'],['.','homes','homes/shared-home','homes/shared-home/sentinel']];
 export function validateTree(tree) {
  assert(Array.isArray(tree)&&tree.length>0&&tree.length<=32);const names=tree.map(x=>x.path);assert.deepEqual(names,[...new Set(names)].sort());
@@ -199,7 +202,7 @@ async function runGuest(options,tools,harness) {
  const candidatePin=pin(CANDIDATE,relative(CANDIDATE,candidateFile),'candidate');assert.equal(candidatePin.sha256,options['candidate-sha']);assert.equal(fs.readFileSync(candidateFile).subarray(0,4).toString('hex'),'7f454c46');
  const coreFile=admitted(CANDIDATE,options['core-test-binary']);assert(/^\.cache\/broker-paths\/[A-Za-z0-9_-]+\.test$/.test(relative(CANDIDATE,coreFile)));const corePin=pin(CANDIDATE,relative(CANDIDATE,coreFile),'candidate');assert.equal(corePin.sha256,options['core-test-sha']);
  const reviewPin=pin(CANDIDATE,'.cache/broker-paths/independent.test','candidate');assert.equal(reviewPin.sha256,options['review-test-sha']);const reviewManifest=pin(CANDIDATE,'.cache/broker-paths/independent-authority.json','candidate');assert.equal(reviewManifest.sha256,options['review-manifest-sha']);for(const file of [coreFile,path.join(CANDIDATE,reviewPin.path)])assert.equal(fs.readFileSync(file).subarray(0,4).toString('hex'),'7f454c46');
- const reviewAuthority=JSON.parse(fs.readFileSync(path.join(CANDIDATE,reviewManifest.path),'utf8'));assert.equal(reviewAuthority.passed,true);assert.equal(reviewAuthority.linux_challenges.compiled,true);assert.equal(reviewAuthority.linux_challenges.executed,false);assert.deepEqual(reviewAuthority.linux_challenges.test_names,reviewNames);keys(reviewAuthority.linux_challenges.binary,['path','bytes','sha256']);assert.deepEqual(reviewAuthority.linux_challenges.binary,{path:'artifacts/broker-paths-review/build-setgid/independent.test',bytes:reviewPin.bytes,sha256:reviewPin.sha256});
+ validateReviewAuthority(JSON.parse(fs.readFileSync(path.join(CANDIDATE,reviewManifest.path),'utf8')),reviewPin,reviewNames);
  const manifestFile=admitted(OWN,options['baseline-manifest']);assert(relative(OWN,manifestFile).startsWith('.cache/broker-paths-build/'));const manifest=JSON.parse(fs.readFileSync(manifestFile,'utf8'));
  keys(manifest,['schema_version','scope','source_base','source_catalog','source_catalog_sha256','tools_catalog_sha256','binary','commands','go_environment','exits','inputs_unchanged']);assert(manifest.schema_version===1&&manifest.scope==='offline_unchanged_baseline_linux_build'&&manifest.source_base===BASE&&manifest.inputs_unchanged===true);assert.equal(digest(JSON.stringify(manifest.source_catalog)),manifest.source_catalog_sha256);assert.equal(digest(JSON.stringify(tools)),manifest.tools_catalog_sha256);assert(stable(manifest.source_catalog)&&stable([manifest.binary]));
  const baseline=admitted(OWN,path.join(OWN,manifest.binary.path));assert.equal(manifest.binary.namespace,'baseline');

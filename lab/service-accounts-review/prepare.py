@@ -24,7 +24,8 @@ def write(path,raw):
  directory(path.parent)
  if path.exists() or path.is_symlink():assert regular(path)==raw
  else:path.write_bytes(raw)
-assert git(ROOT,'rev-parse','HEAD').decode().strip()==BASE
+assert subprocess.run(['git','merge-base','--is-ancestor',BASE,'HEAD'],cwd=ROOT,check=False).returncode==0
+assert all(label.startswith('lab/service-accounts-review/') for label in git(ROOT,'diff','--name-only',BASE,'HEAD').decode().splitlines())
 assert sorted(git(ROOT,'diff','--name-only',BASE,CORE).decode().splitlines())==sorted(FILES)
 assert git(CANDIDATE,'rev-parse','HEAD').decode().strip()==CORE
 assert not git(CANDIDATE,'status','--porcelain')

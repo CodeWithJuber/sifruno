@@ -53,3 +53,10 @@ Recovery is source revert before activation, preserving ambiguous native
 intent rather than automatic retries, deletion or identity adoption. Retain
 original receipts/logs/ELFs unchanged; any repair needs a new supplemental
 receipt and output directory. Root alone integrates reviewed commits.
+
+The [helper supplement](helper-review.json) admits lab-only commits above the
+unchanged baseline, allowing preparation after the review commit. Its current
+helper source pin supersedes only the historical helper pin; the original
+acceptance, challenge sources and ELF remain unchanged. A shell quoting failure
+before Python execution is classified separately from the successful helper
+check; no Go/native execution was repeated for this helper correction.

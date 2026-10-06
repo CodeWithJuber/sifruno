@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sifruno/internal/hostaccounts"
+	"sifruno/internal/hostwebpreview"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,7 +21,16 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	return runWithServices(args, stdout, stderr, hostaccounts.CheckHostPolicy, hostaccounts.RunBroker)
+	return runWithPreviewServices(args, stdout, stderr, hostaccounts.CheckHostPolicy, hostaccounts.CheckBrokerAdmission, serveBroker)
+}
+
+func serveBroker(ctx context.Context, opts hostaccounts.BrokerOptions, enabled bool) error {
+	if !enabled {
+		return hostaccounts.RunBroker(ctx, opts)
+	}
+	return hostaccounts.RunBrokerWithWebPreview(ctx, opts, func(provider hostaccounts.SnapshotProvider) hostaccounts.WebPreviewService {
+		return hostwebpreview.New(hostwebpreview.BrokerProfile(opts), provider)
+	})
 }
 
 func runWithServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, serve func(context.Context, hostaccounts.BrokerOptions) error) int {
@@ -28,6 +38,10 @@ func runWithServices(args []string, stdout, stderr io.Writer, probe func(context
 }
 
 func runWithAllServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, admission func(context.Context, hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport, serve func(context.Context, hostaccounts.BrokerOptions) error) int {
+	return runWithPreviewServices(args, stdout, stderr, probe, admission, func(ctx context.Context, opts hostaccounts.BrokerOptions, _ bool) error { return serve(ctx, opts) })
+}
+
+func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, admission func(context.Context, hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport, serve func(context.Context, hostaccounts.BrokerOptions, bool) error) int {
 	if len(args) > 0 && args[0] == "--check-startup" {
 		opts, ok := startupOptions(args[1:])
 		if !ok {
@@ -73,6 +87,8 @@ func runWithAllServices(args []string, stdout, stderr io.Writer, probe func(cont
 	f := flag.NewFlagSet("hostbroker", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	opts := hostaccounts.BrokerOptions{}
+	var webPreview bool
+	f.BoolVar(&webPreview, "web-preview", false, "Opt in to named native web configuration preview; no activation")
 	f.StringVar(&opts.StateDir, "state", "", "New dedicated root-only broker state")
 	f.StringVar(&opts.SocketPath, "socket", "", "Exclusive absolute Unix socket")
 	f.StringVar(&opts.HomesDir, "homes", "", "Dedicated managed home parent")
@@ -84,7 +100,7 @@ func runWithAllServices(args []string, stdout, stderr io.Writer, probe func(cont
 	opts.ControllerUID = uint32(*uid)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if serve(ctx, opts) != nil {
+	if serve(ctx, opts, webPreview) != nil {
 		fmt.Fprintln(stderr, "Native broker unavailable or recovery required")
 		return 1
 	}

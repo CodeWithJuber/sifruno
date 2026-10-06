@@ -117,6 +117,10 @@ func declaredDir(p string, mode os.FileMode) error {
 	return nil
 }
 func RunBroker(ctx context.Context, opts BrokerOptions) error {
+	return RunBrokerWithWebPreview(ctx, opts, nil)
+}
+
+func RunBrokerWithWebPreview(ctx context.Context, opts BrokerOptions, factory WebPreviewFactory) error {
 	if ctx == nil || !validBrokerPaths(opts) {
 		return ErrInvalid
 	}
@@ -188,7 +192,11 @@ func RunBroker(ctx context.Context, opts BrokerOptions) error {
 	if socketAuthority(opts.SocketPath, opts.ControllerUID) != nil {
 		return ErrUnavailable
 	}
-	server := &http.Server{Handler: handler(s), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 45 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8 << 10}
+	var preview WebPreviewService
+	if factory != nil {
+		preview = factory(s.SnapshotProvider())
+	}
+	server := &http.Server{Handler: handlerWithWebPreview(s, preview), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 45 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8 << 10}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(admittedListener{listener, opts.ControllerUID}) }()
 	select {

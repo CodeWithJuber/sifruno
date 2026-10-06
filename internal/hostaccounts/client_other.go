@@ -9,3 +9,6 @@ import (
 
 func connectBroker(context.Context, string) (net.Conn, error) { return nil, ErrUnavailable }
 func RunBroker(context.Context, BrokerOptions) error          { return ErrUnavailable }
+func RunBrokerWithWebPreview(context.Context, BrokerOptions, WebPreviewFactory) error {
+	return ErrUnavailable
+}

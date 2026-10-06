@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("startup_fixture", Path(__file__).with_name("fixture.py"))
@@ -124,8 +126,71 @@ class StartupFixtureTests(unittest.TestCase):
         names = ["TestAlpha", "TestBeta"]
         good = b"--- PASS: TestAlpha (0.00s)\n--- PASS: TestBeta (0.00s)\nPASS\n"
         for raw in [good.replace(b"PASS: TestBeta", b"SKIP: TestBeta"), good.replace(b"TestBeta", b"Foreign"), b"testing: warning: no tests to run\nPASS\n"]:
-            with patch.object(f, "run_child", return_value={"exit_code": 0, "stdout": raw, "stderr": b""}), self.assertRaises(AssertionError): f.execute_tests(Path("owned.test"), names)
-        with patch.object(f, "run_child", return_value={"exit_code": 0, "stdout": good, "stderr": b""}): self.assertEqual(f.execute_tests(Path("owned.test"), names)["test_names"], names)
+            with patch.object(f, "run_child", return_value={"exit_code": 0, "stdout": raw, "stderr": b""}), self.assertRaises(AssertionError): f.execute_tests(Path("owned.test"), names, Path("owned-test-temp"))
+        with patch.object(f, "run_child", return_value={"exit_code": 0, "stdout": good, "stderr": b""}) as run:
+            self.assertEqual(f.execute_tests(Path("owned.test"), names, Path("owned-test-temp"))["test_names"], names)
+            self.assertEqual(run.call_args.kwargs["test_temp"], Path("owned-test-temp"))
+
+    def test_test_temp_rejects_owner_mode_link_and_inode_drift(self):
+        good = SimpleNamespace(st_mode=f.stat.S_IFDIR | 0o700, st_uid=0, st_ino=10, st_dev=1)
+        for mode, uid in [(f.stat.S_IFDIR | 0o777, 0), (f.stat.S_IFDIR | 0o755, 0), (f.stat.S_IFDIR | 0o700, 65534), (f.stat.S_IFLNK | 0o700, 0), (f.stat.S_IFREG | 0o700, 0)]:
+            with self.assertRaises(AssertionError): f.test_directory_info(SimpleNamespace(st_mode=mode, st_uid=uid), True)
+        for mode in (0o1755, 0o2755, 0o4755):
+            with self.assertRaises(AssertionError): f.test_directory_info(SimpleNamespace(st_mode=f.stat.S_IFDIR | mode, st_uid=0))
+        target = MagicMock()
+        target.__str__.return_value = "/run/sp-tests-" + "b" * 32 + "/core"
+        target.is_absolute.return_value = True
+        target.parents = []
+        target.lstat.return_value = good
+        with patch.object(f, "Path", return_value=target), patch.object(f.os, "O_DIRECTORY", 0x10000, create=True), patch.object(f.os, "O_NOFOLLOW", 0x20000, create=True), patch.object(f.os, "open", return_value=19) as opened, patch.object(f.os, "close") as closed, patch.object(f.os, "fstat", return_value=good):
+            self.assertIs(f.trusted_test_temp(target), target)
+            self.assertEqual(opened.call_args.args[1] & 0x30000, 0x30000)
+            closed.assert_called_once_with(19)
+
+        changed = SimpleNamespace(st_mode=good.st_mode, st_uid=0, st_ino=11, st_dev=1)
+        with patch.object(f, "Path", return_value=target), patch.object(f.os, "O_DIRECTORY", 0x10000, create=True), patch.object(f.os, "O_NOFOLLOW", 0x20000, create=True), patch.object(f.os, "open", return_value=19), patch.object(f.os, "close") as closed, patch.object(f.os, "fstat", return_value=changed), self.assertRaises(AssertionError):
+            f.trusted_test_temp(target)
+        closed.assert_called_once_with(19)
+        target.__str__.return_value = "/tmp"
+        with patch.object(f, "Path", return_value=target), self.assertRaises(AssertionError): f.trusted_test_temp(target)
+
+    def test_test_directory_setup_separates_core_and_review_with_exact_modes(self):
+        parent = SimpleNamespace(st_mode=f.stat.S_IFDIR | 0o755, st_uid=0, st_ino=10, st_dev=1)
+        root = SimpleNamespace(st_mode=f.stat.S_IFDIR | 0o700, st_uid=0, st_ino=11, st_dev=1)
+        def info(path): return root if path.name.startswith("sp-tests-") else parent
+        with patch.object(f.sys, "platform", "linux"), patch.object(f.os, "geteuid", return_value=0, create=True), patch.object(Path, "lstat", info), patch.object(f.os, "O_DIRECTORY", 0x10000, create=True), patch.object(f.os, "O_NOFOLLOW", 0x20000, create=True), patch.object(f.os, "open", side_effect=[19, 20]), patch.object(f.os, "fstat", side_effect=[parent, root, root]), patch.object(f.os, "close") as closed, patch.object(f.os, "mkdir") as mkdir, patch.object(f, "trusted_test_temp", side_effect=lambda path: path) as trusted:
+            result = f.create_test_temps("b" * 32)
+        self.assertEqual(mkdir.call_args_list[0].args, ("sp-tests-" + "b" * 32, 0o700))
+        self.assertEqual([(call.args, call.kwargs) for call in mkdir.call_args_list[1:]], [(("core", 0o700), {"dir_fd": 20}), (("review", 0o700), {"dir_fd": 20})])
+        self.assertEqual(set(result), {"core", "review"})
+        self.assertNotEqual(result["core"], result["review"])
+        self.assertEqual(trusted.call_count, 3)
+        self.assertEqual([call.args[0] for call in closed.call_args_list], [19, 20])
+
+    def test_exclusive_test_directory_creation_never_adopts_existing_parent(self):
+        good = SimpleNamespace(st_mode=f.stat.S_IFDIR | 0o755, st_uid=0, st_ino=10, st_dev=1)
+        with patch.object(f.sys, "platform", "linux"), patch.object(f.os, "geteuid", return_value=0, create=True), patch.object(Path, "lstat", return_value=good), patch.object(f.os, "O_DIRECTORY", 0x10000, create=True), patch.object(f.os, "O_NOFOLLOW", 0x20000, create=True), patch.object(f.os, "open", return_value=19), patch.object(f.os, "fstat", return_value=good), patch.object(f.os, "close") as closed, patch.object(f.os, "mkdir", side_effect=FileExistsError) as mkdir, patch.object(f, "trusted_test_temp") as trusted:
+            with self.assertRaises(FileExistsError): f.create_test_temps("b" * 32)
+            mkdir.assert_called_once_with("sp-tests-" + "b" * 32, 0o700, dir_fd=19)
+            trusted.assert_not_called()
+            closed.assert_called_once_with(19)
+
+    def test_only_test_child_receives_explicit_verified_tmpdir(self):
+        real_popen = subprocess.Popen
+        calls = []
+        def capture(argv, **options):
+            calls.append(dict(options["env"]))
+            return real_popen(argv, **options)
+        owned = Path("owned-test-temp")
+        with patch.object(f, "trusted_test_temp", return_value=owned) as trusted, patch.object(f.subprocess, "Popen", side_effect=capture):
+            f.run_child([sys.executable, "-I", "-B", "-c", "print('test')"], timeout=5, test_temp=owned)
+            f.run_child([sys.executable, "-I", "-B", "-c", "print('diagnostic')"], timeout=5)
+            trusted.assert_called_once_with(owned)
+        fixed = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+        self.assertEqual(calls, [dict(fixed, TMPDIR=str(owned)), fixed])
+        with patch.object(f, "trusted_test_temp", side_effect=AssertionError("test_temp_authority")), patch.object(f.subprocess, "Popen") as popen, self.assertRaises(AssertionError):
+            f.run_child(["native-test"], test_temp=owned)
+        popen.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -63,6 +63,15 @@ and `TestIndependentStartupProtocol`. Missing families, skips, stderr, wrong
 nonce framing, schema additions, false no-writes claims, swapped policy metadata
 or binary hashes, and incomplete owned-child cleanup reject the evidence.
 
+Native test children alone receive explicit `TMPDIR` below an exclusively
+created `/run/sp-tests-NONCE` parent0700, with separate core/review directories
+0700. Nofollow directory descriptors, same-inode checks and root-owned trusted
+ancestor metadata are verified before the child starts. Preexisting paths,
+links, untrusted owners, permissive modes and metadata drift are refused. This
+owned fixture setup occurs after the no-writes observations and stays separate
+from broker state and global `/tmp`; diagnostic and inventory environments
+retain only the fixed PATH/LANG/LC_ALL variables.
+
 Synthetic checks, with TEMP/TMP set to this worktree's ignored cache:
 
 ```powershell

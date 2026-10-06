@@ -89,9 +89,57 @@ def strict_json(raw):
     return json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda _: require(False, "json_number"))
 
 
-def run_child(argv, timeout=20, limit=16384):
+def test_directory_info(info, dedicated=False):
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) & 0o7022 == 0 and (not dedicated or stat.S_IMODE(info.st_mode) == 0o700), "test_temp_authority")
+
+
+def trusted_test_temp(target):
+    target = Path(target)
+    require(target.is_absolute() and re.fullmatch(r"/run/sp-tests-[0-9a-f]{32}(?:/(?:core|review))?", str(target)), "test_temp_path")
+    for current in (target, *target.parents):
+        test_directory_info(current.lstat(), current == target or current.name.startswith("sp-tests-"))
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(target, flags)
+    try:
+        observed = os.fstat(fd)
+        test_directory_info(observed, True)
+        require(os.path.samestat(observed, target.lstat()), "test_temp_drift")
+    finally:
+        os.close(fd)
+    return target
+
+
+def create_test_temps(nonce):
+    require(sys.platform == "linux" and os.geteuid() == 0 and re.fullmatch(r"[0-9a-f]{32}", nonce), "test_temp_platform")
+    # Open the admitted parent without following a leaf link; exclusive mkdir
+    # refuses any preexisting nonce path instead of adopting global temp state.
+    test_directory_info(Path("/").lstat())
+    before = Path("/run").lstat()
+    test_directory_info(before)
+    parent = os.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        require(os.path.samestat(before, os.fstat(parent)), "test_temp_parent_drift")
+        leaf = "sp-tests-" + nonce
+        os.mkdir(leaf, 0o700, dir_fd=parent)
+    finally:
+        os.close(parent)
+    root = trusted_test_temp(Path("/run") / leaf)
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        test_directory_info(os.fstat(fd), True)
+        require(os.path.samestat(root.lstat(), os.fstat(fd)), "test_temp_root_drift")
+        for role in ("core", "review"):
+            os.mkdir(role, 0o700, dir_fd=fd)
+    finally:
+        os.close(fd)
+    return {role: trusted_test_temp(root / role) for role in ("core", "review")}
+
+
+def run_child(argv, timeout=20, limit=16384, test_temp=None):
     """Concurrent bounded pipe readers also work in synthetic Windows tests."""
     env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"}
+    if test_temp is not None:
+        env["TMPDIR"] = str(trusted_test_temp(test_temp))
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=os.name != "nt")
     buffers = [bytearray(), bytearray()]
     lock = threading.Lock()
@@ -225,8 +273,8 @@ def listeners():
     return {"count": len(rows), "sha256": sha("\n".join(sorted(rows)).encode())}
 
 
-def execute_tests(binary, names):
-    result = run_child([str(binary), "-test.v", "-test.timeout=20s", "-test.run=^(" + "|".join(names) + ")$"], limit=65536)
+def execute_tests(binary, names, test_temp):
+    result = run_child([str(binary), "-test.v", "-test.timeout=20s", "-test.run=^(" + "|".join(names) + ")$"], limit=65536, test_temp=test_temp)
     raw = result["stdout"].decode()
     require(result["exit_code"] == 0 and result["stderr"] == b"" and "--- SKIP:" not in raw and "[no tests to run]" not in raw and raw.rstrip().endswith("PASS") and sorted(re.findall(r"^--- PASS: ([A-Za-z0-9_]+) \(", raw, re.MULTILINE)) == names, "test_family_execution")
     return {"exit_code": 0, "stdout_sha256": sha(result["stdout"]), "stdout_bytes": len(result["stdout"]), "test_names": names, "skipped": False, "owned_child_exited": True}
@@ -491,8 +539,9 @@ def observe(args):
     host_check = strict_json(host_result["stdout"].decode())
     require(set(host_check) == {"schema_version", "scope", "platform", "supported", "read_only", "checks", "restrictions"} and host_check["scope"] == "native_linux_account_host_policy" and host_check["supported"] is True, "host_policy_unchanged")
     smoke = broker_smoke(root / paths["candidate"], args.nonce)
-    core = execute_tests(root / paths["core_test"], args.core_test_names.split(","))
-    review = execute_tests(root / paths["review_test"], args.review_test_names.split(","))
+    test_temps = create_test_temps(args.nonce)
+    core = execute_tests(root / paths["core_test"], args.core_test_names.split(","), test_temps["core"])
+    review = execute_tests(root / paths["review_test"], args.review_test_names.split(","), test_temps["review"])
     after = policy_snapshot()
     require(after == adapted and mail_snapshot(username) == mail_before and subid_snapshot(username) == subids_before and listeners() == listen_before, "final_host_unchanged")
     unchanged = all(sha(bounded_bytes(root / leaf, 64 * 1024 * 1024)) == hashes[name] for name, leaf in paths.items())

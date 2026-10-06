@@ -156,7 +156,10 @@ func TestWebPreviewWithholdsRevokedCancelledAndFailedResults(t *testing.T) {
 }
 
 func TestWebPreviewOpenAPI(t *testing.T) {
-	w := websiteRequest(New(Options{}), "GET", "/openapi.json", nil, nil, "")
+	w := websiteRequest(New(Options{AllowedOrigins: []string{"http://127.0.0.1:8080"}}), "GET", "/openapi.json", nil, nil, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("OpenAPI status %d", w.Code)
+	}
 	var spec struct {
 		Paths map[string]map[string]struct {
 			Security    []map[string][]string

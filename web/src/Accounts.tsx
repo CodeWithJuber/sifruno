@@ -125,7 +125,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     if (!session?.authenticated) return;
     const timer = setTimeout(() => {
       setSession({ authenticated: false });
-      setError("Your local operator session expired. Sign in again; your form values are kept.");
+      setError("Your local operator session expired. Sign in again; your creation draft is kept. Any state confirmation and its reason were cleared; refresh, review and enter a new reason.");
     }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
     return () => clearTimeout(timer);
   }, [session]);
@@ -215,7 +215,11 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
       const account = await setAccountState(current, pending.state, pending.reason.trim(), session.csrf_token);
       setAccounts((items) => items.map((item) => item.id === account.id ? account : item));
       setPending(undefined); setNotice(`${account.username} is ${stateLabel(account.state)}.`); setLoadedAt(new Date());
-    } catch (failure) { fail(failure); }
+    } catch (failure) {
+      fail(failure);
+      const detail = accountError(failure).replaceAll("Your form values are kept", "Your creation draft is kept").replaceAll("your form values are kept", "your creation draft is kept");
+      setError(`${detail} The state change could not be confirmed. The previous confirmation and its reason were cleared. Refresh and reconcile the account, then begin a new confirmation with a new reason.`);
+    }
     finally { setBusy(undefined); }
   }
 

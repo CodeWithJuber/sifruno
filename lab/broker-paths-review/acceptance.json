@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "kind": "independent_broker_startup_path_source_portable_compile_acceptance",
+  "passed": true,
+  "checked_at": "2026-10-06T07:39:10.332853+00:00",
+  "baseline_commit": "b4225d8877d798cdf93b49d3584cc0d8d4cc8375",
+  "candidate_core_commit": "4af0b7190ba5b73271c57a824d8d713190587553",
+  "review_core_cherry_pick": "ea64b80d4668b6ff6efc8dc7590f46383f699567",
+  "source_review": {
+    "all_three_destinations_and_socket_before_first_write": true,
+    "native_policy_controller_operation_guards_unchanged": true,
+    "state_store_recovery_and_cli_unchanged": true,
+    "exact_directory_modes_refuse_special_bits": true,
+    "filesystem_root_socket_parent_and_overlaps_refused": true,
+    "fresh_state_requires_empty_homes": true,
+    "nonempty_state_retains_later_recovery": true,
+    "one_entry_directory_probe_and_samefile_descriptor_guard": true,
+    "cooperative_precancel_and_prewrite_checks": true,
+    "blocking_findings": []
+  },
+  "source_pins": [
+    {
+      "path": "internal/hostaccounts/broker_linux.go",
+      "bytes": 5589,
+      "sha256": "5bace319e7be915c0ba5b6c4c4d27e54e7ef5c9b03eca637dfa6b4b6690a59e0"
+    },
+    {
+      "path": "internal/hostaccounts/broker_paths_linux.go",
+      "bytes": 2290,
+      "sha256": "6440b5e0388c909fd28b8339f6d91599db5d0e576190f5af9e92631bdf203b36"
+    },
+    {
+      "path": "internal/hostaccounts/broker_paths_linux_test.go",
+      "bytes": 8617,
+      "sha256": "0e029ca7452f3e6b129eafec31f0b68d15228c8398d63433197b449920c451e6"
+    },
+    {
+      "path": "internal/hostaccounts/native_linux.go",
+      "bytes": 18649,
+      "sha256": "b0df0b2f7c237a5fb1707225c671d849431d168a52b3d3ea082a090bfd155c43"
+    },
+    {
+      "path": "internal/hostaccounts/store.go",
+      "bytes": 14563,
+      "sha256": "fd2094e5ba57bb379546040d779ed379e7ad0ef430e0687e35bfec0985dfbd56"
+    },
+    {
+      "path": "go.mod",
+      "bytes": 822,
+      "sha256": "1082d590f04ae0f44e29fd20d1d55f199be166f396ae608ae9ec6fd650d6227d"
+    },
+    {
+      "path": "go.sum",
+      "bytes": 4946,
+      "sha256": "75870928880ec30f71a1e66110caed018505a8ac53477bbf1eb8f3d1126dd611"
+    },
+    {
+      "path": "lab/broker-paths-review/private_linux_test.go.txt",
+      "bytes": 4739,
+      "sha256": "04886a36e2c6692a45553442a89bf6a66d67647d47799b26dd577382273d8b61"
+    },
+    {
+      "path": "lab/broker-paths-review/public_test.go",
+      "bytes": 521,
+      "sha256": "c06a6927fcee3ea7c944181ab75f5ace263cc59168ed48477738d361805f9409"
+    },
+    {
+      "path": "lab/broker-paths-review/prepare.py",
+      "bytes": 3940,
+      "sha256": "f0f6a2f79a9a07b1af897d660310dbba2f7b433d60b64fb2a50376577993e278"
+    }
+  ],
+  "source_audit": {
+    "path": "artifacts/broker-paths-review/build/source-audit.json",
+    "bytes": 2425,
+    "sha256": "947960e1d937fb2e77529afd41f2cb2c248396092e62ceafb6aa10d104022766"
+  },
+  "overlay": {
+    "path": "artifacts/broker-paths-review/build/overlay.json",
+    "bytes": 346,
+    "sha256": "bca0db6780e456e9144b3c78dd9060274e83c93baff78cb7c236271c1ed859ad"
+  },
+  "checks": {
+    "portable-test": {
+      "status": {
+        "command": [
+          "primary scripts/go.ps1",
+          "test",
+          "-mod=readonly",
+          "-count=1",
+          "-timeout=60s",
+          "-json",
+          "./internal/hostaccounts",
+          "./cmd/hostbroker",
+          "./lab/broker-paths-review"
+        ],
+        "environment": {
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOENV": "off",
+          "GOTOOLCHAIN": "local"
+        },
+        "exit_code": 0,
+        "finished_at": "2026-10-06T07:37:37.133148+00:00",
+        "stdout": {
+          "bytes": 79519,
+          "sha256": "ead63f3b2d26dc82e491e93de18d33594e5506ce0d9bca0d28dfc29697574eaa"
+        },
+        "stderr": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "status_file": {
+        "path": "artifacts/broker-paths-review/build/portable-test.status.json",
+        "bytes": 673,
+        "sha256": "3bfa6839fd8c7fee6f2923419482bee1e54072c5933f1bfbff271a4dd7661db3"
+      },
+      "stdout": {
+        "path": "artifacts/broker-paths-review/build/portable-test.out",
+        "bytes": 79519,
+        "sha256": "ead63f3b2d26dc82e491e93de18d33594e5506ce0d9bca0d28dfc29697574eaa"
+      },
+      "stderr": {
+        "path": "artifacts/broker-paths-review/build/portable-test.err",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "linux-vet": {
+      "status": {
+        "command": [
+          "primary scripts/go.ps1",
+          "vet",
+          "-mod=readonly",
+          "-overlay=C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build\\overlay.json",
+          "./internal/hostaccounts"
+        ],
+        "environment": {
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOENV": "off",
+          "GOTOOLCHAIN": "local",
+          "GOOS": "linux",
+          "GOARCH": "amd64",
+          "CGO_ENABLED": "0"
+        },
+        "exit_code": 0,
+        "finished_at": "2026-10-06T07:37:38.126572+00:00",
+        "stdout": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "status_file": {
+        "path": "artifacts/broker-paths-review/build/linux-vet.status.json",
+        "bytes": 794,
+        "sha256": "375d28ebb2ec4e9d45e422bf0ecafc5de0faa63777e6ba1d17a0a8ea7ca6040c"
+      },
+      "stdout": {
+        "path": "artifacts/broker-paths-review/build/linux-vet.out",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "artifacts/broker-paths-review/build/linux-vet.err",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "linux-independent-build": {
+      "status": {
+        "command": [
+          "primary scripts/go.ps1",
+          "test",
+          "-mod=readonly",
+          "-overlay=C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build\\overlay.json",
+          "-c",
+          "-trimpath",
+          "-buildvcs=false",
+          "-o",
+          "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build\\independent.test",
+          "./internal/hostaccounts"
+        ],
+        "environment": {
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOENV": "off",
+          "GOTOOLCHAIN": "local",
+          "GOOS": "linux",
+          "GOARCH": "amd64",
+          "CGO_ENABLED": "0"
+        },
+        "exit_code": 0,
+        "finished_at": "2026-10-06T07:37:48.306126+00:00",
+        "stdout": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "status_file": {
+        "path": "artifacts/broker-paths-review/build/linux-independent-build.status.json",
+        "bytes": 1020,
+        "sha256": "ac6d556e5f48937724a59790b222d5f7a013259a6c679f92be73e8354eb3bf32"
+      },
+      "stdout": {
+        "path": "artifacts/broker-paths-review/build/linux-independent-build.out",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "artifacts/broker-paths-review/build/linux-independent-build.err",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "portable_named_pass": 94,
+  "portable_package_pass": 3,
+  "portable_fail": 0,
+  "portable_skip": 0,
+  "linux_independent_elf": {
+    "path": "artifacts/broker-paths-review/build/independent.test",
+    "bytes": 12803212,
+    "sha256": "cf303fe4a021e9d2807dce6360836156f5de15bae00fa97e7bf4962365333085"
+  },
+  "linux_runtime_executed": false,
+  "native_exact_test_filter": "^TestIndependentBroker(DirectoryIdentity|FreshVersusNonemptyState|OptionBoundary)$",
+  "native_required_families": [
+    "TestIndependentBrokerDirectoryIdentity",
+    "TestIndependentBrokerFreshVersusNonemptyState",
+    "TestIndependentBrokerOptionBoundary"
+  ],
+  "native_require_no_skip": true,
+  "helper_failure_history": [
+    {
+      "result": "reviewer_helper_only_idempotence_refusal",
+      "reason": "existing generated overlay used Windows CRLF while new checker expected raw LF",
+      "correction": "admit the same canonical overlay content after CRLF normalization; retain link/reparse/hardlink guards",
+      "raw_failure_authority": "completed tool output, not retained as a raw file",
+      "product_or_native_failure": false
+    }
+  ],
+  "limits": [
+    "94 portable named passes include existing hostaccounts/CLI tests and one independent exported-client test; Linux helper tests were compiled, not executed.",
+    "The Linux ELF contains package tests; later guest must use the exact three-family filter and qualify actual same-ELF execution separately.",
+    "Source pins certify these reviewed files, not exhaustive Go distribution/compiler source closure. Root/harness must separately bind ELF and all declared build inputs.",
+    "No live host state/policy/credentials/services or account utility execution; own fixtures only.",
+    "Not full persisted-database admission, atomic filesystem stability, original vendor/cPanel/CloudLinux/allOS/reboot or production activation."
+  ],
+  "linux_challenges": {
+    "binary": {
+      "path": "artifacts/broker-paths-review/build/independent.test",
+      "bytes": 12803212,
+      "sha256": "cf303fe4a021e9d2807dce6360836156f5de15bae00fa97e7bf4962365333085"
+    },
+    "test_names": [
+      "TestIndependentBrokerDirectoryIdentity",
+      "TestIndependentBrokerFreshVersusNonemptyState",
+      "TestIndependentBrokerOptionBoundary"
+    ],
+    "compiled": true,
+    "executed": false
+  }
+}

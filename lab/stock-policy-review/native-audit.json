@@ -1,0 +1,423 @@
+{
+  "schema_version": 1,
+  "kind": "independent_actual_native_stock_policy_and_assembled_source_audit",
+  "passed": true,
+  "report_sha256": "51d280fd62775277bb66cf28dd58aa70e3e91c50687ffb8a110c1a98af55216b",
+  "report_bytes": 373717,
+  "run_id": "stock-20261006T065323076Z-e5d1c91b",
+  "source_catalog_entries": 1847,
+  "source_catalog_sha256": "31e31b4120e4fdb7b3727550679155794513e9bd3fad2c0ad96b268859fc0821",
+  "current_file_joins": 1853,
+  "executed_host_harness_sha256": "5a5ab64c20175c2c32f4eac5ff9c01e01c1410ed9d73f1d695c90fb8dbc84eb9",
+  "guest_fixture_sha256": "d42f59d79dddd1f723c11ff6ec05bc0f711d51ffd471a4ca773e0e84bc5eae7c",
+  "binary_sha256": {
+    "baseline": "7e9768c37fcff7c88d8e3266e78e03d27cc2cb58eed95538f57b2901e2c0cbda",
+    "candidate": "b529cad85afd3106a3bb7fb85663d3b4806fe3050da93e9d80ec09d0dacd0e46",
+    "fixture": "d42f59d79dddd1f723c11ff6ec05bc0f711d51ffd471a4ca773e0e84bc5eae7c"
+  },
+  "image_sha256": "6bdab6376d46d42e4203ace3733efafc7c5d37c7cb443a6cc74750097002d74b",
+  "iso_sha256": "1b0583611491eac422f74a3dc208c30c5e35cd61bb3d7988aaf094c81173a811",
+  "payload_plan_sha256": "3da70e54dbe2535c1a738eea5234a5f5f04a09c248eac507b9f715d0cc91bd7f",
+  "serial_private_sha256": "8b7a3cbd4ebdc1621dc93ae0008f4b7b6b3bfee21a6ca6697225d485c365b0f8",
+  "exact_nonce_serial_guest_join": true,
+  "policy_before_after_equal": true,
+  "listeners_before_after_equal": true,
+  "baseline_three_empty_directories_candidate_zero": true,
+  "owned_cleanup": true,
+  "limits": [
+    "Read-only audit; guest execution belongs to worker. Raw boot read privately for exact nonce frame only; never emitted.",
+    "Policy invariance starts after explicit cloud-init staging, not untouched whole-image proof.",
+    "248-file root manifest stays historical binary build scope; current linked source catalog is separately checked.",
+    "Refusal/admission ordering only, no stock account provisioning,cPanel/CloudLinux,allOS,reboot,remote ingress,atomic policy stability or hostile guest qualification.",
+    "Go-list and tool catalogs include1847declared native run inputs but did not pre-pin five installed .tools/go/pkg/include assembler headers. No exhaustive prebuild/full-distribution closure asserted; exact ELF behavior and all catalogued input invariance remain the narrow observation.",
+    "Root808/26 whole-module results and original99portable/1Windowsrace/21synthetic parser results remain separate from actual native CLI/startup observation.",
+    "Five-second context is cooperative before/after bounded probes, not a preemptive filesystem-syscall deadline; utility metadata does not qualify installed flags/version.",
+    "No credential/globalconfig/live state/service/firewall/provider/dependency mutation or production activation; source and read-only evidence only."
+  ],
+  "independent_ISO_contents_audit": {
+    "schema_version": 1,
+    "kind": "independent_actual_stock_policy_ISO_contents_audit",
+    "passed": true,
+    "report_sha256": "51d280fd62775277bb66cf28dd58aa70e3e91c50687ffb8a110c1a98af55216b",
+    "iso_sha256": "1b0583611491eac422f74a3dc208c30c5e35cd61bb3d7988aaf094c81173a811",
+    "payload_plan_sha256": "3da70e54dbe2535c1a738eea5234a5f5f04a09c248eac507b9f715d0cc91bd7f",
+    "existing_readonly_wheel_sha256": "1a82cd735542921d0dd7bc40381e7b7b9cbc70bd4c03e4f67a0531d59d2f518e",
+    "volume_label": "CIDATA",
+    "directories": [
+      "/payload"
+    ],
+    "entries": [
+      {
+        "destination": "payload/panelctl",
+        "bytes": 10979119,
+        "sha256": "7e9768c37fcff7c88d8e3266e78e03d27cc2cb58eed95538f57b2901e2c0cbda",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "payload/hostbroker",
+        "bytes": 10987879,
+        "sha256": "b529cad85afd3106a3bb7fb85663d3b4806fe3050da93e9d80ec09d0dacd0e46",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "payload/qualifier.py",
+        "bytes": 12559,
+        "sha256": "d42f59d79dddd1f723c11ff6ec05bc0f711d51ffd471a4ca773e0e84bc5eae7c",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "user-data",
+        "bytes": 1701,
+        "sha256": "92bded9f16fd5156c9740bf4454ad1eae14cdd08e174326597583610fae61f04",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "meta-data",
+        "bytes": 85,
+        "sha256": "8d93dc3df4ebb50d6fd01d710c039d0500933209eab455669f31bb36d1b9a29b",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "network-config",
+        "bytes": 25,
+        "sha256": "639b6f419a9ac49312b218e12395dc7e7d623d96202c3315a92dcd19d6fa02ba",
+        "regular_mode": "100444",
+        "links": 1
+      }
+    ],
+    "native_execution_performed": false,
+    "limits": [
+      "Read-only binary ISO payload/metadata/nonce and exact current source-byte closure; no guest execution repeated.",
+      "Existing pinned PyCdlib wheel is an approved dependency, not stdlib or a new download.",
+      "Cloud-init staging precedes the guest policy snapshot boundary; this audit does not certify entire pristine image or full Go distribution."
+    ]
+  },
+  "current_root_vs_historical_source_audit": {
+    "schema_version": 1,
+    "kind": "independent_current_root_source_vs_historical_review_audit",
+    "passed": true,
+    "root_head_at_check": "6fc827a22df1e5a6516010694f84e6ffbe625451",
+    "source_inputs": [
+      {
+        "path": "internal/hostaccounts/broker_linux.go",
+        "historical_reviewer_raw_sha256": "803ce42254bc4a8e19ec15275ec8deab3756bccb1307250a25e58ba33201b818",
+        "root_current_raw_sha256": "803ce42254bc4a8e19ec15275ec8deab3756bccb1307250a25e58ba33201b818",
+        "root_current_bytes": 5392,
+        "expected_source_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+        "expected_and_root_git_blob": "404f8b34cdce1d5f01a0473b34bcda3ca85c4aa9",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "internal/hostaccounts/native_linux.go",
+        "historical_reviewer_raw_sha256": "b0df0b2f7c237a5fb1707225c671d849431d168a52b3d3ea082a090bfd155c43",
+        "root_current_raw_sha256": "b0df0b2f7c237a5fb1707225c671d849431d168a52b3d3ea082a090bfd155c43",
+        "root_current_bytes": 18649,
+        "expected_source_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+        "expected_and_root_git_blob": "08d11c962ff2775b8f008a8a50b9e2861102b77e",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "internal/hostaccounts/policy.go",
+        "historical_reviewer_raw_sha256": "dabda4c804de0f7750acb1d47d3e142fb078a25b6450b3e2dccccb3f6a6f4291",
+        "root_current_raw_sha256": "dabda4c804de0f7750acb1d47d3e142fb078a25b6450b3e2dccccb3f6a6f4291",
+        "root_current_bytes": 1869,
+        "expected_source_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+        "expected_and_root_git_blob": "e4aaaa2784166587de23e0b242f6c4ce5a792f43",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "internal/hostaccounts/policy_report.go",
+        "historical_reviewer_raw_sha256": "86f356fbb0c073b392f96986af236a2bdd08396138c582ceb6a74778cc5665a2",
+        "root_current_raw_sha256": "86f356fbb0c073b392f96986af236a2bdd08396138c582ceb6a74778cc5665a2",
+        "root_current_bytes": 2615,
+        "expected_source_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+        "expected_and_root_git_blob": "7d7395bffc0190662b381baedf6f69911168b84b",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "internal/hostaccounts/policy_report_linux.go",
+        "historical_reviewer_raw_sha256": "b590917a59aed109a7551fcb9c18877843b1c4195f1180fdc15137f57da30f32",
+        "root_current_raw_sha256": "b590917a59aed109a7551fcb9c18877843b1c4195f1180fdc15137f57da30f32",
+        "root_current_bytes": 224,
+        "expected_source_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+        "expected_and_root_git_blob": "9d06f79b578297ce3c4fad6fb4fbbf7d671fdc00",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "internal/hostaccounts/policy_report_other.go",
+        "historical_reviewer_raw_sha256": "5ac978df9ab23269bd2c30548f7740d2b543667a72efe440814a1db726913108",
+        "root_current_raw_sha256": "5ac978df9ab23269bd2c30548f7740d2b543667a72efe440814a1db726913108",
+        "root_current_bytes": 115,
+        "expected_source_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+        "expected_and_root_git_blob": "6db1c86587462b57d3389c57fb3da9a7aa3b00d0",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "go.mod",
+        "historical_reviewer_raw_sha256": "1082d590f04ae0f44e29fd20d1d55f199be166f396ae608ae9ec6fd650d6227d",
+        "root_current_raw_sha256": "1082d590f04ae0f44e29fd20d1d55f199be166f396ae608ae9ec6fd650d6227d",
+        "root_current_bytes": 822,
+        "expected_source_commit": "cebd86fa9ec12a24e6e597e88d5185d76540c685",
+        "expected_and_root_git_blob": "edfcc89ddd717857dff5f3ce5e741315648bb1d6",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "go.sum",
+        "historical_reviewer_raw_sha256": "75870928880ec30f71a1e66110caed018505a8ac53477bbf1eb8f3d1126dd611",
+        "root_current_raw_sha256": "75870928880ec30f71a1e66110caed018505a8ac53477bbf1eb8f3d1126dd611",
+        "root_current_bytes": 4946,
+        "expected_source_commit": "cebd86fa9ec12a24e6e597e88d5185d76540c685",
+        "expected_and_root_git_blob": "38abc672706c5ecc658e35d428450549d35599db",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "cmd/hostbroker/main.go",
+        "historical_reviewer_raw_sha256": "b0f57f455063d72b3afb71c660771300989c2de69eb8d44b916001e1cc7fdf96",
+        "root_current_raw_sha256": "94f0dabb295e5c21d0143210ced531d1f3f07c626ab5d8895c6bf0aba46cb724",
+        "root_current_bytes": 2126,
+        "expected_source_commit": "6494e272c61b533231db0cc889e5a604a5a980e0",
+        "expected_and_root_git_blob": "8d8981995082dcb89e19d56a63ad9c72fb15e008",
+        "lf_normalized_equal": true
+      },
+      {
+        "path": "cmd/hostbroker/main_test.go",
+        "historical_reviewer_raw_sha256": "1e1da84ad9d339ee4cb7601f7f692030eb576840756a7c98a59d1323d3a5a96e",
+        "root_current_raw_sha256": "68b49dee60599edefc25b62934502508b3cdac0568472707e2026879f1cb4d0e",
+        "root_current_bytes": 5159,
+        "expected_source_commit": "6494e272c61b533231db0cc889e5a604a5a980e0",
+        "expected_and_root_git_blob": "50a40f688aeb4fe940fd65fdffd7177ddaa1d479",
+        "lf_normalized_equal": true
+      }
+    ],
+    "historical_acceptance_unchanged_sha256": "83050172f33275c2d0dc55cee0ddb728812289822afc8b0f483212659d95aa6d",
+    "limits": [
+      "Read-only current root raw hashes and exact reviewed Git blobs; original99-test source/receipt authority unchanged.",
+      "Root fresh whole-module execution and actual native binary/catalog evidence retain their separate raw authorities."
+    ]
+  },
+  "environment_only_source_review": {
+    "path": "lab/stock-policy-review/environment-review.json",
+    "bytes": 1273,
+    "sha256": "f8e1a77275ce69e236109b60143d934ab2585a5592841336fce9297593fe8d33"
+  },
+  "historical_independent_receipts": [
+    {
+      "path": "lab/stock-policy-review/acceptance.json",
+      "bytes": 9643,
+      "sha256": "83050172f33275c2d0dc55cee0ddb728812289822afc8b0f483212659d95aa6d"
+    },
+    {
+      "path": "lab/stock-policy-review/harness-review.json",
+      "bytes": 5130,
+      "sha256": "d4aeedc7b4863460986f7c0d3898134e32cdb3eb6b8d4ab918de587ace9a7d7d"
+    },
+    {
+      "path": "lab/stock-policy-review/source-catalog.json",
+      "bytes": 1912,
+      "sha256": "c3442db895d645e9b4591ac624d51fe89c9ce5f665ef95e217cfc974107ee555"
+    }
+  ],
+  "root_actual_whole_module": {
+    "status": {
+      "command": "go test -mod=readonly ./... -count=1 -json",
+      "exit_code": 0,
+      "finished_at": "2026-10-06T06:48:04.1805482Z"
+    },
+    "stdout": {
+      "path": ".cache/stock-preflight/final-go-test-all.jsonl",
+      "bytes": 726571,
+      "sha256": "5fefcb7ad1f357e181a4d81abd390443301b3f337b00624fa3dd126bf8037f24"
+    },
+    "stderr": {
+      "path": ".cache/stock-preflight/final-go-test-all.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "named_pass": 808,
+    "package_pass": 26,
+    "fail": 0,
+    "named_skip": [
+      {
+        "package": "sifruno/internal/trail",
+        "test": "TestTrailProcessWorker"
+      }
+    ],
+    "no_test_packages": [
+      "sifruno/config",
+      "sifruno/internal/platform",
+      "sifruno/lab/hostwebruntime-crash-review"
+    ]
+  },
+  "root_actual_vet": {
+    "status": {
+      "command": "go vet -mod=readonly ./...",
+      "exit_code": 0,
+      "finished_at": "2026-10-06T06:47:41.7695086Z"
+    },
+    "stdout": {
+      "path": ".cache/stock-preflight/final-vet.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "path": ".cache/stock-preflight/final-vet.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "post_run_assembler_header_observation": {
+    "receipt": {
+      "path": ".cache/alma9-qualification/stock-20261006T065323076Z-e5d1c91b/post-run-go-include.json",
+      "bytes": 1510,
+      "sha256": "f9b9fe5f582af422eb63b73e50efa206e3c98cd56e626ed7ff2dce995c03a359"
+    },
+    "entries": [
+      {
+        "namespace": "primary",
+        "path": ".tools/go/pkg/include/asm_amd64.h",
+        "bytes": 631,
+        "sha256": "85fc2d5bb80e6db36cef4da5e5c02278d0dcaa6103e5660629b4b713cff15d54"
+      },
+      {
+        "namespace": "primary",
+        "path": ".tools/go/pkg/include/asm_ppc64x.h",
+        "bytes": 1487,
+        "sha256": "8396b3e0d10ddfa90ee7bd1fa3c6b201416844e2be2ef44e71918305bc4bbf54"
+      },
+      {
+        "namespace": "primary",
+        "path": ".tools/go/pkg/include/asm_riscv64.h",
+        "bytes": 535,
+        "sha256": "25631f053993036af2a03634699de446120671b17c197976fc66b74afb18fb34"
+      },
+      {
+        "namespace": "primary",
+        "path": ".tools/go/pkg/include/funcdata.h",
+        "bytes": 2616,
+        "sha256": "bd73b7c27a4d3f8560a5a9dd1a5da54e0e48572311a744cf7843e709b7f2a015"
+      },
+      {
+        "namespace": "primary",
+        "path": ".tools/go/pkg/include/textflag.h",
+        "bytes": 1501,
+        "sha256": "a9d761d03aecdcc117691b6a55eacd43eb7d47d9ad9ca7510b8669ac403b380e"
+      }
+    ],
+    "current_postrun_hashes_equal": true,
+    "pre_build_header_invariance_verified": false,
+    "entire_go_distribution_verified": false,
+    "interpretation": "Five installed assembler headers were not explicitly pre-pinned. These current hashes are post-build/post-native observation only; they cannot be retroactively treated as consumed prebuild input evidence."
+  },
+  "executed_reviewer_helpers": [
+    {
+      "path": "lab/stock-policy-review/audit-native.mjs",
+      "bytes": 9064,
+      "sha256": "35d855dd0b3fb6c2a8909679365421a43c6e3ce976fce4678e22973d0b7d724b"
+    },
+    {
+      "path": "lab/stock-policy-review/audit-iso.py",
+      "bytes": 4161,
+      "sha256": "6947d1dc92d0b1856e93ae08188a70a440ae06c05ec81832b865558e40ec6f99"
+    }
+  ],
+  "review_commands": [
+    {
+      "command": "node lab/stock-policy-review/audit-native.mjs ../stock-preflight-cli-sol ../stock-preflight-cli-sol/artifacts/stock-policy/stock-20261006T065323076Z-e5d1c91b/report.json 51d280fd62775277bb66cf28dd58aa70e3e91c50687ffb8a110c1a98af55216b .cache/stock-policy-review/native-actual-audit.json",
+      "exit_code": 0,
+      "read_only": true
+    },
+    {
+      "existing_wheel_only": true,
+      "command": "primary Python312 -I -B lab/stock-policy-review/audit-iso.py EXACT_WORKER EXACT_REPORT 51d280fd62775277bb66cf28dd58aa70e3e91c50687ffb8a110c1a98af55216b .cache/stock-policy-review/native-iso-audit.json",
+      "exit_code": 0,
+      "read_only": true
+    },
+    {
+      "command": "python .cache/stock-policy-review/audit_root_sources.py",
+      "exit_code": 0,
+      "activity": "current root raw10source pins and exact expected425/6494/baseline Git blobs"
+    },
+    {
+      "command": "python .cache/stock-policy-review/audit_env.py",
+      "exit_code": 0,
+      "activity": "minimal3constant delta reconstructs historical64d340 source SHA; all1450baseline catalogued inputs/currentELF and source guard"
+    }
+  ],
+  "review_raw_audit_files": [
+    {
+      "path": ".cache/stock-policy-review/native-audit.out",
+      "bytes": 371,
+      "sha256": "0826d2d5116437d4a64e283fa7979d2a17e897b9dc87fbd8cacce9a3b73b1f98"
+    },
+    {
+      "path": ".cache/stock-policy-review/native-audit.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/stock-policy-review/native-audit-status.json",
+      "bytes": 350,
+      "sha256": "8fbf4723645a200d22be14f03d5501a96e59311db0f211141c116e25b96db215"
+    },
+    {
+      "path": ".cache/stock-policy-review/native-actual-audit.json",
+      "bytes": 2002,
+      "sha256": "9ddd4b984bd44755c48c618d30065b25683df163769d10018c749df799ff7bf3"
+    },
+    {
+      "path": ".cache/stock-policy-review/iso-audit.out",
+      "bytes": 198,
+      "sha256": "4b75ca566558c009c2c570ab52cc7eb907d53f2c25d4e602ad1259d06f8c5907"
+    },
+    {
+      "path": ".cache/stock-policy-review/iso-audit.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/stock-policy-review/iso-audit-status.json",
+      "bytes": 296,
+      "sha256": "684c8ec389bd4d6109068dbd3444b661fac9ccb71c27544b32ac60cb8cc7d035"
+    },
+    {
+      "path": ".cache/stock-policy-review/native-iso-audit.json",
+      "bytes": 2284,
+      "sha256": "2c50ff8c6cf2c34d1310bd0e182191b74c672bdc077ea024e92160d276b19bee"
+    },
+    {
+      "path": ".cache/stock-policy-review/root-source-audit.json",
+      "bytes": 5617,
+      "sha256": "fe47382e064355fbd07f09dfcc3c2b437958ac44bf0d99dcb7d3a69e3d7c7972"
+    },
+    {
+      "path": ".cache/stock-policy-review/env-audit.out",
+      "bytes": 158,
+      "sha256": "1536b50dc64efadc32e92ec20ee4562babcac7213a11f543ffad0a5cd712e193"
+    },
+    {
+      "path": ".cache/stock-policy-review/env-audit.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "retained_harness_admission_failure": {
+    "path": ".worktrees/stock-preflight-cli-sol/.cache/stock-policy-build/baseline-1791269152046-686b4854",
+    "classification": "Before guest launch, minimal Windows wrapper environment returned0 with empty Go-list output; source/admission refused. Fixed only whitelisted OS/PATHEXT and GOENVoff; separately rebuilt catalogued baseline, then first native guest passed.",
+    "authority": "Worker retained owned diagnostic files; no VM or product failure occurred. Complete old raw harness was reconstructed only for minimal-delta verification, not presented as a retained historical source snapshot."
+  },
+  "findings_closed": [
+    "CLI diagnostic token consumed as serving option value: fixed6494 and independently challenged.",
+    "EmbeddedCR/ANSI evidence normalization: fixed raw framing and21synthetic cases; originals remain separate.",
+    "MinimalWindows environment empty wrapper output: fixed source-only3constants, unchanged parser/payload/cleanup source."
+  ],
+  "followup_separate_review": [
+    "Root final typed evidence/guide/status and observed draft publication require bounded read-only review.",
+    "Final source ZIP every-member manifest/current-source/brand/private-exclusion closure remains separate; no ZIP verdict in this receipt."
+  ],
+  "rollback": "Source-only revert; unsupported policy remains refused, no state migration or host-policy rewriting. All owned failed diagnostics and disposable guest overlay remain retained."
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "independent_read_only_minimal_harness_environment_and_baseline_build_audit",
+  "passed": true,
+  "harness_sha256": "5a5ab64c20175c2c32f4eac5ff9c01e01c1410ed9d73f1d695c90fb8dbc84eb9",
+  "reconstructed_prior_harness_sha256": "64d340fbf314e7b2f8eefe5ef707819173382ec5e7d515371334195525ced3a0",
+  "only_new_source_constants": [
+    "OS=Windows_NT",
+    "PATHEXT=.COM;.EXE;.BAT;.CMD",
+    "GOENV=off"
+  ],
+  "prior_parser_receipt_unchanged": true,
+  "baseline_manifest_sha256": "aaa2477acb1b56f1bef21fb7b635732acb3a337c6c90328a3a805b85d0ed9ac8",
+  "baseline_source_and_linked_inputs": 1450,
+  "baseline_binary_sha256": "7e9768c37fcff7c88d8e3266e78e03d27cc2cb58eed95538f57b2901e2c0cbda",
+  "baseline_source_guard_exit": 0,
+  "baseline_binary_is_linux_elf": true,
+  "native_observation": false,
+  "limits": [
+    "Minimal source delta checked by removing exactly three constants and recovering prior reviewed raw source SHA. This is reconstruction, not a retained old complete byte snapshot.",
+    "Baseline tool/source checks do not execute a guest or qualify native runtime.",
+    "First empty-wrapper list admission failure remains a separate retained owned diagnostic outcome, not a product or guest failure."
+  ]
+}

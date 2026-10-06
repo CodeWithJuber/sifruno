@@ -1,0 +1,450 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "independent_read_only_broker_startup_preflight_source_and_overlay_review",
+  "passed": true,
+  "native_observation": false,
+  "checked_at": "2026-10-06T09:59:06.601210+00:00",
+  "baseline_commit": "67d527c76b8880f41b5481effc34003307de9df8",
+  "candidate_commit": "3893195e8720865a9a7ea394895528f74e58db1b",
+  "candidate_source_pins": [
+    {
+      "path": "cmd/hostbroker/main.go",
+      "bytes": 4068,
+      "sha256": "603b1c078c7e9379878af709f3eebb4cf9b88d349a72534150f0cba0d6c7496a",
+      "canonical_git_sha256": "603b1c078c7e9379878af709f3eebb4cf9b88d349a72534150f0cba0d6c7496a",
+      "git_blob": "f5d2b24bcefd64d918eeec28483459d0dfc9ae63"
+    },
+    {
+      "path": "cmd/hostbroker/main_test.go",
+      "bytes": 8199,
+      "sha256": "1485324311f48a2e4aacc8c32053d89d028814b5f98c888d7af1e85f9789924c",
+      "canonical_git_sha256": "1485324311f48a2e4aacc8c32053d89d028814b5f98c888d7af1e85f9789924c",
+      "git_blob": "abf07b5df87a9ae2f6ae0d7b39b137aa53019590"
+    },
+    {
+      "path": "internal/hostaccounts/startup_report.go",
+      "bytes": 3063,
+      "sha256": "13f6c30a8c276ab081f5a38358481fcb34e012e8de28f27e3d1a82a6b442c67f",
+      "canonical_git_sha256": "13f6c30a8c276ab081f5a38358481fcb34e012e8de28f27e3d1a82a6b442c67f",
+      "git_blob": "b7778dc8735a9c553356d6b8d9ecf1652e320e14"
+    },
+    {
+      "path": "internal/hostaccounts/startup_report_linux.go",
+      "bytes": 2109,
+      "sha256": "7e7f687a78b406fea35433bd1a90d22e51e37bb2012c82e122409206dd74a773",
+      "canonical_git_sha256": "7e7f687a78b406fea35433bd1a90d22e51e37bb2012c82e122409206dd74a773",
+      "git_blob": "777be4f652bc1a54719918fb9db2fecd6f86e61d"
+    },
+    {
+      "path": "internal/hostaccounts/startup_report_linux_test.go",
+      "bytes": 3869,
+      "sha256": "c27c269ed590f6e5f59aba5c1f756ee35b9ff434abc094d0bb071b4be3158f1b",
+      "canonical_git_sha256": "c27c269ed590f6e5f59aba5c1f756ee35b9ff434abc094d0bb071b4be3158f1b",
+      "git_blob": "fecca20045cd41a5d12bae89fa8046b30cb89910"
+    },
+    {
+      "path": "internal/hostaccounts/startup_report_other.go",
+      "bytes": 128,
+      "sha256": "536e69010721fc2cc5035660c199b9138110bc93832c78f6c11e311b48124797",
+      "canonical_git_sha256": "536e69010721fc2cc5035660c199b9138110bc93832c78f6c11e311b48124797",
+      "git_blob": "ed856f46bbd4f4ca417ef1dac33e0dd5f9550749"
+    },
+    {
+      "path": "internal/hostaccounts/startup_report_test.go",
+      "bytes": 3527,
+      "sha256": "0988ecb6b4f836abbd86f67f889af54645f05c31fa7d3d785242b1bcb307ec82",
+      "canonical_git_sha256": "0988ecb6b4f836abbd86f67f889af54645f05c31fa7d3d785242b1bcb307ec82",
+      "git_blob": "ff6349711641ecee096ffdecf142109dbada0ad8"
+    }
+  ],
+  "prebuild_source_freeze": {
+    "path": "artifacts/startup-preflight-review/build/source-freeze.json",
+    "bytes": 10228,
+    "sha256": "55bc4b8c100c4670de5d9e5b45b56a937e4c4597a8b1568fed6fe5abd82d9535"
+  },
+  "conservative_source_and_tool_inputs": [
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/broker_linux.go",
+      "bytes": 5593,
+      "sha256": "f2f8a28911bc4ee5807b52325b97265ac0015c449deecf2d1b25f83740b692db"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/broker_paths_linux.go",
+      "bytes": 2563,
+      "sha256": "826276568dc8a9a2d3ad68b75d43b188ea6819a2d50390f19d13076cbea2e4a2"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/broker_paths_linux_test.go",
+      "bytes": 10358,
+      "sha256": "b1ae433b09c2685564c4d0df35218b045af3fca380f955e6ef000d5f7534d72c"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/client.go",
+      "bytes": 3713,
+      "sha256": "87cb2ab5f958d9409d27352cc9c86a8ef31b6d87dfd3bbbd7e3a4f3b5d860b43"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/client_other.go",
+      "bytes": 263,
+      "sha256": "8643af0ee3b9212461b6a79bf53a630414e16d8f867babacb585471b57102c5b"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/http.go",
+      "bytes": 4555,
+      "sha256": "3901b27c52143e605561605f87ef3246510972201cb156726d03a442cc30fb95"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/journal.go",
+      "bytes": 6728,
+      "sha256": "1241795bb3a5145f1403b955ee973322335d4ac391d931ebb867403a88be355b"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/native_linux.go",
+      "bytes": 18663,
+      "sha256": "dd195ca69d1460ac9f37a9e6a36073c28ac021539837a336ec8c9316b2ab527d"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/native_linux_test.go",
+      "bytes": 4495,
+      "sha256": "5ca7e7fd066d11ea228c4276680b464e99b083b26a72028a41a8ceb264cce63b"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/policy.go",
+      "bytes": 1958,
+      "sha256": "464a9bf291a8b1d55f925a560ee70adb1d2c1c98c187544d6a54d51bf3f4b842"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/policy_report.go",
+      "bytes": 2627,
+      "sha256": "75229dcd9feb2f5985f3cb7a56e9c7ecde9a3d74b41ffa067d2c3cc64fd6a20d"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/policy_report_linux.go",
+      "bytes": 224,
+      "sha256": "b590917a59aed109a7551fcb9c18877843b1c4195f1180fdc15137f57da30f32"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/policy_report_other.go",
+      "bytes": 115,
+      "sha256": "5ac978df9ab23269bd2c30548f7740d2b543667a72efe440814a1db726913108"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/policy_report_test.go",
+      "bytes": 5090,
+      "sha256": "25cebc183fe49a0f9b0c26a8a896c73fa05d0f0fd4daed45f261a7e69651fd7c"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/policy_test.go",
+      "bytes": 4977,
+      "sha256": "2eca1662d9a4d33d83f72b1e86d542d78e46907d3ae4767fa8a39327914f54da"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/snapshot.go",
+      "bytes": 5700,
+      "sha256": "aed1c575bfd4270b76cd96c6d9917a8b02389a957f34a0128bb437c37e4c2ef4"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/snapshot_test.go",
+      "bytes": 9528,
+      "sha256": "84152d31b66d6ade2cf53de49564f7c655588792412db9aaa272183f2c78db0d"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/store.go",
+      "bytes": 14563,
+      "sha256": "fd2094e5ba57bb379546040d779ed379e7ad0ef430e0687e35bfec0985dfbd56"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/store_test.go",
+      "bytes": 13357,
+      "sha256": "65d95867b45a796aa8e69b2f1ce769ff26d6142d256b4e29dcaccac14e63aa58"
+    },
+    {
+      "namespace": "baseline_package_source",
+      "path": "internal/hostaccounts/types.go",
+      "bytes": 4376,
+      "sha256": "83fe338bad00f12d9ed8f239a8caa73e0655b61e7a8765960f77e99f568545bf"
+    },
+    {
+      "namespace": "baseline_module_manifest",
+      "path": "go.mod",
+      "bytes": 822,
+      "sha256": "1082d590f04ae0f44e29fd20d1d55f199be166f396ae608ae9ec6fd650d6227d"
+    },
+    {
+      "namespace": "baseline_module_manifest",
+      "path": "go.sum",
+      "bytes": 4946,
+      "sha256": "75870928880ec30f71a1e66110caed018505a8ac53477bbf1eb8f3d1126dd611"
+    },
+    {
+      "namespace": "primary_readonly_tool",
+      "path": "scripts/go.ps1",
+      "bytes": 388,
+      "sha256": "743ebc069474966efecd831a522695d295ab1570660e62270070ef0fa59443b9"
+    },
+    {
+      "namespace": "primary_readonly_tool",
+      "path": ".tools/go/bin/go.exe",
+      "bytes": 17508352,
+      "sha256": "d3ccdb604eafa6031133aefe1a3db24f0bb7362b857bc2125ac4e4c178b4b490"
+    },
+    {
+      "namespace": "primary_readonly_tool",
+      "path": ".tools/go/pkg/include/asm_amd64.h",
+      "bytes": 631,
+      "sha256": "85fc2d5bb80e6db36cef4da5e5c02278d0dcaa6103e5660629b4b713cff15d54"
+    },
+    {
+      "namespace": "primary_readonly_tool",
+      "path": ".tools/go/pkg/include/asm_ppc64x.h",
+      "bytes": 1487,
+      "sha256": "8396b3e0d10ddfa90ee7bd1fa3c6b201416844e2be2ef44e71918305bc4bbf54"
+    },
+    {
+      "namespace": "primary_readonly_tool",
+      "path": ".tools/go/pkg/include/asm_riscv64.h",
+      "bytes": 535,
+      "sha256": "25631f053993036af2a03634699de446120671b17c197976fc66b74afb18fb34"
+    },
+    {
+      "namespace": "primary_readonly_tool",
+      "path": ".tools/go/pkg/include/funcdata.h",
+      "bytes": 2616,
+      "sha256": "bd73b7c27a4d3f8560a5a9dd1a5da54e0e48572311a744cf7843e709b7f2a015"
+    },
+    {
+      "namespace": "primary_readonly_tool",
+      "path": ".tools/go/pkg/include/textflag.h",
+      "bytes": 1501,
+      "sha256": "a9d761d03aecdcc117691b6a55eacd43eb7d47d9ad9ca7510b8669ac403b380e"
+    },
+    {
+      "namespace": "owned_review",
+      "path": "lab/startup-preflight-review/private_protocol_test.go.txt",
+      "bytes": 5440,
+      "sha256": "c028999695b27d1b137c02f60401aaa6db330ec107d15df7fef1e85df90adfda"
+    },
+    {
+      "namespace": "owned_review",
+      "path": "lab/startup-preflight-review/private_native_linux_test.go.txt",
+      "bytes": 4135,
+      "sha256": "67eccb801b45d606b08d8466d1338983b2bd3b01073311b7cfd26245d4242dce"
+    },
+    {
+      "namespace": "owned_review",
+      "path": "lab/startup-preflight-review/private_cli_test.go.txt",
+      "bytes": 4912,
+      "sha256": "3c052dedd44b222f6319762ffb2360b50c4a2b965ca78b0db5f88def73affbe9"
+    },
+    {
+      "namespace": "owned_review",
+      "path": "lab/startup-preflight-review/baseline_cli_control_test.go.txt",
+      "bytes": 614,
+      "sha256": "d486ad3fad5544c442879d2912c48f471aa5c61d91a1390385c265ebab3d8611"
+    },
+    {
+      "namespace": "owned_review",
+      "path": "lab/startup-preflight-review/prepare.py",
+      "bytes": 5001,
+      "sha256": "7c18b08bb3d53eedec355fcdf19886bb0111830296c22d82882028d3882fe0a8"
+    }
+  ],
+  "inputs_unchanged_after_build": true,
+  "source_review": {
+    "seven_files_only": true,
+    "fixed_report_keys": 7,
+    "ordered_checks": 9,
+    "fixed_restrictions": 4,
+    "first_refusal_stops_later_probes": true,
+    "nil_cancelled_postprobe_context_discards_partial_observations": true,
+    "fresh_only_missing_or_empty": true,
+    "nonempty_state_recovery_unchecked": true,
+    "controller_local_identity_authority_preserved": true,
+    "files_only_NSS_permission_unchanged": true,
+    "no_storage_directory_listener_account_writes": true,
+    "legacy_host_diagnostic_and_serving_preserved": true,
+    "no_concrete_blockers": true
+  },
+  "preflight": {
+    "command": "forge substrate \"Add independent owned startup preflight overlay challenges and compilation evidence against frozen core3893195; no product source edits or native execution\"",
+    "exit_code": 0,
+    "advisory": "ASK FIRST heuristic sought exact outputs; parent already specified scope, sourcefreeze, runtime boundary and acceptance; manually inspected unknown impact",
+    "raw_authority": "tool-stream observation, no separate raw capture"
+  },
+  "commands": {
+    "windows": {
+      "command": "primary go.ps1 test -mod=readonly -count=1 -timeout=60s -json -overlay artifacts/startup-preflight-review/build/overlay.json -run TestIndependentStartup|TestStartup ./internal/hostaccounts ./cmd/hostbroker",
+      "cgo": 0,
+      "started_at": "2026-10-06T09:53:06.1785074Z",
+      "finished_at": "2026-10-06T09:53:09.1510242Z",
+      "exit_code": 0,
+      "goos": "windows"
+    },
+    "baseline": {
+      "command": "primary go.ps1 test -mod=readonly -count=1 -timeout=60s -json -overlay artifacts/startup-preflight-review/build/baseline-overlay.json -run ^TestIndependentStartupLegacyControl$ ./cmd/hostbroker",
+      "exit_code": 1,
+      "classification": "expected untouched baseline lacks explicitly authorized new diagnostic route"
+    },
+    "linux-vet": {
+      "cgo": 0,
+      "exit_code": 0,
+      "goos": "linux",
+      "command": "primary go.ps1 vet -mod=readonly -overlay artifacts/startup-preflight-review/build/overlay.json ./internal/hostaccounts ./cmd/hostbroker"
+    },
+    "linux-build": {
+      "exit_code": 0,
+      "command": "primary go.ps1 test -mod=readonly -trimpath -buildvcs=false -overlay artifacts/startup-preflight-review/build/overlay.json -c -o artifacts/startup-preflight-review/build/independent.test ./internal/hostaccounts",
+      "goos": "linux",
+      "cgo": 0
+    }
+  },
+  "windows_result": {
+    "named_pass": 95,
+    "packages": 2,
+    "failures": 0,
+    "skips": 0,
+    "scope": "private SDK/report and CLI callback overlays plus focused new core portable tests; no live broker or host policy reads"
+  },
+  "baseline_control": {
+    "expected_exit_code": 1,
+    "actual_exit_code": 1,
+    "compile_succeeded": true,
+    "test": "TestIndependentStartupLegacyControl",
+    "meaning": "untouched baseline rejects the new explicitly authorized diagnostic route; private control tests only old available API",
+    "not_a_candidate_failure": true
+  },
+  "linux_challenges": {
+    "binary": {
+      "path": "artifacts/startup-preflight-review/build/independent.test",
+      "bytes": 12892941,
+      "sha256": "ab06ed2bfa699fc831e665b2de23d0bdc51cce5e6ccce79ca548a25a9e5d8781"
+    },
+    "test_names": [
+      "TestIndependentStartupCancellation",
+      "TestIndependentStartupFreshAuthority",
+      "TestIndependentStartupProtocol"
+    ],
+    "compiled": true,
+    "executed": false,
+    "required_native_environment": "Linux root with owned trusted-ancestor TMPDIR; never skipped",
+    "native_fixture_scope": "real owned directory tree/mode/content/entry equality and admitted FD identity drift; controlled dependency fixtures for UID, utility and NSS/default probes; no account utilities or global credential reads"
+  },
+  "raw_files": [
+    {
+      "path": "artifacts/startup-preflight-review/build/baseline-overlay.json",
+      "bytes": 355,
+      "sha256": "0dd8b9c6a9cea46362ffd0fff6f854a9d104b1e58a7e16990526e64b6ded70e0"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/baseline-status.json",
+      "bytes": 336,
+      "sha256": "5cd33a611b1c160c4dec941404da7a7897006e7df11e59875a53e75560a18222"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/baseline.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/baseline.out",
+      "bytes": 1570,
+      "sha256": "d0fb66a76d3382b17c963218a8da79b26c853ab598f6861fc61ac92c0f276996"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/linux-build-status.json",
+      "bytes": 285,
+      "sha256": "7d9bf421a34cea0fe0a5c8d691a60d119304f1f82ccc4a3458ae9f478655f125"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/linux-build.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/linux-build.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/linux-vet-status.json",
+      "bytes": 211,
+      "sha256": "910f565e8ba6bf82bd95517fc709a38cf8b69a023b3991158b5c8712801cb076"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/linux-vet.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/linux-vet.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/overlay.json",
+      "bytes": 3493,
+      "sha256": "6556a0d1b099607651f411fd25b4d7206e465ca36434dcba8687b916a38b11ae"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/source-freeze.json",
+      "bytes": 10228,
+      "sha256": "55bc4b8c100c4670de5d9e5b45b56a937e4c4597a8b1568fed6fe5abd82d9535"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/windows-status.json",
+      "bytes": 381,
+      "sha256": "6be1bd4116341efa2b4dc44c390c104875c6657680555ee51ad54b1c87790d39"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/windows.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/startup-preflight-review/build/windows.out",
+      "bytes": 74955,
+      "sha256": "7451bdf9590a9f81afc2787f130944c78d8ded91ecb75d99f87082f272691399"
+    }
+  ],
+  "tracked_private_tests_only": true,
+  "source_inputs_written": false,
+  "shared_dependencies_read_only": true,
+  "normal_primary_compilation_cache_allowed": true,
+  "environment": {
+    "GOENV": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOARCH": "amd64",
+    "CGO_ENABLED": "0",
+    "TEMP_TMP": "owned artifacts/startup-preflight-review/build/temp",
+    "GOMODCACHE": "primary wrapper readonly module inputs"
+  },
+  "limits": [
+    "Original compiled ELF and receipt are compilation/source authority only; later exact guest execution has distinct native authority.",
+    "Five installed pkg/include assembler headers pinned before compilation and compared after; generated test main and entire Go distribution are not exhaustively catalogued.",
+    "Conservative baseline package Go list includes inactive platform/test files; not an exact compiler-selected linked catalogue.",
+    "prepare.py admits original baseline HEAD and must run before own lab commit; frozen overlay/source outputs remain byte-exact recovery artifacts afterward.",
+    "No new public Go package, full-module execution, VM, account/host policy mutation, dependency addition, live service or provider call by reviewer.",
+    "Fresh admission remains a cooperative read-only observation, not atomic startup permission, persisted-state recovery, full stock/CloudLinux/cPanel/vendor/allOS qualification."
+  ]
+}

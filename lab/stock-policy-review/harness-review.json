@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "kind": "independent_synthetic_stock_guest_parser_and_source_review",
+  "passed": true,
+  "checked_at": "2026-10-06T06:49:01.160703+00:00",
+  "native_observation": false,
+  "worker_worktree": "assigned .worktrees/stock-preflight-cli-sol",
+  "reviewed_harness": {
+    "path": "scripts/verify-stock-policy.mjs",
+    "bytes": 30261,
+    "sha256": "64d340fbf314e7b2f8eefe5ef707819173382ec5e7d515371334195525ced3a0"
+  },
+  "reviewed_fixture": {
+    "path": "lab/stock-policy-guest/fixture.py",
+    "bytes": 12559,
+    "sha256": "d42f59d79dddd1f723c11ff6ec05bc0f711d51ffd471a4ca773e0e84bc5eae7c"
+  },
+  "challenge": {
+    "schema_version": 1,
+    "kind": "independent_synthetic_stock_guest_parser_challenges",
+    "source_sha256": "64d340fbf314e7b2f8eefe5ef707819173382ec5e7d515371334195525ced3a0",
+    "positive_cases": 3,
+    "negative_cases": 18,
+    "passed_cases": 21,
+    "unexpectedly_admitted": [],
+    "native_observation": false
+  },
+  "command": {
+    "source_sha256": "64d340fbf314e7b2f8eefe5ef707819173382ec5e7d515371334195525ced3a0",
+    "exit_code": 0,
+    "command": "node lab/stock-policy-review/challenge-harness.mjs EXACT_WORKER_HARNESS_PATH EXACT_RAW_SHA",
+    "synthetic_only": true
+  },
+  "stdout": {
+    "path": ".cache/stock-policy-review/harness-challenge-1.out",
+    "bytes": 276,
+    "sha256": "157511a60f5534e5fd39a408aa8c4c97ae74738d0710f40a8a4b903a2eab4de0"
+  },
+  "stderr": {
+    "path": ".cache/stock-policy-review/harness-challenge-1.err",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "executed_reviewer_helper": {
+    "path": "lab/stock-policy-review/challenge-harness.mjs",
+    "bytes": 5083,
+    "sha256": "b91ab57450a0549ea10861f7a1f367e971167aff1a552f13d7e3d7f25a9030ad"
+  },
+  "source_review": [
+    "Exact-hash existing ISO helper imports with owned ROOT and primary read-only WHEEL override only; six fixed payload destinations and explicit baseline/candidate/fixture roles.",
+    "Baseline -buildvcs=false, Linux/amd64 CGO0 readonly offline build, complete selected linked input catalog and frozen tools. Root248-file source manifest is historical binary build scope; current linked source catalog is distinct.",
+    "Pinned signature-verified Alma9.8 backing image used through disposable overlay, external NIC disabled, no host shares. Cloud-init stages payload but suppresses requested default cloud user and SSH key creation; installed policy snapshot begins after staging.",
+    "Guest uses existing unique UID65534 from passwd metadata, no identity creation, account utility execution, NSS/default rewriting, shadow/key or credential read. Policy metadata/hashes and listeners measured before and after both owned broker children.",
+    "Guest actual diagnostic must exit1 with fixed seven-field refused report; old broker must create only three empty declared directories, candidate none, no store/socket. Binary/fixture hash before and after.",
+    "20s broker/8192-16384 output bounds, owned child session/group cleanup and wait; host600s QEMU/2MiB bounds, owned direct process exit required. No guest-host hostile isolation or full provisioning claim.",
+    "Nonce exact-three-marker frame, canonical nested JSON, strict known fields/IDs/order/modes/hashes/bounds, policy/listener equality and cleanup booleans. Raw boot remains private and opaque; CRLF normalized only, framed CR/ANSI refused."
+  ],
+  "findings": [
+    {
+      "id": "embedded-cr-evidence-alias",
+      "observed": "Initial source removed all CR, including evidence marker/JSON bytes.",
+      "resolution": "Current source normalizes CRLF only and refuses CR in exact raw framed segment; independent negatives pass.",
+      "authority": "Source review finding, not a retained failed guest/parser execution."
+    },
+    {
+      "id": "ansi-prefix-evidence-normalization",
+      "observed": "Intermediate source could classify ANSI-prefixed JSON as boot, strip escapes and admit framed evidence.",
+      "resolution": "Current source keeps boot opaque and validates raw framed bytes without escape stripping; independent negative passes.",
+      "authority": "Source review finding; final first synthetic execution used already corrected source and passed."
+    }
+  ],
+  "limits": [
+    "Synthetic typed receipt parser cases and source review only, no native execution, signed-image runtime or actual policy observation asserted.",
+    "Any actual run requires same reviewed input bytes or separately audited normalized adoption, fresh image/binary/source/ISO/report hashes, unchanged inputs and owned cleanup.",
+    "Guest policy invariance starts after cloud-init payload staging and does not prove every pristine image byte or service stayed unchanged.",
+    "No stock account provisioning, cPanel/CloudLinux,100-account hosting,reboot,allOS,remote ingress or hostile guest certification.",
+    "Five-second CLI context does not preempt a blocked syscall; metadata probe does not qualify utility flags/version or atomic host-policy stability."
+  ]
+}

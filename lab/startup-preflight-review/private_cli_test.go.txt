@@ -1,0 +1,31 @@
+package main
+
+import (
+ "bytes"
+ "context"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "reflect"
+ "sifruno/internal/hostaccounts"
+ "testing"
+ "time"
+)
+
+type independentBrokenOutput struct{}
+func(independentBrokenOutput)Write([]byte)(int,error){return 0,errors.New("private-output-error")}
+func TestIndependentStartupCLI(t *testing.T) {
+ pairs:=[][]string{{"--state","/private-review/state"},{"--socket","/private-review/run/broker.sock"},{"--homes","/private-review/homes"},{"--controller-uid","4294967295"}}
+ valid:=[]string{"--check-startup"};for _,p:=range pairs {valid=append(valid,p...)}
+ var permutations func([]int,[]int);permutations=func(order,remaining []int){if len(remaining)==0 {args:=[]string{"--check-startup"};for _,i:=range order {args=append(args,pairs[i]...)};t.Run(fmt.Sprint("order",order),func(t *testing.T){var out,err bytes.Buffer;calls:=0;code:=runWithAllServices(args,&out,&err,func(context.Context)hostaccounts.HostPolicyReport{t.Fatal("host callback");return hostaccounts.HostPolicyReport{}},func(ctx context.Context,o hostaccounts.BrokerOptions)hostaccounts.BrokerAdmissionReport{calls++;if !reflect.DeepEqual(o,hostaccounts.BrokerOptions{StateDir:"/private-review/state",SocketPath:"/private-review/run/broker.sock",HomesDir:"/private-review/homes",ControllerUID:4294967295}){t.Fatal("typed options")};deadline,ok:=ctx.Deadline();if !ok||time.Until(deadline)<=4*time.Second||time.Until(deadline)>5*time.Second {t.Fatal("cooperative bound")};return hostaccounts.BrokerAdmissionReport{SchemaVersion:1,Supported:true,ReadOnly:true}},func(context.Context,hostaccounts.BrokerOptions)error{t.Fatal("serve callback");return nil});if code!=0||calls!=1||err.Len()!=0||bytes.Contains(out.Bytes(),[]byte("/private-review")){t.Fatal("valid grammar or redaction")};var obj map[string]json.RawMessage;if json.Unmarshal(out.Bytes(),&obj)!=nil||len(obj)!=7{t.Fatal("JSON shape")}});return};for j,i:=range remaining {next:=append([]int(nil),remaining[:j]...);next=append(next,remaining[j+1:]...);permutations(append(append([]int(nil),order...),i),next)}};permutations(nil,[]int{0,1,2,3})
+ invalid:=[][]string{{"--check-startup"},{"-check-startup"},{"--check-startup=true"},append(append([]string(nil),valid...),"--check-host"),append([]string{"--state","--check-startup"},valid[3:]...)}
+ for i:=1;i<len(valid);i++ {a:=append([]string(nil),valid[:i]...);a=append(a,valid[i+1:]...);invalid=append(invalid,a)}
+ for _,u:=range []string{"0","-1","+1","0x1","4294967296","١","1.0","1e0"," 1","1 ","","--check-host","--check-startup"}{a:=append([]string(nil),valid...);a[8]=u;invalid=append(invalid,a)}
+ for _,key:=range []string{"-state","--State","--state=/private-review/state","--unknown","--check-host"}{a:=append([]string(nil),valid...);a[1]=key;invalid=append(invalid,a)}
+ for _,value:=range []string{"","--check-host","--check-startup","-check-startup"}{a:=append([]string(nil),valid...);a[2]=value;invalid=append(invalid,a)}
+ for i:=3;i<8;i+=2 {a:=append([]string(nil),valid...);a[i]="--state";invalid=append(invalid,a)}
+ for i,args:=range invalid {t.Run(fmt.Sprint("invalid",i),func(t *testing.T){var out,err bytes.Buffer;called:=false;code:=runWithAllServices(args,&out,&err,func(context.Context)hostaccounts.HostPolicyReport{called=true;return hostaccounts.HostPolicyReport{}},func(context.Context,hostaccounts.BrokerOptions)hostaccounts.BrokerAdmissionReport{called=true;return hostaccounts.BrokerAdmissionReport{}},func(context.Context,hostaccounts.BrokerOptions)error{called=true;return nil});if code!=2||called||out.Len()!=0||err.String()!="Invalid native broker configuration\n"{t.Fatal("invalid grammar reached authority")}})}
+ t.Run("refused",func(t *testing.T){var out,err bytes.Buffer;code:=runWithAllServices(valid,&out,&err,nil,func(context.Context,hostaccounts.BrokerOptions)hostaccounts.BrokerAdmissionReport{return hostaccounts.BrokerAdmissionReport{ReadOnly:true}},nil);if code!=1||err.Len()!=0||out.Len()==0{t.Fatal("refusal exit")}})
+ t.Run("write_failure",func(t *testing.T){var err bytes.Buffer;code:=runWithAllServices(valid,independentBrokenOutput{},&err,nil,func(context.Context,hostaccounts.BrokerOptions)hostaccounts.BrokerAdmissionReport{return hostaccounts.BrokerAdmissionReport{Supported:true}},nil);if code!=1||err.String()!="Unable to write native broker startup admission report\n"{t.Fatal("write exit")}})
+ t.Run("old_host_route",func(t *testing.T){var out,err bytes.Buffer;calls:=0;code:=runWithAllServices([]string{"--check-host"},&out,&err,func(context.Context)hostaccounts.HostPolicyReport{calls++;return hostaccounts.HostPolicyReport{Supported:true}},func(context.Context,hostaccounts.BrokerOptions)hostaccounts.BrokerAdmissionReport{t.Fatal("startup callback");return hostaccounts.BrokerAdmissionReport{}},func(context.Context,hostaccounts.BrokerOptions)error{t.Fatal("serve callback");return nil});if code!=0||calls!=1||err.Len()!=0{t.Fatal("old host route")}})
+}

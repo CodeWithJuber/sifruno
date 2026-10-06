@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "independent_service_accounts_harness_source_protocol_review",
+  "passed": true,
+  "native_observation": false,
+  "baseline_commit": "392700489d49f13810923586a94eef6b48ec9cf6",
+  "initial_harness_commit": "6cf88684d6e3d9e621fa606961c7bbc1d1da7859",
+  "corrective_commits": [
+    "017e86d941746babc9ec907bea32167c90523517",
+    "5b0d0f59a923131f59074d2143dce16de63d9ec7"
+  ],
+  "source_commit": "5b0d0f59a923131f59074d2143dce16de63d9ec7",
+  "current_source_pins": [
+    {
+      "path": "scripts/verify-service-accounts.mjs",
+      "bytes": 41941,
+      "sha256": "a5dfeadf43ca6517d324cbb56d19a22e5b627e326577236b54ece7c65401b614",
+      "git_blob": "443db7cc5ff2efb8d1643f9db4cc43b2b3ab6fb5",
+      "canonical_git_sha256": "543855716da4e5983c2cb1e22521951bd714e97b70290e7dd117dfa65716b4ca"
+    },
+    {
+      "path": "lab/service-accounts-guest/README.md",
+      "bytes": 5259,
+      "sha256": "9f92eb232179db003301e8c141e40954bf05a6135818ae4cbc11445910e301c2",
+      "git_blob": "d07a1cf90a2a312fb564aa9ac68af24575b898df",
+      "canonical_git_sha256": "9f92eb232179db003301e8c141e40954bf05a6135818ae4cbc11445910e301c2"
+    },
+    {
+      "path": "lab/service-accounts-guest/contract.test.mjs",
+      "bytes": 10286,
+      "sha256": "d60ad9348e41b52acaaa2b8b0d335f66bf5890da1f238831a5f3705846944e65",
+      "git_blob": "4f4a68007f18351583e4053fe292e59bd66fcdbe",
+      "canonical_git_sha256": "d60ad9348e41b52acaaa2b8b0d335f66bf5890da1f238831a5f3705846944e65"
+    },
+    {
+      "path": "lab/service-accounts-guest/fixture.py",
+      "bytes": 34617,
+      "sha256": "d629cc012a4fa5edd4187086a1fc7197dc395869d247cfb5b514c85051f59b54",
+      "git_blob": "328a4367e871e311a985f2e87e5c1569a2ebe080",
+      "canonical_git_sha256": "712f21dac22aed2393ccb8edc89528739d1fbcf69ca016b0201449c56b677f04"
+    },
+    {
+      "path": "lab/service-accounts-guest/fixture_test.py",
+      "bytes": 6096,
+      "sha256": "a48e79e0792390c1a6f8523b022d668e564c8f02e68ec1038043f8d7b41cb69d",
+      "git_blob": "26d7b86eb8c387f924d664cb83b10edf2f3cfb03",
+      "canonical_git_sha256": "a48e79e0792390c1a6f8523b022d668e564c8f02e68ec1038043f8d7b41cb69d"
+    }
+  ],
+  "independent_decoder": {
+    "passed": true,
+    "synthetic_only": true,
+    "positive": 5,
+    "negative": 83,
+    "cases": 88,
+    "driver_sha256": "a5dfeadf43ca6517d324cbb56d19a22e5b627e326577236b54ece7c65401b614",
+    "native_execution": false
+  },
+  "independent_synthetic_identity": {
+    "passed": true,
+    "synthetic_only": true,
+    "positive": 3,
+    "negative": 10,
+    "native_execution": false,
+    "fixture_sha256": "d629cc012a4fa5edd4187086a1fc7197dc395869d247cfb5b514c85051f59b54"
+  },
+  "commands": [
+    {
+      "command": "node lab/service-accounts-review/challenge-harness.mjs ../service-accounts-guest-sol/scripts/verify-service-accounts.mjs a5dfeadf43ca6517d324cbb56d19a22e5b627e326577236b54ece7c65401b614",
+      "exit_code": 0
+    },
+    {
+      "command": "python -I -B lab/service-accounts-review/challenge-fixture.py ../service-accounts-guest-sol/lab/service-accounts-guest/fixture.py d629cc012a4fa5edd4187086a1fc7197dc395869d247cfb5b514c85051f59b54",
+      "exit_code": 0
+    }
+  ],
+  "helper_sources": [
+    {
+      "path": "lab/service-accounts-review/challenge-harness.mjs",
+      "bytes": 12038,
+      "sha256": "e0d1cf474c4ba093f55d6470067d994c3f1623e590f2dff496ed2e63f6bb495e"
+    },
+    {
+      "path": "lab/service-accounts-review/challenge-fixture.py",
+      "bytes": 3936,
+      "sha256": "fb1888b9ebc86a8ddc92cae95b678df2fd63b1507390b39a61af069346ef59e8"
+    }
+  ],
+  "historical_helper_sources": [
+    {
+      "path": "artifacts/service-accounts-review/harness/initial-challenge-harness.mjs",
+      "bytes": 11275,
+      "sha256": "c89e5a8d37fe81aeaa40e91a8993467b6cf6e7dae99a4689e8337505c5c1aece"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/initial-challenge-fixture.py",
+      "bytes": 3207,
+      "sha256": "a400d5e46a1beb5752679866ad1e614f6ca1d2c60058cbfe7cdea325c2041327"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/pre-clock-schema-challenge.mjs",
+      "bytes": 11282,
+      "sha256": "066d98776fbfdc9e7192b48df5b33837f649540a43148b16e613d41ae2d70f71"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/pre-clock-schema-fixture.py",
+      "bytes": 3207,
+      "sha256": "a400d5e46a1beb5752679866ad1e614f6ca1d2c60058cbfe7cdea325c2041327"
+    }
+  ],
+  "raw_execution_pins": [
+    {
+      "path": "artifacts/service-accounts-review/harness/initial.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/initial.err",
+      "bytes": 648,
+      "sha256": "79026e24ae7947cea1177cdae6010e4e2cef2a118b35cac095d123153344c381"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/initial-status.json",
+      "bytes": 188,
+      "sha256": "a11f76c92060dd1f1361fba883dc901b3e2643f833914f83ca870c013b4df0b5"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/initial-fixture.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/initial-fixture.err",
+      "bytes": 472,
+      "sha256": "1ceb62c0d2c164f23a34f00f256f3d1c32b6fb2309c811a766150987c5ad325b"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/initial-fixture-status.json",
+      "bytes": 199,
+      "sha256": "dcd22662dfc3c7d09596aaf25742c237e33417462dc0be8745ffc6e313294c84"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final.err",
+      "bytes": 2753,
+      "sha256": "6bbc60e8082d489869aaefe06701b1bc41c630f908d0282bf9f9e077a13207a2"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-status.json",
+      "bytes": 113,
+      "sha256": "132e0f32db29131f39bb69e4a386117016728b25ea79886757581e3e88537b78"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-fixture.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-fixture.err",
+      "bytes": 949,
+      "sha256": "6dae1fcedd7d6dc9e09d09bf3310e74861209edb80272ed1fdce04b92d58e366"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-fixture-status.json",
+      "bytes": 126,
+      "sha256": "65bc5a292ddc4b1f2bd5b38867b05659fbe7a945ad6396adb80bed39e4bfbc8e"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-clock.out",
+      "bytes": 184,
+      "sha256": "4d57723aa39d53b573be55c8e77388a24d2fbabcd26efae66c688521052eedf7"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-clock.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-clock-status.json",
+      "bytes": 110,
+      "sha256": "60c25f63e7c6216700930db4c8feb15e978ad485c7970b8e96a104a290c1add5"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-clock-fixture.out",
+      "bytes": 186,
+      "sha256": "0deb9c36861d4bc107391c34afd1333de3245acbb369b5baa22d2e1f5e367ee7"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-clock-fixture.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/final-clock-fixture-status.json",
+      "bytes": 126,
+      "sha256": "6c98b93fdf7a43e3c9f155520737336b00f989268f923c4e481e5359b8b5cb7e"
+    }
+  ],
+  "original_core_authority": {
+    "path": "lab/service-accounts-review/acceptance.json",
+    "bytes": 17771,
+    "sha256": "758eb3da1c30b41aaea91cd94c73df75615ec4a2baf16c9d16bed69ebf97a0ed"
+  },
+  "original_independent_ELF": {
+    "path": "artifacts/service-accounts-review/build/independent.test",
+    "bytes": 12827112,
+    "sha256": "2927afc269ff2c78cd4cf71b6b0f61b385bc7f3d07477b0b0f1a6f07b75f6d61"
+  },
+  "helper_supplement_authority": {
+    "path": "lab/service-accounts-review/helper-review.json",
+    "bytes": 2297,
+    "sha256": "7d5aa0edc372660268e3d473400f534d83ca8778a341132ddcf57f4217d293d6"
+  },
+  "worker_initial_history_authority": {
+    "path": ".worktrees/service-accounts-guest-sol/.cache/service-accounts-prep/original-6cf8868/authority.json",
+    "bytes": 1269,
+    "sha256": "00f9588e73bd1ccc5bb87f9fdb1a999eb0f8eedf74bfdb2ed86686e7e81cd711"
+  },
+  "original_tracked_LF_source_snapshots": [
+    {
+      "path": "artifacts/service-accounts-review/harness/original-tracked-verify-service-accounts.mjs",
+      "bytes": 40740,
+      "sha256": "f7c80bc67b5ca76a0e1917ec7b83e001a5df1e7b2abf0eb5c0dcd86f4f87103a"
+    },
+    {
+      "path": "artifacts/service-accounts-review/harness/original-tracked-fixture.py",
+      "bytes": 33312,
+      "sha256": "000a9504b954e4fb2c238c262f7dd85da13aae8c0d5fea4eb8bbce0f29a23c1f"
+    }
+  ],
+  "original_raw_source_identity_only": {
+    "driver_sha256": "5bb60ec03c2859d081ba96d28f2db642c171ad8aa6d5e5a869943dd782b47ea6",
+    "fixture_sha256": "9b098959453adfd73d67b78f872ace23b813a0f162efb06495fec6126c911660",
+    "matching_raw_snapshots_retained": false,
+    "authority": "hash-checked original imports and completed tool outputs; preserved Git LF source is explicitly distinct"
+  },
+  "resolved_findings": [
+    {
+      "finding": "Literal producer NSS54 bytes vs decoder55; initial synthetic correctness fixture mirrored55",
+      "resolution": "Measured literal Buffer.byteLength54 + correct independently authored54 fixture"
+    },
+    {
+      "finding": "Last-password-change never falsely required for system identity",
+      "resolution": "Actual Shadow4.9 current-day date independent from disabled max/expiry/inactive; measured last-change day bound by creation/reopen clock and invariant across phases; no product/chage mutation"
+    },
+    {
+      "finding": "Copied20s broker lifecycle and5s socket/8s peerchild budgets could kill legitimate multioperation TCG run",
+      "resolution": "Bounded60sbroker/45ssocket/50speerchild, host receipt/producer/tests/docs aligned; production45s/15s handler/utility guards unchanged"
+    }
+  ],
+  "remaining_source_findings": [],
+  "source_review": {
+    "NSS_only_leaf_adaptation": true,
+    "stock_useradd_defaults_fullbytes_and_metadata_invariant": true,
+    "actual_existing_nonroot_peer_mutations": true,
+    "six_lifecycle_revisions_identity_expiry_reopen": true,
+    "duplicate_stale_readonly_state_digests": true,
+    "two_owned_SIGTERM_wait_socket_cleanup": true,
+    "own_spool_absence_subID_unrelated_public_identity_listeners_checks": true,
+    "strict_schema_nonce_compact_rawframe_nonzeroexit_refusal": true,
+    "exact_original_builder_authority_path_andELF_binding": true,
+    "fixed_signed_image_noNIC_noShares_noCloudUsers_noKeys": true,
+    "bounded_child_output_and_timeout_cleanup_source_reviewed": true,
+    "eight_ISO_payload_plan_and_pinned_reused_readonly_ISO_adapter": true
+  },
+  "runtime_limits": {
+    "qemu_seconds": 600,
+    "qemu_output_bytes": 2097152,
+    "broker_seconds": 60,
+    "broker_output_bytes": 16384,
+    "peer_request_seconds": 50,
+    "peer_socket_seconds": 45,
+    "check_host_output_bytes": 8192,
+    "test_output_bytes": 65536,
+    "test_seconds": 20
+  },
+  "root_current_catalog_scope": {
+    "cmd_internal_mod_rows": 152,
+    "candidate_source_catalog_sha256": "b24f8e5d6ba0c21b00563e85b748b10d3f99aeeb9cbb7ef64e4cec708f582501",
+    "root_go_manifest_bytes": 43701,
+    "root_go_manifest_sha256": "0936998e5efc0a868153aaa5f135b93722c089b94dbf14de477ed71a861e57cd",
+    "README_excluded": true
+  },
+  "failure_history": [
+    {
+      "kind": "initial_source_blockers",
+      "runs": [
+        "initial",
+        "initial-fixture"
+      ],
+      "exit_code": 1,
+      "raw_outputs_pinned": true,
+      "meaning": "Independent54-byte/currentdatedaging positives reject original erroneous harness"
+    },
+    {
+      "kind": "reviewer_schema_update",
+      "runs": [
+        "final",
+        "final-fixture"
+      ],
+      "exit_code": 1,
+      "raw_outputs_pinned": true,
+      "meaning": "First corrected-source attempts used old synthetic clock_days/native last-change fields and old Python native_identity signature; updated own challenges to new measured contract then passed"
+    },
+    {
+      "kind": "worker_original_selfchecks",
+      "counts": "7 Node and7 Python after2 earlier synthetic Python failures",
+      "authority": "worker history/committed README/tool-stream only, not original raw captures; no VM result"
+    },
+    {
+      "kind": "prose_count_correction",
+      "meaning": "Reviewer initially stated84/8 in commentary; actual raw final outputs88/13 above are authority"
+    }
+  ],
+  "limits": [
+    "Synthetic/source protocol gate only; no Go builds/VM/live account/state/policy/services/shared inputs/providers or credentials changed by reviewer.",
+    "Actual distro service creation/mailabsence/suspend/activate/reopen remains pending exact new guest execution and independent artifact/ISO/catalog/rawserial audit.",
+    "Original raw6cf mixed-newline source snapshots were not retained before worker corrections; original hashes and tool history are separate from preserved trackedLF source, never represented as byte-identical raw snapshot.",
+    "Generated Go test main/entire Go distribution remain separately limited; no cPanel/CloudLinux/allOS/reboot/full-stock or production qualification."
+  ]
+}

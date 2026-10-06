@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "kind": "independent_service_account_prepare_helper_supplement",
+  "passed": true,
+  "original_acceptance": {
+    "path": "lab/service-accounts-review/acceptance.json",
+    "bytes": 17771,
+    "sha256": "758eb3da1c30b41aaea91cd94c73df75615ec4a2baf16c9d16bed69ebf97a0ed"
+  },
+  "original_binary": {
+    "path": "artifacts/service-accounts-review/build/independent.test",
+    "bytes": 12827112,
+    "sha256": "2927afc269ff2c78cd4cf71b6b0f61b385bc7f3d07477b0b0f1a6f07b75f6d61"
+  },
+  "helper_source": {
+    "path": "lab/service-accounts-review/prepare.py",
+    "bytes": 4294,
+    "sha256": "b61c803dc6fc2c52d1459f649c38f1a40ac6c648275ae20e21551ac181315992"
+  },
+  "change": "Permit baseline ancestor plus exclusively owned lab-only tracked commit delta instead of literal baseline HEAD; seven untouched baseline product Git bindings and exact clean candidate still required.",
+  "command": "python -I -B lab/service-accounts-review/prepare.py",
+  "exit_code": 0,
+  "raw_execution_pins": [
+    {
+      "path": "artifacts/service-accounts-review/build/helper-supplement.out",
+      "bytes": 196,
+      "sha256": "0b3707fc4ec8cb7f5f49e7042d0ec89813a8e40b8325f7d8366f1cbf314d05d0"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/helper-supplement.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/helper-supplement-status.json",
+      "bytes": 117,
+      "sha256": "ba72d416805d1d13b195c9ef5caa3827888a5af071c7619da8c711cfdd87bfdb"
+    }
+  ],
+  "failed_helper_outcomes": [
+    {
+      "scope": "First supplement shell invocation",
+      "exit_code": 1,
+      "authority": "completed tool output only; not retained raw file",
+      "cause": "PowerShell parser rejected improperly nested quote escapes before Python/edit/test execution. Corrected invocation used stdin here-string."
+    }
+  ],
+  "limits": [
+    "Helper-only correction; no product/private challenge source or ELF changes and no Go/native reexecution.",
+    "Original acceptance raw helper source pin remains historical; this supplemental pin is the current helper authority.",
+    "Runtime remains pending."
+  ]
+}

@@ -1,0 +1,103 @@
+//go:build linux
+
+package hostaccounts
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestIndependentBrokerSetgidParent(t *testing.T) {
+	if os.Geteuid() != 0 || authority("/root") != nil {
+		t.Skip("requires admitted root-owned setgid fixture")
+	}
+	for _, target := range []string{"state", "homes", "socket"} {
+		t.Run("missing_"+target, func(t *testing.T) {
+			root, err := os.MkdirTemp("/root", "sifruno-independent-setgid-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.RemoveAll(root); err != nil {
+					t.Error("owned cleanup", err)
+				}
+			})
+			parent := filepath.Join(root, "inheriting")
+			if err := os.Mkdir(parent, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(parent, 0755|os.ModeSetgid); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Lstat(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := BrokerOptions{StateDir: filepath.Join(root, "state"), HomesDir: filepath.Join(root, "homes"), SocketPath: filepath.Join(root, "socket", "broker.sock"), ControllerUID: 65534}
+			switch target {
+			case "state":
+				options.StateDir = filepath.Join(parent, "state")
+			case "homes":
+				options.HomesDir = filepath.Join(parent, "homes")
+			case "socket":
+				options.SocketPath = filepath.Join(parent, "socket", "broker.sock")
+			}
+			if err := admitBrokerPaths(options); err != ErrUnavailable {
+				t.Fatal("missing inherited-mode destination admitted", err)
+			}
+			for _, path := range []string{options.StateDir, options.HomesDir, filepath.Dir(options.SocketPath)} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Fatal("admission created destination", err)
+				}
+			}
+			after, err := os.Lstat(parent)
+			if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
+				t.Fatal("read-only admission changed parent", err)
+			}
+			// Existing exact-mode children need no mkdir and remain admissible
+			// under the retained ancestor authority. Setgid is not global policy.
+			if target == "homes" {
+				if err := os.Mkdir(options.HomesDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(options.HomesDir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := admitBrokerPaths(options); err != nil {
+					t.Fatal("exact existing directory regression", err)
+				}
+			}
+		})
+	}
+	t.Run("actual_post_create_inheritance", func(t *testing.T) {
+		root, err := os.MkdirTemp("/root", "sifruno-independent-created-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := os.RemoveAll(root); err != nil {
+				t.Error("owned cleanup", err)
+			}
+		})
+		if err := os.Chmod(root, 0755|os.ModeSetgid); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.Lstat(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		child := filepath.Join(root, "state")
+		if err := declaredDir(child, 0700); err != ErrUnavailable {
+			t.Fatal("post-create special mode accepted", err)
+		}
+		info, err := os.Lstat(child)
+		if err != nil || info.Mode() != os.ModeDir|os.ModeSetgid|0700 {
+			t.Fatal("kernel inheritance not exercised", err)
+		}
+		after, err := os.Lstat(root)
+		if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+			t.Fatal("guard rewrote parent", err)
+		}
+	})
+}

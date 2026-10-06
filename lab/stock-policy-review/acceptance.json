@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "independent_portable_stock_host_policy_challenge_acceptance",
+  "passed": true,
+  "checked_at": "2026-10-06T06:45:05.748417+00:00",
+  "baseline_commit": "cebd86fa9ec12a24e6e597e88d5185d76540c685",
+  "core_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+  "cli_commit": "6494e272c61b533231db0cc889e5a604a5a980e0",
+  "own_adopted_candidate": "4d3b3a930697f4bea71d7329b484317bec65b022",
+  "qualification": {
+    "status": {
+      "exit_code": 0,
+      "offline": true,
+      "owned_temp": true,
+      "command": "primary scripts/go.ps1 test -mod=readonly -overlay=.cache/stock-policy-review/overlay.json -run=^TestIndependent -count=1 -timeout=60s -json ./internal/hostaccounts ./cmd/hostbroker ./lab/stock-policy-review"
+    },
+    "stdout": {
+      "path": ".cache/stock-policy-review/qualification.out",
+      "bytes": 91832,
+      "sha256": "08d57f16a62c70e5f901a373990ff088d2c8cd4cb4d2c297537b14fcf7c8c1b7"
+    },
+    "stderr": {
+      "path": ".cache/stock-policy-review/qualification.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "named_pass": 99,
+    "package_pass": [
+      {
+        "package": "sifruno/internal/hostaccounts",
+        "elapsed": 0.959
+      },
+      {
+        "package": "sifruno/lab/stock-policy-review",
+        "elapsed": 0.47
+      },
+      {
+        "package": "sifruno/cmd/hostbroker",
+        "elapsed": 0.569
+      }
+    ],
+    "failed": 0,
+    "named_skip": []
+  },
+  "targeted_windows_cgo_race": {
+    "status": {
+      "owned_temp": true,
+      "exit_code": 0,
+      "offline": true,
+      "command": "primary scripts/go.ps1 test -mod=readonly -overlay=.cache/stock-policy-review/overlay.json -race -run=^TestIndependentCancellationWhileProbeBlockedDiscardsCompletePrefix$ -count=1 -timeout=60s -json ./internal/hostaccounts"
+    },
+    "stdout": {
+      "path": ".cache/stock-policy-review/race.out",
+      "bytes": 1508,
+      "sha256": "76802aa10bfcc5adac10bfd8d74c0408ce0427a48adf95d1f73b26e19ebd253a"
+    },
+    "stderr": {
+      "path": ".cache/stock-policy-review/race.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "named_pass": 1,
+    "package_pass": [
+      {
+        "package": "sifruno/internal/hostaccounts",
+        "elapsed": 1.8559999999999999
+      }
+    ],
+    "failed": 0,
+    "named_skip": []
+  },
+  "vet": {
+    "status": {
+      "offline": true,
+      "command": "primary scripts/go.ps1 vet -mod=readonly -overlay=.cache/stock-policy-review/overlay.json ./internal/hostaccounts ./cmd/hostbroker ./lab/stock-policy-review",
+      "exit_code": 0,
+      "owned_temp": true
+    },
+    "stdout": {
+      "path": ".cache/stock-policy-review/vet.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "path": ".cache/stock-policy-review/vet.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "source_audit": {
+    "command": "python lab/stock-policy-review/audit_source.py",
+    "exit_code": 0,
+    "result": {
+      "passed": true,
+      "admitted_source_pins": 10,
+      "native_guard_suffix_lf_byte_unchanged": true,
+      "broker_only_constructor_relocation": true,
+      "constructor_refusal_before_declared_directories_store_socket": true,
+      "limits": [
+        "Read-only source equality/order proof, not executed native startup or atomic host-policy stability.",
+        "Portable injected callbacks never access real Linux account policy or execute utilities."
+      ]
+    },
+    "stdout": {
+      "path": ".cache/stock-policy-review/source-audit.out",
+      "bytes": 414,
+      "sha256": "4849daf6fe00f7a5e0a3bd39caff54070a1a12ca6cbdaf5991379d55a06d3d7c"
+    },
+    "stderr": {
+      "path": ".cache/stock-policy-review/source-audit.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "source_catalog": {
+    "path": "lab/stock-policy-review/source-catalog.json",
+    "bytes": 1912,
+    "sha256": "c3442db895d645e9b4591ac624d51fe89c9ce5f665ef95e217cfc974107ee555"
+  },
+  "executed_test_and_helper_bytes": [
+    {
+      "path": "lab/stock-policy-review/public_test.go",
+      "bytes": 2242,
+      "sha256": "3ff28db26c15bd9f83a20ea90a7ddce4bc2c881c04cc7fb0a1b36fbb3e1879aa"
+    },
+    {
+      "path": "lab/stock-policy-review/private_challenges_test.go.txt",
+      "bytes": 7305,
+      "sha256": "6e838332f6d8a94f9e0c61e10f36d50c696f16926cc10070dc965d3b58512c7a"
+    },
+    {
+      "path": "lab/stock-policy-review/cli_challenges_test.go.txt",
+      "bytes": 4298,
+      "sha256": "a3d847ef7f02010aeaaa3098fc1b14a20d793bccbbc33cd09e418b974d70426c"
+    },
+    {
+      "path": "lab/stock-policy-review/prepare.py",
+      "bytes": 1489,
+      "sha256": "5b9ad7ed1c2bb03e4d6d450dde0890af93669f8eb311eeab7c8446ff9da2802b"
+    },
+    {
+      "path": "lab/stock-policy-review/audit_source.py",
+      "bytes": 1966,
+      "sha256": "0d7d89a7e5e5ff6ec36ba6226a4fc4734cdb26a6b40746980ff165ba91b44e1e"
+    }
+  ],
+  "execution_boundaries": {
+    "primary_wrapper": "C:/Users/Administrator/Documents/Codex/2026-10-04/hi/scripts/go.ps1",
+    "cwd": "assigned .worktrees/stock-preflight-review-sol",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "mod": "readonly",
+    "TEMP_TMP": "owned .cache/stock-policy-review/temp",
+    "module_tool_inputs": "primary read-only",
+    "compilation_cache": "normal primary wrapper shared cache explicitly allowed",
+    "production_source_overridden": 0,
+    "test_files_added_via_overlay": 2,
+    "fixture_data": "synthetic in-memory bytes and injected callbacks; no live Linux policy reads"
+  },
+  "challenge_scope": [
+    "NUL insertion at every byte offset including comments/unrelated settings",
+    "required NSS foreign provider/action/repetition and duplicate-key refusal; inherited files-only comments/whitespace preserved",
+    "exact Shadow disabled mail literal, duplicate whitespace aliases, total4096 and legacy1022/1023 line bounds",
+    "NSS4MiB inclusive total bound",
+    "opaque error whose Error method panics proves no raw error formatting; fixed3check reasons/order",
+    "blocked probe cancellation discards completed prefix and stops later callbacks",
+    "public exact7keys and3keys/check, fixed restrictions, nil/cancel/platform refusal",
+    "CLI diagnostic tokens supplied as serving-option values, alias/assignment/repetition/trailing/NUL malformed cases",
+    "CLI single bounded JSON, five-second context and cancellation after return, partial output failure uses generic fixed message"
+  ],
+  "findings": [
+    {
+      "id": "diagnostic-token-consumed-as-option-value",
+      "kind": "source finding",
+      "observed": "Initial root CLI flag.Parse could consume --check-host as --state/--homes/--socket value and call serve, contrary to mixed-mode no-service contract. No native execution of faulty source performed.",
+      "resolution": "root corrected token admission before serving parser in6494e272; independent18 option/value plus five standalone cases pass on actual candidate."
+    }
+  ],
+  "earlier_passes": {
+    "core_only_before_cli": {
+      "path": ".cache/stock-policy-review/challenge.out",
+      "bytes": 65917,
+      "sha256": "052fa01af99c7851cc97646061fba10fbb1e8ec9cf93257c28ec3e89b825573c"
+    },
+    "core_and_cli_before_test_gofmt": {
+      "path": ".cache/stock-policy-review/final-challenge.out",
+      "bytes": 91882,
+      "sha256": "693df2da8794804df0530caa5153fa8f2ab611d3dafb45164bebce41c6e5a634"
+    },
+    "interpretation": "Retained earlier passing commands, separate from final formatted test-byte authority. No failed product challenge execution."
+  },
+  "preflight": {
+    "tool": "Forge substrate_check",
+    "okToProceed": true,
+    "advisory": "TempDir symbol unknown to repo graph; standard Go testing fixture APIs/owned compiler TEMP are explicit. Empty impact means unknown; source scope inspected manually."
+  },
+  "rollback": "Source-only revert of diagnostics/admission relocation; no migration, policy rewrite, state update or broadened provider authority.",
+  "native_observation": false,
+  "pending_separate_evidence": [
+    "Signed Alma guest harness/receipt and image/binary/input/cleanup audit require separately frozen artifacts; this portable receipt does not qualify them.",
+    "Whole-module root tests/vet and final documentation/archive publication are separate authorities."
+  ],
+  "limits": [
+    "Actual Windows portable test execution plus source review, not Linux execution or all-OS evidence.",
+    "Constructor admission-before-first-directory is source equality/order proof here; actual baseline/candidate native side-effect comparison belongs to guest receipt.",
+    "Injected report callbacks and positive CLI DTOs are synthetic; no account utility, native constructor or live Linux policy is executed.",
+    "Context cancellation discards partial results when control returns from a bounded probe; no atomic host-policy stability guarantee or interruptible syscall guarantee.",
+    "No stock provisioning, cPanel/CloudLinux compatibility,100-account hosting,reboot,remote ingress,hostile guest or production activation claim.",
+    "No credentials,live state,services,firewall,dependency inputs or provider settings modified."
+  ]
+}

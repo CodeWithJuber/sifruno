@@ -1,0 +1,438 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "independent_managed_service_accounts_core_source_and_overlay",
+  "passed": true,
+  "baseline_commit": "392700489d49f13810923586a94eef6b48ec9cf6",
+  "candidate_commit": "23e9a97f17b9735fdffa7ed4012f78e4e8e44a57",
+  "candidate_source_pins": [
+    {
+      "path": "internal/hostaccounts/native_linux.go",
+      "bytes": 18020,
+      "sha256": "049486edcd5bee4e9b5584d1b766ee1d0065b3273ceeb521c0353bcfdf554ee4",
+      "canonical_git_sha256": "049486edcd5bee4e9b5584d1b766ee1d0065b3273ceeb521c0353bcfdf554ee4",
+      "git_blob": "19dac316541852f5dd59e25b6baae2ed9e0e9a81"
+    },
+    {
+      "path": "internal/hostaccounts/native_linux_test.go",
+      "bytes": 4362,
+      "sha256": "d7e0b47744c1b8cad6c8ecac08d43ea67ed8993ac4c841aa8eb8f15fb34c22a8",
+      "canonical_git_sha256": "d7e0b47744c1b8cad6c8ecac08d43ea67ed8993ac4c841aa8eb8f15fb34c22a8",
+      "git_blob": "ea7d2302f895cc79502d4c531f7b2bf849a05193"
+    },
+    {
+      "path": "internal/hostaccounts/policy.go",
+      "bytes": 1892,
+      "sha256": "6e7707df544c85a59c428724f6860a15bd49a3267bba715f445eb1359fd1c58d",
+      "canonical_git_sha256": "6e7707df544c85a59c428724f6860a15bd49a3267bba715f445eb1359fd1c58d",
+      "git_blob": "2a670a6b13c40f9653fe157e514c950f71405b22"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report.go",
+      "bytes": 2553,
+      "sha256": "5a32e7823b31a0b517d2608ff9b1f9074020f7a696d4fbfa72f489a73954dd62",
+      "canonical_git_sha256": "5a32e7823b31a0b517d2608ff9b1f9074020f7a696d4fbfa72f489a73954dd62",
+      "git_blob": "067d97d820f592307406e417104da04a46b871cc"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report_test.go",
+      "bytes": 4960,
+      "sha256": "7c77fd9a1c4262aed2351bcab35e8f8d13fa5b18a665f7fa07d2dd0e88ca5ff5",
+      "canonical_git_sha256": "7c77fd9a1c4262aed2351bcab35e8f8d13fa5b18a665f7fa07d2dd0e88ca5ff5",
+      "git_blob": "4ce7f5da3e2eab84f11bed210cef9f0cc6680487"
+    },
+    {
+      "path": "internal/hostaccounts/policy_test.go",
+      "bytes": 4870,
+      "sha256": "d503b30f0f7edf8dcb30d67cfa94a671e64dc278d39b0b63a0a03c0c92ebf7bb",
+      "canonical_git_sha256": "d503b30f0f7edf8dcb30d67cfa94a671e64dc278d39b0b63a0a03c0c92ebf7bb",
+      "git_blob": "e066393088398b016c4972201868a77c11854777"
+    },
+    {
+      "path": "internal/hostaccounts/types.go",
+      "bytes": 4268,
+      "sha256": "12f5b01017d6ebe1d47ab1b2827a88740d99180bb69b00a3f4f76c4626db25e6",
+      "canonical_git_sha256": "12f5b01017d6ebe1d47ab1b2827a88740d99180bb69b00a3f4f76c4626db25e6",
+      "git_blob": "4a0a561bb928eecae30431173fe6541928936aac"
+    }
+  ],
+  "overlay_source_audit": {
+    "path": "artifacts/service-accounts-review/build/source-audit.json",
+    "bytes": 3324,
+    "sha256": "307cd3b14f2bde1ceffafd234f72cd643dd7ca46481ce9faa76f36b366bcaa97"
+  },
+  "owned_lab_source_pins": [
+    {
+      "path": "lab/service-accounts-review/prepare.py",
+      "bytes": 4056,
+      "sha256": "0a2775756ed63b130cd25455474cba575dad0db2a734d50348a14f9ad4134b33"
+    },
+    {
+      "path": "lab/service-accounts-review/private_policy_test.go.txt",
+      "bytes": 3928,
+      "sha256": "e69f25bb25a8f891d996cd73b879f43859765a26861ff71784d45ea57ffc9181"
+    },
+    {
+      "path": "lab/service-accounts-review/private_argv_linux_test.go.txt",
+      "bytes": 1722,
+      "sha256": "eb8ac54e493fca7e6651b49bcf33736caee54157647d359ffc2e3cb4031d2886"
+    },
+    {
+      "path": "lab/service-accounts-review/public_test.go",
+      "bytes": 850,
+      "sha256": "a4191da877618987804d814d0d3a06190df103e282912be7cdfc77d682c867f6"
+    }
+  ],
+  "raw_execution_pins": [
+    {
+      "path": "artifacts/service-accounts-review/build/source-audit.json",
+      "bytes": 3324,
+      "sha256": "307cd3b14f2bde1ceffafd234f72cd643dd7ca46481ce9faa76f36b366bcaa97"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/overlay.json",
+      "bytes": 2936,
+      "sha256": "6df2285c82c83f6fe979d4752e0cecd5802fff69d8e5b4746745e2bfcf244d79"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/baseline-overlay.json",
+      "bytes": 365,
+      "sha256": "a1d27e4c7976238f84dced24c7dc90fd5ed9a1e68960b563f0259d58fece94d9"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/baseline_control_test.go.txt",
+      "bytes": 3924,
+      "sha256": "97b3a7a6b3483c5b1b2497a7ab634822e0ecd72ee9e8ebc0c71317ca75325c16"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/portable.out",
+      "bytes": 70358,
+      "sha256": "f920d461588a648e091a674a80029ca8561609249a25f44c5b931665fa054c99"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/portable.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/portable-status.json",
+      "bytes": 128,
+      "sha256": "4a2774dd547b0321738f5f9a8e0938d299204f74b96374e50045422332e3faae"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/baseline-control.out",
+      "bytes": 3136,
+      "sha256": "8fa378c4a591b289246de3231559ea6284d441c73d23bafee07a3c6386348620"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/baseline-control.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/baseline-control-status.json",
+      "bytes": 163,
+      "sha256": "c431c259d7597545529fccc3ff8b15a2a79b0c5786777971ffd8a6ab0704f052"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/linux-vet.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/linux-vet.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/linux-vet-status.json",
+      "bytes": 97,
+      "sha256": "22aab981db43349c3c246619ab8f2935a3aaa80ff9f7653008b5efebf4fce436"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/linux-compile.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/linux-compile.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/build/linux-compile-status.json",
+      "bytes": 292,
+      "sha256": "df8b108eca9f54b8837e8a3205b9c60613a99e5a605109aacf9f203188944da9"
+    }
+  ],
+  "commands": [
+    {
+      "name": "portable",
+      "goos": "windows",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "argv": [
+        "test",
+        "-mod=readonly",
+        "-count=1",
+        "-timeout=60s",
+        "-json",
+        "-overlay",
+        "artifacts/service-accounts-review/build/overlay.json",
+        "-run",
+        "TestIndependentService|TestServiceAccountDefaultsPolicy|TestHostPolicyReport|TestPublicPolicyContextBoundary",
+        "./internal/hostaccounts",
+        "./lab/service-accounts-review"
+      ],
+      "exit_code": 0,
+      "named_pass": 84,
+      "package_pass": 2,
+      "failures": 0,
+      "skips": 0
+    },
+    {
+      "name": "baseline_control",
+      "goos": "windows",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "argv": [
+        "test",
+        "-mod=readonly",
+        "-count=1",
+        "-timeout=60s",
+        "-json",
+        "-overlay",
+        "artifacts/service-accounts-review/build/baseline-overlay.json",
+        "-run",
+        "^TestIndependentServiceDefaults/yes/literal$",
+        "./internal/hostaccounts"
+      ],
+      "exit_code": 1,
+      "expected_failure": true,
+      "meaning": "Untouched baseline product rejects admitted service yes-default; only private test function name adapted to baseline symbol."
+    },
+    {
+      "name": "linux_vet",
+      "goos": "linux",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "argv": [
+        "vet",
+        "-mod=readonly",
+        "-overlay",
+        "artifacts/service-accounts-review/build/overlay.json",
+        "./internal/hostaccounts",
+        "./lab/service-accounts-review"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "linux_compile",
+      "goos": "linux",
+      "goarch": "amd64",
+      "cgo_enabled": "0",
+      "argv": [
+        "test",
+        "-mod=readonly",
+        "-trimpath",
+        "-buildvcs=false",
+        "-overlay",
+        "artifacts/service-accounts-review/build/overlay.json",
+        "-c",
+        "-o",
+        "artifacts/service-accounts-review/build/independent.test",
+        "./internal/hostaccounts"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "environment": {
+    "wrapper": "../../scripts/go.ps1 (primary, unchanged)",
+    "cwd": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\service-accounts-review-sol",
+    "GOENV": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "TEMP_TMP": "artifacts/service-accounts-review/build/temp (owned)",
+    "module_input_access": "read_only",
+    "normal_primary_compilation_cache": "allowed"
+  },
+  "linux_challenges": {
+    "binary": {
+      "path": "artifacts/service-accounts-review/build/independent.test",
+      "bytes": 12827112,
+      "sha256": "2927afc269ff2c78cd4cf71b6b0f61b385bc7f3d07477b0b0f1a6f07b75f6d61"
+    },
+    "test_names": [
+      "TestIndependentServiceDefaults",
+      "TestIndependentServicePolicyContract",
+      "TestIndependentServiceUseraddBoundary"
+    ],
+    "compiled": true,
+    "executed": false
+  },
+  "review_findings": [],
+  "source_review": {
+    "seven_file_canonical_Git_binding": true,
+    "all_fixed_creation_args_retained_plus_system": true,
+    "policy_NUL_byte_physical_line_duplicate_exact_literal_guards_retained": true,
+    "report_seven_keys_three_IDs_three_restrictions_preserved": true,
+    "new_refusal_reason_and_capability_disclose_service_contract": true,
+    "existing_native_controller_operation_path_guards_unchanged": true,
+    "existing_account_metadata_and_recovery_not_migrated": true
+  },
+  "failure_history": [
+    {
+      "kind": "expected_baseline_regression_control",
+      "exit_code": 1,
+      "raw_outputs_retained": true,
+      "scope": "baseline rejects service yes-default, intended detection proof"
+    },
+    {
+      "kind": "Forge_heuristic_advisory",
+      "result": "ASK_FIRST exact inputs/constraints prompts",
+      "resolution": "Parent contract provides exact input/output, ownership, guards, bounded verification and recovery; advisory manually resolved, no missing user permission."
+    }
+  ],
+  "limits": [
+    "Portable checks plus Linux compile/vet only; Linux test ELF has not executed.",
+    "Shadow4.9 upstream system mail suppression informs source review; installed patched distro must qualify actual creation, zero mail spool, fixed identities, suspend/activate/reopen/recovery.",
+    "NSS remains files-only; no stock provisioning, CloudLinux/cPanel/allOS/reboot/100-account/full-hosting or production qualification.",
+    "Compiler-generated Go test main and exhaustive module/tool/Go-distribution prebuild inputs not independently catalogued by this compile-only lab. Native harness must separately bind exact source/tool/module/image/ELF/ISO inputs.",
+    "No live accounts, policy/state/services/firewall/shared dependency writes/global credentials/providers accessed or mutated; no VM executed."
+  ],
+  "package_source_inventory_pins": [
+    {
+      "path": "internal/hostaccounts/broker_linux.go",
+      "compiled_source": "internal/hostaccounts/broker_linux.go",
+      "bytes": 5593,
+      "sha256": "f2f8a28911bc4ee5807b52325b97265ac0015c449deecf2d1b25f83740b692db"
+    },
+    {
+      "path": "internal/hostaccounts/broker_paths_linux.go",
+      "compiled_source": "internal/hostaccounts/broker_paths_linux.go",
+      "bytes": 2563,
+      "sha256": "826276568dc8a9a2d3ad68b75d43b188ea6819a2d50390f19d13076cbea2e4a2"
+    },
+    {
+      "path": "internal/hostaccounts/broker_paths_linux_test.go",
+      "compiled_source": "internal/hostaccounts/broker_paths_linux_test.go",
+      "bytes": 10358,
+      "sha256": "b1ae433b09c2685564c4d0df35218b045af3fca380f955e6ef000d5f7534d72c"
+    },
+    {
+      "path": "internal/hostaccounts/client.go",
+      "compiled_source": "internal/hostaccounts/client.go",
+      "bytes": 3713,
+      "sha256": "87cb2ab5f958d9409d27352cc9c86a8ef31b6d87dfd3bbbd7e3a4f3b5d860b43"
+    },
+    {
+      "path": "internal/hostaccounts/client_other.go",
+      "compiled_source": "internal/hostaccounts/client_other.go",
+      "bytes": 263,
+      "sha256": "8643af0ee3b9212461b6a79bf53a630414e16d8f867babacb585471b57102c5b"
+    },
+    {
+      "path": "internal/hostaccounts/http.go",
+      "compiled_source": "internal/hostaccounts/http.go",
+      "bytes": 4555,
+      "sha256": "3901b27c52143e605561605f87ef3246510972201cb156726d03a442cc30fb95"
+    },
+    {
+      "path": "internal/hostaccounts/journal.go",
+      "compiled_source": "internal/hostaccounts/journal.go",
+      "bytes": 6728,
+      "sha256": "1241795bb3a5145f1403b955ee973322335d4ac391d931ebb867403a88be355b"
+    },
+    {
+      "path": "internal/hostaccounts/native_linux.go",
+      "compiled_source": "artifacts/service-accounts-review/build/candidate/native_linux.go",
+      "bytes": 18020,
+      "sha256": "049486edcd5bee4e9b5584d1b766ee1d0065b3273ceeb521c0353bcfdf554ee4"
+    },
+    {
+      "path": "internal/hostaccounts/native_linux_test.go",
+      "compiled_source": "artifacts/service-accounts-review/build/candidate/native_linux_test.go",
+      "bytes": 4362,
+      "sha256": "d7e0b47744c1b8cad6c8ecac08d43ea67ed8993ac4c841aa8eb8f15fb34c22a8"
+    },
+    {
+      "path": "internal/hostaccounts/policy.go",
+      "compiled_source": "artifacts/service-accounts-review/build/candidate/policy.go",
+      "bytes": 1892,
+      "sha256": "6e7707df544c85a59c428724f6860a15bd49a3267bba715f445eb1359fd1c58d"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report.go",
+      "compiled_source": "artifacts/service-accounts-review/build/candidate/policy_report.go",
+      "bytes": 2553,
+      "sha256": "5a32e7823b31a0b517d2608ff9b1f9074020f7a696d4fbfa72f489a73954dd62"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report_linux.go",
+      "compiled_source": "internal/hostaccounts/policy_report_linux.go",
+      "bytes": 224,
+      "sha256": "b590917a59aed109a7551fcb9c18877843b1c4195f1180fdc15137f57da30f32"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report_other.go",
+      "compiled_source": "internal/hostaccounts/policy_report_other.go",
+      "bytes": 115,
+      "sha256": "5ac978df9ab23269bd2c30548f7740d2b543667a72efe440814a1db726913108"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report_test.go",
+      "compiled_source": "artifacts/service-accounts-review/build/candidate/policy_report_test.go",
+      "bytes": 4960,
+      "sha256": "7c77fd9a1c4262aed2351bcab35e8f8d13fa5b18a665f7fa07d2dd0e88ca5ff5"
+    },
+    {
+      "path": "internal/hostaccounts/policy_test.go",
+      "compiled_source": "artifacts/service-accounts-review/build/candidate/policy_test.go",
+      "bytes": 4870,
+      "sha256": "d503b30f0f7edf8dcb30d67cfa94a671e64dc278d39b0b63a0a03c0c92ebf7bb"
+    },
+    {
+      "path": "internal/hostaccounts/snapshot.go",
+      "compiled_source": "internal/hostaccounts/snapshot.go",
+      "bytes": 5700,
+      "sha256": "aed1c575bfd4270b76cd96c6d9917a8b02389a957f34a0128bb437c37e4c2ef4"
+    },
+    {
+      "path": "internal/hostaccounts/snapshot_test.go",
+      "compiled_source": "internal/hostaccounts/snapshot_test.go",
+      "bytes": 9528,
+      "sha256": "84152d31b66d6ade2cf53de49564f7c655588792412db9aaa272183f2c78db0d"
+    },
+    {
+      "path": "internal/hostaccounts/store.go",
+      "compiled_source": "internal/hostaccounts/store.go",
+      "bytes": 14563,
+      "sha256": "fd2094e5ba57bb379546040d779ed379e7ad0ef430e0687e35bfec0985dfbd56"
+    },
+    {
+      "path": "internal/hostaccounts/store_test.go",
+      "compiled_source": "internal/hostaccounts/store_test.go",
+      "bytes": 13357,
+      "sha256": "65d95867b45a796aa8e69b2f1ce769ff26d6142d256b4e29dcaccac14e63aa58"
+    },
+    {
+      "path": "internal/hostaccounts/types.go",
+      "compiled_source": "artifacts/service-accounts-review/build/candidate/types.go",
+      "bytes": 4268,
+      "sha256": "12f5b01017d6ebe1d47ab1b2827a88740d99180bb69b00a3f4f76c4626db25e6"
+    },
+    {
+      "path": "lab/service-accounts-review/private_policy_test.go.txt",
+      "compiled_source": "lab/service-accounts-review/private_policy_test.go.txt",
+      "bytes": 3928,
+      "sha256": "e69f25bb25a8f891d996cd73b879f43859765a26861ff71784d45ea57ffc9181"
+    },
+    {
+      "path": "lab/service-accounts-review/private_argv_linux_test.go.txt",
+      "compiled_source": "lab/service-accounts-review/private_argv_linux_test.go.txt",
+      "bytes": 1722,
+      "sha256": "eb8ac54e493fca7e6651b49bcf33736caee54157647d359ffc2e3cb4031d2886"
+    }
+  ],
+  "package_source_inventory_scope": "Conservative package Go inventory including platform-inactive files; selected compiler-generated source and full tool/module dependency closure are not certified here."
+}

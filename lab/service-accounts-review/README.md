@@ -1,0 +1,116 @@
+# Independent managed-service account core review
+
+This lab owns only its review files and ignored build artifacts. It reviews
+core `23e9a97f17b9735fdffa7ed4012f78e4e8e44a57` over baseline
+`392700489d49f13810923586a94eef6b48ec9cf6`; product sources are never edited.
+[acceptance.json](acceptance.json) records seven candidate raw/canonical Git
+bindings, compiled package sources, own tests, commands, exits and raw logs.
+
+`prepare.py` validates the assigned clean baseline and exact clean candidate,
+then freezes seven raw candidate files into an owned read-only Go overlay.
+Two independently authored test additions challenge defaults ambiguity/bounds,
+report redaction/cancellation/capability and Linux command authority. Output
+parents are checked componentwise before creation; symlinks/reparse points and
+nonregular/multiply linked existing inputs are refused.
+
+Run from the assigned reviewer worktree:
+
+```powershell
+python -I -B lab/service-accounts-review/prepare.py
+$env:GOENV='off'; $env:GOPROXY='off'; $env:GOSUMDB='off'; $env:GOTOOLCHAIN='local'
+$env:TEMP=(Resolve-Path artifacts/service-accounts-review/build/temp).Path
+$env:TMP=$env:TEMP; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+$env:GOOS='windows'
+pwsh -NoProfile -File ../../scripts/go.ps1 test -mod=readonly -count=1 -timeout=60s -json -overlay artifacts/service-accounts-review/build/overlay.json -run 'TestIndependentService|TestServiceAccountDefaultsPolicy|TestHostPolicyReport|TestPublicPolicyContextBoundary' ./internal/hostaccounts ./lab/service-accounts-review
+$env:GOOS='linux'
+pwsh -NoProfile -File ../../scripts/go.ps1 vet -mod=readonly -overlay artifacts/service-accounts-review/build/overlay.json ./internal/hostaccounts ./lab/service-accounts-review
+pwsh -NoProfile -File ../../scripts/go.ps1 test -mod=readonly -trimpath -buildvcs=false -overlay artifacts/service-accounts-review/build/overlay.json -c -o artifacts/service-accounts-review/build/independent.test ./internal/hostaccounts
+```
+
+Actual focused Windows result: **84 named passes, two packages, no failures or
+skips**. The untouched baseline's independent yes-literal regression control
+exited **1 as expected**; its raw stdout/stderr/status are retained separately.
+Linux vet and ELF compilation exited zero. No native execution occurred here.
+The compiled independent ELF must later execute exactly these three families,
+with no skip, before any Linux runtime qualification:
+
+```text
+^TestIndependentService(Defaults|PolicyContract|UseraddBoundary)$
+```
+
+Source review found no blocker. Runtime must prove the installed Shadow package
+suppresses mail with `--system`, retains explicit IDs/home/private group/locked
+nologin, and preserves expiry suspension, activation, reopening and recovery.
+The command changes password-aging semantics; ordinary interactive identities
+are outside this feature. Existing records are not migrated or relabeled.
+Files-only NSS remains a prerequisite; stock/cPanel/CloudLinux/full-hosting,
+all-OS and reboot gates remain open. No live state, host policy/account writes,
+dependencies, credentials, services, providers or VM runs are part of this lab.
+Generated Go test main and the entire Go distribution remain separate native
+build-provenance gates; this compile-only receipt does not close them.
+
+Recovery is source revert before activation, preserving ambiguous native
+intent rather than automatic retries, deletion or identity adoption. Retain
+original receipts/logs/ELFs unchanged; any repair needs a new supplemental
+receipt and output directory. Root alone integrates reviewed commits.
+
+The [helper supplement](helper-review.json) admits lab-only commits above the
+unchanged baseline, allowing preparation after the review commit. Its current
+helper source pin supersedes only the historical helper pin; the original
+acceptance, challenge sources and ELF remain unchanged. A shell quoting failure
+before Python execution is classified separately from the successful helper
+check; no Go/native execution was repeated for this helper correction.
+
+## New harness source gate
+
+[harness-review.json](harness-review.json) qualifies only the corrected new
+harness/fixture source and synthetic protocol. Own `challenge-harness.mjs`
+passed 88 cases (five positive, 83 negative); `challenge-fixture.py` passed
+13 synthetic identity/aging cases (three positive, ten negative), without
+host files or children. Original source errors (NSS54 vs55 and system-account
+last-change date), initial failing challenges, reviewer clock-schema/signature
+updates and the matched lifecycle-budget correction are retained separately.
+The producer/decoder/README now agree on 60-second broker, 50-second peer-child,
+45-second socket and 600-second QEMU bounds. No production expiry or chage
+behavior was changed to satisfy the fixture.
+
+Original raw mixed-newline `6cf8868` source was not copied before worker edits.
+Its observed hashes/tool history remain historical; separately preserved Git
+LF blobs are explicitly distinct authority. Original 7/7 worker selftests and
+two earlier Python failures lack original raw-file captures. Current corrected
+source bytes, exact commits and all independent raw challenge logs are pinned.
+Actual native execution and artifact/ISO/source-catalog audit are still pending;
+this source gate is not a full stock-host qualification.
+
+
+[native-audit.json](native-audit.json) independently admits the first actual
+NSS-only adapted Alma9.8 run `service-accounts-20261006T090326396Z-8f664ddd`.
+The read-only Node auditor checked all 1,948 declared current input files,
+eight staged payloads, root 253-file Go freeze, 152-file namespace catalog,
+original builder receipt and ELF, and exact private serial nonce/guest equality.
+The pinned Python/PyCdlib auditor extracted and checked every actual ISO member,
+including modes, immutable payload bytes, nonce and network-disabled cloud config.
+Both final commands exited 0; raw audit outputs/status files remain in the
+owned ignored `artifacts/service-accounts-review/native` directory. An earlier
+successful audit invocation is retained separately; final helper tightening
+added original ELF equality and strict duplicate-key JSON without a guest rerun.
+
+Native receipts show two core and three independent test families passing
+without skips. Actual API create/duplicate/suspend/stale/activate/reopen kept
+one service identity, expected revisions, current-day last password change,
+no ordinary aging, nologin, locked password and stable owned directory identity.
+The stock useradd defaults' 119 bytes and full metadata remained equal before,
+after NSS adaptation and after the lifecycle. Own mail was absent; unrelated
+mail, public identity rows, subordinate-ID files and listener snapshots remained
+equal. Both owned brokers stopped cleanly. These are observations from the
+reviewed fixture, joined to exact native bytes, rather than a second independent
+execution actor. No shadow, keys or boot log contents were published.
+
+Original source-review failures, missing original mixed-newline raw snapshots,
+portable-test authority and original ELF are preserved. The five assembler
+headers were pinned, while generated test main and the entire Go distribution
+remain outside exhaustive provenance. This qualifies one service identity in
+an NSS-adapted disposable image; full stock provisioning, CloudLinux, cPanel,
+all OSes, reboot, remote ingress and atomic privileged-path stability remain
+unqualified. Final assembled documentation and source-archive admission are
+separate follow-up gates.

@@ -5,6 +5,7 @@ package hostaccounts
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -42,30 +43,6 @@ func TestUseraddGeneratedCommentContract(t *testing.T) {
 	}
 	if count != 1 || groups != 1 {
 		t.Fatal("missing or duplicated comment option")
-	}
-}
-
-func TestMailDefaultsContract(t *testing.T) {
-	if mailDisabledDefaults([]byte("# Synthetic defaults\nGROUP=100\nCREATE_MAIL_SPOOL=no\n")) != nil {
-		t.Fatal("supported literal refused")
-	}
-	if mailDisabledDefaults([]byte("CREATE_MAIL_SPOOL=no\n#"+strings.Repeat(" ", 1021)+"\n")) != nil {
-		t.Fatal("bounded legacy line refused")
-	}
-	for name, input := range map[string]string{
-		"missing": "GROUP=100\n", "enabled": "CREATE_MAIL_SPOOL=yes\n",
-		"duplicate": "CREATE_MAIL_SPOOL=no\nCREATE_MAIL_SPOOL=no\n",
-		"quoted":    "CREATE_MAIL_SPOOL=\"no\"\n", "leading": " CREATE_MAIL_SPOOL=no\n",
-		"commented": "# CREATE_MAIL_SPOOL=no\n", "suffix": "CREATE_MAIL_SPOOL=no # disabled\n",
-		"nul": "CREATE_MAIL_SPOOL=no\x00\n", "oversized": strings.Repeat("#", 4097),
-		"legacy_comment_chunk": "CREATE_MAIL_SPOOL=no\n#" + strings.Repeat(" ", 1022) + "CREATE_MAIL_SPOOL=yes\n",
-		"line_boundary":        "CREATE_MAIL_SPOOL=no\n#" + strings.Repeat(" ", 1022) + "\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			if mailDisabledDefaults([]byte(input)) != ErrUnavailable {
-				t.Fatal("unsupported policy accepted")
-			}
-		})
 	}
 }
 
@@ -136,5 +113,21 @@ func TestDirectoryHandleRejectsSymlinkAndPinsMutation(t *testing.T) {
 	info, e := os.Stat(target)
 	if e != nil || info.Mode().Perm() != 0700 {
 		t.Fatal("symlink target changed")
+	}
+}
+
+// Literal expected argv is independent of production assembly. System identity
+// semantics must not drop the explicitly allocated private IDs or home guards.
+func TestServiceAccountUseraddExactArgv(t *testing.T) {
+	for _, ids := range [][2]int{{20000, 20001}, {60000, 59999}} {
+		r := record{Account: Account{Username: "fixtureacct", UID: ids[0], GID: ids[1], Home: "/srv/fixtureacct"}, Tag: "fixture-tag"}
+		uid, gid := "20000", "20001"
+		if ids[0] == 60000 {
+			uid, gid = "60000", "59999"
+		}
+		want := []string{"--system", "-K", "SUB_UID_COUNT=0", "-K", "SUB_GID_COUNT=0", "--uid", uid, "--gid", gid, "--no-user-group", "--groups", "", "--create-home", "--home-dir", "/srv/fixtureacct", "--skel", "/root/fixture/empty-skel", "--shell", "/usr/sbin/nologin", "--comment", "fixture-tag", "--password", "!", "--expiredate", "", "--", "fixtureacct"}
+		if got := useraddArgs(r, "/root/fixture/empty-skel"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("useradd argv = %#v; want %#v", got, want)
+		}
 	}
 }

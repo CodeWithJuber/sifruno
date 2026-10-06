@@ -1,0 +1,569 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "independent_read_only_assembled_native_restore_preview_audit",
+  "checked_at": "2026-10-06T05:56:16.987900+00:00",
+  "passed": true,
+  "blocking_findings": [],
+  "baseline_commit": "8aa8b41c687fe0299648665e2a0bb413c0284377",
+  "tested_source_commit": "5813700f7f087893b59595f99c498c331c1efb51",
+  "reviewed_document_commit": "83f1e187d9532558c48375b1adb94cd548bc6f71",
+  "scope": "Native app-owned static-site restore preview Store/API/CLI/private UI, isolated Windows evidence; reviewer owns lab only.",
+  "root_acceptance": {
+    "path": "docs/evidence/native-restore-preview.json",
+    "bytes": 17707,
+    "sha256": "146417e401a4d4a390e5ddeb0fb27edda44aa552cca0321e7850fa54d52d8203"
+  },
+  "independent_historical_receipts": [
+    {
+      "path": "lab/native-restore-preview-review/acceptance.json",
+      "bytes": 8830,
+      "sha256": "f2ff03fc0aa186a2ca618fe6b352877e290240b39397e54206f019312148871e"
+    },
+    {
+      "path": "lab/native-restore-preview-review/source-catalog.json",
+      "bytes": 14289,
+      "sha256": "ecc88b6ff231c08e2af89d76e9c8a6c65c219f04370ff081ec4822d2ea44f800"
+    },
+    {
+      "path": "lab/native-restore-preview-review/helper-acceptance.json",
+      "bytes": 3622,
+      "sha256": "b4e4395f29562a2058636b6589c489c9d84c34115c2307c87dbe2c301f983b56"
+    }
+  ],
+  "historical_authority": {
+    "independent_named_pass": 47,
+    "targeted_windows_cgo_race_pass": 5,
+    "source_catalog_entries": 83,
+    "go_overlays": 75,
+    "all_83_inputs_match_current_root_and_are_members_of_browser_199": true,
+    "test_stdout": {
+      "path": ".cache/native-restore-preview-review/test.out",
+      "bytes": 44879,
+      "sha256": "30d136a0b4c87e7a1a1a79698eaca7ff0b86a1cf17529811aa7b933f0f0e02d0"
+    },
+    "race_stdout": {
+      "path": ".cache/native-restore-preview-review/race.out",
+      "bytes": 5125,
+      "sha256": "c2ca257aacde559761646e6e4baddafedea86a179fb27d9ec28cb30459b4b45b"
+    },
+    "helper_checks": 4,
+    "interpretation": "Original reviewer execution and raw source catalog remain historical. Canonical adopted source may differ in CRLF bytes; original raw proof is never rewritten as current proof."
+  },
+  "canonical_go_audit": {
+    "schema": 1,
+    "kind": "independent-read-only-final-restore-preview-whole-Go-audit",
+    "passed": true,
+    "test_status": {
+      "exit_code": 0,
+      "state": "isolated temporary fixtures only",
+      "command": "go test -mod=readonly -count=1 -timeout=180s -json ./...",
+      "finished_at": "2026-10-06T05:44:55.6751925Z"
+    },
+    "test_stdout": {
+      "path": ".cache/restore-preview/final-test.out",
+      "bytes": 667281,
+      "sha256": "d095a7b21bbf8d4ad7d2016b38d2074675d51c60a31dd6ea7d6780f157b3c43c"
+    },
+    "test_stderr": {
+      "path": ".cache/restore-preview/final-test.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "named_pass": 738,
+    "tested_packages": 24,
+    "named_skip": [
+      {
+        "package": "sifruno/internal/trail",
+        "test": "TestTrailProcessWorker"
+      }
+    ],
+    "no_test_packages": [
+      "sifruno/cmd/hostbroker",
+      "sifruno/config",
+      "sifruno/internal/platform",
+      "sifruno/lab/hostwebruntime-crash-review"
+    ],
+    "required_tests": [
+      {
+        "package": "sifruno/internal/api",
+        "test": "TestRestorePreviewSpecUsesBoundedExactNativeContract",
+        "elapsed_seconds": 0.14
+      },
+      {
+        "package": "sifruno/cmd/panelctl",
+        "test": "TestRestorePreviewCLIActualAuthenticatedHTTP",
+        "elapsed_seconds": 0.38
+      },
+      {
+        "package": "sifruno/cmd/panelctl",
+        "test": "TestRestorePreviewCLIRejectsInvalidInputsBeforeCredentials",
+        "elapsed_seconds": 0.01
+      },
+      {
+        "package": "sifruno/internal/sites",
+        "test": "TestRestorePreviewActualDiffReadOnlyAndReopen",
+        "elapsed_seconds": 0.68
+      },
+      {
+        "package": "sifruno/internal/sites",
+        "test": "TestRestorePreviewFailuresAreReadOnly",
+        "elapsed_seconds": 2.77
+      },
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "test": "TestActualZIPFourKindsWireReadOnlyReopen",
+        "elapsed_seconds": 1.14
+      },
+      {
+        "package": "sifruno/internal/sites",
+        "test": "TestRestorePreviewMaximumUnion",
+        "elapsed_seconds": 0.98
+      },
+      {
+        "package": "sifruno/internal/sites",
+        "test": "TestRestorePreviewRefusesCrossSnapshotCaseAliases",
+        "elapsed_seconds": 0.39
+      },
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "test": "TestRejectedInputsAndIntegrityAreByteReadOnly",
+        "elapsed_seconds": 3.49
+      },
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "test": "TestStrictWireShapeAndAdmissionBeforeParse",
+        "elapsed_seconds": 0.31
+      },
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "test": "TestFull128UnionCrossSnapshotAliasesAndRevisionCeiling",
+        "elapsed_seconds": 1.75
+      },
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "test": "TestConcurrentPreviewAndMutationRemainSerial",
+        "elapsed_seconds": 1.58
+      },
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "test": "TestRehashedStoredZIPStillRequiresExactNativeMetadata",
+        "elapsed_seconds": 0.9
+      }
+    ],
+    "vet_status": {
+      "command": "go vet -mod=readonly ./...",
+      "finished_at": "2026-10-06T05:44:52.9700980Z",
+      "exit_code": 0
+    },
+    "vet_stdout": {
+      "path": ".cache/restore-preview/final-vet.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet_stderr": {
+      "path": ".cache/restore-preview/final-vet.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "limits": [
+      "Read-only raw JSON/status derivation; execution belongs to root.",
+      "One named skip is cross-process helper, separate from package-level no-test events.",
+      "Local Windows execution does not qualify Linux, all-OS, vendor parity, hosted CI or live activation."
+    ]
+  },
+  "browser_audit": {
+    "schema": 1,
+    "kind": "independent-read-only-restore-preview-browser-audit",
+    "passed": true,
+    "report_sha256": "4f73ece20b4fb3f6068cd3bb61779b0ee2e7d1b5dd41ac5592af07489fc98494",
+    "source_entries": 199,
+    "ui_entries": 91,
+    "source_catalog_sha256": "365f9e1165c3b8c5fa0f0e1f14efac01dc06f07f5498e3afc17efd4117c7f170",
+    "ui_catalog_sha256": "a36c31a823164da457e88d9d505553cefb94d8ce5b0bea12a0592be54a0e8310",
+    "binary_sha256": "96ce9dd87a7000e8fc78664fedbad197bc56bf77274503b5fc059bf6f1be9103",
+    "harness_sha256": "fb7236a8db67a38c20d6df8781419b3bdefb03e90b3e3b7559511519c2852a6b",
+    "workflow_flags": 12,
+    "private_cases": 6,
+    "public_cases": 6,
+    "cleanup_flags": 4,
+    "screenshots": [
+      {
+        "name": "private-390-light.png",
+        "sha256": "6d08b880398b8c7646169e87fc843f80c516e73367cf4fac54a9cbc2785fcc53",
+        "width": 390,
+        "height": 1805
+      },
+      {
+        "name": "dialog-390-light.png",
+        "sha256": "c697bf6e95f36655e27be1cc0b45904d436a31182924277bbb5d6536c5e5b4df",
+        "width": 390,
+        "height": 844
+      },
+      {
+        "name": "public-390-light.png",
+        "sha256": "8483264973d83d3b9f6b6a963a0b5fbdea74b5614450c2fd323818c1bf01b10f",
+        "width": 390,
+        "height": 1729
+      },
+      {
+        "name": "private-390-dark.png",
+        "sha256": "6587d886c280ea52da4e205b84c4d59829927daa1775db6b6e200c409999a8ed",
+        "width": 390,
+        "height": 1805
+      },
+      {
+        "name": "dialog-390-dark.png",
+        "sha256": "6104c72ba18323a9bc0bc61a7de897e2074a8e9326b36edc1f45be36f428e0a8",
+        "width": 390,
+        "height": 844
+      },
+      {
+        "name": "public-390-dark.png",
+        "sha256": "197db78ec404853b7a1a13213cfd49809f6b19354f48baa63e35b60aa57e5bea",
+        "width": 390,
+        "height": 1729
+      },
+      {
+        "name": "private-768-light.png",
+        "sha256": "cad12675a7d6928cadc7d3abc1e891a4913a3942ff78b15ce5ca442368199687",
+        "width": 768,
+        "height": 1697
+      },
+      {
+        "name": "dialog-768-light.png",
+        "sha256": "72219495c57c3731f99fb47663f69df1c3b543c9908d1d08ee40ef27c0f003a1",
+        "width": 768,
+        "height": 1000
+      },
+      {
+        "name": "public-768-light.png",
+        "sha256": "c29e3400ae097a756e61b2192459b19bff676d3d4e6b2a5755412b4cb4aa273e",
+        "width": 768,
+        "height": 1693
+      },
+      {
+        "name": "private-768-dark.png",
+        "sha256": "f5b58901972b1141a1f33f1683a97e1c64ccef2a7456c7d5b653a35221f49e46",
+        "width": 768,
+        "height": 1697
+      },
+      {
+        "name": "dialog-768-dark.png",
+        "sha256": "b32808e9d684a74ee9bb9c9c0a63176c53b4b48b49aeb48437e1a3bb1171fff9",
+        "width": 768,
+        "height": 1000
+      },
+      {
+        "name": "public-768-dark.png",
+        "sha256": "ace21dbe04205d92caf2899cff3c0ec1603abca3e2ada74162608537dca93c1f",
+        "width": 768,
+        "height": 1693
+      },
+      {
+        "name": "private-1440-light.png",
+        "sha256": "8de6b848f53e9b696c22f701181d7c266ada9537dc156ecbd5e309f97b8ea892",
+        "width": 1440,
+        "height": 1235
+      },
+      {
+        "name": "dialog-1440-light.png",
+        "sha256": "c74a2d86ed48017c73d6477962a417db8faccc92d4b00e9a5ed59f410588e6f4",
+        "width": 1440,
+        "height": 1000
+      },
+      {
+        "name": "public-1440-light.png",
+        "sha256": "0b1b67263c255865cae19d0d0e75e347490b9b87a6df6ef8c639314ad9a74bc6",
+        "width": 1440,
+        "height": 1248
+      },
+      {
+        "name": "private-1440-dark.png",
+        "sha256": "61bf3c907b635540e47f24dfe7f2688ec9933374da0d7a4ea31f1f5143444ef5",
+        "width": 1440,
+        "height": 1235
+      },
+      {
+        "name": "dialog-1440-dark.png",
+        "sha256": "c0c4e5437a7957e981107613da730324c1647f1a73d54db60d2a86392a42f3cb",
+        "width": 1440,
+        "height": 1000
+      },
+      {
+        "name": "public-1440-dark.png",
+        "sha256": "a760f4439f75d5447b7e9c9c1ea6d590fdb9c233ea3e7e2a7a4d4a95b8637dae",
+        "width": 1440,
+        "height": 1248
+      }
+    ],
+    "limitations": [
+      "Receipt/source/hash audit; browser run belongs to worker.",
+      "Synthetic 503, malformed200, short UI expiry and modal-bypassed navigation retain separate labels; no server expiry claim.",
+      "Public-mode fixture is local, with no remote/proxy/tunnel acceptance.",
+      "Readonly API-observation hashes are worker measurements, not raw disk/packet proof; MAX_SAFE is source-DTO-only. No service/reboot/all-OS, native Linux or vendor qualification follows."
+    ]
+  },
+  "raw_join_audit": {
+    "passed": true,
+    "root_receipt_sha256": "146417e401a4d4a390e5ddeb0fb27edda44aa552cca0321e7850fa54d52d8203",
+    "raw_output_source_artifact_joins": 61,
+    "source_pins": 22,
+    "independent_original_named": 47,
+    "original_race_named": 5,
+    "node_pass": 28,
+    "helper_pass": 4,
+    "brand_assets": 92
+  },
+  "executed_and_adopted_browser_harness": {
+    "worker_raw": {
+      "path": "scripts/verify-restore-preview-ui.mjs",
+      "bytes": 45159,
+      "sha256": "fb7236a8db67a38c20d6df8781419b3bdefb03e90b3e3b7559511519c2852a6b"
+    },
+    "root_raw": {
+      "path": "scripts/verify-restore-preview-ui.mjs",
+      "bytes": 45517,
+      "sha256": "ecef4532700e54ab205240ea20a09ab9e2ffe0e6e2c92aa1c91bb6225437ba7e"
+    },
+    "independently_checked_lf_normalized_equal": true,
+    "interpretation": "Worker executed raw harness authority is separate from root adopted raw hash."
+  },
+  "retained_browser_attempts": [
+    {
+      "run_id": "20261006T053351449-1dc59797",
+      "path": "artifacts/native-restore-preview/20261006T053351449-1dc59797/report.json",
+      "bytes": 59701,
+      "sha256": "730125103c2eeb544870e0cec16361233147a867a840d0b53d08b4490927173e",
+      "passed": false,
+      "workflow_count": 6,
+      "private_cases": 6,
+      "public_cases": 6,
+      "cleanup": {
+        "browser_closed": true,
+        "public_fixture_closed": true,
+        "owned_children_stopped": true,
+        "owned_listeners_closed": true
+      },
+      "failure": {
+        "phase": "actual_confirm_restore_and_zero_change",
+        "code": "bounded_browser_operation_failed"
+      }
+    },
+    {
+      "run_id": "20261006T053757186-d87cfc3d",
+      "path": "artifacts/native-restore-preview/20261006T053757186-d87cfc3d/report.json",
+      "bytes": 60142,
+      "sha256": "c7c701a185445c0da3304e2cde20c1fccd396be3e85866efc0fd07ed239f2d1b",
+      "passed": false,
+      "workflow_count": 7,
+      "private_cases": 6,
+      "public_cases": 6,
+      "cleanup": {
+        "browser_closed": true,
+        "public_fixture_closed": true,
+        "owned_children_stopped": true,
+        "owned_listeners_closed": true
+      },
+      "failure": {
+        "phase": "actual_editor_draft_preservation",
+        "code": "bounded_browser_operation_failed",
+        "operation": "page.waitForFunction"
+      }
+    },
+    {
+      "run_id": "20261006T053944574-9405133a",
+      "path": "artifacts/native-restore-preview/20261006T053944574-9405133a/report.json",
+      "bytes": 59960,
+      "sha256": "4f73ece20b4fb3f6068cd3bb61779b0ee2e7d1b5dd41ac5592af07489fc98494",
+      "passed": true,
+      "workflow_count": 12,
+      "private_cases": 6,
+      "public_cases": 6,
+      "cleanup": {
+        "browser_closed": true,
+        "public_fixture_closed": true,
+        "owned_children_stopped": true,
+        "owned_listeners_closed": true
+      }
+    }
+  ],
+  "failed_attempt_limits": [
+    "Both original failed reports were checked and copied byte-exact. Their reported historical harness-model hashes are receipt authority only; old harness byte snapshots were not independently located.",
+    "First failure phase is coarse. Second failure records actual_editor_draft_preservation/page.waitForFunction with hidden mounted Websites busy indicator; corrected Backups-scoped waits changed the verifier only.",
+    "Separate diagnostic replay is not retroactively inserted into earlier receipts."
+  ],
+  "reviewed_documents": [
+    {
+      "path": "docs/native-restore-preview.md",
+      "bytes": 7333,
+      "sha256": "fb24bba5fa725a877c975f8a88b7849c9c22bb963771994c248914d75e5171e1"
+    },
+    {
+      "path": "docs/DELIVERY-PLAN.md",
+      "bytes": 55249,
+      "sha256": "de36b3f3265e09a8da8a20c269f0bb1b7a3603386eb0c07fee8711282cfa12b9"
+    },
+    {
+      "path": "docs/WORKSTREAM-STATUS.json",
+      "bytes": 129302,
+      "sha256": "28746bdd203d7d208e5a53024f727e77173b8e69f517d4d017a05c8697f865df"
+    },
+    {
+      "path": "docs/parallel-development.md",
+      "bytes": 15264,
+      "sha256": "1cc3145056cb3e9f71c3a12efba900f526b374a879e0f1473e9421fed365b6da"
+    },
+    {
+      "path": ".github/workflows/source-checks.yml",
+      "bytes": 2516,
+      "sha256": "8d3623b05bf5a505b6147674aa4ffe605ed30ef28e2217cc66c9b1c1a098415c"
+    }
+  ],
+  "source_review": {
+    "store_shared_mutex_archive_snapshot_checkpoint_and_alias_guards": "reviewed; actual independent challenges retain matching failure and byte-invariance evidence",
+    "api_exact_body_auth_before_parse_and_bounded_schema": "reviewed; strict non-null lowercase fields, duplicate/unknown/type/case rejection, 4KiB and safe revision bound",
+    "ui_bound_preview_confirmation_and_late_result_guards": "reviewed; explicit refresh, shared action lock, cancel/navigation/logout clearing and MAX_SAFE confirmation disabled",
+    "cli_and_reopen_test_cleanup": "root eefd442 checked Close errors using t.Error; no production-byte change",
+    "workflow": "new 28 DTO checks and four helper checks reviewed; root YAML parse uses existing pinned dependency, unique keys and contents:read; no current hosted CI execution claimed",
+    "dependencies_licenses_packager_baseline_diff": "git diff --name-only 8aa8b41 -- go.mod go.sum web/package.json web/package-lock.json package.json package-lock.json LICENSE scripts/package-source.ps1 exited 0 with no paths",
+    "approved_brand": "root raw brand check exit 0, PASS 92 asset hashes; preserved source asset bytes reviewed",
+    "documents": "evidence versus inference, original 0/30 broader compatibility gates, narrow Windows acceptance, historical authority and rollback remain explicit"
+  },
+  "visual_read_only_review": {
+    "images": [
+      "dialog-390-light.png",
+      "dialog-390-dark.png",
+      "private-1440-dark.png",
+      "public-390-light.png"
+    ],
+    "finding": "Readable approved brand and no horizontal overflow or displayed authentication values in reviewed images.",
+    "limit": "Mobile dialog is vertically scrollable and footer can be below the initial fold. No all-content-fits or physical-phone claim."
+  },
+  "review_commands": [
+    {
+      "command": "python .cache/native-restore-preview-review/audit_go.py ../restore-preview-integration .cache/native-restore-preview-review/final-go-audit.json 738",
+      "exit_code": 0,
+      "activity": "read-only JSON/status derivation"
+    },
+    {
+      "command": "node lab/native-restore-preview-review/audit-browser.mjs ROOT_INTEGRATION ROOT_UI_WORKER EXACT_REPORT_PATH 4f73ece20b4fb3f6068cd3bb61779b0ee2e7d1b5dd41ac5592af07489fc98494",
+      "exit_code": 0,
+      "arguments": {
+        "ROOT_INTEGRATION": "../restore-preview-integration resolved absolute",
+        "ROOT_UI_WORKER": "../restore-preview-ui-sol resolved absolute",
+        "EXACT_REPORT_PATH": "../restore-preview-ui-sol/artifacts/restore-preview-ui/20261006T053944574-9405133a/report.json resolved absolute"
+      },
+      "activity": "read-only complete source/UI/PE/harness/screenshot inventory audit"
+    },
+    {
+      "command": "python .cache/native-restore-preview-review/audit_joins.py",
+      "exit_code": 0,
+      "activity": "61 raw output/source/artifact joins; 22 current source pins; 28 Node checks; four helpers; 92 brand assets"
+    },
+    {
+      "command": "git -C ../restore-preview-integration status --short",
+      "exit_code": 0,
+      "stdout": "empty at ce8ea3e and metadata-only 83f1e18"
+    },
+    {
+      "command": "Forge substrate_check",
+      "result": "EPERM scanning primary ignored accounts-native-debug state; no edits performed by check"
+    },
+    {
+      "command": "Forge predict_impact lab/native-restore-preview-review/audit-browser.mjs",
+      "result": "found=false, impacted=[]; unknown advisory; manually inspected lab-only ownership and evidence-only scope"
+    }
+  ],
+  "review_helper_and_raw_output_pins": [
+    {
+      "path": "lab/native-restore-preview-review/audit-browser.mjs",
+      "bytes": 11629,
+      "sha256": "004cc6fd9609e5f69f7f828bc2004207b6cfbdccd69808ab34018906d4759417"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/audit_go.py",
+      "bytes": 3513,
+      "sha256": "44a62639647b855bc1c9b64c50d2526c87ac370a6bbfe44587518dc5a925d642"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/audit_joins.py",
+      "bytes": 3207,
+      "sha256": "13e33664a985d57a3e90c984cdd797742fef37781a799b5b8b98122045c9b5c8"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/final-go-audit.json",
+      "bytes": 3973,
+      "sha256": "ad87b317b611dd809fca1e7a191a75a8dcfb7dd3079c9efb8afd7c1d53291585"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/browser-audit.out",
+      "bytes": 4368,
+      "sha256": "95790cd02cf4552e0a8acb405f505bc7343f7fb04f5444840fbf6ba72e9cd4ac"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/browser-audit.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/browser-audit-status.json",
+      "bytes": 320,
+      "sha256": "3c8d21417cff3047e6129d206e562d5667a688c11446d51230deff1665739d69"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/joins-audit.out",
+      "bytes": 283,
+      "sha256": "de64dbe290c9f6165d6e302163f860d8652dbce96d16836de6bcc47d15c0e927"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/joins-audit.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/native-restore-preview-review/joins-audit-status.json",
+      "bytes": 207,
+      "sha256": "6b8fbc7d560633ae7cca4ebd08af0093566a8ead6937683b64c6179c49882083"
+    }
+  ],
+  "review_parser_correction": "An initial inline reviewer join parser assertion failed when Windows default text decoding misread the UTF-8 Node summary and the brand output was assumed JSON. The final explicit UTF-8/plaintext helper passed. This is tool-stream-only reviewer parser authority, not a product failure or independently retained raw failed output.",
+  "limits": [
+    "Final Go and browser execution belongs to root/worker. Reviewer parsed the actual raw bytes and ran read-only auditors; no Go/browser/native run was repeated during this audit.",
+    "Portable Windows tests do not prove Linux, all OS, original vendor/cPanel parity, hosted CI, reboot, real interruption or production activation.",
+    "Synthetic union/alias/MAX_SAFE/pending/foreign ZIP metadata, browser 503/malformed200/client-clock expiry and programmatic modal navigation remain labeled separately from ordinary actual product operations.",
+    "Browser API observation hashes are narrower than independent raw fixture disk hash/mode/size/membership checks. Shared-start concurrency is not exhaustive lock interleaving proof.",
+    "No server session-expiry, remote ingress, public proxy/tunnel, physical-phone or packet proof follows from local public-mode fixtures.",
+    "Existing restore checkpoints and exact archive/revision guards remain the recovery authority. Preview cannot repair uncertain state.",
+    "Final source ZIP and subsequent observed publication metadata require a separate bounded audit after this receipt; no archive or PR publication verdict is implied here."
+  ],
+  "publication_observation": {
+    "metadata_diff": "git diff ce8ea3e 83f1e18: exactly guide/DELIVERY-PLAN/WORKSTREAM-STATUS, 33 insertions and one deletion; source receipt and production inputs unchanged",
+    "saved_pr_readback": {
+      "path": ".cache/restore-preview/pr22-initial.json",
+      "bytes": 582,
+      "sha256": "197441034f336d70227977cf9dacc7c9023b69e239f8a471f81552bc81d1f303"
+    },
+    "saved_run_readback": {
+      "path": ".cache/restore-preview/pr22-run-initial.json",
+      "bytes": 295,
+      "sha256": "793b75f507fb91e11e396c2c58524de557ba58c005dc04d64f9abf8dcd2df467"
+    },
+    "saved_annotation_readback": {
+      "path": ".cache/restore-preview/pr22-check-annotations-initial.json",
+      "bytes": 280,
+      "sha256": "d360f03f7a6da4b64121398b60bd8733bcb2347322318cdc3989ab69ca0ddb12"
+    },
+    "initial_state": "Saved PR readback OPEN/draft/main/exact ce8ea3e, source check initially QUEUED.",
+    "newer_saved_state": "Saved run37420859674 completed failure at ce8ea3e; saved annotation says recent account payments/spending restriction prevented job start. Parent notified to include honest limitation in final publication metadata; no hosted acceptance or settings change.",
+    "authority": "Read-only saved root gh responses; reviewer made no independent provider call. Later publication metadata and archive receive separate bounded review."
+  },
+  "activation": {
+    "live_state_mutated": false,
+    "live_processes_restarted": false,
+    "firewall_changed": false,
+    "production_activated": false,
+    "new_dependencies": 0,
+    "paid_provider_calls": 0,
+    "original_compatibility_passes": 0
+  }
+}

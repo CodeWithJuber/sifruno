@@ -47,6 +47,16 @@ catalog and require separate execution evidence. No shared dependency writes or
 downloads are authorized by these instructions; the primary wrapper's normal
 shared Go compilation cache is allowed by the assigned batch.
 
+The later helper-only correction admits the entire destination plan before any
+directory creation, rejects escaping symlinks/Windows reparse points and
+hardlinked output files, and rechecks each directory/file before writing. Run
+`python lab/native-restore-preview-review/prepare_test.py` for four temporary
+stdlib regressions, including refusal before outside directory creation. Their
+83-input fixture is synthetic; a separate recorded prepare command admitted the
+actual unchanged 83-input catalog. These checks do not repeat or replace the
+historical Go receipt. Exclusive workspace ownership remains an assumption;
+path admission is not proof against adversarial concurrent filesystem swaps.
+
 Run the focused concurrency/four-kind case with `-race` only where the existing
 compiler permits it. The receipt's race result is Windows CGO/gcc execution,
 not a Linux or all-OS qualification. A first invocation failed before any tests

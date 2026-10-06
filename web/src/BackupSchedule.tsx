@@ -6,7 +6,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { dateLabel } from "@/lib/api";
 import { SiteApiError } from "@/lib/sites-api";
 import type { OperatorSession, Site } from "@/lib/sites-api";
-import { backupIntervals, backupScheduleError, getBackupSchedule, putBackupSchedule } from "@/lib/backupSchedule";
+import { backupIntervals, backupScheduleError, getBackupSchedule, putBackupSchedule, stoppedBackupRecovery } from "@/lib/backupSchedule";
 import type { BackupInterval, BackupScheduleEnvelope, BackupScheduleInput } from "@/lib/backupSchedule";
 import "./backup-schedule.css";
 
@@ -40,8 +40,9 @@ export default function BackupSchedule({ site, session, active, fresh: siteFresh
   const authenticated = session.authenticated;
   const csrf = session.authenticated ? session.csrf_token : undefined;
   const schedule = records?.schedule;
-  const changed = schedule ? interval !== schedule.interval || enabled !== schedule.enabled : true;
-  const canSave = active && authenticated && siteFresh && fresh && Boolean(records) && changed && !parentBusy && !loading && !saving && !schedule?.pending && site.state !== "recovery_required" && (!enabled || records?.runner_enabled === true);
+  const recovery = stoppedBackupRecovery(schedule);
+  const changed = recovery || (schedule ? interval !== schedule.interval || enabled !== schedule.enabled : true);
+  const canSave = active && authenticated && siteFresh && fresh && Boolean(records) && changed && !parentBusy && !loading && !saving && (!schedule?.pending || recovery) && site.state !== "recovery_required" && (!enabled || records?.runner_enabled === true);
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++readEpoch.current; }; }, []);
   useEffect(() => {
@@ -106,27 +107,28 @@ export default function BackupSchedule({ site, session, active, fresh: siteFresh
     {loading && <p role="status">Reading the actual backup schedule…</p>}
     {records ? <>
       <dl className="backup-schedule-summary">
-        <div><dt>Schedule</dt><dd>{schedule ? schedule.enabled ? "Enabled" : "Paused" : "Not configured"}{schedule?.pending && " · Run pending"}</dd></div>
-        <div><dt>Next run</dt><dd>{schedule?.enabled ? <time dateTime={schedule.next_run_at}>{dateLabel(schedule.next_run_at)}</time> : "No run while paused"}</dd></div>
+        <div><dt>Schedule</dt><dd>{schedule ? schedule.enabled ? "Enabled" : "Paused" : "Not configured"}{recovery ? " · Recovery needs review" : schedule?.pending && " · Run pending"}</dd></div>
+        <div><dt>{recovery ? "Retained due time" : "Next run"}</dt><dd>{schedule && (schedule.enabled || recovery) ? <time dateTime={schedule.next_run_at}>{dateLabel(schedule.next_run_at)}</time> : "No run while paused"}</dd></div>
         <div><dt>Last run</dt><dd>{schedule ? statusLabel[schedule.last_status] : "No scheduled run yet"}{schedule?.last_run_at && <small><time dateTime={schedule.last_run_at}>{dateLabel(schedule.last_run_at)}</time></small>}</dd></div>
         <div><dt>Archive capacity</dt><dd>{archives} / {records.max_archives} snapshots</dd></div>
       </dl>
       {schedule?.last_error && <p className="backup-status" role="status">{runError[schedule.last_error]}</p>}
       {!records.runner_enabled && <p className="backup-status" role="status">The server’s schedule runner is disabled. Enabling is unavailable; you can pause an existing schedule.</p>}
-      {schedule?.pending && <p className="backup-status" role="status">A scheduled backup is pending. Refresh records after it finishes before changing this schedule.</p>}
+      {recovery ? <p className="backup-status" role="status">The interrupted run is paused with recovery evidence retained. Refresh both records, then explicitly review a save or resume. The server must verify the exact previous outcome; if recovery is unresolved, it keeps the marker and rejects the save. This page does not automatically retry or delete evidence.</p> : schedule?.pending && <p className="backup-status" role="status">A scheduled backup is running. Refresh records after it finishes before changing this schedule.</p>}
       {!fresh && !loading && <p className="backup-status" role="status">Refresh website and schedule records before confirming a change. Your schedule draft is kept.</p>}
       <form className="backup-schedule-form" onSubmit={review}>
         <div><label htmlFor="backup-schedule-interval">Interval</label><NativeSelect id="backup-schedule-interval" value={interval} disabled={parentBusy || saving || loading || !fresh} onChange={(event) => { edited.current = true; setInterval(event.target.value as BackupInterval); setConfirmation(undefined); setNotice(undefined); }}>
           {backupIntervals.map((value) => <NativeSelectOption key={value} value={value}>{intervalLabel[value]}</NativeSelectOption>)}
         </NativeSelect></div>
         <label className="backup-schedule-toggle"><input type="checkbox" checked={enabled} disabled={parentBusy || saving || loading || !fresh || (!enabled && !records.runner_enabled)} onChange={(event) => { edited.current = true; setEnabled(event.target.checked); setConfirmation(undefined); setNotice(undefined); }} />Enable scheduled backups</label>
-        <Button label={!schedule ? "Review new schedule" : enabled ? "Review schedule change" : "Review schedule pause"} type="submit" variant="secondary" isDisabled={!canSave} data-testid="backup-schedule-review" />
+        <Button label={recovery ? "Review interrupted recovery" : !schedule ? "Review new schedule" : enabled ? "Review schedule change" : "Review schedule pause"} type="submit" variant="secondary" isDisabled={!canSave} data-testid="backup-schedule-review" />
       </form>
       <p className="website-help">One schedule per website; up to 100 website schedules. Manual and scheduled snapshots share the 8-archive and 128 MiB storage limits. Existing archives are not automatically deleted. Scheduled backups do not include server, database, mail or cPanel backups.</p>
     </> : !loading && <p className="backup-status">{error ? "Schedule records are unavailable. Refresh to retry." : "Waiting for current website records."}</p>}
     <dialog ref={dialog} className="website-restore-dialog backup-schedule-dialog" data-testid="backup-schedule-confirm" aria-labelledby="backup-schedule-title" aria-describedby="backup-schedule-description" onCancel={(event) => { if (saving) event.preventDefault(); else setConfirmation(undefined); }}>{confirmation && <>
       <h2 id="backup-schedule-title">{confirmation.enabled ? "Save and enable backup schedule?" : schedule ? "Pause backup schedule?" : "Save a paused backup schedule?"}</h2>
       <p id="backup-schedule-description">{confirmation.enabled ? <>Save a <strong>{confirmation.interval}</strong> schedule for <strong>{site.name}</strong>. The opted-in server runner will create native ZIP snapshots of saved static files.</> : <>Save a paused <strong>{confirmation.interval}</strong> schedule for <strong>{site.name}</strong>. Existing snapshots and manual backups are kept.</>}</p>
+      {recovery && <p>The server must verify the interrupted run’s exact outcome before accepting this save. Unresolved recovery keeps its evidence and returns no confirmed save; no archive is deleted by this action.</p>}
       <p>Website revision {confirmation.expected_revision} · {confirmation.expected_schedule_revision ? `schedule revision ${confirmation.expected_schedule_revision}` : "new schedule"}. The archive limit remains 8.</p>
       <div><Button label="Cancel schedule change" variant="ghost" isDisabled={saving} onClick={() => setConfirmation(undefined)} /><Button label="Confirm backup schedule" variant="primary" isDisabled={!canSave} isLoading={saving} onClick={() => void confirmSave()} data-testid="backup-schedule-save" /></div>
     </>}</dialog>

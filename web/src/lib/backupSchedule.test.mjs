@@ -38,11 +38,21 @@ test("historical status relationships persist while paused or pending", () => {
   const failed = { ...schedule(), last_status: "failed", last_run_at: "2026-10-06T10:00:00Z", last_error: "archive_capacity" };
   const interrupted = { ...failed, last_status: "interrupted", last_error: "interrupted" };
   for (const value of [completed, failed, { ...failed, last_error: "backup_failed" }, interrupted]) {
-    assert(api.validBackupSchedule(value)); assert(api.validBackupSchedule({ ...value, enabled: false, pending: true, next_run_at: value.created_at }));
+    assert(api.validBackupSchedule(value)); assert(api.validBackupSchedule({ ...value, enabled: false }));
+    assert(api.validBackupSchedule({ ...value, pending: true, next_run_at: value.created_at }));
+    assert.equal(api.validBackupSchedule({ ...value, enabled: false, pending: true, next_run_at: value.created_at }), value.last_status === "interrupted");
     assert.equal(api.validBackupSchedule({ ...value, last_run_at: null }), false);
     assert.equal(api.validBackupSchedule({ ...value, last_run_at: "2026-10-06T10:00:01Z" }), false);
   }
   for (const value of [{ ...schedule(), last_backup_id: "b".repeat(32) }, { ...schedule(), last_run_at: schedule().created_at }, { ...completed, last_error: "backup_failed" }, { ...failed, last_backup_id: "b".repeat(32) }, { ...interrupted, last_error: "backup_failed" }]) assert.equal(api.validBackupSchedule(value), false);
+});
+test("only terminal interrupted disabled pending markers admit explicit recovery review", () => {
+  const stopped = { ...schedule(), enabled: false, pending: true, last_status: "interrupted", last_error: "interrupted", last_run_at: schedule().created_at, next_run_at: schedule().created_at };
+  assert(api.validBackupSchedule(stopped)); assert(api.stoppedBackupRecovery(stopped));
+  assert.equal(api.stoppedBackupRecovery({ ...stopped, enabled: true }), false);
+  assert.equal(api.stoppedBackupRecovery({ ...stopped, pending: false }), false);
+  assert.equal(api.stoppedBackupRecovery(null), false);
+  for (const value of [{ ...schedule(), enabled: false, pending: true }, { ...stopped, last_run_at: null }, { ...stopped, last_error: "backup_failed" }, { ...stopped, last_backup_id: "b".repeat(32) }, { ...stopped, last_run_at: "2026-10-06T10:00:01Z" }]) assert.equal(api.validBackupSchedule(value), false);
 });
 test("PUT admits exactly both expected revisions, interval and enabled", () => {
   assert(api.validBackupScheduleInput(input())); assert(api.validBackupScheduleInput({ ...input(), expected_schedule_revision: 0 }));
@@ -61,13 +71,16 @@ test("PUT keeps CSRF in a header, sends exact revision body and requires a confi
     assert.equal(url, `/api/v1/sites/${siteId}/backup-schedule`); assert.equal(options.method, "PUT"); assert.equal(options.headers["X-CSRF-Token"], "synthetic-csrf"); assert.equal(options.credentials, "same-origin"); assert.deepEqual(JSON.parse(options.body), input()); assert.equal(url.includes("synthetic-csrf"), false);
     return response(envelope(saved));
   }, async () => assert.equal((await api.putBackupSchedule(siteId, input(), "synthetic-csrf")).schedule.revision, 2));
-  for (const invalid of [null, { ...saved, revision: 1 }, { ...saved, site_id: "b".repeat(32) }, { ...saved, enabled: true }, { ...saved, interval: "hourly" }]) await mockFetch(async () => response(envelope(invalid)), async () => await assert.rejects(api.putBackupSchedule(siteId, input(), "synthetic-csrf"), e => e.code === "invalid_response"));
+  const retained = { ...saved, pending: true, last_status: "interrupted", last_error: "interrupted", last_run_at: saved.updated_at };
+  assert(api.validBackupSchedule(retained));
+  for (const invalid of [null, retained, { ...saved, revision: 1 }, { ...saved, revision: 3 }, { ...saved, site_id: "b".repeat(32) }, { ...saved, enabled: true }, { ...saved, interval: "hourly" }]) await mockFetch(async () => response(envelope(invalid)), async () => await assert.rejects(api.putBackupSchedule(siteId, input(), "synthetic-csrf"), e => e.code === "invalid_response"));
 });
 test("invalid outbound inputs are rejected before fetch", () => {
   assert.throws(() => api.getBackupSchedule("bad")); assert.throws(() => api.putBackupSchedule(siteId, input(), "")); assert.throws(() => api.putBackupSchedule(siteId, { ...input(), extra: true }, "synthetic-csrf"));
 });
 test("conflict, expiry, unavailable and malformed responses never become success", async () => {
   for (const status of [400, 401, 403, 409, 422, 503]) await mockFetch(async () => response({ error: "request_failed" }, status), async () => await assert.rejects(api.putBackupSchedule(siteId, input(), "synthetic-csrf"), e => e.status === status));
+  await mockFetch(async () => response({ error: "recovery_required" }, 503), async () => { try { await api.putBackupSchedule(siteId, input(), "synthetic-csrf"); assert.fail("Unresolved recovery must fail"); } catch (failure) { assert.match(api.backupScheduleError(failure), /recovery needs review/); assert.match(api.backupScheduleError(failure), /draft is kept/); assert.match(api.backupScheduleError(failure), /does not automatically retry or delete/); } });
   await mockFetch(async () => new Response('{"schedule":'), async () => await assert.rejects(api.getBackupSchedule(siteId), e => e.code === "invalid_response"));
   assert.match(api.backupScheduleError({}), /could not be confirmed/);
 });

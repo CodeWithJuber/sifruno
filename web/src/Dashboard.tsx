@@ -3,7 +3,7 @@ import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
-import { ArrowDown, ArrowUp, Clock3, Cpu, Database, Info, MemoryStick, Monitor, Network, Search, Server } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Clock3, Cpu, Database, Folder, Globe, Info, Layers, LockKeyhole, MemoryStick, Monitor, Network, Search, Server, Users } from "lucide-react";
 import type { PlatformReport, ServerReport, ServerSample, ServiceItem, ServicesReport } from "@/lib/api";
 import { dateLabel } from "@/lib/api";
 
@@ -26,6 +26,27 @@ export function uptime(value: number | null): string {
   return `${Math.floor(value)}s`;
 }
 const time = (timestamp: string) => new Date(timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+
+type HostingTarget = "websites" | "accounts" | "backups" | "files" | "access";
+const hostingModules = [
+  { id: "websites", label: "Websites", description: "Manage local static sites and their files.", detail: "Static sites", icon: Globe },
+  { id: "accounts", label: "Accounts", description: "Local Linux identities and home directories.", detail: "Linux broker required", icon: Users },
+  { id: "backups", label: "Backups", description: "Create, export and restore website snapshots.", detail: "Native ZIP snapshots", icon: Archive },
+  { id: "files", label: "File Manager", description: "Browse and edit saved website files.", detail: "Website files", icon: Folder },
+  { id: "access", label: "Access", description: "Review operator sessions and server access.", detail: "Operator sessions", icon: LockKeyhole },
+] as const;
+
+export function HostingWorkspace({ publicPreview, platform, onNavigate, onPreview }: { publicPreview: boolean; platform?: PlatformReport; onNavigate: (target: HostingTarget) => void; onPreview: () => void }) {
+  return <Card className="dashboard-card hosting-workspace" padding={0} data-testid="hosting-workspace">
+    <div className="workspace-heading"><div><h2>{publicPreview ? "Public panel preview" : "Hosting"}</h2><p>{publicPreview ? "Host monitoring and a tour of the workspace." : "Open a module to work on this server."}</p></div><span className="workspace-scope">{publicPreview ? "Preview" : "Local panel"}</span></div>
+    {publicPreview ? <div className="workspace-preview"><Layers aria-hidden="true" /><div><h3>Explore the panel</h3><p>The tour uses sample content. Private websites, accounts, backups, files and access controls stay in the local panel.</p></div><Button label="Explore panel" variant="secondary" size="sm" onClick={onPreview} data-testid="open-panel-preview" /></div> : <>
+      <div className="workspace-modules">{hostingModules.map(({ id, label, description, detail, icon: Icon }) => <button key={id} type="button" className={`workspace-module module-${id}`} onClick={() => onNavigate(id)} aria-label={`Open ${label}`} data-testid={`workspace-${id}`}>
+        <Icon className="workspace-module-icon" aria-hidden="true" /><span className="workspace-module-copy"><strong>{label}</strong><span>{description}</span></span><span className="workspace-module-kind">{detail}</span><ArrowUpRight className="workspace-module-arrow" aria-hidden="true" />
+      </button>)}</div>
+      <div className="workspace-context"><Info aria-hidden="true" /><p>{platform && platform.os !== "linux" ? "Native account actions require Linux. Static-site tools and monitoring remain separate modules." : "Account availability is checked after sign-in. A configured, admitted Linux broker is required for native account actions."}</p></div>
+    </>}
+  </Card>;
+}
 
 function paths(samples: ServerSample[], key: "cpu_usage_percent" | "memory_used_percent", x: (s: ServerSample) => number) {
   let open = false;

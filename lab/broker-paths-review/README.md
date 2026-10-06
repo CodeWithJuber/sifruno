@@ -77,3 +77,38 @@ unchanged; creating the child naturally changes parent directory timestamps.
 Linux [mkdir documentation](https://man7.org/linux/man-pages/man2/mkdir.2.html)
 describes inherited setgid. Documentation and compilation do not qualify the
 actual guest runtime, which remains pending in this supplemental receipt.
+
+## Actual adapted native receipt
+
+[native-audit.json](native-audit.json) records the separate actual run
+`adapted-paths-20261006T075519308Z-2a8a54ec`. Original portable/compile receipts
+remain historical; they are not rewritten as executed. The audited guest
+passes eight core and four independent Linux families without skip, including
+the setgid inheritance challenge on the exact supplemental ELF.
+
+The read-only `audit-native.mjs` takes worker root, actual report path, expected
+report SHA and a fresh owned output path. It checks all 1,945 current catalog
+inputs, all eight payload sources, 252 root Go/module inputs, the 1,457-entry
+baseline catalog, declared tools and five pre-pinned assembler headers, exact
+original review authority, nonce-framed private serial/report equality and
+owned cleanup. It never prints or republishes raw serial bytes.
+`audit-iso.py`, invoked with pinned primary Python `-I -B`, independently reads
+all eight actual ISO members using the admitted existing PyCdlib wheel, checks
+manifest/source bytes and CIDATA metadata/nonce/no-network configuration, and
+writes only a fresh owned output. No dependency was installed.
+
+Exact commands, exits, raw output/status hashes, source helper hashes and
+redacted results are pinned in the native receipt. Additional read-only parsing
+joins the actual 809 named portable passes in 27 packages, vet, build, seven
+Node contracts and six Python fixtures; those counts have separate authority
+from the 12 Linux test families and 53 independent synthetic parser cases.
+
+Original stock NSS/mail policy remains refused. Only two explicit policy files
+in the disposable guest overlay were adapted, after which 12 policy and 14
+listener observations stayed stable. Six candidate conflict trees add nothing;
+six baseline comparisons retain their partial directory additions. Empty
+native inventory is read by an owned child using existing UID65534, followed
+by owned SIGTERM/socket cleanup and same-source reopen. No account was created
+or mutated. Compiler-generated test main is labelled and the complete Go
+distribution is not certified. These are narrow adapted-image observations,
+not stock provisioning, production activation or original vendor parity.

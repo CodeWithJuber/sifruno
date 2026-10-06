@@ -60,3 +60,24 @@ helper source pin supersedes only the historical helper pin; the original
 acceptance, challenge sources and ELF remain unchanged. A shell quoting failure
 before Python execution is classified separately from the successful helper
 check; no Go/native execution was repeated for this helper correction.
+
+## New harness source gate
+
+[harness-review.json](harness-review.json) qualifies only the corrected new
+harness/fixture source and synthetic protocol. Own `challenge-harness.mjs`
+passed 88 cases (five positive, 83 negative); `challenge-fixture.py` passed
+13 synthetic identity/aging cases (three positive, ten negative), without
+host files or children. Original source errors (NSS54 vs55 and system-account
+last-change date), initial failing challenges, reviewer clock-schema/signature
+updates and the matched lifecycle-budget correction are retained separately.
+The producer/decoder/README now agree on 60-second broker, 50-second peer-child,
+45-second socket and 600-second QEMU bounds. No production expiry or chage
+behavior was changed to satisfy the fixture.
+
+Original raw mixed-newline `6cf8868` source was not copied before worker edits.
+Its observed hashes/tool history remain historical; separately preserved Git
+LF blobs are explicitly distinct authority. Original 7/7 worker selftests and
+two earlier Python failures lack original raw-file captures. Current corrected
+source bytes, exact commits and all independent raw challenge logs are pinned.
+Actual native execution and artifact/ISO/source-catalog audit are still pending;
+this source gate is not a full stock-host qualification.

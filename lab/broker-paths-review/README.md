@@ -47,3 +47,33 @@ or live state was changed by the reviewer. No cPanel, CloudLinux, all-OS,
 full database-state admission or atomic privileged path-stability claim follows.
 Recovery is to revert the source patch before activation; no cleanup of
 preexisting conflicts is introduced.
+
+## Supplemental setgid admission
+
+[setgid-review.json](setgid-review.json) separately admits fix
+`73ce4c5b9f9a83bcdb754c4469364461aa284faf`. The original acceptance receipt
+and `build/independent.test` remain unchanged historical evidence. New source
+pins, commands, overlay and ELF use `artifacts/broker-paths-review/build-setgid`.
+No portable suite was repeated for this Linux-only correction.
+
+The supplemental overlay adds both `private_linux_test.go.txt` and
+`private_setgid_linux_test.go.txt` as new package test files, without replacing
+any production source. Compile and vet commands in the supplemental receipt
+use the same offline primary wrapper and owned TEMP/TMP. The later native
+guest must execute the supplemental ELF with this exact filter, requiring
+four families and every subtest to PASS without skip:
+
+```text
+^TestIndependentBroker(DirectoryIdentity|FreshVersusNonemptyState|OptionBoundary|SetgidParent)$
+```
+
+The additional challenge checks missing state/homes/socket destinations under
+a setgid direct parent without any additions or parent metadata changes. It
+also verifies an existing exact-mode child remains admitted, and calls the
+post-create guard to measure actual kernel inheritance. The latter deliberately
+creates one owned child before refusing its inherited mode; this is distinct
+from the mutation-free pre-admission refusal. Parent identity and mode stay
+unchanged; creating the child naturally changes parent directory timestamps.
+Linux [mkdir documentation](https://man7.org/linux/man-pages/man2/mkdir.2.html)
+describes inherited setgid. Documentation and compilation do not qualify the
+actual guest runtime, which remains pending in this supplemental receipt.

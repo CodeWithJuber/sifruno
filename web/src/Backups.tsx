@@ -9,6 +9,7 @@ import type { Resource } from "@/lib/api";
 import { downloadSiteBackup, SiteApiError, siteRequest, siteURL, validBackup, validBackupList, validSession, validSite, validSiteList } from "@/lib/sites-api";
 import type { OperatorSession, Site, SiteBackup } from "@/lib/sites-api";
 import "./backups.css";
+import BackupSchedule from "./BackupSchedule";
 
 type Restore = { site: Site; backup: SiteBackup };
 const backupError = (error: unknown) => error instanceof SiteApiError && error.status === 409
@@ -174,6 +175,7 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
         {!fresh && !busy && <p className="backup-status" role="status">Records need to be refreshed before another backup or restore.</p>}
         {selected.state === "recovery_required" && <p className="backup-status" role="alert">This website requires recovery. Backup creation and restore are disabled until its recovery is resolved.</p>}
         <div className="backup-summary"><Card className="dashboard-card" padding={0}><span>Recorded snapshots</span><strong>{backups.length}</strong></Card><Card className="dashboard-card" padding={0}><span>Archive storage</span><strong>{bytes(backups.reduce((sum, backup) => sum + backup.bytes, 0))}</strong></Card><Card className="dashboard-card" padding={0}><span>Latest snapshot</span><strong className="backup-latest">{backups.length ? dateLabel([...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0].created_at) : "No backups yet"}</strong></Card></div>
+        <BackupSchedule key={selected.id} site={selected} session={session} active={active} fresh={fresh} busy={Boolean(busy) || Boolean(restore)} archives={backups.length} onRefresh={refreshRecords} onAction={run} onUnauthorized={fail} />
         <Card className="dashboard-card" padding={0} data-testid="backups-inventory" data-site-id={selected.id} data-revision={selected.revision} data-fresh={fresh}>
           <div className="card-heading backup-inventory-heading"><div><h2>ZIP backups · {selected.name}</h2><p>Saved site files only. Unsaved Websites editor drafts stay in the editor.</p></div><Button label="Create ZIP backup" icon={<Archive />} variant="secondary" size="sm" isDisabled={!canChange || backups.length >= 8} isLoading={busy === "Creating ZIP backup"} onClick={() => void createBackup()} /></div>
           {backups.length ? <div className="backup-records">{[...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map((backup) => <article key={backup.id} data-testid="backup-row" data-backup-id={backup.id}>

@@ -1,7 +1,7 @@
 # Native Linux account foundation
 
 This package separates an unprivileged controller from a root-only local Unix
-socket broker. It supplies native local users, private primary groups, homes and
+socket broker. It supplies native managed service identities, private primary groups, homes and
 public_html directories. Domain is validated reserved metadata only: this slice
 does not configure web servers, DNS, TLS, mail, databases, PHP or cPanel behavior.
 
@@ -24,9 +24,14 @@ the controller client also has45seconds. No /etc/shadow hashes are read or logge
 locked-password and account-expiry observations use passwd status and chage list.
 Only exact locked status tokens L and LK are supported. The root-owned regular
 nonwritable /etc/default/useradd must contain exactly one literal
-CREATE_MAIL_SPOOL=no line. This bounded policy is rechecked before utilities;
-the broker never rewrites it. Mail policy is a useradd default, not a login.defs
--K key. Subordinate UID/GID allocation is disabled through supported fixed -K
+CREATE_MAIL_SPOOL=yes or CREATE_MAIL_SPOOL=no line. This bounded policy is rechecked
+before utilities; the broker never rewrites it. New identities use fixed
+useradd --system with explicit UID/GID and home creation, retaining locked
+passwords and nologin. Shadow's system-account mode omits mail creation and
+ordinary password-aging defaults; expiry suspension remains explicit. Mail
+policy is a useradd default, not a login.defs -K key. See the
+[service-account contract and qualification](../../docs/service-account-mail-policy.md).
+Subordinate UID/GID allocation is disabled through supported fixed -K
 count options. Explicit --groups '' excludes supplementary defaults; native
 verification requires the private primary group only and no member additions.
 
@@ -48,7 +53,7 @@ There are at most100managed accounts and256immutable audit event rows per accoun
 UID/GID pairs in20000–60000 are reserved in durable private bbolt metadata before
 OS changes. Controller UID, existing local users/groups/homes and metadata
 username/domain reservations are never adopted. groupadd/useradd create a fresh
-private group, explicitUID/GID, nologin shell, locked password and an empty home
+private group, explicitUID/GID, system-account mode, nologin shell, locked password and an empty home
 from a private empty skeleton. A root-only ownership marker stays in broker state,
 outside tenant-owned directories. Home/public_html mutation uses nofollow opened
 directory handles. Captured dev/inode identities are durably recorded before

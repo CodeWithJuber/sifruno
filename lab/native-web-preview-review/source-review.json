@@ -87,5 +87,7 @@
     "No generated config syntax/activation/health/installer/reboot/vendor/allOS qualification",
     "Bounded cooperative checks do not defeat privileged interference"
   ],
-  "recovery": "Disable explicit run; retain evidence; root owns disposable overlay lifecycle"
+  "recovery": "Disable explicit run; retain evidence; root owns disposable overlay lifecycle",
+  "current_status": "SUPERSEDED; original provisional CLEAR withdrawn before execution",
+  "current_receipt": "final-source-review.json"
 }

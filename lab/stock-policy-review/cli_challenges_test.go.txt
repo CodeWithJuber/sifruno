@@ -1,0 +1,117 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"reflect"
+	"sifruno/internal/hostaccounts"
+	"testing"
+	"time"
+)
+
+func TestIndependentCLIConsumesNoDiagnosticTokenAsValue(t *testing.T) {
+	tokens := []string{"--check-host", "-check-host", "--check-host=true", "--check-host=false", "-check-host=true", "--check-host=synthetic-private-detail"}
+	for _, option := range []string{"--state", "--homes", "--socket"} {
+		for i, token := range tokens {
+			t.Run(fmt.Sprintf("%s_%d", option, i), func(t *testing.T) {
+				args := []string{option, token, "--controller-uid", "7"}
+				var out, errOut bytes.Buffer
+				code := runWithServices(args, &out, &errOut, func(context.Context) hostaccounts.HostPolicyReport {
+					t.Fatal("mixed diagnostic invoked probe")
+					return hostaccounts.HostPolicyReport{}
+				}, func(context.Context, hostaccounts.BrokerOptions) error {
+					t.Fatal("diagnostic consumed as serving option value")
+					return nil
+				})
+				if code != 2 || out.Len() != 0 || errOut.String() != "Invalid native broker configuration\n" {
+					t.Fatal("mixed diagnostic fixed refusal")
+				}
+			})
+		}
+	}
+	for i, args := range [][]string{{"--check-host", "--check-host"}, {"--", "--check-host"}, {"--check-host\x00"}, {"--check-host", "--controller-uid", "7"}, {"--controller-uid", "7", "--check-host"}} {
+		t.Run(fmt.Sprint("standalone_shape_", i), func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := runWithServices(args, &out, &errOut, func(context.Context) hostaccounts.HostPolicyReport {
+				t.Fatal("invalid diagnostic invoked probe")
+				return hostaccounts.HostPolicyReport{}
+			}, func(context.Context, hostaccounts.BrokerOptions) error {
+				t.Fatal("invalid diagnostic invoked serve")
+				return nil
+			})
+			if code != 2 || out.Len() != 0 || errOut.String() != "Invalid native broker configuration\n" {
+				t.Fatal("invalid diagnostic refusal")
+			}
+		})
+	}
+}
+
+func TestIndependentCLIExactOneBoundedObjectDeadlineAndCancel(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		t.Run(fmt.Sprint(supported), func(t *testing.T) {
+			want := hostaccounts.CheckHostPolicy(nil)
+			want.Platform = "linux"
+			want.Supported = supported
+			if supported {
+				for i := range want.Checks {
+					want.Checks[i].Status = "pass"
+					want.Checks[i].Reason = "satisfied"
+				}
+			}
+			var out, errOut bytes.Buffer
+			calls := 0
+			var observed context.Context
+			code := runWithServices([]string{"--check-host"}, &out, &errOut, func(ctx context.Context) hostaccounts.HostPolicyReport {
+				calls++
+				observed = ctx
+				deadline, ok := ctx.Deadline()
+				if !ok || ctx.Err() != nil || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Second {
+					t.Fatal("unbounded diagnostic context")
+				}
+				return want
+			}, func(context.Context, hostaccounts.BrokerOptions) error {
+				t.Fatal("standalone diagnostic entered broker")
+				return nil
+			})
+			expectedCode := 1
+			if supported {
+				expectedCode = 0
+			}
+			if code != expectedCode || calls != 1 || errOut.Len() != 0 || out.Len() > 1024 || observed.Err() != context.Canceled {
+				t.Fatal("standalone diagnostic outcome/cleanup")
+			}
+			var got hostaccounts.HostPolicyReport
+			decoder := json.NewDecoder(&out)
+			if decoder.Decode(&got) != nil || !reflect.DeepEqual(got, want) || decoder.Decode(&got) != io.EOF {
+				t.Fatal("report changed or extra object")
+			}
+		})
+	}
+}
+
+type independentFailAfterPrefix struct{ bytes.Buffer }
+
+func (w *independentFailAfterPrefix) Write(b []byte) (int, error) {
+	w.Buffer.Write(b[:3])
+	return 3, errors.New("synthetic-sensitive-output-detail")
+}
+
+func TestIndependentCLIOutputFailureDoesNotEnterServeOrLeakError(t *testing.T) {
+	out := &independentFailAfterPrefix{}
+	var errOut bytes.Buffer
+	var observed context.Context
+	code := runWithServices([]string{"--check-host"}, out, &errOut, func(ctx context.Context) hostaccounts.HostPolicyReport {
+		observed = ctx
+		return hostaccounts.CheckHostPolicy(nil)
+	}, func(context.Context, hostaccounts.BrokerOptions) error {
+		t.Fatal("failed output entered broker")
+		return nil
+	})
+	if code != 1 || out.Len() != 3 || errOut.String() != "Unable to write native host policy report\n" || observed.Err() != context.Canceled {
+		t.Fatal("output failure fixed error/context cancellation")
+	}
+}

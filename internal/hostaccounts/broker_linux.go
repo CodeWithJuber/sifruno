@@ -136,6 +136,10 @@ func RunBroker(ctx context.Context, opts BrokerOptions) error {
 	if controllerCount != 1 {
 		return ErrInvalid
 	}
+	system, e := newLinuxSystem(opts)
+	if e != nil {
+		return e
+	}
 	for _, d := range []struct {
 		path string
 		mode os.FileMode
@@ -146,10 +150,6 @@ func RunBroker(ctx context.Context, opts BrokerOptions) error {
 	}
 	if _, e = os.Lstat(opts.SocketPath); !errors.Is(e, os.ErrNotExist) {
 		return ErrConflict
-	}
-	system, e := newLinuxSystem(opts)
-	if e != nil {
-		return e
 	}
 	opening, cancelOpening := context.WithTimeout(ctx, 45*time.Second)
 	s, e := openStore(opening, opts, system)

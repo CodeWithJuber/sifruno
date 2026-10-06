@@ -40,57 +40,31 @@ type linuxSystem struct {
 }
 
 func newLinuxSystem(opts BrokerOptions) (*linuxSystem, error) {
-	n := &linuxSystem{opts: opts, tools: map[string]os.FileInfo{}}
+	tools, e := trustedUtilities()
+	if e != nil || supportedNSS() != nil || supportedUseraddDefaults() != nil {
+		return nil, ErrUnavailable
+	}
+	return &linuxSystem{opts: opts, tools: tools}, nil
+}
+
+func trustedUtilities() (map[string]os.FileInfo, error) {
+	tools := map[string]os.FileInfo{}
 	for _, p := range fixedUtilities {
 		info, e := trustedFile(p, false)
 		if e != nil || info.Mode().Perm()&0111 == 0 {
 			return nil, ErrUnavailable
 		}
-		n.tools[p] = info
+		tools[p] = info
 	}
-	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
-		return nil, ErrUnavailable
-	}
-	return n, nil
+	return tools, nil
 }
 
 func supportedUseraddDefaults() error {
-	b, e := readBoundedSystemFile("/etc/default/useradd", 4096)
+	b, e := readBoundedSystemFile("/etc/default/useradd", maxUseraddDefaultsBytes)
 	if e != nil {
 		return ErrUnavailable
 	}
 	return mailDisabledDefaults(b)
-}
-
-// Shadow reads this key from useradd defaults, not login.defs/-K. Require
-// exactly the literal that the supported utility will interpret as disabled.
-func mailDisabledDefaults(b []byte) error {
-	if len(b) > 4096 || bytes.IndexByte(b, 0) >= 0 {
-		return ErrUnavailable
-	}
-	found := false
-	for _, line := range strings.Split(string(b), "\n") {
-		// Legacy shadow fgets(1024) can interpret overlong line chunks as
-		// separate settings. Refuse them before considering comments/keys.
-		if len(line) >= 1023 {
-			return ErrUnavailable
-		}
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(key) != "CREATE_MAIL_SPOOL" {
-			continue
-		}
-		if found || key != "CREATE_MAIL_SPOOL" || value != "no" {
-			return ErrUnavailable
-		}
-		found = true
-	}
-	if !found {
-		return ErrUnavailable
-	}
-	return nil
 }
 
 func supportedNSS() error {
@@ -98,23 +72,7 @@ func supportedNSS() error {
 	if e != nil {
 		return e
 	}
-	found := map[string]bool{}
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.SplitN(line, "#", 2)[0]
-		key, value, ok := strings.Cut(line, ":")
-		key = strings.TrimSpace(key)
-		if !ok || (key != "passwd" && key != "group" && key != "shadow") {
-			continue
-		}
-		if found[key] || strings.TrimSpace(value) != "files" {
-			return ErrUnavailable
-		}
-		found[key] = true
-	}
-	if !found["passwd"] || !found["group"] || !found["shadow"] {
-		return ErrUnavailable
-	}
-	return nil
+	return filesOnlyNSS(b)
 }
 func authority(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {

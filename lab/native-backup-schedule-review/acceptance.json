@@ -1,0 +1,389 @@
+{
+  "schema": 1,
+  "kind": "independent-native-static-site-backup-schedule-review",
+  "baseline": "835d9213154179aa77e35267c0c5cb81acb840e3",
+  "platform": "Windows",
+  "qualification": "isolated actual Store/API/owned goroutine, with explicitly synthetic durable-state challenges",
+  "result": "pass",
+  "source_catalog": {
+    "path": "source-catalog.json",
+    "items": 37,
+    "sha256": "40733dbcf38f559712c83026bc8ca2d24b886655b39fa13c9d962b7f2b06d3b1",
+    "overlay_files": 35,
+    "unchanged_after_test_vet_race": true
+  },
+  "challenge_source_sha256": "62bc9e88c5b9b49acdea88f53683862d8493acb993be9bf1a9ed796359d291ee",
+  "commands": [
+    {
+      "wrapper": "primary scripts/go.ps1",
+      "cwd": "review worktree",
+      "environment": {
+        "GOSUMDB": "off",
+        "GOPROXY": "off"
+      },
+      "args": [
+        "test",
+        "-overlay=<owned immutable overlay.json>",
+        "-mod=readonly",
+        "-count=1",
+        "-timeout=60s",
+        "-json",
+        "./lab/native-backup-schedule-review"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 8.09,
+      "passed": 61,
+      "top_level": 11,
+      "failed": 0,
+      "skipped": 0,
+      "stdout_sha256": "ec10d2421904c019c288e4a3ff0a89a73277d02d3321da92fd2255364441d24a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "wrapper": "primary scripts/go.ps1",
+      "cwd": "review worktree",
+      "environment": {
+        "GOSUMDB": "off",
+        "GOPROXY": "off"
+      },
+      "args": [
+        "vet",
+        "-overlay=<same immutable overlay.json>",
+        "-mod=readonly",
+        "./lab/native-backup-schedule-review"
+      ],
+      "exit": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "wrapper": "primary scripts/go.ps1",
+      "cwd": "review worktree",
+      "environment": {
+        "CGO_ENABLED": "1",
+        "GOSUMDB": "off",
+        "GOPROXY": "off"
+      },
+      "args": [
+        "test",
+        "-overlay=<same immutable overlay.json>",
+        "-mod=readonly",
+        "-race",
+        "-count=1",
+        "-timeout=60s",
+        "-json",
+        "-run=^(TestConcurrentRunAndPauseSerialize|TestPauseRacesWithDueConsumption|TestOwnedRunnerImmediateCycleAndCancellation)$",
+        "./lab/native-backup-schedule-review"
+      ],
+      "exit": 0,
+      "elapsed_seconds": 3.079,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 0,
+      "stdout_sha256": "e8f9a8b89c159857fb92eed7d101b6262262882b3fe95b10c0f73b3449bd60c6",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "test_passes": [
+    {
+      "name": "TestExactAbsentAndOffRunnerContract",
+      "elapsed_seconds": 0.19
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/empty",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/null",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/array",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/unknown",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/duplicate",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/case_alias",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/trailing",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/oversize",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/wrong_content",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/no_origin",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/wrong_origin",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/no_csrf",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/wrong_csrf",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/nonlocal_peer",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule/foreign_host",
+      "elapsed_seconds": 0
+    },
+    {
+      "name": "TestHTTPRefusalsLeaveAbsentSchedule",
+      "elapsed_seconds": 0.12
+    },
+    {
+      "name": "TestDueConsumptionAndNoCatchup/hourly",
+      "elapsed_seconds": 0.38
+    },
+    {
+      "name": "TestDueConsumptionAndNoCatchup/daily",
+      "elapsed_seconds": 0.3
+    },
+    {
+      "name": "TestDueConsumptionAndNoCatchup/weekly",
+      "elapsed_seconds": 0.41
+    },
+    {
+      "name": "TestDueConsumptionAndNoCatchup",
+      "elapsed_seconds": 1.09
+    },
+    {
+      "name": "TestConcurrentRunAndPauseSerialize",
+      "elapsed_seconds": 0.31
+    },
+    {
+      "name": "TestArchiveCountCapacityPreservesExistingBytes",
+      "elapsed_seconds": 0.93
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/missing_enabled",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/null_enabled",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/missing_absent_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/null_absent_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/missing_site_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/null_site_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/null_interval",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/unknown_interval",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/cron_not_a_preset",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/boolean_string",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/numeric_string",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/uint_overflow",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/unsafe_site_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/unsafe_schedule_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/negative_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation/fractional_revision",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "name": "TestRequiredTypedInputsRefuseWithoutMutation",
+      "elapsed_seconds": 0.22
+    },
+    {
+      "name": "TestPauseRacesWithDueConsumption",
+      "elapsed_seconds": 0.2
+    },
+    {
+      "name": "TestPublicActorAdmissionCannotBorrowSchedulerPrivilege",
+      "elapsed_seconds": 0.12
+    },
+    {
+      "name": "TestOwnedRunnerImmediateCycleAndCancellation",
+      "elapsed_seconds": 0.26
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/unknown_field",
+      "elapsed_seconds": 0.13
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/duplicate_field",
+      "elapsed_seconds": 0.12
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/case_alias",
+      "elapsed_seconds": 0.14
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/orphan_row",
+      "elapsed_seconds": 0.12
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/pending_without_marker",
+      "elapsed_seconds": 0.14
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/completed_absent_catalog",
+      "elapsed_seconds": 0.14
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/bad_UTC",
+      "elapsed_seconds": 0.13
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption/oversized_revision",
+      "elapsed_seconds": 0.13
+    },
+    {
+      "name": "TestSyntheticDurableAdmissionRejectsCorruption",
+      "elapsed_seconds": 1.05
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/exact_committed",
+      "elapsed_seconds": 0.36
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/absent_reserved_ID",
+      "elapsed_seconds": 0.41
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/untracked_reserved_file",
+      "elapsed_seconds": 0.47
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/wrong_source_revision",
+      "elapsed_seconds": 0.45
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/wrong_hash",
+      "elapsed_seconds": 0.47
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/wrong_byte_count",
+      "elapsed_seconds": 0.48
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/wrong_file_count",
+      "elapsed_seconds": 0.44
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive/tampered_actual_ZIP",
+      "elapsed_seconds": 0.41
+    },
+    {
+      "name": "TestSyntheticPendingReconciliationUsesExactArchive",
+      "elapsed_seconds": 3.49
+    }
+  ],
+  "race_passes": [
+    "TestConcurrentRunAndPauseSerialize",
+    "TestPauseRacesWithDueConsumption",
+    "TestOwnedRunnerImmediateCycleAndCancellation"
+  ],
+  "retained_artifacts": ".cache/native-backup-schedule-review/attempt-1",
+  "initial_attempt_classification": "No failed challenge compile/test attempt. Formatting and exploratory missing-path diagnostics are not qualification commands.",
+  "resolved_findings": [
+    "Internal scheduler actor admitted only in private callback-backed backup path; public methods reject borrowing privilege.",
+    "Expected site and schedule revisions both capped at JavaScript safe integer maximum.",
+    "Historical completion requires parent archive catalog membership; this is not fresh ZIP-health evidence.",
+    "Unproven reserved archive preserves exact stopped marker; proven current absence may close interrupted intent without claiming historical nonexecution.",
+    "UI follow-up 0cfa09b binds successful PUT to exact revision +1 and pending=false; allows reviewed terminal recovery and rejects other disabled pending DTOs."
+  ],
+  "limits": [
+    "Actual platform Windows; no all-OS qualification.",
+    "HTTP handler exercised through httptest, not live listener/browser/remote ingress.",
+    "Real archive bytes generated/read/hashed; eight-archive count capacity actually tested; 128 MiB fill not independently exhausted.",
+    "Durable pending/corrupt rows and untracked ZIP are synthetic isolated fixtures, not observed OS/process crashes.",
+    "Owned scheduler goroutine immediate cycle/cancel tested; no native service install/reboot/long-lived daemon claim.",
+    "CLI and main lifecycle reviewed/pinned; lab does not execute those binaries.",
+    "No stock/cPanel/whole-host backup or original vendor compatibility qualification."
+  ],
+  "cleanup": "All actual tests and race checks passed, including Store.Close/DB.Close checks, runner completion wait and testing.T.TempDir cleanup; no live state used.",
+  "rollback": "Revert this independent lab directory; product rollback belongs to root reviewed change.",
+  "ui_read_only_review": {
+    "commit": "0cfa09b3f71e5c898c230ad34db9e2abdc92123a",
+    "files": [
+      {
+        "path": "web/src/Backups.tsx",
+        "sha256": "c129d090cbbf9b412b10405dce7e74d29b51407be7e5994c53ee4e214d979cc2",
+        "bytes": 18774
+      },
+      {
+        "path": "web/src/BackupSchedule.tsx",
+        "sha256": "3c055e26d3cca7df8be707b7780b628d1a2f530288d2edf942e388e4788e517e",
+        "bytes": 12482
+      },
+      {
+        "path": "web/src/backup-schedule.css",
+        "sha256": "3bee6029b5af04226f59c77a0b6ff5903b5e6591481c05c63c82be1dfddf721e",
+        "bytes": 2159
+      },
+      {
+        "path": "web/src/lib/backupSchedule.ts",
+        "sha256": "2ee9a04a84bc8080e07168b1413e7b437d0a4db7c97830aa8631278617a3edc3",
+        "bytes": 6979
+      },
+      {
+        "path": "web/src/lib/backupSchedule.test.mjs",
+        "sha256": "f4ec0036d4ebe4d91a948729597b544f7e019900ed8577aa3e2da21562984b93",
+        "bytes": 9817
+      }
+    ],
+    "authority": "Source review only; no UI check or browser executed by this reviewer."
+  }
+}

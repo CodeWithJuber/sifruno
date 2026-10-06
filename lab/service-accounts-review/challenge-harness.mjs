@@ -49,4 +49,3 @@ const own=path.resolve('.');assert.equal(admitted(own,path.resolve('lab/service-
 for(const file of [own,path.resolve('../service-accounts-core-sol/internal/hostaccounts/policy.go')]){assert.throws(()=>admitted(own,file));negative++;}
 assert.throws(()=>admitted(own,path.resolve('lab/service-accounts-review/acceptance.json'),1));negative++;
 console.log(JSON.stringify({passed:true,synthetic_only:true,positive,negative,cases:positive+negative,driver_sha256:process.argv[3],native_execution:false}));
-

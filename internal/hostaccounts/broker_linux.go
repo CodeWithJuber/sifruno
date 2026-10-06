@@ -87,7 +87,7 @@ func validBrokerPaths(opts BrokerOptions) bool {
 	if opts.ControllerUID == 0 || !validSocketName(opts.SocketPath) {
 		return false
 	}
-	for _, p := range []string{opts.StateDir, opts.HomesDir} {
+	for _, p := range []string{opts.StateDir, opts.HomesDir, filepath.Dir(opts.SocketPath)} {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p || p == "/" || len(p) > 2048 || strings.ContainsAny(p, "\x00\r\n") {
 			return false
 		}
@@ -111,7 +111,7 @@ func declaredDir(p string, mode os.FileMode) error {
 		return ErrUnavailable
 	}
 	info, e := os.Lstat(p)
-	if e != nil || info.Mode().Perm() != mode {
+	if e != nil || info.Mode() != os.ModeDir|mode {
 		return ErrUnavailable
 	}
 	return nil
@@ -119,6 +119,9 @@ func declaredDir(p string, mode os.FileMode) error {
 func RunBroker(ctx context.Context, opts BrokerOptions) error {
 	if ctx == nil || !validBrokerPaths(opts) {
 		return ErrInvalid
+	}
+	if ctx.Err() != nil {
+		return ErrUnavailable
 	}
 	if os.Geteuid() != 0 {
 		return ErrUnavailable
@@ -136,6 +139,16 @@ func RunBroker(ctx context.Context, opts BrokerOptions) error {
 	if controllerCount != 1 {
 		return ErrInvalid
 	}
+	system, e := newLinuxSystem(opts)
+	if e != nil {
+		return e
+	}
+	if e = admitBrokerPaths(opts); e != nil {
+		return e
+	}
+	if ctx.Err() != nil {
+		return ErrUnavailable
+	}
 	for _, d := range []struct {
 		path string
 		mode os.FileMode
@@ -146,10 +159,6 @@ func RunBroker(ctx context.Context, opts BrokerOptions) error {
 	}
 	if _, e = os.Lstat(opts.SocketPath); !errors.Is(e, os.ErrNotExist) {
 		return ErrConflict
-	}
-	system, e := newLinuxSystem(opts)
-	if e != nil {
-		return e
 	}
 	opening, cancelOpening := context.WithTimeout(ctx, 45*time.Second)
 	s, e := openStore(opening, opts, system)

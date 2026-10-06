@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "kind": "independent_supplemental_broker_setgid_path_admission_review",
+  "passed": true,
+  "checked_at": "2026-10-06T07:46:09.759936+00:00",
+  "original_core_commit": "4af0b7190ba5b73271c57a824d8d713190587553",
+  "candidate_fix_commit": "73ce4c5b9f9a83bcdb754c4469364461aa284faf",
+  "review_fix_cherry_pick": "b3bfeae71a11503a6b2489fea63621c0b7f51c58",
+  "original_receipt_preserved": {
+    "path": "lab/broker-paths-review/acceptance.json",
+    "bytes": 10634,
+    "sha256": "d1f3a91e30cae821d5c3f1c8b7e867030e51c349bcd3d17728deb6838d6abb2c"
+  },
+  "original_elf_preserved": {
+    "path": "artifacts/broker-paths-review/build/independent.test",
+    "bytes": 12803212,
+    "sha256": "cf303fe4a021e9d2807dce6360836156f5de15bae00fa97e7bf4962365333085"
+  },
+  "source_review": {
+    "blocking_findings": [],
+    "exact_three_file_fix_matches_commit": true,
+    "missing_destination_direct_parent_setgid_refused_prewrite": true,
+    "declared_directory_postcreate_requires_exact_mode_including_special_bits": true,
+    "existing_exact_mode_directory_under_setgid_parent_retains_admission": true,
+    "native_authority_host_policy_controller_store_cli_modules_unchanged": true,
+    "no_parent_chmod_chown_or_policy_rewrite": true,
+    "no_atomic_path_stability_claim": true
+  },
+  "source_pins": [
+    {
+      "path": "internal/hostaccounts/broker_linux.go",
+      "bytes": 5593,
+      "sha256": "f2f8a28911bc4ee5807b52325b97265ac0015c449deecf2d1b25f83740b692db"
+    },
+    {
+      "path": "internal/hostaccounts/broker_paths_linux.go",
+      "bytes": 2563,
+      "sha256": "826276568dc8a9a2d3ad68b75d43b188ea6819a2d50390f19d13076cbea2e4a2"
+    },
+    {
+      "path": "internal/hostaccounts/broker_paths_linux_test.go",
+      "bytes": 10358,
+      "sha256": "b1ae433b09c2685564c4d0df35218b045af3fca380f955e6ef000d5f7534d72c"
+    },
+    {
+      "path": "internal/hostaccounts/native_linux.go",
+      "bytes": 18649,
+      "sha256": "b0df0b2f7c237a5fb1707225c671d849431d168a52b3d3ea082a090bfd155c43"
+    },
+    {
+      "path": "internal/hostaccounts/store.go",
+      "bytes": 14563,
+      "sha256": "fd2094e5ba57bb379546040d779ed379e7ad0ef430e0687e35bfec0985dfbd56"
+    },
+    {
+      "path": "go.mod",
+      "bytes": 822,
+      "sha256": "1082d590f04ae0f44e29fd20d1d55f199be166f396ae608ae9ec6fd650d6227d"
+    },
+    {
+      "path": "go.sum",
+      "bytes": 4946,
+      "sha256": "75870928880ec30f71a1e66110caed018505a8ac53477bbf1eb8f3d1126dd611"
+    },
+    {
+      "path": "lab/broker-paths-review/private_linux_test.go.txt",
+      "bytes": 4739,
+      "sha256": "04886a36e2c6692a45553442a89bf6a66d67647d47799b26dd577382273d8b61"
+    },
+    {
+      "path": "lab/broker-paths-review/private_setgid_linux_test.go.txt",
+      "bytes": 3268,
+      "sha256": "828c6f9bbc008fa57c4e1abfef4b95bd5c53a7e8994a2afc449bc60eec8c9ed8"
+    }
+  ],
+  "source_audit": {
+    "path": "artifacts/broker-paths-review/build-setgid/source-audit.json",
+    "bytes": 1899,
+    "sha256": "6db11c44b08d0b44010ee49034e6a3847e7a3a9b722b91b464383f38ee002d39"
+  },
+  "overlay": {
+    "path": "artifacts/broker-paths-review/build-setgid/overlay.json",
+    "bytes": 667,
+    "sha256": "29a02e39e3548f4761e39b1afa81faa50cadce21ebf47655fb833a698fb7f439"
+  },
+  "linux_challenges": {
+    "binary": {
+      "path": "artifacts/broker-paths-review/build-setgid/independent.test",
+      "bytes": 12819826,
+      "sha256": "9d0b9af9f3cdb4fdb9b4095e4189ad5bcdc040836cdbfb0708e06c67b0c8631c"
+    },
+    "test_names": [
+      "TestIndependentBrokerDirectoryIdentity",
+      "TestIndependentBrokerFreshVersusNonemptyState",
+      "TestIndependentBrokerOptionBoundary",
+      "TestIndependentBrokerSetgidParent"
+    ],
+    "compiled": true,
+    "executed": false
+  },
+  "native_exact_test_filter": "^TestIndependentBroker(DirectoryIdentity|FreshVersusNonemptyState|OptionBoundary|SetgidParent)$",
+  "native_require_no_skip": true,
+  "checks": {
+    "linux-vet": {
+      "status": {
+        "command": [
+          "primary scripts/go.ps1",
+          "vet",
+          "-mod=readonly",
+          "-overlay=C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build-setgid\\overlay.json",
+          "./internal/hostaccounts"
+        ],
+        "environment": {
+          "TEMP": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build-setgid\\temp",
+          "TMP": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build-setgid\\temp",
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOENV": "off",
+          "GOTOOLCHAIN": "local",
+          "GOOS": "linux",
+          "GOARCH": "amd64",
+          "CGO_ENABLED": "0"
+        },
+        "exit_code": 0,
+        "finished_at": "2026-10-06T07:44:41.344053+00:00"
+      },
+      "status_file": {
+        "path": "artifacts/broker-paths-review/build-setgid/linux-vet.status.json",
+        "bytes": 888,
+        "sha256": "170826f829123abc7363b3d6e18896cf5bf7020c8a9132682faaf4e7d7eb274b"
+      },
+      "stdout": {
+        "path": "artifacts/broker-paths-review/build-setgid/linux-vet.out",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "artifacts/broker-paths-review/build-setgid/linux-vet.err",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "linux-independent-build": {
+      "status": {
+        "command": [
+          "primary scripts/go.ps1",
+          "test",
+          "-mod=readonly",
+          "-overlay=C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build-setgid\\overlay.json",
+          "-c",
+          "-trimpath",
+          "-buildvcs=false",
+          "-o",
+          "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build-setgid\\independent.test",
+          "./internal/hostaccounts"
+        ],
+        "environment": {
+          "TEMP": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build-setgid\\temp",
+          "TMP": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\build-setgid\\temp",
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOENV": "off",
+          "GOTOOLCHAIN": "local",
+          "GOOS": "linux",
+          "GOARCH": "amd64",
+          "CGO_ENABLED": "0"
+        },
+        "exit_code": 0,
+        "finished_at": "2026-10-06T07:44:43.204912+00:00"
+      },
+      "status_file": {
+        "path": "artifacts/broker-paths-review/build-setgid/linux-independent-build.status.json",
+        "bytes": 1121,
+        "sha256": "27196d5ff49b8ef1d0f496f4540964117f65b0693f682fe36bb47217761fe35d"
+      },
+      "stdout": {
+        "path": "artifacts/broker-paths-review/build-setgid/linux-independent-build.out",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "artifacts/broker-paths-review/build-setgid/linux-independent-build.err",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "preflight": {
+    "substrate": "failed scanning unrelated protected primary cache path with EPERM",
+    "scope_files": "same EPERM path",
+    "manual_resolution": "actual three-file diff inspected; owned lab/output paths and preserved artifact hashes checked; no permissions or protected cache changed"
+  },
+  "upstream_reference": {
+    "url": "https://man7.org/linux/man-pages/man2/mkdir.2.html",
+    "observed": "Linux man-pages6.19 mkdir documentation explicitly describes setgid inheritance from direct parent",
+    "authority": "documentation only; actual kernel runtime pending"
+  },
+  "limits": [
+    "Original94 portable passes/3packages remain historical; no repeat for Linux-only fix.",
+    "Linux focused vet and compilation executed; all4 independent Linux families remain unexecuted until actual exact-ELF guest proof.",
+    "Preexisting setgid missing destinations are refused before startup writes. The separate direct declaredDir inheritance challenge deliberately creates an owned child and verifies postcreate refusal; no universal mutation-free rejection claim.",
+    "Cooperative checks only; not an atomic filesystem transaction against another privileged actor.",
+    "Source pins are declared reviewed inputs, not exhaustive prebuild Go toolchain closure.",
+    "No live state/policy/account/service/credential changes, production activation, original vendor/cPanel/CloudLinux/allOS qualification."
+  ]
+}

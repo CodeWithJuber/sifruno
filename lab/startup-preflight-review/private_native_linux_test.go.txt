@@ -1,0 +1,39 @@
+//go:build linux
+
+package hostaccounts
+
+import (
+ "context"
+ "crypto/sha256"
+ "os"
+ "path/filepath"
+ "reflect"
+ "testing"
+)
+
+func independentNativeDeps(opts BrokerOptions) startupNativeDependencies {
+ return startupNativeDependencies{euid:func()int{return 0},users:func()([]nativeUser,error){return []nativeUser{{UID:int(opts.ControllerUID)}},nil},utilities:func()(map[string]os.FileInfo,error){return nil,nil},readFile:func(p string,n int64)([]byte,error){if p!="/etc/nsswitch.conf"||n!=4<<20 {return nil,ErrUnavailable};return []byte("passwd: files\ngroup: files\nshadow: files\n"),nil},defaults:func()error{return nil},paths:admitBrokerPaths,lstat:os.Lstat,authority:authority,empty:brokerDirectoryEmpty}
+}
+func independentTree(t *testing.T,root string) map[string][32]byte {
+ t.Helper();out:=map[string][32]byte{};e:=filepath.WalkDir(root,func(p string,d os.DirEntry,e error)error{if e!=nil{return e};i,e:=os.Lstat(p);if e!=nil{return e};text:=i.Mode().String();if d.Type()&os.ModeSymlink!=0 {target,e:=os.Readlink(p);if e!=nil{return e};text+=target}else if !d.IsDir(){b,e:=os.ReadFile(p);if e!=nil{return e};text+=string(b)};out[p]=sha256.Sum256([]byte(text));return nil});if e!=nil {t.Fatal(e)};return out
+}
+func TestIndependentStartupFreshAuthority(t *testing.T) {
+ if os.Geteuid()!=0 {t.Fatal("requires owned root Linux fixture, never skip")}
+ root:=t.TempDir();if e:=os.Chmod(root,0700);e!=nil {t.Fatal(e)}
+ opts:=BrokerOptions{StateDir:filepath.Join(root,"state"),HomesDir:filepath.Join(root,"homes"),SocketPath:filepath.Join(root,"socket","broker.sock"),ControllerUID:65534}
+ if authority(root)!=nil {t.Fatal("owned TMPDIR requires trusted ancestors")}
+ for _,name:=range []string{"missing","empty","marker","invalid_db","socket_leaf","homes_foreign","mode","identity_drift","controller_duplicate","nss_provider"} {name:=name;t.Run(name,func(t *testing.T){
+  dir:=t.TempDir();if e:=os.Chmod(dir,0700);e!=nil {t.Fatal(e)};o:=opts;o.StateDir=filepath.Join(dir,"state");o.HomesDir=filepath.Join(dir,"homes");o.SocketPath=filepath.Join(dir,"run","broker.sock");d:=independentNativeDeps(o);want:="pass";stage:=8
+  if name!="missing" {if e:=os.Mkdir(o.StateDir,0700);e!=nil {t.Fatal(e)}}
+  switch name {
+  case "marker","invalid_db":file:=".sifruno-state";if name=="invalid_db" {file="hostaccounts.db"};if e:=os.WriteFile(filepath.Join(o.StateDir,file),[]byte("not-a-storage-input"),0600);e!=nil {t.Fatal(e)};want="not_checked"
+  case "socket_leaf":if e:=os.Mkdir(filepath.Dir(o.SocketPath),0755);e!=nil {t.Fatal(e)};if e:=os.Symlink("missing-target",o.SocketPath);e!=nil {t.Fatal(e)};want="refused";stage=7
+  case "homes_foreign":if e:=os.Mkdir(o.HomesDir,0755);e!=nil {t.Fatal(e)};if e:=os.WriteFile(filepath.Join(o.HomesDir,"unrelated"),[]byte("preserve"),0600);e!=nil {t.Fatal(e)};want="refused";stage=7
+  case "mode":if e:=os.Chmod(o.StateDir,0755);e!=nil {t.Fatal(e)};want="refused";stage=7
+  case "identity_drift":info,e:=os.Lstat(o.StateDir);if e!=nil {t.Fatal(e)};replacement:=filepath.Join(dir,"replacement");if e:=os.Mkdir(replacement,0700);e!=nil {t.Fatal(e)};if e:=os.Rename(o.StateDir,filepath.Join(dir,"old"));e!=nil {t.Fatal(e)};if e:=os.Rename(replacement,o.StateDir);e!=nil {t.Fatal(e)};d.lstat=func(p string)(os.FileInfo,error){if p!=o.StateDir {t.Fatal("unexpected read")};return info,nil};want="refused"
+  case "controller_duplicate":d.users=func()([]nativeUser,error){return []nativeUser{{UID:65534},{UID:65534}},nil};want="refused";stage=2
+  case "nss_provider":d.readFile=func(string,int64)([]byte,error){return []byte("passwd: files sss\ngroup: files\nshadow: files\n"),nil};want="refused";stage=5
+  }
+  before:=independentTree(t,dir);r:=probeBrokerAdmission(context.Background(),"linux",nativeBrokerAdmissionProbes(o,d));after:=independentTree(t,dir);independentStartupShape(t,r);if !reflect.DeepEqual(before,after) {t.Fatal("read-only tree changed")};if r.Checks[stage].Status!=want||r.Supported!=(want=="pass") {t.Fatal("fresh authority result")};if name=="marker"||name=="invalid_db" {if r.Checks[8].Reason!="persisted_state_recovery_not_checked" {t.Fatal("storage incorrectly interpreted")}}
+ })}
+}

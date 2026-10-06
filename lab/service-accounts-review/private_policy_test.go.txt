@@ -1,0 +1,46 @@
+package hostaccounts
+
+import (
+ "context"
+ "encoding/json"
+ "errors"
+ "reflect"
+ "strings"
+ "testing"
+)
+
+func TestIndependentServiceDefaults(t *testing.T) {
+ for _, value := range []string{"yes", "no"} {
+  t.Run(value,func(t *testing.T) {
+   literal:="CREATE_MAIL_SPOOL="+value
+   accept:=map[string]string{"literal":literal,"newline":literal+"\n","surrounding_comments":"# defaults\nGROUP=100\n"+literal+"\n# end\n","line1022":literal+"\n#"+strings.Repeat("x",1021)}
+   rest:=4096-len(literal)-1; accept["exact4096"]=literal+"\n"+strings.Repeat("#\n",rest/2)+strings.Repeat("#",rest%2)
+   for name,input:=range accept { t.Run(name,func(t *testing.T){ if serviceAccountDefaults([]byte(input))!=nil {t.Fatal("supported bounded literal refused")} }) }
+   reject:=map[string]string{"missing":"GROUP=100\n","duplicate":literal+"\n"+literal,"mixed":literal+"\nCREATE_MAIL_SPOOL=yes\nCREATE_MAIL_SPOOL=no","leading":" "+literal,"keyspace":"CREATE_MAIL_SPOOL ="+value,"valuespace":"CREATE_MAIL_SPOOL= "+value,"trailing":literal+" ","quoted":"CREATE_MAIL_SPOOL=\""+value+"\"","comment_suffix":literal+" # note","CR":literal+"\r\n","NULcomment":literal+"\n#\x00","NULsetting":literal+"\x00","line1023":literal+"\n#"+strings.Repeat("x",1022),"shadow_chunk":literal+"\n#"+strings.Repeat("x",1022)+"CREATE_MAIL_SPOOL=wrong","oversized":accept["exact4096"]+"#","uppercase_value":"CREATE_MAIL_SPOOL="+strings.ToUpper(value),"empty":"CREATE_MAIL_SPOOL=","unknown":"CREATE_MAIL_SPOOL=maybe"}
+   for name,input:=range reject { t.Run(name,func(t *testing.T){ if serviceAccountDefaults([]byte(input))!=ErrUnavailable {t.Fatal("ambiguous or unbounded defaults admitted")} }) }
+  })
+ }
+}
+
+func TestIndependentServicePolicyContract(t *testing.T) {
+ t.Run("reason_and_redaction",func(t *testing.T){
+  secret:=errors.New("untrusted configuration bytes must not escape")
+  got:=probeHostPolicy(context.Background(),"linux",[3]func()error{func()error{return nil},func()error{return nil},func()error{return secret}})
+  raw,err:=json.Marshal(got);if err!=nil {t.Fatal(err)}
+  var d map[string]json.RawMessage;if json.Unmarshal(raw,&d)!=nil || len(d)!=7 {t.Fatal("report shape")}
+  for _, key:=range []string{"schema_version","scope","platform","supported","read_only","checks","restrictions"} {if _,ok:=d[key];!ok {t.Fatal("missing fixed report key")}}
+  if got.SchemaVersion!=1||got.Scope!="native_linux_account_host_policy"||got.Supported||!got.ReadOnly||len(got.Checks)!=3 {t.Fatal("report authority")}
+  if got.Checks[2]!=(PolicyCheck{"useradd_defaults","refused","supported_service_account_defaults_required"})||strings.Contains(string(raw),secret.Error()) {t.Fatal("service reason/redaction")}
+  if !reflect.DeepEqual(got.Restrictions,[]string{"host_policy_only","controller_paths_state_not_checked","no_stock_host_or_cpanel_certification"}) {t.Fatal("restriction drift")}
+ })
+ t.Run("cancel_discards_partial",func(t *testing.T){
+  ctx,cancel:=context.WithCancel(context.Background());defer cancel();calls:=0
+  got:=probeHostPolicy(ctx,"linux",[3]func()error{func()error{calls++;return nil},func()error{calls++;cancel();return nil},func()error{calls++;return nil}})
+  if calls!=2||got.Supported {t.Fatal("cancelled observation retained")}
+  for _,check:=range got.Checks {if check.Status!="not_checked"||check.Reason!="probe_context_unavailable" {t.Fatal("partial probe retained")}}
+ })
+ t.Run("capability_honest",func(t *testing.T){
+  got:=restrictions(); for _,required:=range []string{"managed_service_identities_with_system_flag","files_only_nss_and_bounded_yes_or_no_useradd_defaults_required","password_locked_and_nologin_in_all_states","suspension_is_pam_account_expiry_only","no_cpanel_compatibility_certification"} {found:=false;for _,v:=range got {found=found||v==required};if !found {t.Fatal("capability omission")}}
+  for _,v:=range got {if strings.Contains(v,"mail_disabled_useradd") {t.Fatal("obsolete disabled-default claim")}}
+ })
+}

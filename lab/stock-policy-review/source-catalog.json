@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "candidate_core_commit": "425d719f9f572cc8dc1d06b606ae26dc1d5c3e48",
+  "candidate_cli_commit": "6494e272c61b533231db0cc889e5a604a5a980e0",
+  "adopted_review_commit": "4d3b3a9",
+  "files": [
+    {
+      "path": "internal/hostaccounts/broker_linux.go",
+      "bytes": 5392,
+      "sha256": "803ce42254bc4a8e19ec15275ec8deab3756bccb1307250a25e58ba33201b818"
+    },
+    {
+      "path": "internal/hostaccounts/native_linux.go",
+      "bytes": 18649,
+      "sha256": "b0df0b2f7c237a5fb1707225c671d849431d168a52b3d3ea082a090bfd155c43"
+    },
+    {
+      "path": "internal/hostaccounts/policy.go",
+      "bytes": 1869,
+      "sha256": "dabda4c804de0f7750acb1d47d3e142fb078a25b6450b3e2dccccb3f6a6f4291"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report.go",
+      "bytes": 2615,
+      "sha256": "86f356fbb0c073b392f96986af236a2bdd08396138c582ceb6a74778cc5665a2"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report_linux.go",
+      "bytes": 224,
+      "sha256": "b590917a59aed109a7551fcb9c18877843b1c4195f1180fdc15137f57da30f32"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report_other.go",
+      "bytes": 115,
+      "sha256": "5ac978df9ab23269bd2c30548f7740d2b543667a72efe440814a1db726913108"
+    },
+    {
+      "path": "go.mod",
+      "bytes": 822,
+      "sha256": "1082d590f04ae0f44e29fd20d1d55f199be166f396ae608ae9ec6fd650d6227d"
+    },
+    {
+      "path": "go.sum",
+      "bytes": 4946,
+      "sha256": "75870928880ec30f71a1e66110caed018505a8ac53477bbf1eb8f3d1126dd611"
+    },
+    {
+      "path": "cmd/hostbroker/main.go",
+      "bytes": 2193,
+      "sha256": "b0f57f455063d72b3afb71c660771300989c2de69eb8d44b916001e1cc7fdf96"
+    },
+    {
+      "path": "cmd/hostbroker/main_test.go",
+      "bytes": 5294,
+      "sha256": "1e1da84ad9d339ee4cb7601f7f692030eb576840756a7c98a59d1323d3a5a96e"
+    }
+  ]
+}

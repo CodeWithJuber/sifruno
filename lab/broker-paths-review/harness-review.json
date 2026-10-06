@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "kind": "independent_broker_paths_guest_harness_source_and_synthetic_review",
+  "passed": true,
+  "checked_at": "2026-10-06T07:54:01.861033+00:00",
+  "source_freeze_commit": "0c5acb7bc809bd3ab810e5e26b478d89f950346e",
+  "driver_sha256": "0692d783d2adb12fd2e1d4d20dcb1a2c026eaf84bcf686fd5eecb135d3b28c35",
+  "guest_fixture_sha256": "993cae3db12de3489ce6554e43ce5dcb7edf9c0804a7f4db667007246f1d55f2",
+  "harness_source_pins": [
+    {
+      "path": "scripts/verify-broker-paths.mjs",
+      "bytes": 41307,
+      "sha256": "0692d783d2adb12fd2e1d4d20dcb1a2c026eaf84bcf686fd5eecb135d3b28c35"
+    },
+    {
+      "path": "lab/broker-paths-guest/fixture.py",
+      "bytes": 25401,
+      "sha256": "993cae3db12de3489ce6554e43ce5dcb7edf9c0804a7f4db667007246f1d55f2"
+    },
+    {
+      "path": "lab/broker-paths-guest/contract.test.mjs",
+      "bytes": 10271,
+      "sha256": "cfbe8ad095b9f6b3a59ffd08346f37492ede1e301cf0d680e9753c092c2dd84e"
+    },
+    {
+      "path": "lab/broker-paths-guest/fixture_test.py",
+      "bytes": 3911,
+      "sha256": "c6a3497f6d833fa450dab2c699c3456dbf6303609bcfe028f8d08cd06d613d43"
+    },
+    {
+      "path": "lab/broker-paths-guest/README.md",
+      "bytes": 6033,
+      "sha256": "82f0aeae08b6709b8a352bf0ab8a463431361950f74ec7cdbd7684ca27743211"
+    }
+  ],
+  "own_challenge_source": {
+    "path": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\lab\\broker-paths-review\\challenge-harness.mjs",
+    "bytes": 10590,
+    "sha256": "ce61759ac15d3bc170ec137cf769d9436fc6fbca8540daf1af0333ac58a13c79"
+  },
+  "check": {
+    "status": {
+      "command": [
+        "node",
+        "lab/broker-paths-review/challenge-harness.mjs",
+        "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-guest-sol\\scripts\\verify-broker-paths.mjs",
+        "0692d783d2adb12fd2e1d4d20dcb1a2c026eaf84bcf686fd5eecb135d3b28c35"
+      ],
+      "exit_code": 0,
+      "finished_at": "2026-10-06T07:52:04.723718+00:00"
+    },
+    "status_file": {
+      "path": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\harness-phase\\challenge.status.json",
+      "bytes": 376,
+      "sha256": "233153fc47063f9a01d9107bc4fd8465e7383b202fd9c91247ab259a0f9f7cae"
+    },
+    "stdout": {
+      "path": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\harness-phase\\challenge.out",
+      "bytes": 179,
+      "sha256": "1927db533243fe238580ae29de01053a375f73abce032dc738d89f0439bf258c"
+    },
+    "stderr": {
+      "path": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\broker-paths-review-sol\\artifacts\\broker-paths-review\\harness-phase\\challenge.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "positive": 4,
+    "negative": 49,
+    "total": 53,
+    "synthetic": true
+  },
+  "source_findings": [
+    {
+      "initial_freeze": "47eb34669cdf5c88582115e5e4031c0fbb891fc5",
+      "finding": "binary metadata shape omitted original authority path, rejecting exact supplemental receipt",
+      "resolution": "fixed original path/bytes/SHA shape; original receipt remains unchanged",
+      "classification": "source review before native execution"
+    },
+    {
+      "finding": "raw.trim admitted framed compact-JSON whitespace aliases",
+      "resolution": "exact raw JSON roundtrip",
+      "classification": "source tightening before first independent synthetic execution"
+    },
+    {
+      "finding": "fixed sentinel hash/length drift could agree before/after",
+      "resolution": "reconstruct fixed sentinel bytes/length/hash and require single link",
+      "classification": "source tightening before first independent synthetic execution"
+    }
+  ],
+  "source_gate": {
+    "fixed_owned_worktree_and_input_ancestor_admission": true,
+    "exact_root_supplied_binary_source_manifest_and_review_authority_pins": true,
+    "explicit_disposable_NSS_useradd_only_adaptation": true,
+    "original_then_adapted_then_final_policy_provenance": true,
+    "twelve_conflicts_exact_baseline_candidate_order_and_no_candidate_additions": true,
+    "known_sentinel_hashes_independently_reconstructable": true,
+    "actual_nonroot_GET_empty_inventory_only_then_owned_SIGTERM_and_reopen": true,
+    "eight_core_and_four_review_families_exact_no_skip": true,
+    "eight_fixed_ISO_roles_no_old_account_qualifier_execution": true,
+    "bounded_owned_guest_child_group_and_QEMU_cleanup": true,
+    "nonce_compact_json_duplicate_alias_unknown_nonzero_cleanup_fail_closed": true,
+    "blocking_findings": []
+  },
+  "preflight": {
+    "command": "forge substrate <scoped synthetic harness review task>",
+    "exit_code": 0,
+    "proceed": true,
+    "advisory_resolution": "new owned test/receipt paths intentionally created; graph unknown resolved by exact source inspection"
+  },
+  "native_runtime_observed": false,
+  "limits": [
+    "53 synthetic cases exercise actual reviewed parser/validator; they are not native evidence.",
+    "Worker Node7/Python6 outcomes reported separately; not independently rerun or promoted to own53 count.",
+    "Baseline build/tools/source and actual catalog/ISO/rawserial joins need separate audit after signed-image run.",
+    "Independent ELF was compiled from supplemental reviewed source; fixture must execute exact same9d0b ELF and all4 families before runtime qualification.",
+    "ADAPTED only: no stock provisioning, cPanel/CloudLinux/allOS/reboot/hostile-guest/atomic privileged-path guarantee or live activation.",
+    "Review does not certify exhaustive Go distribution; generated test main and declared tool/source scope remain explicit."
+  ]
+}

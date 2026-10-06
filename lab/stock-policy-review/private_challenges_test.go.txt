@@ -1,0 +1,190 @@
+package hostaccounts
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+// Compiled as one additional test file in the actual production package by
+// an owned Go overlay. No policy implementation or native system probe is copied.
+func TestIndependentPolicyNULAtEveryByte(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		parse func([]byte) error
+	}{
+		{"nss", "# comment\npasswd: files\ngroup: files\nshadow: files\nhosts: dns\n", filesOnlyNSS},
+		{"mail", "# comment\nGROUP=100\nCREATE_MAIL_SPOOL=no\n", mailDisabledDefaults},
+	}
+	for _, c := range cases {
+		if c.parse([]byte(c.input)) != nil {
+			t.Fatal("valid fixture refused")
+		}
+		t.Run(c.name, func(t *testing.T) {
+			for i := 0; i <= len(c.input); i++ {
+				altered := append(append([]byte{}, []byte(c.input[:i])...), 0)
+				altered = append(altered, []byte(c.input[i:])...)
+				if c.parse(altered) != ErrUnavailable {
+					t.Fatalf("NUL at offset %d admitted", i)
+				}
+			}
+		})
+	}
+}
+
+func TestIndependentNSSProvidersDuplicatesAndComments(t *testing.T) {
+	for _, database := range []string{"passwd", "group", "shadow"} {
+		for _, provider := range []string{"sss", "systemd", "compat", "ldap", "nis", "db", "files files", "files dns", "files [NOTFOUND=return]", "[SUCCESS=return] files", "files\\\nsss", "FILES"} {
+			name := database + "_" + strings.NewReplacer(" ", "_", "\\", "slash", "\n", "newline").Replace(provider)
+			t.Run(name, func(t *testing.T) {
+				fixture := "passwd: files\ngroup: files\nshadow: files\n"
+				fixture = strings.Replace(fixture, database+": files", database+": "+provider, 1)
+				if filesOnlyNSS([]byte(fixture)) != ErrUnavailable {
+					t.Fatal("foreign or ambiguous provider admitted")
+				}
+			})
+		}
+		t.Run(database+"_duplicate", func(t *testing.T) {
+			fixture := "passwd: files\ngroup: files\nshadow: files\n\t" + database + " : files # same duplicate\n"
+			if filesOnlyNSS([]byte(fixture)) != ErrUnavailable {
+				t.Fatal("duplicate authority admitted")
+			}
+		})
+	}
+	supported := []string{
+		"passwd: files\ngroup: files\nshadow: files",
+		" passwd\t: files # permitted comment\ngroup: files\r\nshadow: files\nservices: dns\n",
+		"# passwd: sss\nshadow: files\ngroup: files\npasswd: files\n",
+	}
+	for i, input := range supported {
+		t.Run(fmt.Sprint("permitted_", i), func(t *testing.T) {
+			if filesOnlyNSS([]byte(input)) != nil {
+				t.Fatal("inherited permitted syntax refused")
+			}
+		})
+	}
+}
+
+func TestIndependentMailExactShadowLiteral(t *testing.T) {
+	for _, value := range []string{"yes", "NO", "false", "0", " no", "no ", "no\r", "\"no\"", "'no'", "no #off", "no=no"} {
+		t.Run(fmt.Sprintf("value_%x", value), func(t *testing.T) {
+			if mailDisabledDefaults([]byte("CREATE_MAIL_SPOOL="+value+"\n")) != ErrUnavailable {
+				t.Fatal("nonexact disabled value admitted")
+			}
+		})
+	}
+	for i, input := range []string{
+		" CREATE_MAIL_SPOOL=no\n", "CREATE_MAIL_SPOOL =no\n", "CREATE_MAIL_SPOOL\t=no\n",
+		"#CREATE_MAIL_SPOOL=no\n", "CREATE_MAIL_SPOOL=no\nCREATE_MAIL_SPOOL=no\n",
+		"CREATE_MAIL_SPOOL=no\n CREATE_MAIL_SPOOL=yes\n", "CREATE_MAIL_SPOOL=no\nCREATE_MAIL_SPOOL=\"no\"\n",
+	} {
+		t.Run(fmt.Sprint("key_", i), func(t *testing.T) {
+			if mailDisabledDefaults([]byte(input)) != ErrUnavailable {
+				t.Fatal("ambiguous mail key admitted")
+			}
+		})
+	}
+	// Comment text and unknown keys retain original behavior, without relaxing the
+	// literal or duplicate-key check used by actual native commands.
+	if mailDisabledDefaults([]byte("#CREATE_MAIL_SPOOL=yes\nHOME=/synthetic/unused\nCREATE_MAIL_SPOOL=no")) != nil {
+		t.Fatal("inherited unrelated defaults refused")
+	}
+}
+
+func TestIndependentParserExactBounds(t *testing.T) {
+	nss := []byte("passwd: files\ngroup: files\nshadow: files\n#")
+	nss = append(nss, bytes.Repeat([]byte("x"), (4<<20)-len(nss))...)
+	if filesOnlyNSS(nss) != nil || filesOnlyNSS(append(nss, 'x')) != ErrUnavailable {
+		t.Fatal("NSS inclusive bound")
+	}
+	mail := "CREATE_MAIL_SPOOL=no\n"
+	exact := mail + strings.Repeat("#\n", (4096-len(mail))/2) + strings.Repeat("#", (4096-len(mail))%2)
+	if len(exact) != 4096 || mailDisabledDefaults([]byte(exact)) != nil || mailDisabledDefaults([]byte(exact+"#")) != ErrUnavailable {
+		t.Fatal("mail inclusive bound")
+	}
+	for _, width := range []int{1022, 1023} {
+		input := []byte(mail + "#" + strings.Repeat("x", width-1) + "\n")
+		got := mailDisabledDefaults(input)
+		if width == 1022 && got != nil || width == 1023 && got != ErrUnavailable {
+			t.Fatal("shadow line chunk boundary")
+		}
+	}
+}
+
+type independentOpaqueError struct{}
+
+func (independentOpaqueError) Error() string { panic("policy errors must not be formatted") }
+
+func independentUnchecked(t *testing.T, report HostPolicyReport) {
+	t.Helper()
+	if report.Supported || !report.ReadOnly || len(report.Checks) != 3 {
+		t.Fatal("unchecked envelope")
+	}
+	for i, id := range []string{"utilities", "nss", "useradd_defaults"} {
+		if report.Checks[i] != (PolicyCheck{ID: id, Status: "not_checked", Reason: "probe_context_unavailable"}) {
+			t.Fatal("partial report escaped cancellation")
+		}
+	}
+}
+
+func TestIndependentReportNoRawErrorAndMissingProbes(t *testing.T) {
+	opaque := func() error { return independentOpaqueError{} }
+	report := probeHostPolicy(context.Background(), "linux", [3]func() error{opaque, nil, func() error { return errors.New("synthetic-sensitive-policy-data") }})
+	raw, e := json.Marshal(report)
+	if e != nil || len(raw) > 1024 || strings.Contains(string(raw), "synthetic") {
+		t.Fatal("unbounded/raw report")
+	}
+	if report.Supported {
+		t.Fatal("missing or refused probe admitted")
+	}
+	want := []PolicyCheck{{"utilities", "refused", "trusted_utilities_required"}, {"nss", "refused", "files_only_nss_required"}, {"useradd_defaults", "refused", "mail_disabled_defaults_required"}}
+	if !reflect.DeepEqual(report.Checks, want) {
+		t.Fatal("fixed report reasons/order")
+	}
+}
+
+func TestIndependentCancellationWhileProbeBlockedDiscardsCompletePrefix(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan HostPolicyReport, 1)
+	calls := 0
+	probes := [3]func() error{func() error { calls++; return nil }, func() error { calls++; close(entered); <-release; return nil }, func() error { calls++; return nil }}
+	go func() { done <- probeHostPolicy(ctx, "linux", probes) }()
+	<-entered
+	cancel()
+	close(release)
+	report := <-done
+	independentUnchecked(t, report)
+	if calls != 2 {
+		t.Fatal("probing continued after cancellation")
+	}
+}
+
+func TestIndependentUnavailableSkipsAllCallbacks(t *testing.T) {
+	never := func() error { t.Fatal("unavailable probe called"); return nil }
+	probes := [3]func() error{never, never, never}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, input := range []context.Context{nil, ctx} {
+		independentUnchecked(t, probeHostPolicy(input, "linux", probes))
+	}
+	for _, platform := range []string{"windows", "darwin", "freebsd"} {
+		r := probeHostPolicy(context.Background(), platform, probes)
+		if r.Supported || !r.ReadOnly || len(r.Checks) != 3 {
+			t.Fatal("platform envelope")
+		}
+		for _, row := range r.Checks {
+			if row.Status != "not_checked" || row.Reason != "linux_required" {
+				t.Fatal("nonlinux reason")
+			}
+		}
+	}
+}

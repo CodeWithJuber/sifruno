@@ -1,0 +1,26 @@
+//go:build linux
+package hostaccounts
+
+import (
+ "strconv"
+ "testing"
+)
+
+func TestIndependentServiceUseraddBoundary(t *testing.T) {
+ for _,id:=range []int{20000,60000} {t.Run(strconv.Itoa(id),func(t *testing.T){
+  r:=record{Account:Account{Username:"service_fixture",UID:id,GID:id,Home:"/owned/homes/service_fixture"},Tag:"sifruno-owned-tag"}
+  args:=useraddArgs(r,"/owned/state/empty-skel")
+  if len(args)==0||args[0]!="--system" {t.Fatal("service semantics absent")}
+  standalone:=map[string]int{}; values:=map[string][]string{}; name:=""
+  for i:=0;i<len(args);i++ {key:=args[i]; switch key {
+  case "--": if i!=len(args)-2 {t.Fatal("separator misplaced")};name=args[i+1];i++
+  case "--system","--no-user-group","--create-home": standalone[key]++
+  case "-K","--uid","--gid","--groups","--home-dir","--skel","--shell","--comment","--password","--expiredate": if i+1>=len(args) {t.Fatal("missing option value")};values[key]=append(values[key],args[i+1]);i++
+  default:t.Fatal("unexpected command authority") }
+  }
+  if name!=r.Account.Username||standalone["--system"]!=1||standalone["--no-user-group"]!=1||standalone["--create-home"]!=1 {t.Fatal("service identity or private home options")}
+  expected:=map[string]string{"--uid":strconv.Itoa(id),"--gid":strconv.Itoa(id),"--groups":"","--home-dir":r.Account.Home,"--skel":"/owned/state/empty-skel","--shell":"/usr/sbin/nologin","--comment":r.Tag,"--password":"!","--expiredate":""}
+  for key,value:=range expected {if len(values[key])!=1||values[key][0]!=value {t.Fatal("fixed account option lost")}}
+  if len(values["-K"])!=2||values["-K"][0]!="SUB_UID_COUNT=0"||values["-K"][1]!="SUB_GID_COUNT=0" {t.Fatal("subordinate guard lost or mail override invented")}
+ }) }
+}

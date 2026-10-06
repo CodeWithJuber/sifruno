@@ -1,0 +1,51 @@
+// Synthetic DTO/frame/process tests. They do not constitute native evidence.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {canonicalJSON,validateGuest,validateReviewAuthority,parseSerial,admitted,child,digest,CASES,CORE_NAMES} from '../../scripts/verify-broker-paths.mjs';
+const nonce='1'.repeat(32),hash='2'.repeat(64),reviewNames=['TestIndependentBrokerDirectoryIdentity','TestIndependentBrokerFreshVersusNonemptyState','TestIndependentBrokerOptionBoundary','TestIndependentBrokerSetgidParent'];
+const binding={nonce,hashes:{baseline:hash,candidate:hash,fixture:hash,core_test:hash,review_test:hash},reviewNames};
+const info=(label,kind='directory',mode='0755')=>({path:label,kind,mode,uid:0,gid:0,inode:100+label.length,device:1,nlink:1,bytes:kind==='directory'?4096:123,sha256:kind==='directory'?null:hash});
+function guest(){
+ const policies=['nss','nss_authselect','useradd_defaults','login_defaults','passwd_metadata','group_metadata','groupadd','useradd','usermod','passwd_utility','chage','nologin'].map(id=>({id,kind:'file',mode:'0644',bytes:123,sha256:hash}));
+ const policyText={nss:'passwd: files\ngroup: files\nshadow: files\nhosts: files\n',useradd_defaults:'CREATE_MAIL_SPOOL=no\n'};
+ const adapted=structuredClone(policies);for(const item of adapted)if(policyText[item.id]){item.bytes=Buffer.byteLength(policyText[item.id]);item.sha256=digest(policyText[item.id]);}
+ const check=supported=>({schema_version:1,scope:'native_linux_account_host_policy',platform:'linux',supported,read_only:true,checks:['utilities','nss','useradd_defaults'].map((id,i)=>({id,status:supported||i===0?'pass':'refused',reason:supported||i===0?'satisfied':i===1?'files_only_nss_required':'mail_disabled_defaults_required'})),restrictions:['host_policy_only','controller_paths_state_not_checked','no_stock_host_or_cpanel_certification']});
+ const conflicts=[];
+ CASES.forEach(name=>{for(const role of ['baseline','candidate']){
+  const before=[info('.','directory','0700')];if(name==='homes_file')before.push(info('homes','file','0644'));if(name==='homes_symlink')before.push(info('homes','symlink','0777'),info('target'));if(name==='homes_wrong_mode')before.push(info('homes','directory','0700'));if(name==='unsafe_socket_parent')before.push(info('socket-parent','directory','0757'));if(name==='occupied_socket')before.push(info('socket-parent'),info('socket-parent/broker.sock','file','0644'));if(name==='fresh_shared_homes')before.push(info('homes'),info('homes/shared-home'),info('homes/shared-home/sentinel','file','0644'));
+  const fixed=name==='homes_file'?['homes','owned homes file sentinel\n']:name==='occupied_socket'?['socket-parent/broker.sock','owned occupied socket sentinel\n']:name==='fresh_shared_homes'?['homes/shared-home/sentinel','owned unrelated home sentinel\n']:null;if(fixed){const item=before.find(x=>x.path===fixed[0]);item.bytes=Buffer.byteLength(fixed[1]);item.sha256=digest(fixed[1]);}
+  const additions=role==='candidate'?[]:name.startsWith('homes_')?['state']:['unsafe_socket_parent','occupied_socket'].includes(name)?['homes','state']:['socket-parent','state','state/.sifruno-hostbroker','state/.sifruno-state','state/hostaccounts.db'];
+  const after=structuredClone(before);for(const label of additions)after.push(info(label,label.includes('/')?'file':'directory',label.includes('/')?'0600':label==='state'?'0700':'0755'));after.sort((a,b)=>a.path<b.path?-1:1);if(additions.length)after[0].nlink++;
+  conflicts.push({name,role,adapted_policy:true,exit_code:1,before,after,added_paths:additions,preexisting_preserved:true,owned_child_exited:true});
+ }});
+ const state=[info('.','directory','0700'),...['.sifruno-hostbroker','.sifruno-state','hostaccounts.db'].map(name=>info(name,'file','0600'))];
+ const happy={adapted_policy:true,startup_socket_observed:true,inventory:{http_status:200,account_count:0,peer_uid:65534,response_sha256:digest('{"items":[]}\n')},sigterm_sent:true,exit_code:0,socket_removed:true,homes_empty:true,owned_children_exited:true,state_after:state};
+ const tests=names=>({exit_code:0,stdout_sha256:hash,stdout_bytes:1234,test_names:[...names],skipped:false,owned_child_exited:true});
+ return {schema_version:1,scope:'ADAPTED_disposable_linux_broker_path_observation',nonce,passed:true,profile:{distribution:'almalinux',version:'9.8',kernel:'synthetic-only',machine:'x86_64'},binary_sha256:{...binding.hashes},controller:{uid:65534,matching_local_passwd_records:1,account_created:false},policy_before:policies,policy_adapted:adapted,policy_after:structuredClone(adapted),adaptation:Object.keys(policyText).map(id=>({id,sha256:digest(policyText[id]),mode:'0644',root_owned_regular:true})),stock_check:check(false),adapted_check:check(true),conflicts,happy_fresh_and_reopen:[happy,structuredClone(happy)],core_tests:tests(CORE_NAMES),review_tests:tests(reviewNames),listeners_before:{count:14,sha256:hash},listeners_after:{count:14,sha256:hash},adapted_policy_unchanged:true,inputs_unchanged:true,account_created:false,account_mutation_requests:0,stock_provisioning_qualified:false,owned_children_exited:true};
+}
+const frame=value=>`opaque boot\nSIFRUNO_PATHS_REPORT_BEGIN_${nonce}\n${JSON.stringify(value)}\nSIFRUNO_PATHS_REPORT_END_${nonce}\nSIFRUNO_PATHS_FIXTURE_EXIT_${nonce}_0\n`;
+test('full synthetic adapted join admits only explicit scope/policy/provenance',()=>{assert.equal(validateGuest(guest(),binding).passed,true);assert.equal(parseSerial(frame(guest()),binding).passed,true);});
+test('nonce and raw canonical frame reject aliases, duplicate JSON, CR/ANSI/truncation',()=>{
+ const valid=frame(guest());assert.equal(parseSerial(valid.replaceAll('\n','\r\n'),binding).passed,true);assert.equal(parseSerial('\x1b[32mboot\x1b[0m\n'+valid,binding).passed,true);
+ for(const value of [valid+`SIFRUNO_PATHS_FIXTURE_EXIT_${nonce}_0\n`,valid.replace('REPORT_BEGIN_','REPORT_BEG\rIN_'),valid.replace('"passed":true','"pas\rsed":true'),valid.replace(JSON.stringify(guest()),'\x1b[32m'+JSON.stringify(guest())+'\x1b[0m'),valid.replace(JSON.stringify(guest()),' \t'+JSON.stringify(guest())+'\t '),valid.replace('"passed":true','"passed":true,"passed":true'),valid.slice(0,-100),valid.replace(nonce,'f'.repeat(32))])assert.throws(()=>parseSerial(value,binding));
+ for(const value of ['{"nested":{"x":1,"x":1}}','{"x":NaN}','{"x":'])assert.throws(()=>canonicalJSON(value));
+});
+test('original independent authority path is preserved and binds copied binary/names',()=>{
+ const original={passed:true,linux_challenges:{compiled:true,executed:false,test_names:[...reviewNames],binary:{path:'artifacts/broker-paths-review/build-setgid/independent.test',bytes:12819826,sha256:hash}}};assert.equal(validateReviewAuthority(original,{bytes:12819826,sha256:hash},reviewNames),original);
+ for(const mutate of [x=>x.linux_challenges.binary.path='.cache/broker-paths/independent.test',x=>x.linux_challenges.binary.sha256='3'.repeat(64),x=>x.linux_challenges.binary.bytes++,x=>x.linux_challenges.binary.extra=true,x=>x.linux_challenges.executed=true,x=>x.linux_challenges.compiled=false,x=>x.linux_challenges.test_names.pop()]){const value=structuredClone(original);mutate(value);assert.throws(()=>validateReviewAuthority(value,{bytes:12819826,sha256:hash},reviewNames));}
+});
+test('conflict evidence requires exact earlier additions and unchanged existing identity',()=>{
+ for(const mutate of [x=>x.conflicts[1].after[0].inode++,x=>x.conflicts[0].after[1].sha256='3'.repeat(64),x=>x.conflicts[0].added_paths=[],x=>x.conflicts[0].after.at(-1).mode='4700',x=>x.conflicts[11].after.push(info('state','directory','0700')),x=>x.conflicts[0].before[1].path='/root/private',x=>x.conflicts[0].before[1].inode=Number.MAX_SAFE_INTEGER+1,x=>x.conflicts.reverse(),x=>x.conflicts[3].owned_child_exited=false]){const row=guest();mutate(row);assert.throws(()=>validateGuest(row,binding));}
+ const alias=guest();for(const tree of [alias.conflicts[0].before,alias.conflicts[0].after])tree.find(x=>x.path==='homes').sha256='3'.repeat(64);assert.throws(()=>validateGuest(alias,binding));
+});
+test('adaptation/reopen/test execution false claims and foreign hashes fail closed',()=>{
+ for(const mutate of [x=>x.policy_after[2].sha256='3'.repeat(64),x=>x.policy_adapted[0].mode='0666',x=>x.adaptation[0].root_owned_regular=false,x=>x.binary_sha256.review_test='3'.repeat(64),x=>x.stock_provisioning_qualified=true,x=>x.account_mutation_requests=1,x=>x.happy_fresh_and_reopen[1].inventory.account_count=1,x=>x.happy_fresh_and_reopen[0].inventory.peer_uid=0,x=>x.happy_fresh_and_reopen[0].sigterm_sent=false,x=>x.happy_fresh_and_reopen[1].socket_removed=false,x=>x.core_tests.test_names.pop(),x=>x.review_tests.skipped=true,x=>x.listeners_after.count++,x=>x.raw_policy='forbidden']){const row=guest();mutate(row);assert.throws(()=>validateGuest(row,binding));}
+});
+test('owned filesystem admissions enforce traversal, size and single-link files',()=>{
+ const own=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');let current=own;for(const name of ['.cache','broker-paths-tests']){current=path.join(current,name);if(!fs.existsSync(current))fs.mkdirSync(current);assert.equal(fs.realpathSync(current).toLowerCase(),current.toLowerCase());}
+ const root=fs.mkdtempSync(path.join(current,'dto-'));try{const file=path.join(root,'source');fs.writeFileSync(file,'safe');assert.equal(admitted(root,file),file);assert.throws(()=>admitted(root,file,2));assert.throws(()=>admitted(root,path.join(root,'../foreign')));fs.linkSync(file,path.join(root,'alias'));assert.throws(()=>admitted(root,file));}finally{assert(path.resolve(root).startsWith(path.resolve(current)+path.sep));fs.rmSync(root,{recursive:true});}
+});
+test('bounded child cleanup on excessive output and timeout',async()=>{const env={SystemRoot:process.env.SystemRoot||process.env.SYSTEMROOT,OS:'Windows_NT',PATHEXT:'.COM;.EXE;.BAT;.CMD'};const capped=await child(process.execPath,['-e','process.stdout.write("x".repeat(100000))'],{env,timeout:5000,maximum:64});assert(capped.output_limit&&capped.owned_child_exited);const timed=await child(process.execPath,['-e','setTimeout(()=>{},5000)'],{env,timeout:50});assert(timed.timedout&&timed.owned_child_exited);});

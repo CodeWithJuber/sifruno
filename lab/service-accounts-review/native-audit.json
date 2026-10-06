@@ -1,0 +1,503 @@
+{
+  "schema_version": 1,
+  "kind": "independent_read_only_actual_NSS_ADAPTED_service_identity_audit",
+  "passed": true,
+  "native_observation": true,
+  "execution_performed_by_reviewer": false,
+  "report_sha256": "df52d6d6d3742df572be7ceabc36f4c5f0b5e32b9a395337e1991fb9ca6a5ac6",
+  "report_bytes": 416722,
+  "run_id": "service-accounts-20261006T090326396Z-8f664ddd",
+  "source_catalog_entries": 1948,
+  "source_catalog_sha256": "059a19bd62d4b354bd4bd5c0ed07b4ec2873f7479f03bd9aadd981c1f97dee5e",
+  "current_file_joins": 1956,
+  "executed_host_harness_sha256": "a5dfeadf43ca6517d324cbb56d19a22e5b627e326577236b54ece7c65401b614",
+  "guest_fixture_sha256": "d629cc012a4fa5edd4187086a1fc7197dc395869d247cfb5b514c85051f59b54",
+  "binary_sha256": {
+    "baseline": "502f8bb8fca324c3f9b6813361e6b9f7506ffa5054437bc54316b49b03026b87",
+    "candidate": "de6b21a60fb6a6e823f9721d9bf1ceac5328b25ac9da511ee979895d4f6276a2",
+    "fixture": "d629cc012a4fa5edd4187086a1fc7197dc395869d247cfb5b514c85051f59b54",
+    "core_test": "0d136ef36ff59f04f84bc44370a67bdc8bb98af1c9fd778639d41c49b91d1698",
+    "review_test": "2927afc269ff2c78cd4cf71b6b0f61b385bc7f3d07477b0b0f1a6f07b75f6d61"
+  },
+  "image_sha256": "6bdab6376d46d42e4203ace3733efafc7c5d37c7cb443a6cc74750097002d74b",
+  "iso_sha256": "531bfbf6d481301644449b54cc8d4d820ec041e9d8c66e7374ffdf73b5ed2a51",
+  "payload_plan_sha256": "cdef7c4d7dadcdbcabeb22f389affe1e26911325156a94435277ffbaf8275e86",
+  "serial_private_sha256": "30f8aced49a2396294059ef6dff16313eb324211172e6c742525e70db35b47cf",
+  "serial_bytes": 100585,
+  "exact_nonce_serial_guest_join": true,
+  "root_manifest_entries": 253,
+  "root_manifest_sha256": "0936998e5efc0a868153aaa5f135b93722c089b94dbf14de477ed71a861e57cd",
+  "baseline_catalog_entries": 1459,
+  "baseline_manifest_sha256": "6e93d27c1d575b6b7fafd37e78a6781b937fcdab7e0a76b213ca70438067230c",
+  "candidate_namespace_entries": 152,
+  "candidate_namespace_sha256": "b24f8e5d6ba0c21b00563e85b748b10d3f99aeeb9cbb7ef64e4cec708f582501",
+  "assembler_headers_pinned": [
+    {
+      "namespace": "primary",
+      "path": ".tools/go/pkg/include/asm_amd64.h",
+      "bytes": 631,
+      "sha256": "85fc2d5bb80e6db36cef4da5e5c02278d0dcaa6103e5660629b4b713cff15d54"
+    },
+    {
+      "namespace": "primary",
+      "path": ".tools/go/pkg/include/asm_ppc64x.h",
+      "bytes": 1487,
+      "sha256": "8396b3e0d10ddfa90ee7bd1fa3c6b201416844e2be2ef44e71918305bc4bbf54"
+    },
+    {
+      "namespace": "primary",
+      "path": ".tools/go/pkg/include/asm_riscv64.h",
+      "bytes": 535,
+      "sha256": "25631f053993036af2a03634699de446120671b17c197976fc66b74afb18fb34"
+    },
+    {
+      "namespace": "primary",
+      "path": ".tools/go/pkg/include/funcdata.h",
+      "bytes": 2616,
+      "sha256": "bd73b7c27a4d3f8560a5a9dd1a5da54e0e48572311a744cf7843e709b7f2a015"
+    },
+    {
+      "namespace": "primary",
+      "path": ".tools/go/pkg/include/textflag.h",
+      "bytes": 1501,
+      "sha256": "a9d761d03aecdcc117691b6a55eacd43eb7d47d9ad9ca7510b8669ac403b380e"
+    }
+  ],
+  "original_builder_authority_sha256": "758eb3da1c30b41aaea91cd94c73df75615ec4a2baf16c9d16bed69ebf97a0ed",
+  "canonical_source_pins": [
+    {
+      "path": "internal/hostaccounts/native_linux.go",
+      "historical_raw_sha256": "049486edcd5bee4e9b5584d1b766ee1d0065b3273ceeb521c0353bcfdf554ee4",
+      "current_candidate_bytes": 18663,
+      "current_candidate_sha256": "dd195ca69d1460ac9f37a9e6a36073c28ac021539837a336ec8c9316b2ab527d",
+      "canonical_git_sha256": "049486edcd5bee4e9b5584d1b766ee1d0065b3273ceeb521c0353bcfdf554ee4",
+      "git_blob": "19dac316541852f5dd59e25b6baae2ed9e0e9a81"
+    },
+    {
+      "path": "internal/hostaccounts/native_linux_test.go",
+      "historical_raw_sha256": "d7e0b47744c1b8cad6c8ecac08d43ea67ed8993ac4c841aa8eb8f15fb34c22a8",
+      "current_candidate_bytes": 4495,
+      "current_candidate_sha256": "5ca7e7fd066d11ea228c4276680b464e99b083b26a72028a41a8ceb264cce63b",
+      "canonical_git_sha256": "d7e0b47744c1b8cad6c8ecac08d43ea67ed8993ac4c841aa8eb8f15fb34c22a8",
+      "git_blob": "ea7d2302f895cc79502d4c531f7b2bf849a05193"
+    },
+    {
+      "path": "internal/hostaccounts/policy.go",
+      "historical_raw_sha256": "6e7707df544c85a59c428724f6860a15bd49a3267bba715f445eb1359fd1c58d",
+      "current_candidate_bytes": 1958,
+      "current_candidate_sha256": "464a9bf291a8b1d55f925a560ee70adb1d2c1c98c187544d6a54d51bf3f4b842",
+      "canonical_git_sha256": "6e7707df544c85a59c428724f6860a15bd49a3267bba715f445eb1359fd1c58d",
+      "git_blob": "2a670a6b13c40f9653fe157e514c950f71405b22"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report.go",
+      "historical_raw_sha256": "5a32e7823b31a0b517d2608ff9b1f9074020f7a696d4fbfa72f489a73954dd62",
+      "current_candidate_bytes": 2627,
+      "current_candidate_sha256": "75229dcd9feb2f5985f3cb7a56e9c7ecde9a3d74b41ffa067d2c3cc64fd6a20d",
+      "canonical_git_sha256": "5a32e7823b31a0b517d2608ff9b1f9074020f7a696d4fbfa72f489a73954dd62",
+      "git_blob": "067d97d820f592307406e417104da04a46b871cc"
+    },
+    {
+      "path": "internal/hostaccounts/policy_report_test.go",
+      "historical_raw_sha256": "7c77fd9a1c4262aed2351bcab35e8f8d13fa5b18a665f7fa07d2dd0e88ca5ff5",
+      "current_candidate_bytes": 5090,
+      "current_candidate_sha256": "25cebc183fe49a0f9b0c26a8a896c73fa05d0f0fd4daed45f261a7e69651fd7c",
+      "canonical_git_sha256": "7c77fd9a1c4262aed2351bcab35e8f8d13fa5b18a665f7fa07d2dd0e88ca5ff5",
+      "git_blob": "4ce7f5da3e2eab84f11bed210cef9f0cc6680487"
+    },
+    {
+      "path": "internal/hostaccounts/policy_test.go",
+      "historical_raw_sha256": "d503b30f0f7edf8dcb30d67cfa94a671e64dc278d39b0b63a0a03c0c92ebf7bb",
+      "current_candidate_bytes": 4977,
+      "current_candidate_sha256": "2eca1662d9a4d33d83f72b1e86d542d78e46907d3ae4767fa8a39327914f54da",
+      "canonical_git_sha256": "d503b30f0f7edf8dcb30d67cfa94a671e64dc278d39b0b63a0a03c0c92ebf7bb",
+      "git_blob": "e066393088398b016c4972201868a77c11854777"
+    },
+    {
+      "path": "internal/hostaccounts/types.go",
+      "historical_raw_sha256": "12f5b01017d6ebe1d47ab1b2827a88740d99180bb69b00a3f4f76c4626db25e6",
+      "current_candidate_bytes": 4376,
+      "current_candidate_sha256": "83fe338bad00f12d9ed8f239a8caa73e0655b61e7a8765960f77e99f568545bf",
+      "canonical_git_sha256": "12f5b01017d6ebe1d47ab1b2827a88740d99180bb69b00a3f4f76c4626db25e6",
+      "git_blob": "4a0a561bb928eecae30431173fe6541928936aac"
+    },
+    {
+      "path": "scripts/verify-service-accounts.mjs",
+      "historical_raw_sha256": "a5dfeadf43ca6517d324cbb56d19a22e5b627e326577236b54ece7c65401b614",
+      "current_candidate_bytes": 41983,
+      "current_candidate_sha256": "234ceb24699ccff12d2e864e64f48b49fbc39a68e2388bc12434e0fbf6274c72",
+      "canonical_git_sha256": "543855716da4e5983c2cb1e22521951bd714e97b70290e7dd117dfa65716b4ca",
+      "git_blob": "443db7cc5ff2efb8d1643f9db4cc43b2b3ab6fb5"
+    },
+    {
+      "path": "lab/service-accounts-guest/README.md",
+      "historical_raw_sha256": "9f92eb232179db003301e8c141e40954bf05a6135818ae4cbc11445910e301c2",
+      "current_candidate_bytes": 5341,
+      "current_candidate_sha256": "874bddd6d6f629fdf980ec224730b3313d1946419ca69e253aa70bc9badc7a2a",
+      "canonical_git_sha256": "9f92eb232179db003301e8c141e40954bf05a6135818ae4cbc11445910e301c2",
+      "git_blob": "d07a1cf90a2a312fb564aa9ac68af24575b898df"
+    },
+    {
+      "path": "lab/service-accounts-guest/contract.test.mjs",
+      "historical_raw_sha256": "d60ad9348e41b52acaaa2b8b0d335f66bf5890da1f238831a5f3705846944e65",
+      "current_candidate_bytes": 10315,
+      "current_candidate_sha256": "ac9b69fc14456f672fe0bb18c1f378d2469a3585bc76f4a40309c3d3240c1e01",
+      "canonical_git_sha256": "d60ad9348e41b52acaaa2b8b0d335f66bf5890da1f238831a5f3705846944e65",
+      "git_blob": "4f4a68007f18351583e4053fe292e59bd66fcdbe"
+    },
+    {
+      "path": "lab/service-accounts-guest/fixture.py",
+      "historical_raw_sha256": "d629cc012a4fa5edd4187086a1fc7197dc395869d247cfb5b514c85051f59b54",
+      "current_candidate_bytes": 35041,
+      "current_candidate_sha256": "6521e54b99640cc86c84eb68739becbc3f601c1be80f9194eb2cfc605f6da5aa",
+      "canonical_git_sha256": "712f21dac22aed2393ccb8edc89528739d1fbcf69ca016b0201449c56b677f04",
+      "git_blob": "328a4367e871e311a985f2e87e5c1569a2ebe080"
+    },
+    {
+      "path": "lab/service-accounts-guest/fixture_test.py",
+      "historical_raw_sha256": "a48e79e0792390c1a6f8523b022d668e564c8f02e68ec1038043f8d7b41cb69d",
+      "current_candidate_bytes": 6204,
+      "current_candidate_sha256": "3b7c443003a158bd4aa6dd118f3e82dad2d11af52194a5a068b7eb9c6f44569b",
+      "canonical_git_sha256": "a48e79e0792390c1a6f8523b022d668e564c8f02e68ec1038043f8d7b41cb69d",
+      "git_blob": "26d7b86eb8c387f924d664cb83b10edf2f3cfb03"
+    }
+  ],
+  "stock_useradd_defaults": {
+    "id": "useradd_defaults",
+    "kind": "file",
+    "mode": "0644",
+    "bytes": 119,
+    "sha256": "b121fd1b90c1a2fb6081a137dd7b441c7e7fec61bc17ca60db401a952d7b8825",
+    "uid": 0,
+    "gid": 0,
+    "inode": 25176345,
+    "device": 64516,
+    "nlink": 1
+  },
+  "NSS_only_disposable_adaptation": true,
+  "existing_controller_uid": 65534,
+  "lifecycle_operations": [
+    {
+      "operation": "create",
+      "http_status": 200,
+      "revision": 1,
+      "state": "active"
+    },
+    {
+      "operation": "duplicate",
+      "http_status": 409,
+      "revision": 1,
+      "state": "active"
+    },
+    {
+      "operation": "suspend",
+      "http_status": 200,
+      "revision": 2,
+      "state": "suspended"
+    },
+    {
+      "operation": "stale",
+      "http_status": 409,
+      "revision": 2,
+      "state": "suspended"
+    },
+    {
+      "operation": "activate",
+      "http_status": 200,
+      "revision": 3,
+      "state": "active"
+    },
+    {
+      "operation": "reopen",
+      "http_status": 200,
+      "revision": 3,
+      "state": "active"
+    }
+  ],
+  "account_mutation_requests": 5,
+  "accepted_account_mutations": 3,
+  "refusal_state_unchanged": [
+    {
+      "operation": "duplicate",
+      "before_sha256": "34a7e379cbe42d50cf26f364624807b5f3388e10377eb825dd2f8dceecd9f8dd",
+      "after_sha256": "34a7e379cbe42d50cf26f364624807b5f3388e10377eb825dd2f8dceecd9f8dd",
+      "account_revision": 1
+    },
+    {
+      "operation": "stale",
+      "before_sha256": "06141ac382982fe3740a61885520cd9d402e200f21e92f06950fbae2cb6ce81a",
+      "after_sha256": "06141ac382982fe3740a61885520cd9d402e200f21e92f06950fbae2cb6ce81a",
+      "account_revision": 2
+    }
+  ],
+  "actual_clock_days": {
+    "before_create": "2026-10-06",
+    "after_reopen": "2026-10-06"
+  },
+  "actual_last_password_change": "2026-10-06",
+  "aging": "max=-1; password_expiry/inactivity never; current-day last-change is retained",
+  "native_directory_identity_reopen_equal": true,
+  "own_mail_absent_and_existing_mail_equal": true,
+  "subids_unrelated_public_identities_listeners_equal": true,
+  "core_native_families": {
+    "exit_code": 0,
+    "stdout_sha256": "249880915a04a73d95b350287d47af7fd4240fc3555bda206e0a5aca55afa11a",
+    "stdout_bytes": 3281,
+    "test_names": [
+      "TestServiceAccountDefaultsPolicy",
+      "TestServiceAccountUseraddExactArgv"
+    ],
+    "skipped": false,
+    "owned_child_exited": true
+  },
+  "independent_native_families": {
+    "exit_code": 0,
+    "stdout_sha256": "52d4e9341ebb28b7628f9f9a22df45d5d4dcd379790840c79606adc46d23e2f5",
+    "stdout_bytes": 6921,
+    "test_names": [
+      "TestIndependentServiceDefaults",
+      "TestIndependentServicePolicyContract",
+      "TestIndependentServiceUseraddBoundary"
+    ],
+    "skipped": false,
+    "owned_child_exited": true
+  },
+  "owned_cleanup": {
+    "owned_qemu_exited": true,
+    "no_live_process_mutation": true,
+    "no_host_listener_created": true,
+    "disposable_overlay_retained": true
+  },
+  "bounds": {
+    "qemu_seconds": 600,
+    "qemu_output_bytes": 2097152,
+    "broker_seconds": 60,
+    "broker_output_bytes": 16384,
+    "peer_request_seconds": 50,
+    "peer_socket_seconds": 45,
+    "check_host_output_bytes": 8192,
+    "test_output_bytes": 65536,
+    "test_seconds": 20
+  },
+  "scope_limits": [
+    "Read-only audit; guest execution belongs to worker. Raw boot read privately for exact nonce frame only; never emitted.",
+    "NSS_ADAPTED image only: original NSS refused, one explicit disposable overlay adaptation; stock mail defaults unchanged.",
+    "Five top-level native families pass without skip; fixture-measured stdout hashes/names are not a second execution actor.",
+    "All declared catalogued inputs checked, including five assembler headers; compiler-generated test main and entire Go distribution are not certified.",
+    "Historical source-review failures and unavailable original mixed-newline raw snapshots remain separately classified in harness-review.json; canonical Git blobs are distinct authority.",
+    "No full stock provisioning,cPanel/CloudLinux,allOS,reboot,remote ingress,atomic privileged path stability or hostile guest qualification."
+  ],
+  "iso_audit": {
+    "schema_version": 1,
+    "kind": "independent_actual_ADAPTED_service_accounts_ISO_contents_audit",
+    "passed": true,
+    "report_sha256": "df52d6d6d3742df572be7ceabc36f4c5f0b5e32b9a395337e1991fb9ca6a5ac6",
+    "iso_sha256": "531bfbf6d481301644449b54cc8d4d820ec041e9d8c66e7374ffdf73b5ed2a51",
+    "payload_plan_sha256": "cdef7c4d7dadcdbcabeb22f389affe1e26911325156a94435277ffbaf8275e86",
+    "existing_readonly_wheel_sha256": "1a82cd735542921d0dd7bc40381e7b7b9cbc70bd4c03e4f67a0531d59d2f518e",
+    "volume_label": "CIDATA",
+    "directories": [
+      "/payload"
+    ],
+    "entries": [
+      {
+        "destination": "payload/panelctl",
+        "bytes": 10988351,
+        "sha256": "502f8bb8fca324c3f9b6813361e6b9f7506ffa5054437bc54316b49b03026b87",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "payload/hostbroker",
+        "bytes": 10988467,
+        "sha256": "de6b21a60fb6a6e823f9721d9bf1ceac5328b25ac9da511ee979895d4f6276a2",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "payload/qualifier.py",
+        "bytes": 34617,
+        "sha256": "d629cc012a4fa5edd4187086a1fc7197dc395869d247cfb5b514c85051f59b54",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "payload/core.test",
+        "bytes": 12796288,
+        "sha256": "0d136ef36ff59f04f84bc44370a67bdc8bb98af1c9fd778639d41c49b91d1698",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "payload/authority.test",
+        "bytes": 12827112,
+        "sha256": "2927afc269ff2c78cd4cf71b6b0f61b385bc7f3d07477b0b0f1a6f07b75f6d61",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "user-data",
+        "bytes": 2325,
+        "sha256": "4652539d6378e5cde872b02bf9413bb90faa687beb3264aa61e8792c4dc41aa4",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "meta-data",
+        "bytes": 100,
+        "sha256": "d381430de65f79cd6f5da5ef00c3644b3f87292157abcf2c415e0115cea73175",
+        "regular_mode": "100444",
+        "links": 1
+      },
+      {
+        "destination": "network-config",
+        "bytes": 25,
+        "sha256": "639b6f419a9ac49312b218e12395dc7e7d623d96202c3315a92dcd19d6fa02ba",
+        "regular_mode": "100444",
+        "links": 1
+      }
+    ],
+    "native_execution_performed": false,
+    "limits": [
+      "Read-only binary ISO payload/metadata/nonce and exact current source-byte closure; no guest execution repeated.",
+      "Existing pinned PyCdlib wheel is an approved dependency, not stdlib or a new download.",
+      "Original NSS is refused, then only NSS in the disposable overlay is explicitly adapted; stock mail defaults remain unchanged. No stock provisioning or full Go distribution claim."
+    ]
+  },
+  "audit_scope": "read-only actual artifact audit; no guest, Go build, service, account utility or credential execution by reviewer",
+  "preflight": {
+    "command": "forge substrate \"Add owned read-only service-account native receipt and ISO audit helpers; no product edits or execution\"",
+    "exit_code": 0,
+    "advisory": "ASK FIRST heuristic: exact input/output requested; parent already supplied precise authorized read-only scope, resolved by inspection",
+    "not_a_safety_proof": true
+  },
+  "audit_commands": [
+    {
+      "command": "node lab/service-accounts-review/audit-native.mjs ../service-accounts-guest-sol ../service-accounts-guest-sol/artifacts/service-accounts/service-accounts-20261006T090326396Z-8f664ddd/report.json df52d6d6d3742df572be7ceabc36f4c5f0b5e32b9a395337e1991fb9ca6a5ac6 artifacts/service-accounts-review/native/actual-native-audit-final.json",
+      "exit_code": 0
+    },
+    {
+      "command": "pinned Python312/python.exe -I -B lab/service-accounts-review/audit-iso.py ../service-accounts-guest-sol ../service-accounts-guest-sol/artifacts/service-accounts/service-accounts-20261006T090326396Z-8f664ddd/report.json df52d6d6d3742df572be7ceabc36f4c5f0b5e32b9a395337e1991fb9ca6a5ac6 artifacts/service-accounts-review/native/actual-iso-audit-final.json",
+      "exit_code": 0
+    }
+  ],
+  "retained_raw_audit_files": [
+    {
+      "path": "artifacts/service-accounts-review/native/actual-iso-audit-final.json",
+      "bytes": 2782,
+      "sha256": "10eb2d10d7e0136887b1f33823c77a538fd5648cb25ffe8bb251b3fd169cbc6c"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/actual-iso-audit.json",
+      "bytes": 2782,
+      "sha256": "10eb2d10d7e0136887b1f33823c77a538fd5648cb25ffe8bb251b3fd169cbc6c"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/actual-native-audit-final.json",
+      "bytes": 12959,
+      "sha256": "fc4e32d237fa30a40ea7211e6f7aebc89a8faa96f42843aabe73ff9f99533baa"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/actual-native-audit.json",
+      "bytes": 12885,
+      "sha256": "5bf0b3017c99273048839b524b55d317b607e916a863166c2d4da1ee9c6a4b89"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/audit-final-status.json",
+      "bytes": 373,
+      "sha256": "981133ea9604135cda6fe02a0f76a739b5cf1089def2192911dd2332fd1fa6b0"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/audit-final.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/audit-final.out",
+      "bytes": 393,
+      "sha256": "785a6c669fc9cf011a9e52ab63997d9d50bd8b67c4ac457361319adf97a5b09a"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/audit-status.json",
+      "bytes": 183,
+      "sha256": "bca779d6d946e49011ea29263c95b6aed4c1d36be4bbc4cd28d4ff0865992f53"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/audit.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/audit.out",
+      "bytes": 387,
+      "sha256": "85974b80d482ff05a277cf60b0b70260ad371ab24930c45ae9c4f076949bed6b"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/iso-final-status.json",
+      "bytes": 395,
+      "sha256": "8ee042cfa865454a7c847f1f1fa58d3c5153d84f80c483659046c84e6fdc5381"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/iso-final.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/iso-final.out",
+      "bytes": 198,
+      "sha256": "660e16617d85f43c3f0129628292e41c310869d72e131ccabbe981cfcbed8b87"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/iso-status.json",
+      "bytes": 191,
+      "sha256": "5607b4ed89e373ad9f6702d9197e14356c2d4b86dcdce13c5022c5af0761937c"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/iso.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "artifacts/service-accounts-review/native/iso.out",
+      "bytes": 198,
+      "sha256": "660e16617d85f43c3f0129628292e41c310869d72e131ccabbe981cfcbed8b87"
+    }
+  ],
+  "audit_helper_pins": [
+    {
+      "path": "lab/service-accounts-review/audit-native.mjs",
+      "bytes": 17148,
+      "sha256": "46749cef09d849a3f76e6fa7ba2f22c58b913d89b397099b4f264c3fee27840c",
+      "canonical_lf_sha256": "46749cef09d849a3f76e6fa7ba2f22c58b913d89b397099b4f264c3fee27840c"
+    },
+    {
+      "path": "lab/service-accounts-review/audit-iso.py",
+      "bytes": 4699,
+      "sha256": "f8425c01f17ed58f835fcb0e9112cd01c3275a63f5b97d095a36bb36156d5452",
+      "canonical_lf_sha256": "f8425c01f17ed58f835fcb0e9112cd01c3275a63f5b97d095a36bb36156d5452"
+    }
+  ],
+  "prior_authorities_preserved": [
+    {
+      "path": "lab/service-accounts-review/acceptance.json",
+      "bytes": 17771,
+      "sha256": "758eb3da1c30b41aaea91cd94c73df75615ec4a2baf16c9d16bed69ebf97a0ed"
+    },
+    {
+      "path": "lab/service-accounts-review/helper-review.json",
+      "bytes": 2297,
+      "sha256": "7d5aa0edc372660268e3d473400f534d83ca8778a341132ddcf57f4217d293d6"
+    },
+    {
+      "path": "lab/service-accounts-review/harness-review.json",
+      "bytes": 14184,
+      "sha256": "f53c421e300832a30f837afe307f96a9e7ddc5663ec6d7844caeab5dd5261701"
+    },
+    {
+      "path": "lab/service-accounts-review/whitespace-review.json",
+      "bytes": 986,
+      "sha256": "30a6f2105fbab3cb094dc189d90990fe5ff6d7a46a525b90354831220a372282"
+    }
+  ],
+  "prior_actual_audit_invocations": "First read-only audit and final helper tightening both passed; second read-only pass additionally checks original local ELF equality and strict duplicate-key JSON. No guest rerun or feature tests repeated."
+}

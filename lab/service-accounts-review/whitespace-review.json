@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "passed": true,
+  "scope": "owned-harness-helper-eof-whitespace-only",
+  "original_commit": "9caf9910d43d169aa75a2fcb649c1d41c3da3743",
+  "original_staged_diff_check": "reported extra blank line at EOF; shell continued to commit",
+  "helper": {
+    "path": "lab/service-accounts-review/challenge-harness.mjs",
+    "original_bytes": 12038,
+    "original_sha256": "e0d1cf474c4ba093f55d6470067d994c3f1623e590f2dff496ed2e63f6bb495e",
+    "bytes": 12036,
+    "sha256": "624031e03135c9e6cbb4c9a0da4b55e39d7046a040e5607b6243031495b8615b"
+  },
+  "historical_harness_receipt": {
+    "path": "lab/service-accounts-review/harness-review.json",
+    "bytes": 14184,
+    "sha256": "f53c421e300832a30f837afe307f96a9e7ddc5663ec6d7844caeab5dd5261701"
+  },
+  "semantic_changes": false,
+  "production_changes": false,
+  "challenge_rerun": false,
+  "prior_actual_challenges": {
+    "decoder": 88,
+    "synthetic_fixture": 13
+  },
+  "native_execution": false
+}

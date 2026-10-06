@@ -62,7 +62,13 @@ func registerSiteTransfers(mux *http.ServeMux, a huma.API, o Options) {
 			operator.WriteError(w, status, "invalid_request", "Invalid website archive request")
 			return
 		}
-		site, err := o.Sites.ImportArchive(input, siteActor(r.Context()))
+		// Multipart parsing includes the bounded epilogue. Revalidate before
+		// storage while retaining the transfer slot through every return path.
+		actor, ok := o.Operator.Authorize(w, r, true)
+		if !ok {
+			return
+		}
+		site, err := o.Sites.ImportArchive(input, actor)
 		if err != nil {
 			transferError(w, err)
 			return

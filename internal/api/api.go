@@ -234,10 +234,18 @@ func New(o Options) http.Handler {
 				operator.WriteError(w, 503, "unavailable", "Website storage unavailable")
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
-			if mutation && r.URL.Path != "/api/v1/sites/import" && !prepareSiteJSON(w, r) {
-				return
+			if mutation && r.URL.Path != "/api/v1/sites/import" {
+				if !prepareSiteJSON(w, r) {
+					return
+				}
+				// Recheck sessions that may have expired or been revoked while
+				// reading the body. Admission does not cancel dispatched work.
+				actor, ok = o.Operator.Authorize(w, r, true)
+				if !ok {
+					return
+				}
 			}
+			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
 		}
 		if isAccountPath(r.URL.Path) {
 			actor, ok := o.Operator.Authorize(w, r, mutation)

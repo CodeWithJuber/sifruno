@@ -54,6 +54,20 @@ have separate authority.
 The actual archive-count limit and retained byte hashes were challenged. The
 128 MiB storage bound was reviewed in source; this lab did not fill that bound.
 
+The later [assembled source/browser audit](assembled-audit.json) independently
+checked the worker's actual browser receipt, complete 191-source and 91-asset
+inventories, frozen binary/harness and all 18 screenshot hashes/dimensions.
+Four screenshots also received visual review. Its read-only helper is
+[audit-browser.mjs](audit-browser.mjs); it launches no processes or browsers.
+The audit clears the corrected process cleanup and explicit schema assertions
+as source. Retained final raw Go JSON independently confirms 659 named passes
+in 23 tested packages, including three named process-test pass events, with
+one child-only helper skip and four packages without tests. Whole-module test
+and vet status/output hashes match. The first two process fixture failures
+retain root tool-stream provenance; their original raw bytes were not saved,
+so no independent raw-file integrity claim is made for those failures.
+The original challenge receipt remains unchanged.
+
 Recovery: revert this lab directory. Test cleanup closes owned stores before
 temporary directories are removed; any cleanup failure is a failed test.
 No all-OS, native service lifecycle or original compatibility acceptance

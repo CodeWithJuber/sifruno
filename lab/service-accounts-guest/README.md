@@ -55,7 +55,7 @@ provide final pins; no provisional ELF or old test families qualify this batch.
 
 QEMU has no NIC or host shares, with 600 seconds/2 MiB combined output. Each
 broker lifetime is bounded at 60 seconds, utility/test children 20 seconds,
-peer request child 8 seconds with 5-second socket operations. Requests and
+peer request child 50 seconds with 45-second socket operations. Requests and
 broker output are capped at 16 KiB; test output at 64 KiB. Processes are owned
 and killed/reaped on failures. Inputs, fixed assembly headers and linked Go
 sources are pinned before build/run and rechecked; this is not exhaustive Go

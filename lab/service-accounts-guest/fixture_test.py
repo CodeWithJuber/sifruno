@@ -18,6 +18,15 @@ for directory in (OWN / ".cache", TEMP):
 
 
 class Contract(unittest.TestCase):
+    def test_peer_deadline_exceeds_product_handler_bound(self):
+        self.assertEqual(fixture.PEER_SOCKET_SECONDS, 45)
+        self.assertGreater(fixture.PEER_REQUEST_SECONDS, fixture.PEER_SOCKET_SECONDS)
+        self.assertGreater(fixture.BROKER_SECONDS, fixture.PEER_REQUEST_SECONDS)
+        raw = b'{"http_status":200,"peer_uid":65534,"body":{"items":[]},"body_sha256":"' + b'a' * 64 + b'"}'
+        with patch.object(fixture, "run_child", return_value={"exit_code": 0, "stderr": b"", "stdout": raw}) as child:
+            self.assertEqual(fixture.request("a" * 32, "list")["http_status"], 200)
+            self.assertEqual(child.call_args.kwargs["timeout"], 50)
+
     def test_literal_nss_size_and_measured_last_change_day(self):
         self.assertEqual(len(fixture.NSS_BYTES), 54)
         first = fixture.date(2026, 10, 6)

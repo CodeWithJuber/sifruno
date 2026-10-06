@@ -148,6 +148,9 @@ def run_child(argv, timeout=20, limit=16384):
 SCOPE = "NSS_ADAPTED_stock_mail_service_account_lifecycle"
 NSS_BYTES = b"passwd: files\ngroup: files\nshadow: files\nhosts: files\n"
 ADMISSION = Path("/run/sifruno-service-accounts-admission")
+BROKER_SECONDS = 60
+PEER_SOCKET_SECONDS = 45
+PEER_REQUEST_SECONDS = 50
 
 
 def admitted_guest(nonce):
@@ -278,7 +281,7 @@ def peer_request(nonce, operation, account_id="", revision=0):
     if body:
         headers += "Content-Type: application/json\r\nContent-Length: " + str(len(body)) + "\r\n"
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.settimeout(5)
+    connection.settimeout(PEER_SOCKET_SECONDS)
     try:
         connection.connect(endpoint)
         connection.sendall(headers.encode() + b"\r\n" + body)
@@ -299,7 +302,7 @@ def peer_request(nonce, operation, account_id="", revision=0):
 
 
 def request(nonce, operation, account_id="", revision=0):
-    result = run_child([sys.executable, "-I", "-B", str(Path(__file__)), "--peer-request", nonce, operation, account_id, str(revision)], timeout=8)
+    result = run_child([sys.executable, "-I", "-B", str(Path(__file__)), "--peer-request", nonce, operation, account_id, str(revision)], timeout=PEER_REQUEST_SECONDS)
     require(result["exit_code"] == 0 and result["stderr"] == b"", "request_child")
     response = strict_json(result["stdout"].decode())
     require(response["peer_uid"] == 65534, "request_peer")
@@ -381,7 +384,7 @@ class OwnedBroker:
         def expire():
             self.timed_out.set()
             self.kill()
-        self.timer = threading.Timer(60, expire)
+        self.timer = threading.Timer(BROKER_SECONDS, expire)
         self.timer.start()
         self.endpoint = startup_paths(parent)[3]
 

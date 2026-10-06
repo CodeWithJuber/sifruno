@@ -27,3 +27,8 @@ test('import ignores importer --run argument without build or guest side effects
  assert.equal(p.status,0);assert.equal(p.stdout.trim(),'IMPORT_INERT');assert.equal(p.stderr,'');
  assert.equal(existsSync(new URL('../../.cache/native-web-preview',import.meta.url)),before);
 });
+
+
+test('real Huma account schema is required and exact',()=>{
+ for(const change of [g=>delete g.accounts[0].$schema,g=>g.accounts[0].$schema='http://foreign.example/Account.json',g=>g.accounts[0].extra='unknown']){const g=sample();change(g);assert.throws(()=>decodePreviewSerial(serial(g),g.nonce,g.inputs));}
+});

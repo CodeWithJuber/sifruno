@@ -425,7 +425,7 @@
     "ui_bound_preview_confirmation_and_late_result_guards": "reviewed; explicit refresh, shared action lock, cancel/navigation/logout clearing and MAX_SAFE confirmation disabled",
     "cli_and_reopen_test_cleanup": "root eefd442 checked Close errors using t.Error; no production-byte change",
     "workflow": "new 28 DTO checks and four helper checks reviewed; root YAML parse uses existing pinned dependency, unique keys and contents:read; no current hosted CI execution claimed",
-    "dependencies_licenses_packager_baseline_diff": "git diff --name-only 8aa8b41 -- go.mod go.sum web/package.json web/package-lock.json package.json package-lock.json LICENSE scripts/package-source.ps1 exited 0 with no paths",
+    "dependencies_licenses_packager_baseline_diff": "git diff --name-only 8aa8b41 -- go.mod go.sum web/package.json web/package-lock.json package.json package-lock.json LICENSE scripts/package-source.mjs exited 0 with no paths",
     "approved_brand": "root raw brand check exit 0, PASS 92 asset hashes; preserved source asset bytes reviewed",
     "documents": "evidence versus inference, original 0/30 broader compatibility gates, narrow Windows acceptance, historical authority and rollback remain explicit"
   },

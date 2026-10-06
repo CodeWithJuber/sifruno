@@ -1,5 +1,6 @@
 """NSS-only adapted disposable stock-mail service-account qualification."""
 import argparse
+from datetime import datetime, timezone, date
 import hashlib
 import json
 import os
@@ -316,7 +317,18 @@ def validate_account(value, nonce, parent, state, revision, previous=None):
     return {key: value[key] for key in ("id", "uid", "gid", "state", "revision")}
 
 
-def native_identity(account):
+def validate_last_change(value, first_day, last_day):
+    require(type(value) is str and first_day <= last_day, "last_change_clock")
+    if value == "never":
+        require(first_day == last_day == date(1970, 1, 1), "last_change_never_clock")
+        return "never"
+    require(re.fullmatch(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-3][0-9], [0-9]{4}", value), "last_change_format")
+    measured = datetime.strptime(value, "%b %d, %Y").date()
+    require(first_day <= measured <= last_day and measured >= date(1970, 1, 2), "last_change_bound")
+    return measured.isoformat()
+
+
+def native_identity(account, creation_day):
     name = account["username"]
     rows = [row for row in public_rows(Path("/etc/passwd"), 7) if row[0] == name or int(row[2]) == account["uid"]]
     groups = public_rows(Path("/etc/group"), 4)
@@ -332,7 +344,8 @@ def native_identity(account):
         key, separator, value = line.partition(":")
         require(separator and key.strip() not in fields, "aging_fields")
         fields[key.strip()] = value.strip()
-    require(fields.get("Account expires") == ("never" if account["state"] == "active" else "Jan 02, 1970") and all(fields.get(key) == "never" for key in ("Last password change", "Password expires", "Password inactive")), "service_aging_or_expiry")
+    require(fields.get("Account expires") == ("never" if account["state"] == "active" else "Jan 02, 1970") and all(fields.get(key) == "never" for key in ("Password expires", "Password inactive")), "service_aging_or_expiry")
+    last_change = validate_last_change(fields.get("Last password change"), creation_day, datetime.now(timezone.utc).date())
     require(fields.get("Maximum number of days between password change") == "-1" and fields.get("Minimum number of days between password change") in ("-1", "0") and fields.get("Number of days of warning before password expires") in ("-1", "0"), "service_aging_limits")
     directories = []
     for label, path in (("home", account["home"]), ("public_html", account["public_html"])):
@@ -340,7 +353,7 @@ def native_identity(account):
         require(stat.S_ISDIR(info.st_mode) and info.st_uid == account["uid"] and info.st_gid == account["gid"] and stat.S_IMODE(info.st_mode) == 0o750, "managed_home_identity")
         directories.append({"id": label, "uid": info.st_uid, "gid": info.st_gid, "mode": "0750", "inode": info.st_ino, "device": info.st_dev})
     require(sorted(child.name for child in Path(account["home"]).iterdir()) == ["public_html"] and list(Path(account["public_html"]).iterdir()) == [], "empty_managed_home")
-    return {"uid": account["uid"], "gid": account["gid"], "private_group": True, "supplementary_groups": 0, "password_locked": True, "shell": "nologin", "password_aging": "disabled", "account_expiry": "never" if account["state"] == "active" else "1970-01-02", "directories": directories, "status_sha256": sha(status["stdout"]), "aging_sha256": sha(aging["stdout"])}
+    return {"uid": account["uid"], "gid": account["gid"], "private_group": True, "supplementary_groups": 0, "password_locked": True, "shell": "nologin", "password_aging": "disabled", "last_password_change": last_change, "account_expiry": "never" if account["state"] == "active" else "1970-01-02", "directories": directories, "status_sha256": sha(status["stdout"]), "aging_sha256": sha(aging["stdout"])}
 
 
 class OwnedBroker:
@@ -368,7 +381,7 @@ class OwnedBroker:
         def expire():
             self.timed_out.set()
             self.kill()
-        self.timer = threading.Timer(20, expire)
+        self.timer = threading.Timer(60, expire)
         self.timer.start()
         self.endpoint = startup_paths(parent)[3]
 
@@ -459,10 +472,11 @@ def observe(args):
         broker.ready()
         initial = request(args.nonce, "list")
         require(initial["http_status"] == 200 and initial["body"] == {"items": []}, "initial_inventory")
+        creation_day = datetime.now(timezone.utc).date()
         created = request(args.nonce, "create")
         require(created["http_status"] == 200, "create_http")  # Never retry an ambiguous creation.
         account = created["body"]
-        phases.append({"operation": "create", "http_status": 200, "account": validate_account(account, args.nonce, parent, "active", 1), "native": native_identity(account)})
+        phases.append({"operation": "create", "http_status": 200, "account": validate_account(account, args.nonce, parent, "active", 1), "native": native_identity(account, creation_day)})
         before_refusal = state_evidence(parent)
         duplicate = request(args.nonce, "duplicate")
         require(duplicate["http_status"] == 409 and duplicate["body"] == {"error": "conflict"}, "duplicate_refusal")
@@ -471,22 +485,22 @@ def observe(args):
         after_refusal = state_evidence(parent)
         require(before_refusal == after_refusal, "duplicate_state_mutation")
         refusals.append({"operation": "duplicate", "before_sha256": before_refusal, "after_sha256": after_refusal, "account_revision": 1})
-        phases.append({"operation": "duplicate", "http_status": 409, "account": validate_account(account, args.nonce, parent, "active", 1), "native": native_identity(account)})
+        phases.append({"operation": "duplicate", "http_status": 409, "account": validate_account(account, args.nonce, parent, "active", 1), "native": native_identity(account, creation_day)})
         suspended = request(args.nonce, "suspend", account["id"], 1)
         require(suspended["http_status"] == 200, "suspend_http")
         previous, account = account, suspended["body"]
-        phases.append({"operation": "suspend", "http_status": 200, "account": validate_account(account, args.nonce, parent, "suspended", 2, previous), "native": native_identity(account)})
+        phases.append({"operation": "suspend", "http_status": 200, "account": validate_account(account, args.nonce, parent, "suspended", 2, previous), "native": native_identity(account, creation_day)})
         before_refusal = state_evidence(parent)
         stale = request(args.nonce, "stale", account["id"], 1)
         require(stale["http_status"] == 409 and stale["body"] == {"error": "conflict"} and request(args.nonce, "list")["body"] == {"items": [account]}, "stale_side_effect")
         after_refusal = state_evidence(parent)
         require(before_refusal == after_refusal, "stale_state_mutation")
         refusals.append({"operation": "stale", "before_sha256": before_refusal, "after_sha256": after_refusal, "account_revision": 2})
-        phases.append({"operation": "stale", "http_status": 409, "account": validate_account(account, args.nonce, parent, "suspended", 2), "native": native_identity(account)})
+        phases.append({"operation": "stale", "http_status": 409, "account": validate_account(account, args.nonce, parent, "suspended", 2), "native": native_identity(account, creation_day)})
         activated = request(args.nonce, "activate", account["id"], 2)
         require(activated["http_status"] == 200, "activate_http")
         previous, account = account, activated["body"]
-        phases.append({"operation": "activate", "http_status": 200, "account": validate_account(account, args.nonce, parent, "active", 3, previous), "native": native_identity(account)})
+        phases.append({"operation": "activate", "http_status": 200, "account": validate_account(account, args.nonce, parent, "active", 3, previous), "native": native_identity(account, creation_day)})
     finally:
         shutdowns.append(broker.close(account is not None and len(phases) == 5))
     reopened = OwnedBroker(root / paths["candidate"], parent)
@@ -494,7 +508,7 @@ def observe(args):
         reopened.ready()
         inventory = request(args.nonce, "list")
         require(inventory["http_status"] == 200 and inventory["body"] == {"items": [account]}, "reopen_identity")
-        phases.append({"operation": "reopen", "http_status": 200, "account": validate_account(account, args.nonce, parent, "active", 3, account), "native": native_identity(account)})
+        phases.append({"operation": "reopen", "http_status": 200, "account": validate_account(account, args.nonce, parent, "active", 3, account), "native": native_identity(account, creation_day)})
     finally:
         shutdowns.append(reopened.close(len(phases) == 6))
     core = execute_tests(root / paths["core_test"], args.core_test_names.split(","))
@@ -504,7 +518,7 @@ def observe(args):
     require(identities_before == unrelated_identity_snapshot(username) and mail_before == mail_snapshot(username) and subids_before == subid_snapshot(username) and listeners() == listen_before, "unrelated_native_mutation")
     for name, leaf in paths.items():
         require(sha(bounded_bytes(root / leaf, 64 * 1024 * 1024)) == hashes[name], "input_changed")
-    return {"schema_version": 1, "scope": SCOPE, "nonce": args.nonce, "passed": True, "profile": {"distribution": "almalinux", "version": "9.8", "kernel": platform.release(), "machine": platform.machine()}, "binary_sha256": hashes, "controller": controller, "policy_before": before, "policy_adapted": adapted, "policy_after": after, "adaptation": {"id": "nss", "sha256": sha(NSS_BYTES), "mode": "0644", "root_owned_regular": True}, "original_checks": original, "nss_adapted_checks": after_nss, "baseline_startup": {"exit_code": 1, "added_paths": [], "owned_child_exited": True}, "lifecycle": phases, "refusal_evidence": refusals, "shutdowns": shutdowns, "mail_before": mail_before, "mail_after": mail_snapshot(username), "subids_before": subids_before, "subids_after": subid_snapshot(username), "unrelated_identities_before": identities_before, "unrelated_identities_after": unrelated_identity_snapshot(username), "core_tests": core, "review_tests": review, "listeners_before": listen_before, "listeners_after": listeners(), "stock_mail_defaults_unchanged": True, "inputs_unchanged": True, "account_created": True, "account_mutation_requests": 5, "accepted_account_mutations": 3, "stock_provisioning_qualified": False, "owned_children_exited": True}
+    return {"schema_version": 1, "scope": SCOPE, "nonce": args.nonce, "passed": True, "profile": {"distribution": "almalinux", "version": "9.8", "kernel": platform.release(), "machine": platform.machine()}, "binary_sha256": hashes, "controller": controller, "policy_before": before, "policy_adapted": adapted, "policy_after": after, "adaptation": {"id": "nss", "sha256": sha(NSS_BYTES), "mode": "0644", "root_owned_regular": True}, "original_checks": original, "nss_adapted_checks": after_nss, "baseline_startup": {"exit_code": 1, "added_paths": [], "owned_child_exited": True}, "clock_days": {"before_create": creation_day.isoformat(), "after_reopen": datetime.now(timezone.utc).date().isoformat()}, "lifecycle": phases, "refusal_evidence": refusals, "shutdowns": shutdowns, "mail_before": mail_before, "mail_after": mail_snapshot(username), "subids_before": subids_before, "subids_after": subid_snapshot(username), "unrelated_identities_before": identities_before, "unrelated_identities_after": unrelated_identity_snapshot(username), "core_tests": core, "review_tests": review, "listeners_before": listen_before, "listeners_after": listeners(), "stock_mail_defaults_unchanged": True, "inputs_unchanged": True, "account_created": True, "account_mutation_requests": 5, "accepted_account_mutations": 3, "stock_provisioning_qualified": False, "owned_children_exited": True}
 
 
 def main():

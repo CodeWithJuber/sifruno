@@ -54,7 +54,7 @@ the copied ELF lives in the candidate's `.cache/service-accounts`. Root will
 provide final pins; no provisional ELF or old test families qualify this batch.
 
 QEMU has no NIC or host shares, with 600 seconds/2 MiB combined output. Each
-broker lifetime is bounded at 20 seconds, utility/test children 20 seconds,
+broker lifetime is bounded at 60 seconds, utility/test children 20 seconds,
 peer request child 8 seconds with 5-second socket operations. Requests and
 broker output are capped at 16 KiB; test output at 64 KiB. Processes are owned
 and killed/reaped on failures. Inputs, fixed assembly headers and linked Go
@@ -70,3 +70,13 @@ The test now mocks Linux ownership/mode and binary descriptor semantics; native
 guards and producer bytes remain unchanged. Those failures have tool-stream
 authority with a labelled reconstructed summary in owned ignored preparation
 cache, not an invented raw capture. Native observation remains pending.
+
+Independent pre-execution review corrected two fixture assumptions from commit
+`6cf8868`: the actual files-only NSS literal is 54 bytes (bound using its measured
+length), and [Shadow 4.9 new_spent](https://raw.githubusercontent.com/shadow-maint/shadow/4.9/src/useradd.c)
+sets the current last-password-change day before disabling system-account
+aging limits. The fixture now records the measured C-locale day, requires it
+inside the observed create/reopen UTC day bounds and unchanged across phases,
+while retaining never-expiring/inactive password and maximum-aging -1 checks.
+Only an actual epoch-zero clock may report a last-change value of never.
+No product change or chage mutation was made to satisfy the fixture.

@@ -18,6 +18,16 @@ for directory in (OWN / ".cache", TEMP):
 
 
 class Contract(unittest.TestCase):
+    def test_literal_nss_size_and_measured_last_change_day(self):
+        self.assertEqual(len(fixture.NSS_BYTES), 54)
+        first = fixture.date(2026, 10, 6)
+        self.assertEqual(fixture.validate_last_change("Oct 06, 2026", first, first), "2026-10-06")
+        epoch = fixture.date(1970, 1, 1)
+        self.assertEqual(fixture.validate_last_change("never", epoch, epoch), "never")
+        for value in ("never", "Oct 05, 2026", "Oct 07, 2026", "Feb 30, 2026", "2026-10-06", "Oct 06, 2026 extra"):
+            with self.assertRaises((AssertionError, ValueError)):
+                fixture.validate_last_change(value, first, first)
+
     def test_nss_only_adaptation_does_not_create_defaults(self):
         with tempfile.TemporaryDirectory(dir=TEMP) as name:
             root = Path(name)

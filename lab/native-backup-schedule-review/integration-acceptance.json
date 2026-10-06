@@ -1,0 +1,367 @@
+{
+  "schema_version": 1,
+  "kind": "assembled-native-static-site-backup-schedule-acceptance",
+  "checked_at": "2026-10-06T03:02:15.566Z",
+  "baseline": "835d9213154179aa77e35267c0c5cb81acb840e3",
+  "platform": "Windows",
+  "passed": true,
+  "production_source_unchanged_from_independent_and_browser_review": true,
+  "go": {
+    "test": {
+      "command": "go test -mod=readonly -count=1 -timeout=120s -json ./...",
+      "exit": 0,
+      "stdout_sha256": "afcf8bc46d9fa815bc78c089c530c557bdd9721eaa042f17028d4a299a62a136",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "vet": {
+      "command": "go vet -mod=readonly ./...",
+      "exit": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "passed_named_tests": 659,
+    "passed_packages": 23,
+    "failed": 0,
+    "skipped_named_tests": [
+      {
+        "package": "sifruno/internal/trail",
+        "test": "TestTrailProcessWorker"
+      }
+    ],
+    "packages_without_tests": [
+      "sifruno/cmd/hostbroker",
+      "sifruno/config",
+      "sifruno/internal/platform",
+      "sifruno/lab/hostwebruntime-crash-review"
+    ],
+    "process_proof": "Actual newly built entrypoint flag off/on, seeded past due timestamp, zero/one verified archive and private state reopen. Intentional Kill+Wait cleanup; no graceful signal-shutdown claim.",
+    "process_pass_events": [
+      {
+        "test": "TestOptInScheduleRunnerProcess/runner_false",
+        "elapsed_seconds": 1.48
+      },
+      {
+        "test": "TestOptInScheduleRunnerProcess/runner_true",
+        "elapsed_seconds": 1.12
+      },
+      {
+        "test": "TestOptInScheduleRunnerProcess",
+        "elapsed_seconds": 5.99
+      },
+      {
+        "test": null,
+        "elapsed_seconds": 7.179
+      }
+    ],
+    "prior_failed_process_fixture_observations": [
+      {
+        "command": "go test -mod=readonly -count=1 -timeout=90s -v ./cmd/sifruno",
+        "exit": 1,
+        "failed_cases": [
+          "runner_false",
+          "runner_true"
+        ],
+        "authority": "retained earlier tool-stream observations; no byte-level raw-output pin asserted",
+        "reason": "Fixture populated nonempty outer state without securestate.Dir ownership marker; production guard correctly refused startup",
+        "repair": "Only fixture setup changed; production guard unchanged"
+      },
+      {
+        "command": "go test -mod=readonly -count=1 -timeout=60s -run TestOptInScheduleRunnerProcess/runner_true -v ./cmd/sifruno",
+        "exit": 1,
+        "failed_cases": [
+          "runner_true"
+        ],
+        "authority": "retained earlier tool-stream observations; no byte-level raw-output pin asserted",
+        "reason": "Fixture populated nonempty outer state without securestate.Dir ownership marker; production guard correctly refused startup",
+        "repair": "Only fixture setup changed; production guard unchanged"
+      }
+    ]
+  },
+  "frontend": {
+    "node": "24.19.0",
+    "dto_tests": 18,
+    "passed": 18,
+    "typecheck_exit": 0,
+    "vite_build_exit": 0,
+    "vite": "8.3.2",
+    "dependencies_added": 0,
+    "brand": "92 approved asset hashes passed"
+  },
+  "independent": {
+    "worker_commit": "6c0488a8fb48dd18cc343c8669f29ab6be23b2f6",
+    "receipt": "acceptance.json",
+    "sha256": "c8227494ef0ffab9dea9a762f9566eec30d88798f84c3527ae058131de4e2fa0",
+    "named_passes": 61,
+    "top_level": 11,
+    "focused_race_passes": 3,
+    "line_endings": "Historical reviewer raw pins are retained. Adopted challenge differs only by Git CRLF checkout; root assembled suite verifies current bytes."
+  },
+  "browser": {
+    "run_id": "20261006T025753225-5c6bff7e",
+    "command": "node scripts/verify-backup-schedules-ui.mjs --source-root <integration>",
+    "cwd": "assigned UI worker worktree",
+    "exit": 0,
+    "report_sha256": "23a6eee80b777456b63757d657d6b4d69434e4ca91e8178793f355d1f8d42052",
+    "report_path": "artifacts/native-backup-schedules/20261006T025753225-5c6bff7e/browser-report.json",
+    "source_files": 191,
+    "source_catalog_sha256": "93e979381853b02a1980f919a2396e01ebf736640490c8eeb13df48753fe1b0f",
+    "binary_sha256": "a576fcbb9e900365c20919357ddf9920444d5555b0238d1a93527b7163a9e3fa",
+    "ui_assets": 91,
+    "ui_catalog_sha256": "75f4dfa31a01269b0f96727a18e545568f3e12641227b6094b80541157533eb8",
+    "executed_harness_sha256": "2f6a8e82d2831416d2c6b54d922bba83eb86ac53c7c36ba9c9a2f3f0efe444db",
+    "playwright": {
+      "version": "1.62.1",
+      "package_sha256": "ca170ec143a88ed3043ac953eb3b2377b2b97304104f4e1e23316684ce2c35af"
+    },
+    "browser_version": "151.0.7922.34",
+    "workflow": {
+      "actual_ui_login_absent_schedule": true,
+      "confirmation_cancel_escape_focus": true,
+      "actual_daily_pause_resume": true,
+      "actual_dual_revision_conflict_draft_refresh_review": true,
+      "synthetic_503_draft_retention_explicit_retry": true,
+      "actual_manual_native_backup_schedule_history_preserved": true,
+      "cross_site_draft_boundary": true,
+      "delayed_real_put_navigation_late_state_guard_duplicate_block": true,
+      "actual_runner_off_enable_disabled_paused_save": true,
+      "actual_logout_delayed_get_private_clear": true,
+      "actual_isolated_tcp": true
+    },
+    "private_viewports": [
+      {
+        "width": 390,
+        "theme": "light",
+        "passed": true,
+        "overflow": false,
+        "schedule_visible": true,
+        "dialog_bounds": true,
+        "visible_credentials": false,
+        "browser_storage_credentials": false,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 1,
+        "site_requests": 8,
+        "schedule_requests": 2,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 390,
+        "theme": "dark",
+        "passed": true,
+        "overflow": false,
+        "schedule_visible": true,
+        "dialog_bounds": true,
+        "visible_credentials": false,
+        "browser_storage_credentials": false,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 1,
+        "site_requests": 8,
+        "schedule_requests": 2,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 768,
+        "theme": "light",
+        "passed": true,
+        "overflow": false,
+        "schedule_visible": true,
+        "dialog_bounds": true,
+        "visible_credentials": false,
+        "browser_storage_credentials": false,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 1,
+        "site_requests": 8,
+        "schedule_requests": 2,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 768,
+        "theme": "dark",
+        "passed": true,
+        "overflow": false,
+        "schedule_visible": true,
+        "dialog_bounds": true,
+        "visible_credentials": false,
+        "browser_storage_credentials": false,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 1,
+        "site_requests": 8,
+        "schedule_requests": 2,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 1440,
+        "theme": "light",
+        "passed": true,
+        "overflow": false,
+        "schedule_visible": true,
+        "dialog_bounds": true,
+        "visible_credentials": false,
+        "browser_storage_credentials": false,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 1,
+        "site_requests": 8,
+        "schedule_requests": 2,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 1440,
+        "theme": "dark",
+        "passed": true,
+        "overflow": false,
+        "schedule_visible": true,
+        "dialog_bounds": true,
+        "visible_credentials": false,
+        "browser_storage_credentials": false,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 1,
+        "site_requests": 8,
+        "schedule_requests": 2,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      }
+    ],
+    "public_viewports": [
+      {
+        "width": 390,
+        "theme": "light",
+        "passed": true,
+        "overflow": false,
+        "schedule_hidden": true,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 0,
+        "site_requests": 0,
+        "schedule_requests": 0,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 390,
+        "theme": "dark",
+        "passed": true,
+        "overflow": false,
+        "schedule_hidden": true,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 0,
+        "site_requests": 0,
+        "schedule_requests": 0,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 768,
+        "theme": "light",
+        "passed": true,
+        "overflow": false,
+        "schedule_hidden": true,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 0,
+        "site_requests": 0,
+        "schedule_requests": 0,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 768,
+        "theme": "dark",
+        "passed": true,
+        "overflow": false,
+        "schedule_hidden": true,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 0,
+        "site_requests": 0,
+        "schedule_requests": 0,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 1440,
+        "theme": "light",
+        "passed": true,
+        "overflow": false,
+        "schedule_hidden": true,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 0,
+        "site_requests": 0,
+        "schedule_requests": 0,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      },
+      {
+        "width": 1440,
+        "theme": "dark",
+        "passed": true,
+        "overflow": false,
+        "schedule_hidden": true,
+        "page_errors": 0,
+        "external_requests": 0,
+        "session_requests": 0,
+        "site_requests": 0,
+        "schedule_requests": 0,
+        "schedule_puts": 0,
+        "mutation_requests": 0,
+        "asset_failures": 0,
+        "out_of_scope_mutations": 0
+      }
+    ],
+    "cleanup": {
+      "browser_closed": true,
+      "public_fixture_closed": true,
+      "owned_children_stopped": true,
+      "owned_listeners_closed": true
+    },
+    "inputs_unchanged": true,
+    "limits": [
+      "Synthetic 503 is an intercepted PUT response. Delayed real PUT/navigation and real GET/logout inspect late UI clearing; programmatic navigation bypasses the modal for that controlled lifecycle case.",
+      "Local HTML public-mode/read-only metrics fixture; no production proxy, tunnel, physical phone or remote authorization qualification.",
+      "Flag-on and flag-off fresh processes, configuration and native manual ZIP creation observed. Future due-time execution is qualified separately by core/CLI receipts."
+    ]
+  },
+  "no_live_activation": true,
+  "no_paid_provider_calls": true,
+  "original_compatibility_certified": false,
+  "all_os_certified": false,
+  "limits": [
+    "App-owned static-site ZIP schedules only",
+    "Actual archive-count quota tested;128MiB saturation source-reviewed",
+    "Synthetic journal and timer fixtures are distinct from observed controller crash",
+    "Remote roles, cPanel and vendor acceptance remain open"
+  ]
+}

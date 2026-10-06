@@ -13,7 +13,9 @@ import (
 	"unicode/utf8"
 )
 
-func handler(s *store) http.Handler {
+func handler(s *store) http.Handler { return handlerWithWebPreview(s, nil) }
+
+func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
@@ -24,6 +26,37 @@ func handler(s *store) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
 		switch {
+		case r.Method == "GET" && r.URL.Path == "/v1/web-preview":
+			if r.URL.ForceQuery || r.URL.RawPath != "" {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if r.Body != nil {
+				var one [1]byte
+				n, err := r.Body.Read(one[:])
+				if n != 0 || err != io.EOF {
+					writeError(w, ErrInvalid)
+					return
+				}
+			}
+			if preview == nil {
+				writeError(w, ErrUnavailable)
+				return
+			}
+			result, err := preview.Preview(ctx)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			if ctx.Err() != nil || !validWebPreview(result) {
+				writeError(w, ErrUnavailable)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
 		case r.Method == "GET" && r.URL.Path == "/v1/capability":
 			if r.ContentLength != 0 {
 				writeError(w, ErrInvalid)

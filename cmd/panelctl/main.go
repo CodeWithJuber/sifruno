@@ -43,7 +43,7 @@ const usage = `panelctl [--state .state/sifruno] [--panel-url http://127.0.0.1:8
  sites export --id ID --backup ID --out NEW.zip
  sites import --name NAME --domain DOMAIN --from NATIVE.zip
  backup inspect --from FILE --out NEW.jsonl
- accounts capability | list
+ accounts capability | list | web-preview
  accounts create --username USER --domain DOMAIN --reason TEXT
  accounts state --id ID --state active|suspended --revision N --reason TEXT
 Local operator commands; sites require the running panel and its private access.key.

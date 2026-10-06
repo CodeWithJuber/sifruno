@@ -81,3 +81,36 @@ two earlier Python failures lack original raw-file captures. Current corrected
 source bytes, exact commits and all independent raw challenge logs are pinned.
 Actual native execution and artifact/ISO/source-catalog audit are still pending;
 this source gate is not a full stock-host qualification.
+
+
+[native-audit.json](native-audit.json) independently admits the first actual
+NSS-only adapted Alma9.8 run `service-accounts-20261006T090326396Z-8f664ddd`.
+The read-only Node auditor checked all 1,948 declared current input files,
+eight staged payloads, root 253-file Go freeze, 152-file namespace catalog,
+original builder receipt and ELF, and exact private serial nonce/guest equality.
+The pinned Python/PyCdlib auditor extracted and checked every actual ISO member,
+including modes, immutable payload bytes, nonce and network-disabled cloud config.
+Both final commands exited 0; raw audit outputs/status files remain in the
+owned ignored `artifacts/service-accounts-review/native` directory. An earlier
+successful audit invocation is retained separately; final helper tightening
+added original ELF equality and strict duplicate-key JSON without a guest rerun.
+
+Native receipts show two core and three independent test families passing
+without skips. Actual API create/duplicate/suspend/stale/activate/reopen kept
+one service identity, expected revisions, current-day last password change,
+no ordinary aging, nologin, locked password and stable owned directory identity.
+The stock useradd defaults' 119 bytes and full metadata remained equal before,
+after NSS adaptation and after the lifecycle. Own mail was absent; unrelated
+mail, public identity rows, subordinate-ID files and listener snapshots remained
+equal. Both owned brokers stopped cleanly. These are observations from the
+reviewed fixture, joined to exact native bytes, rather than a second independent
+execution actor. No shadow, keys or boot log contents were published.
+
+Original source-review failures, missing original mixed-newline raw snapshots,
+portable-test authority and original ELF are preserved. The five assembler
+headers were pinned, while generated test main and the entire Go distribution
+remain outside exhaustive provenance. This qualifies one service identity in
+an NSS-adapted disposable image; full stock provisioning, CloudLinux, cPanel,
+all OSes, reboot, remote ingress and atomic privileged-path stability remain
+unqualified. Final assembled documentation and source-archive admission are
+separate follow-up gates.

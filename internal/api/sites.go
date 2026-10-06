@@ -186,7 +186,7 @@ func allowedSiteMutation(r *http.Request) bool {
 	if len(parts) != 2 || parts[0] == "" {
 		return false
 	}
-	return (r.Method == http.MethodPut && parts[1] == "file") || (r.Method == http.MethodPost && (parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore"))
+	return (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore"))
 }
 
 func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -209,6 +209,8 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		target = &backupBody{}
 	case strings.HasSuffix(r.URL.Path, "/restore"):
 		target = &sites.RestoreInput{}
+	case strings.HasSuffix(r.URL.Path, "/backup-schedule"):
+		target = &sites.BackupScheduleInput{}
 	default:
 		operator.WriteError(w, 400, "invalid_request", "Invalid website request")
 		return false
@@ -229,7 +231,7 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		operator.WriteError(w, 400, "invalid_request", "JSON object required")
 		return false
 	}
-	if operator.DecodeObject(b, target) != nil {
+	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) {
 		operator.WriteError(w, 400, "invalid_request", "Invalid JSON request")
 		return false
 	}

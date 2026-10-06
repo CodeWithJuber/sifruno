@@ -195,6 +195,9 @@ func runSites(args []string, state, base string, out, errs io.Writer) error {
 	wantedState := f.String("state", "", "active or suspended")
 	backup := f.String("backup", "", "Native backup ID to restore or export")
 	destination := f.String("out", "", "New native ZIP export file (never overwritten)")
+	scheduleRevision := f.Uint64("schedule-revision", 0, "Expected current backup schedule revision; zero only when absent")
+	interval := f.String("interval", "", "hourly, daily or weekly")
+	enabled := f.String("enabled", "", "Explicit true or false")
 	if err := f.Parse(args[1:]); err != nil {
 		if transfer {
 			return errors.New("invalid site transfer flags; run panelctl help")
@@ -214,6 +217,28 @@ func runSites(args []string, state, base string, out, errs io.Writer) error {
 		endpoint += "/" + url.PathEscape(*id)
 	}
 	switch sub {
+	case "backup-schedule":
+		if !transferID(*id) {
+			return errors.New("backup-schedule requires a valid --id")
+		}
+		endpoint += "/backup-schedule"
+	case "backup-schedule-set":
+		if !transferID(*id) || *revision == 0 || *revision > 9007199254740991 || *scheduleRevision > 9007199254740991 ||
+			(*interval != "hourly" && *interval != "daily" && *interval != "weekly") || (*enabled != "true" && *enabled != "false") {
+			return errors.New("backup-schedule-set requires --id, --revision, --schedule-revision, --interval and explicit --enabled true|false")
+		}
+		seenRevision := false
+		f.Visit(func(flag *flag.Flag) {
+			if flag.Name == "schedule-revision" {
+				seenRevision = true
+			}
+		})
+		if !seenRevision {
+			return errors.New("backup-schedule-set requires explicit --schedule-revision (zero only when absent)")
+		}
+		value := *enabled == "true"
+		method, endpoint = http.MethodPut, endpoint+"/backup-schedule"
+		body = sites.BackupScheduleInput{ExpectedRevision: *revision, ExpectedScheduleRevision: *scheduleRevision, Interval: *interval, Enabled: &value}
 	case "export":
 		if !transferID(*id) || !transferID(*backup) || *destination == "" {
 			return errors.New("export requires --id, --backup and --out")

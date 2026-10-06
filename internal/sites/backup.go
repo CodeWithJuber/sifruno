@@ -146,7 +146,13 @@ func parseNativeArchive(raw []byte) (map[string][]byte, archiveManifest, error) 
 func (s *Store) Backup(id string, expectedRevision uint64, actor string) (BackupInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !validActor(actor) {
+	return s.backupLocked(id, expectedRevision, actor, nil)
+}
+
+// beforeWrite reserves a scheduler's exact archive identity after construction
+// and before any site/file change. The caller holds Store.mu throughout.
+func (s *Store) backupLocked(id string, expectedRevision uint64, actor string, beforeWrite func(BackupInfo) error) (BackupInfo, error) {
+	if !validActor(actor) && !(beforeWrite != nil && actor == "native-backup-scheduler") {
 		return BackupInfo{}, ErrInvalid
 	}
 	r, err := s.checked(id)
@@ -190,6 +196,11 @@ func (s *Store) Backup(id string, expectedRevision uint64, actor string) (Backup
 	name := "backups/" + backupID + ".zip"
 	if _, err = rt.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 		return BackupInfo{}, ErrUnavailable
+	}
+	if beforeWrite != nil {
+		if err := beforeWrite(info); err != nil {
+			return BackupInfo{}, err
+		}
 	}
 	pending := r
 	pending.Pending = &pendingChange{Action: "backup", Checkpoints: []string{}}

@@ -38,6 +38,7 @@ func run() error {
 	state := flag.String("state", ".state/sifruno", "Private application-owned state directory")
 	ui := flag.String("ui", "web/dist", "Built panel directory")
 	accountsSocket := flag.String("accounts-socket", "", "Absolute Unix socket of the separately installed Linux account broker; empty disables accounts")
+	backupScheduler := flag.Bool("backup-scheduler", false, "Opt in to app-owned static-site ZIP schedules; no archive rotation")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -108,9 +109,16 @@ func run() error {
 		servers = append(servers, &http.Server{Addr: *sitesListen, Handler: websiteStore.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10})
 		listeners = append(listeners, websiteListener)
 	}
-	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), SitePreviewPort: &previewPort, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	if *backupScheduler {
+		workerDone := make(chan struct{})
+		go func() { defer close(workerDone); websiteStore.RunBackupScheduler(ctx) }()
+		// Runs before the earlier Store.Close defer, including Serve failures.
+		defer func() { stop(); <-workerDone }()
+	} else {
+		defer stop()
+	}
 	done := make(chan error, len(servers))
 	for i, running := range servers {
 		go func(s *http.Server, l net.Listener) { done <- s.Serve(l) }(running, listeners[i])

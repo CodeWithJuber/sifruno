@@ -37,6 +37,8 @@ type Options struct {
 	Accounts       hostaccounts.Service
 	// nil preserves older UI callers; zero explicitly disables local previews.
 	SitePreviewPort *uint16
+	// Admission capability; the process owner must actually run/cancel the worker.
+	BackupSchedulerEnabled bool
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -63,6 +65,7 @@ func New(o Options) http.Handler {
 	registerAccounts(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
+	registerBackupSchedules(mux, api, o)
 	if o.Operator != nil {
 		o.Operator.Register(mux)
 	}

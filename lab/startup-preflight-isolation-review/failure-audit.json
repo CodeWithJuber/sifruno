@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "kind": "independent_read_only_failed_startup_artifact_and_deterministic_temp_path_audit",
+  "passed": true,
+  "native_qualification": false,
+  "execution_performed_by_reviewer": false,
+  "failed_runs": [
+    {
+      "report": {
+        "path": "artifacts/startup-preflight/startup-preflight-20261006T102031061Z-8c22ae7e/report.json",
+        "bytes": 390386,
+        "sha256": "5c4753972638c922a3b6e6e1e06335db932acc40dc63d81c7201eca0252590db"
+      },
+      "serial": {
+        "path": ".cache/alma9-qualification/startup-preflight-20261006T102031061Z-8c22ae7e/serial-private.log",
+        "bytes": 83152,
+        "sha256": "347395361c1dcebfa50722deb9b883d89eb9758c5ccbe0ea4283377542800442"
+      },
+      "retained_decoder": {
+        "path": ".cache/alma9-qualification/startup-preflight-20261006T102031061Z-8c22ae7e/host-harness-source.mjs",
+        "bytes": 45875,
+        "sha256": "890b0641aa19e951c901afd3a83ec4698dfd692a502979ea10554b3711e0522f"
+      },
+      "failure": {
+        "schema_version": 1,
+        "scope": "read_only_stock_then_NSS_only_adapted_fresh_startup_admission",
+        "nonce": "8c22ae7e2b5dd83ab7a0d0ca8e442b43",
+        "passed": false,
+        "failure": "startup_order_reason"
+      },
+      "exact_nonce_join": true,
+      "inputs_unchanged": true,
+      "owned_exit_and_normal_cleanup": true,
+      "qualification": false
+    },
+    {
+      "report": {
+        "path": "artifacts/startup-preflight/startup-preflight-20261006T103748239Z-95606c04/report.json",
+        "bytes": 390752,
+        "sha256": "5434c75196dbad156813675749cbbe8e65fb2cad626025f806770896992a8e43"
+      },
+      "serial": {
+        "path": ".cache/alma9-qualification/startup-preflight-20261006T103748239Z-95606c04/serial-private.log",
+        "bytes": 80598,
+        "sha256": "e3c9e71740c0fd709debbb106ce9469e2d7ff701ef8fc55e5b42788bde7fe91b"
+      },
+      "retained_decoder": {
+        "path": ".cache/alma9-qualification/startup-preflight-20261006T103748239Z-95606c04/host-harness-source.mjs",
+        "bytes": 49275,
+        "sha256": "1c02950723cd96c90e26941528c80a24465d2a468bf58a16a76c3305546bf770"
+      },
+      "failure": {
+        "schema_version": 1,
+        "scope": "read_only_stock_then_NSS_only_adapted_fresh_startup_admission",
+        "nonce": "95606c04235d08a2a09fb157a5a8e160",
+        "passed": false,
+        "failure": "test_family_execution",
+        "diagnostic": {
+          "phase": "review_tests",
+          "check_index": null,
+          "status": null,
+          "reason": null
+        }
+      },
+      "exact_nonce_join": true,
+      "inputs_unchanged": true,
+      "owned_exit_and_normal_cleanup": true,
+      "qualification": false
+    }
+  ],
+  "original_compiled_only_authority_sha256": "79d3c7799a801ddf9aa73df7e8b6694d8f18322af136216b8dc4b8e3b9d708b7",
+  "original_independent_ELF_sha256": "ab06ed2bfa699fc831e665b2de23d0bdc51cce5e6ccce79ca548a25a9e5d8781",
+  "model_source_pins": [
+    {
+      "namespace": "review",
+      "path": "lab/startup-preflight-review/private_native_linux_test.go.txt",
+      "bytes": 4135,
+      "sha256": "67eccb801b45d606b08d8466d1338983b2bd3b01073311b7cfd26245d4242dce"
+    },
+    {
+      "namespace": "go",
+      "path": "src/testing/testing.go",
+      "bytes": 94214,
+      "sha256": "8d2437cfdcfb82fd8807e5063783de1d50f70e589e80cad10e17d8ef23f724d9"
+    },
+    {
+      "namespace": "go",
+      "path": "src/os/tempfile.go",
+      "bytes": 4002,
+      "sha256": "a337c2a6dc2e4368b2dc0015ea7c0b935b68b14885a0771a6cbe27e588c2cd16"
+    },
+    {
+      "namespace": "go",
+      "path": "src/os/file_unix.go",
+      "bytes": 14265,
+      "sha256": "877dd004355c475e8805b5700061604558422da057037556e0cf6edeb36ab7ec"
+    }
+  ],
+  "deterministic_path_model": {
+    "test_family": "TestIndependentStartupFreshAuthority",
+    "review_TMPDIR_bytes": 53,
+    "GOTMPDIR_absent_in_fixed_child_environment": true,
+    "random_decimal_bytes": [
+      1,
+      10
+    ],
+    "sequence_suffix_bytes": 4,
+    "socket_suffix_bytes": 16,
+    "subcases": [
+      {
+        "subcase": "missing",
+        "pattern_bytes": 43,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 118,
+        "max_socket_bytes": 127
+      },
+      {
+        "subcase": "empty",
+        "pattern_bytes": 41,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 116,
+        "max_socket_bytes": 125
+      },
+      {
+        "subcase": "marker",
+        "pattern_bytes": 42,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 117,
+        "max_socket_bytes": 126
+      },
+      {
+        "subcase": "invalid_db",
+        "pattern_bytes": 46,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 121,
+        "max_socket_bytes": 130
+      },
+      {
+        "subcase": "socket_leaf",
+        "pattern_bytes": 47,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 122,
+        "max_socket_bytes": 131
+      },
+      {
+        "subcase": "homes_foreign",
+        "pattern_bytes": 49,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 124,
+        "max_socket_bytes": 133
+      },
+      {
+        "subcase": "mode",
+        "pattern_bytes": 40,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 115,
+        "max_socket_bytes": 124
+      },
+      {
+        "subcase": "identity_drift",
+        "pattern_bytes": 50,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 125,
+        "max_socket_bytes": 134
+      },
+      {
+        "subcase": "controller_duplicate",
+        "pattern_bytes": 56,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 131,
+        "max_socket_bytes": 140
+      },
+      {
+        "subcase": "nss_provider",
+        "pattern_bytes": 48,
+        "min_random_decimal_bytes": 1,
+        "max_random_decimal_bytes": 10,
+        "min_socket_bytes": 123,
+        "max_socket_bytes": 132
+      }
+    ],
+    "all_modeled_socket_paths_exceed_existing_100_byte_cap": true
+  },
+  "evidence": [
+    "Both exact nonce-bound failed envelopes agree with pinned reports and private serial bytes",
+    "Run1 startup_order_reason records no phase or triggering case",
+    "Run2 test_family_execution records review_tests with null check index/status/reason; no individual subcase is identified",
+    "Pinned Go TempDir construction plus unchanged private FreshAuthority source deterministically exceeds socket cap under long review TMPDIR"
+  ],
+  "inference_limits": [
+    "The deterministic path bug is source/model evidence; tying it to any particular observed failed subcase is not verified",
+    "No successful native qualification, per-subcase logs, Go rebuild, VM rerun, privileged probe or cleanup by reviewer",
+    "Pending success-only audit source remains uncommitted; original failed artifacts and compiled-only receipt/ELF are unchanged"
+  ]
+}

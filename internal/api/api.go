@@ -244,10 +244,19 @@ func New(o Options) http.Handler {
 			if !ok {
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
-			if mutation && !prepareAccountJSON(w, r) {
-				return
+			if mutation {
+				if !prepareAccountJSON(w, r) {
+					return
+				}
+				// Body reads can outlive logout, revocation or session expiry.
+				// Recheck admission before dispatch; this does not cancel work
+				// already admitted to the account service.
+				actor, ok = o.Operator.Authorize(w, r, true)
+				if !ok {
+					return
+				}
 			}
+			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
 		}
 		mux.ServeHTTP(w, r)

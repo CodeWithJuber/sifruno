@@ -91,12 +91,22 @@ func Open(dir string, journal *trail.Store) (*Store, error) {
 		return nil, ErrUnavailable
 	}
 	s := &Store{dir: abs, root: root, rootInfo: rootInfo, dbInfo: dbInfo, db: db, journal: journal}
-	if err = db.Update(func(tx *bolt.Tx) error { _, err := tx.CreateBucketIfNotExists(bucket); return err }); err != nil {
+	if err = db.Update(func(tx *bolt.Tx) error {
+		if _, err := tx.CreateBucketIfNotExists(bucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(backupScheduleBucket)
+		return err
+	}); err != nil {
 		db.Close()
 		return nil, ErrUnavailable
 	}
 	items, err := s.records()
 	if err != nil {
+		db.Close()
+		return nil, ErrUnavailable
+	}
+	if _, err = s.backupSchedules(); err != nil {
 		db.Close()
 		return nil, ErrUnavailable
 	}

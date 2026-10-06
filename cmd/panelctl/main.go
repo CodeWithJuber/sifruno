@@ -36,6 +36,8 @@ const usage = `panelctl [--state .state/sifruno] [--panel-url http://127.0.0.1:8
  sites write --id ID --path PATH --from FILE --revision N [--sha256 SHA]
  sites state --id ID --state active|suspended --revision N
  sites backup --id ID --revision N
+ sites backup-schedule --id ID
+ sites backup-schedule-set --id ID --revision N --schedule-revision N --interval hourly|daily|weekly --enabled true|false
  sites restore --id ID --backup ID --revision N
  sites export --id ID --backup ID --out NEW.zip
  sites import --name NAME --domain DOMAIN --from NATIVE.zip

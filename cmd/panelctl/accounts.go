@@ -16,7 +16,7 @@ import (
 // They never run an OS utility or open privileged broker state directly.
 func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("accounts requires capability, list, create or state")
+		return errors.New("accounts requires capability, list, web-preview, create or state")
 	}
 	f := flag.NewFlagSet("accounts "+args[0], flag.ContinueOnError)
 	f.SetOutput(io.Discard)
@@ -36,6 +36,8 @@ func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 	case "capability":
 		endpoint += "/capability"
 	case "list":
+	case "web-preview":
+		endpoint += "/web-preview"
 	case "create":
 		allowed = map[string]bool{"username": true, "domain": true, "reason": true}
 		if *username == "" || *domain == "" || strings.TrimSpace(*reason) == "" || len(*username) > 32 || len(*domain) > 253 || len(*reason) > 500 {

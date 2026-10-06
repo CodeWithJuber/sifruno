@@ -35,6 +35,7 @@ type Options struct {
 	Sites          *sites.Store
 	Operator       *operator.Manager
 	Accounts       hostaccounts.Service
+	WebPreview     hostaccounts.WebPreviewService
 	// nil preserves older UI callers; zero explicitly disables local previews.
 	SitePreviewPort *uint16
 	// Admission capability; the process owner must actually run/cancel the worker.
@@ -65,6 +66,7 @@ func New(o Options) http.Handler {
 	registerAccounts(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
+	registerWebPreview(mux, api, o)
 	registerBackupSchedules(mux, api, o)
 	registerRestorePreview(mux, api, o)
 	if o.Operator != nil {

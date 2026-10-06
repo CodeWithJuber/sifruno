@@ -73,6 +73,14 @@ test("union admits 128 disjoint bounded paths but rejects 129, excessive side co
 test("selected site, current revision, immutable archive identity and file count cannot be rebound", () => {
   for (const [site, revision, selected] of [["f".repeat(32), 9, backup()], [siteId, 10, backup()], [siteId, 9, { ...backup(), id: "f".repeat(32) }], [siteId, 9, { ...backup(), sha256: "f".repeat(64) }], [siteId, 9, { ...backup(), revision: 5 }], [siteId, 9, { ...backup(), site_id: "f".repeat(32) }], [siteId, 9, { ...backup(), files: 4 }]]) assert.equal(api.restorePreviewMatches(preview(), site, revision, selected), false);
 });
+test("maximum safe revision remains readable but cannot initiate an unsafe restore advance", () => {
+  const value = { ...preview(), current_revision: Number.MAX_SAFE_INTEGER };
+  assert(api.validRestorePreview(value)); assert(api.restorePreviewMatches(value, siteId, Number.MAX_SAFE_INTEGER, backup()));
+  assert.equal(api.canConfirmRestorePreview(value, siteId, Number.MAX_SAFE_INTEGER, backup()), false);
+  value.current_revision--; assert(api.canConfirmRestorePreview(value, siteId, Number.MAX_SAFE_INTEGER - 1, backup()));
+  value.current_revision += 2; assert.equal(api.canConfirmRestorePreview(value, siteId, Number.MAX_SAFE_INTEGER + 1, backup()), false);
+  assert.equal(api.canConfirmRestorePreview(preview(), siteId, 8, backup()), false);
+});
 test("preview request sends only the exact selected IDs/revision with same-origin session and memory-only CSRF", async () => {
   await mockFetch(async (url, options) => {
     assert.equal(url, `/api/v1/sites/${siteId}/restore-preview`); assert.equal(options.method, "POST"); assert.equal(options.credentials, "same-origin"); assert.equal(options.cache, "no-store");

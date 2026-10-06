@@ -49,6 +49,9 @@ export function restorePreviewMatches(value: unknown, siteId: string, revision: 
     value.backup_id === backup.id && value.backup_sha256 === backup.sha256 && value.backup_revision === backup.revision &&
     value.counts.added + value.counts.modified + value.counts.unchanged === backup.files;
 }
+export function canConfirmRestorePreview(value: unknown, siteId: string, revision: number, backup: SiteBackup): value is RestorePreview {
+  return integer(revision, 1, Number.MAX_SAFE_INTEGER - 1) && restorePreviewMatches(value, siteId, revision, backup);
+}
 export function getRestorePreview(siteId: string, revision: number, backup: SiteBackup, csrf: string) {
   if (!id(siteId) || !integer(revision, 1) || backup.site_id !== siteId || !id(backup.id) || !sha(backup.sha256) || !integer(backup.revision, 1, revision) || !integer(backup.files, 1, 64) || !csrf) throw new SiteApiError(0, "invalid_preview", "Refresh the website and backup records before reviewing a restore.");
   return siteRequest(siteURL(siteId, "/restore-preview"), (value): value is RestorePreview => restorePreviewMatches(value, siteId, revision, backup), { method: "POST", csrf, body: { backup_id: backup.id, expected_revision: revision } });

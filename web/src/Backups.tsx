@@ -8,7 +8,7 @@ import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import { downloadSiteBackup, SiteApiError, siteRequest, siteURL, validBackup, validBackupList, validSession, validSite, validSiteList } from "@/lib/sites-api";
 import type { OperatorSession, Site, SiteBackup } from "@/lib/sites-api";
-import { getRestorePreview, restorePreviewError, restorePreviewMatches, restoreKinds } from "@/lib/restorePreview";
+import { canConfirmRestorePreview, getRestorePreview, restorePreviewError, restorePreviewMatches, restoreKinds } from "@/lib/restorePreview";
 import type { RestorePreview } from "@/lib/restorePreview";
 import "./backups.css";
 import BackupSchedule from "./BackupSchedule";
@@ -48,6 +48,7 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
   const authenticated = session?.authenticated === true;
   const canChange = Boolean(active && authenticated && fresh && selected && selected.state !== "recovery_required" && !busy);
   const previewVerified = Boolean(restore && selected && selected.id === restore.site.id && selected.revision === restore.site.revision && restorePreviewMatches(preview, selected.id, selected.revision, restore.backup) && backups.some(item => item.id === restore.backup.id && item.sha256 === restore.backup.sha256 && item.revision === restore.backup.revision && item.files === restore.backup.files));
+  const canRestore = Boolean(canChange && previewVerified && selected && restore && canConfirmRestorePreview(preview, selected.id, selected.revision, restore.backup));
 
   const clearRestore = useCallback(() => { ++previewEpoch.current; restoreReturnFocus.current = false; setRestore(undefined); setPreview(undefined); setPreviewError(undefined); setConfirmed(false); }, []);
   const clearPrivateRecords = useCallback(() => { setSites([]); setSelected(undefined); setBackups([]); setFresh(false); clearRestore(); }, [clearRestore]);
@@ -176,7 +177,7 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
     });
   }
   async function confirmRestore() {
-    if (!restore || !confirmed || !canChange || !session?.authenticated || Date.parse(session.expires_at) <= Date.now() || selected?.id !== restore.site.id || selected.revision !== restore.site.revision || !restorePreviewMatches(preview, selected.id, selected.revision, restore.backup) || !backups.some(item => item.id === restore.backup.id && item.sha256 === restore.backup.sha256 && item.revision === restore.backup.revision && item.files === restore.backup.files)) return;
+    if (!restore || !confirmed || !canRestore || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()) return;
     const target = restore;
     const token = session.csrf_token, generation = previewEpoch.current;
     await run("Restoring ZIP backup", async (parentLive) => {
@@ -240,10 +241,11 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
         <p className="restore-preview-help">Hashes were checked by the server. Only file paths and metadata are shown; a new server change can still reject confirmation.</p>
       </section>}
       {previewError && <p role="alert" className="website-error" data-testid="restore-preview-error">{previewError}</p>}
+      {previewVerified && restore.site.revision === Number.MAX_SAFE_INTEGER && <p className="restore-preview-status" role="status">The website revision limit was reached. This preview is readable, but a further restore cannot be confirmed.</p>}
       {!previewVerified && !busy && !previewError && <p className="restore-preview-status">A matching verified preview is required. Refresh records and review the restore again.</p>}
       <p>Your unsaved Websites editor draft will be kept. Compare it with the restored files before saving it.</p>
-      <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={Boolean(busy) || !fresh || !previewVerified} />I reviewed the verified preview and understand that the current saved files will be replaced.</label>
-      <div><Button label="Cancel restore" variant="ghost" isDisabled={busy === "Restoring ZIP backup"} onClick={closeRestore} />{(!fresh || previewError) && <Button label="Refresh backup records" variant="secondary" isDisabled={Boolean(busy)} onClick={refreshRecords} />}<Button label="Confirm restore" variant="primary" isDisabled={!confirmed || !canChange || !previewVerified} isLoading={busy === "Restoring ZIP backup"} onClick={() => void confirmRestore()} data-testid="restore-confirm" /></div>
+      <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!canRestore} />I reviewed the verified preview and understand that the current saved files will be replaced.</label>
+      <div><Button label="Cancel restore" variant="ghost" isDisabled={busy === "Restoring ZIP backup"} onClick={closeRestore} />{(!fresh || previewError) && <Button label="Refresh backup records" variant="secondary" isDisabled={Boolean(busy)} onClick={refreshRecords} />}<Button label="Confirm restore" variant="primary" isDisabled={!confirmed || !canRestore} isLoading={busy === "Restoring ZIP backup"} onClick={() => void confirmRestore()} data-testid="restore-confirm" /></div>
       {error && !previewError && <p role="alert" className="website-error">{error}</p>}
     </dialog>}
   </section>;

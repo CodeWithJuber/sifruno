@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "verdict": "CLEAR",
+  "commit": "19ad91e556dfbadfda4c412b9016183993467491",
+  "scope": "Strict actual Huma schema decoder correction only; fixture/runner/ISO unchanged",
+  "changed_pins": [
+    {
+      "path": "lab/native-web-preview-guest/report.mjs",
+      "canonical_sha256": "f7c0d5242609327e45833f668138953edaa0d0ffd76bb0ddab5a82ba32d94abc",
+      "raw_sha256": "0cf22456a43094ff69f7780c147254ca7a0755cbca66e7492ba24e5eaf11c49c"
+    },
+    {
+      "path": "lab/native-web-preview-guest/report.test.mjs",
+      "canonical_sha256": "683e98c8a300d2cfde0dc3fff069d810ed03781c91db3d50b038797694ea2f84",
+      "raw_sha256": "2dcce9acbe4be9dff690f7d023b813f26f27532f577fa2a722208d11948ff770"
+    },
+    {
+      "path": "lab/native-web-preview-guest/synthetic.mjs",
+      "canonical_sha256": "5984fea5b3ecf47ec3e4d38322005d0eacccbfd78f6e8c4e5a16084a904f323b",
+      "raw_sha256": "bfce4f9d1f87974521375ab80a0fe93d245b655463b86601a2c27c9f5d14c0a1"
+    }
+  ],
+  "checks": {
+    "passed": true,
+    "positive": 1,
+    "negative": 16,
+    "cases": [
+      "CLI divergence",
+      "original host input mismatch",
+      "case order",
+      "captured digest mismatch",
+      "raw metadata duplicate key",
+      "runtime path addition",
+      "injected root field",
+      "missing child cleanup",
+      "unpaired account path",
+      "wrong Huma schema",
+      "missing Huma schema",
+      "extra account field",
+      "duplicate frame",
+      "late exit duplicate",
+      "early exit",
+      "invalid UTF8"
+    ],
+    "decoder_sha256": "0cf22456a43094ff69f7780c147254ca7a0755cbca66e7492ba24e5eaf11c49c",
+    "scope": "Synthetic only; provisional draft decoder, no native execution"
+  },
+  "native_receipt": "native-review.json",
+  "native_receipt_sha256": "cf2c2a62a63ccbae54cf8c1bdc10e75a994f10cdfc086defa42af732af13b881",
+  "limits": [
+    "Original decode_failed report preserved",
+    "Re-decoded original serial only; no post-fix VM run"
+  ]
+}

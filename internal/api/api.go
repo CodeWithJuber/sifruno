@@ -66,6 +66,7 @@ func New(o Options) http.Handler {
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerBackupSchedules(mux, api, o)
+	registerRestorePreview(mux, api, o)
 	if o.Operator != nil {
 		o.Operator.Register(mux)
 	}

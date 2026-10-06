@@ -1,0 +1,39 @@
+package hostaccounts
+
+import (
+ "context"
+ "encoding/json"
+ "errors"
+ "reflect"
+ "strings"
+ "testing"
+ "time"
+)
+
+var independentStartupIDs=[]string{"configuration","privilege","controller","utilities","nss_file","nss_policy","useradd_defaults","paths","fresh_state"}
+var independentStartupReasons=[]string{"dedicated_paths_and_nonroot_uid_required","root_required","unique_local_controller_uid_required","trusted_utilities_required","trusted_bounded_regular_nss_file_required","files_only_nss_required","supported_service_account_defaults_required","dedicated_path_and_socket_admission_required","persisted_state_recovery_not_checked"}
+func independentStartupShape(t *testing.T,r BrokerAdmissionReport) {
+ t.Helper();b,e:=json.Marshal(r);if e!=nil {t.Fatal(e)}
+ var m map[string]json.RawMessage;if json.Unmarshal(b,&m)!=nil {t.Fatal("JSON")}
+ keys:=[]string{"schema_version","scope","platform","supported","read_only","checks","restrictions"};if len(m)!=len(keys) {t.Fatal("shape")};for _,k:=range keys {if _,ok:=m[k];!ok {t.Fatal("missing field")}}
+ if r.SchemaVersion!=1||r.Scope!="native_linux_broker_startup_admission"||!r.ReadOnly||len(r.Checks)!=9 {t.Fatal("header")}
+ if !reflect.DeepEqual(r.Restrictions,[]string{"fresh_setup_admission_only","host_snapshot_not_startup_grant","persisted_state_recovery_not_checked","no_stock_host_or_cpanel_certification"}) {t.Fatal("restrictions")}
+ for i,c:=range r.Checks {if c.ID!=independentStartupIDs[i] {t.Fatal("ordered check")};raw,_:=json.Marshal(c);var o map[string]json.RawMessage;_ = json.Unmarshal(raw,&o);if len(o)!=3 {t.Fatal("check shape")}}
+ if strings.Contains(string(b),"sensitive-review-error")||strings.Contains(string(b),"private-review-path") {t.Fatal("unredacted input")}
+}
+func independentAllUnknown(t *testing.T,r BrokerAdmissionReport,reason string) {
+ t.Helper();independentStartupShape(t,r);if r.Supported {t.Fatal("unsupported observation promoted")};for _,c:=range r.Checks {if c.Status!="not_checked"||c.Reason!=reason {t.Fatal("partial observation retained")}}
+}
+func TestIndependentStartupProtocol(t *testing.T) {
+ t.Run("all_pass",func(t *testing.T){var p [9]func()error;calls:=[]int{};for i:=range p {i:=i;p[i]=func()error{calls=append(calls,i);return nil}};r:=probeBrokerAdmission(context.Background(),"linux",p);independentStartupShape(t,r);if !r.Supported||!reflect.DeepEqual(calls,[]int{0,1,2,3,4,5,6,7,8}) {t.Fatal("all prerequisites")};for _,c:=range r.Checks {if c.Status!="pass"||c.Reason!="satisfied" {t.Fatal("pass shape")}}})
+ for stop:=0;stop<9;stop++ {stop:=stop;t.Run(independentStartupIDs[stop],func(t *testing.T){var p [9]func()error;calls:=0;for i:=range p {i:=i;p[i]=func()error{calls++;if i==stop {return errors.New("sensitive-review-error /private-review-path")};return nil}};r:=probeBrokerAdmission(context.Background(),"linux",p);independentStartupShape(t,r);if r.Supported||calls!=stop+1 {t.Fatal("prerequisite gate")};for i,c:=range r.Checks {status,reason:="pass","satisfied";if i==stop {status,reason="refused",independentStartupReasons[i]};if i>stop {status,reason="not_checked","prerequisite_refused"};if c.Status!=status||c.Reason!=reason {t.Fatal("refusal shape")}}})}
+ t.Run("nil_probe",func(t *testing.T){var p [9]func()error;r:=probeBrokerAdmission(context.Background(),"linux",p);independentStartupShape(t,r);if r.Supported||r.Checks[0].Status!="refused" {t.Fatal("nil callback granted")}})
+ t.Run("platform_boundary",func(t *testing.T){for _,platform:=range []string{"windows","darwin","other"}{var p [9]func()error;for i:=range p {p[i]=func()error{t.Fatal("nonLinux probe executed");return nil}};r:=probeBrokerAdmission(context.Background(),platform,p);independentAllUnknown(t,r,"linux_required");if r.Platform!=platform {t.Fatal("platform")}}})
+ t.Run("persisted_not_granted",func(t *testing.T){var p [9]func()error;for i:=range p {p[i]=func()error{return nil}};p[8]=func()error{return errPersistedAdmissionState};r:=probeBrokerAdmission(context.Background(),"linux",p);independentStartupShape(t,r);if r.Supported||r.Checks[8].Status!="not_checked"||r.Checks[8].Reason!="persisted_state_recovery_not_checked" {t.Fatal("persisted state grant")}})
+}
+func TestIndependentStartupCancellation(t *testing.T) {
+ t.Run("nil_public",func(t *testing.T){opts:=BrokerOptions{StateDir:"/private-review-path/state",HomesDir:"/private-review-path/homes",SocketPath:"/private-review-path/run/socket",ControllerUID:54321};independentAllUnknown(t,CheckBrokerAdmission(nil,opts),"probe_context_unavailable")})
+ t.Run("pre_public",func(t *testing.T){ctx,cancel:=context.WithCancel(context.Background());cancel();independentAllUnknown(t,CheckBrokerAdmission(ctx,BrokerOptions{}),"probe_context_unavailable")})
+ t.Run("expired",func(t *testing.T){ctx,cancel:=context.WithDeadline(context.Background(),time.Now().Add(-time.Second));defer cancel();var p [9]func()error;for i:=range p {p[i]=func()error{t.Fatal("expired probe");return nil}};independentAllUnknown(t,probeBrokerAdmission(ctx,"linux",p),"probe_context_unavailable")})
+ for stop:=0;stop<9;stop++ {stop:=stop;t.Run(independentStartupIDs[stop],func(t *testing.T){ctx,cancel:=context.WithCancel(context.Background());defer cancel();var p [9]func()error;calls:=0;for i:=range p {i:=i;p[i]=func()error{calls++;if i==stop {cancel()};return nil}};independentAllUnknown(t,probeBrokerAdmission(ctx,"linux",p),"probe_context_unavailable");if calls!=stop+1 {t.Fatal("cancelled continuation")}})}
+}

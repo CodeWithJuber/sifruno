@@ -1,0 +1,3 @@
+package main
+import("bytes";"context";"sifruno/internal/hostaccounts";"testing")
+func TestIndependentStartupLegacyControl(t *testing.T){var out,err bytes.Buffer;args:=[]string{"--check-startup","--state","/isolated/state","--socket","/isolated/run/broker.sock","--homes","/isolated/homes","--controller-uid","65534"};code:=runWithServices(args,&out,&err,func(context.Context)hostaccounts.HostPolicyReport{return hostaccounts.HostPolicyReport{}},func(context.Context,hostaccounts.BrokerOptions)error{return nil});if code!=0 {t.Fatal("new explicitly authorized diagnostic route unavailable on untouched baseline")}}

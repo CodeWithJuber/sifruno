@@ -51,8 +51,8 @@ jobs:
         run: |
           npm run panel:typecheck
           npm run panel:build
-      - name: Private session and backup schedule UI contract checks
-        run: node --test web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs
+      - name: Private session, schedule and restore preview UI contract checks
+        run: node --test web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs web/src/lib/restorePreview.test.mjs
       - name: Approved brand integrity
         run: npm run brand:check
       - name: Python fixture checks
@@ -60,6 +60,7 @@ jobs:
           python3 -m unittest discover -s lab -p test_capture.py
           python3 -m unittest discover -s lab/hostweb-review -p test_web_runtime_fixture.py
           python3 -m unittest discover -s lab -p test_web_package_prepare.py
+          python3 lab/native-restore-preview-review/prepare_test.py
       - name: Packaging and whitespace checks
         run: |
           node scripts/build-runtime.mjs --self-check

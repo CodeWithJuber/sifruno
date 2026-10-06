@@ -46,7 +46,7 @@
     "scope": "Synthetic only; provisional draft decoder, no native execution"
   },
   "native_receipt": "native-review.json",
-  "native_receipt_sha256": "cf2c2a62a63ccbae54cf8c1bdc10e75a994f10cdfc086defa42af732af13b881",
+  "native_receipt_sha256": "d1bdd3b4a709942ae9d00ca2a6cd386860386a44388136289639c86129a9f7a9",
   "limits": [
     "Original decode_failed report preserved",
     "Re-decoded original serial only; no post-fix VM run"

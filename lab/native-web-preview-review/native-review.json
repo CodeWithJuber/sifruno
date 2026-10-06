@@ -82,7 +82,80 @@
     "cli_and_direct_peer_metadata_equal": true,
     "stock_refusal": true,
     "runtime_paths_absent": true,
-    "owned_children_exited": true
+    "owned_children_exited": true,
+    "stock_refusal_reason": "files_only_nss_required",
+    "stock_checks": [
+      {
+        "id": "layout_configuration",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "configuration",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "privilege",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "controller",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "utilities",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "nss_file",
+        "status": "pass",
+        "reason": "satisfied"
+      },
+      {
+        "id": "nss_policy",
+        "status": "refused",
+        "reason": "files_only_nss_required"
+      },
+      {
+        "id": "useradd_defaults",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "paths",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "fresh_state",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "controller_access",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "layout_directories",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "layout_preparation",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      },
+      {
+        "id": "layout_ownership",
+        "status": "not_checked",
+        "reason": "prerequisite_refused"
+      }
+    ]
   },
   "schema_provenance": "Actual Huma Account.json schema exact local guest URL, required not arbitrary extra-field acceptance",
   "limits": [

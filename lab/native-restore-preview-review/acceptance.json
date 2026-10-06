@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "kind": "independent-native-static-site-restore-preview-challenges",
+  "passed": true,
+  "checked_at": "2026-10-06T05:32:42.930678+00:00",
+  "baseline": "8aa8b41",
+  "candidate_provenance": {
+    "root_adopted_core_commit": "9a14e63",
+    "core_commit": "feee329",
+    "root_adopted_ui_commits": [
+      "c331e6e",
+      "30fbc38"
+    ],
+    "catalog": {
+      "path": "lab/native-restore-preview-review/source-catalog.json",
+      "bytes": 14289,
+      "sha256": "ecc88b6ff231c08e2af89d76e9c8a6c65c219f04370ff081ec4822d2ea44f800"
+    },
+    "inputs": 83,
+    "internal_production_go_overlays": 75,
+    "all_current_candidate_inputs_rechecked_match": true,
+    "source_module_input_policy": "GOPROXY=off GOSUMDB=off -mod=readonly; primary Go wrapper; normal compilation cache allowed; no dependency installs/writes"
+  },
+  "executed_lab_inputs": [
+    {
+      "path": "lab/native-restore-preview-review/preview_test.go",
+      "bytes": 24425,
+      "sha256": "406e7b1408eba6e8527f0201f4af8b3eb3701c17ff386ad8dcdcd8296d1c2512"
+    }
+  ],
+  "reproduction_helper": {
+    "path": "lab/native-restore-preview-review/prepare.py",
+    "bytes": 2702,
+    "sha256": "1061766f23214bcbde8debee04aae231312d42eee5236dae969c06638ebfb638"
+  },
+  "test": {
+    "status": {
+      "goproxy": "off",
+      "gosumdb": "off",
+      "command": "primary go.ps1 test -mod=readonly -overlay=.cache/native-restore-preview-review/overlay.json -count=1 -timeout=90s -json ./lab/native-restore-preview-review",
+      "exit": 0,
+      "cwd": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\restore-preview-review-sol"
+    },
+    "stdout": {
+      "path": ".cache/native-restore-preview-review/test.out",
+      "bytes": 44879,
+      "sha256": "30d136a0b4c87e7a1a1a79698eaca7ff0b86a1cf17529811aa7b933f0f0e02d0"
+    },
+    "stderr": {
+      "path": ".cache/native-restore-preview-review/test.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "named_pass": 47,
+    "top_level_pass": 6,
+    "fail": 0,
+    "skip": 0,
+    "package_pass": [
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "elapsed_seconds": 6.397
+      }
+    ]
+  },
+  "race": {
+    "status": {
+      "command": "primary go.ps1 test -mod=readonly -overlay=.cache/native-restore-preview-review/overlay.json -count=1 -race -timeout=60s -run=TestConcurrentPreviewAndMutationRemainSerial|TestActualZIPFourKindsWireReadOnlyReopen -json ./lab/native-restore-preview-review",
+      "platform": "windows",
+      "exit": 0,
+      "compiler": "existing gcc",
+      "cgo_enabled": "1"
+    },
+    "stdout": {
+      "path": ".cache/native-restore-preview-review/race.out",
+      "bytes": 5125,
+      "sha256": "c2ca257aacde559761646e6e4baddafedea86a179fb27d9ec28cb30459b4b45b"
+    },
+    "stderr": {
+      "path": ".cache/native-restore-preview-review/race.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "named_pass": 5,
+    "top_level_pass": 2,
+    "fail": 0,
+    "skip": 0,
+    "package_pass": [
+      {
+        "package": "sifruno/lab/native-restore-preview-review",
+        "elapsed_seconds": 4.341
+      }
+    ]
+  },
+  "vet": {
+    "status": {
+      "exit": 0,
+      "command": "primary go.ps1 vet -mod=readonly -overlay=.cache/native-restore-preview-review/overlay.json ./lab/native-restore-preview-review"
+    },
+    "stdout": {
+      "path": ".cache/native-restore-preview-review/vet.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "path": ".cache/native-restore-preview-review/vet.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "prior_attempts": [
+    {
+      "classification": "PowerShell unquoted overlay option split before test execution; no tests ran; fixed invocation only",
+      "result": {
+        "status": {
+          "exit": 1,
+          "goproxy": "off",
+          "command": "primary go.ps1 test -mod=readonly -overlay=owned frozen overlay -count=1 -timeout=90s -json ./lab/native-restore-preview-review",
+          "cwd": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\restore-preview-review-sol",
+          "gosumdb": "off"
+        },
+        "stdout": {
+          "path": ".cache/native-restore-preview-review/attempt-1.out",
+          "bytes": 1042,
+          "sha256": "b52bfc4a9725116ba11ce7506d8e9f17314f4eb2c70eb4b63e56668f4adb95c7"
+        },
+        "stderr": {
+          "path": ".cache/native-restore-preview-review/attempt-1.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "named_pass": 0,
+        "top_level_pass": 0,
+        "fail": 1,
+        "skip": 0,
+        "package_pass": []
+      }
+    },
+    {
+      "classification": "initial 46-check pass before explicit reopened-handler wiring, deeper rehashed foreign ZIP and wire 128/MAX_SAFE challenge expansions; retained historical",
+      "result": {
+        "status": {
+          "exit": 0,
+          "command": "primary go.ps1 test -mod=readonly -overlay=owned frozen overlay -count=1 -timeout=90s -json ./lab/native-restore-preview-review",
+          "goproxy": "off",
+          "gosumdb": "off",
+          "cwd": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\restore-preview-review-sol"
+        },
+        "stdout": {
+          "path": ".cache/native-restore-preview-review/initial-challenge.out",
+          "bytes": 43934,
+          "sha256": "03989e97ac714eb4fbf79f76f6d410f0050a71f9768d8cb61169c7b846af29fc"
+        },
+        "stderr": {
+          "path": ".cache/native-restore-preview-review/initial-challenge.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "named_pass": 46,
+        "top_level_pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "package_pass": [
+          {
+            "package": "sifruno/lab/native-restore-preview-review",
+            "elapsed_seconds": 6.256
+          }
+        ]
+      }
+    }
+  ],
+  "source_review": {
+    "core_mutex_snapshot_archive_identity_and_alias_guard": "reviewed; no product blocker found",
+    "raw_api_strict_shape_auth_before_parse_exact_bounded_dto": "reviewed and actual isolated challenges passed",
+    "ui_identity_hash_revision_binding_late_result_guard_explicit_refresh_and_safe_ceiling": "source reviewed; no browser qualification from this receipt",
+    "spec_root_additionalProperties_presence_exact_sets": "source reviewed; root separate spec test closes weaker original count/defaultfalse assertions",
+    "minor_findings_sent_to_root": [
+      "new CLI and reopened Store test defer Close ignored errors; asked owner to check cleanup results, production unchanged"
+    ],
+    "minor_findings_resolution": {
+      "commit": "eefd442",
+      "checked_source_paths": [
+        "cmd/panelctl/restore_preview_test.go",
+        "internal/sites/restore_preview_test.go"
+      ],
+      "outcome": "both new test-only cleanup callbacks now report Store.Close errors using t.Error; production source pins unchanged; no repeated challenge execution required"
+    }
+  },
+  "verification_boundaries": [
+    "Actual temporary Store/API handler and exported native ZIP bytes, signed checkpoints, reopen and ordinary restore/backup/write execution.",
+    "Synthetic 128 union/case alias/revision ceiling/rehashed foreign ZIP/pending metadata fixtures are explicitly constructed in owned closed TempDir state; no observed crash or recovery provenance claim.",
+    "Concurrent shared-start pairs exercise complete preview versus conflict around actual write/backup/scheduler; one ordering per pair, not every interleaving. Common Store.mu also inspected.",
+    "Windows targeted race using existing CGO/gcc only; no Linux, all-OS, vendor, whole-panel, browser, remote ingress, provider, live-state or activation claim.",
+    "No raw file contents, operator keys, cookies, CSRF or global credentials were printed or recorded. Fixture private values remain isolated.",
+    "First invocation failure and earlier successful model retained separately, not overwritten with final success.",
+    "Historical source byte hashes stay historical across Git line-ending normalization; future integrated runs must have separately pinned authority."
+  ],
+  "rollback": "Remove only added review lab; product restore remains separately revision-bound and revalidates state."
+}

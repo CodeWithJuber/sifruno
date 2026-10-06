@@ -217,6 +217,12 @@ func runSites(args []string, state, base string, out, errs io.Writer) error {
 		endpoint += "/" + url.PathEscape(*id)
 	}
 	switch sub {
+	case "restore-preview":
+		if !transferID(*id) || !transferID(*backup) || *revision == 0 || *revision > 9007199254740991 {
+			return errors.New("restore-preview requires valid --id, --backup and a positive safe --revision")
+		}
+		method, endpoint = http.MethodPost, endpoint+"/restore-preview"
+		body = sites.RestoreInput{BackupID: *backup, ExpectedRevision: *revision}
 	case "backup-schedule":
 		if !transferID(*id) {
 			return errors.New("backup-schedule requires a valid --id")

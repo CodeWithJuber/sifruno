@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "kind": "independent-restore-preview-preparation-helper-admission",
+  "passed": true,
+  "checked_at": "2026-10-06T05:38:02.755185+00:00",
+  "change": "admit complete output plan componentwise before mkdir/writes; refuse escaping symlink/reparse and hardlinked outputs; recheck each output parent/file",
+  "helper": {
+    "path": "lab/native-restore-preview-review/prepare.py",
+    "bytes": 4247,
+    "sha256": "428e1b1e32495270d432dbfbcc72b7c65619528c6781fa85e0d0f75585d8ea35"
+  },
+  "tests": {
+    "path": "lab/native-restore-preview-review/prepare_test.py",
+    "bytes": 4431,
+    "sha256": "188ef7210fc6d341a22dd4bac905aea60da0938842d27f23366040068b9a5a63"
+  },
+  "commands": [
+    {
+      "status": {
+        "command": "python lab/native-restore-preview-review/prepare_test.py",
+        "exit": 0,
+        "cwd": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\restore-preview-review-sol",
+        "environment": "PYTHONDONTWRITEBYTECODE=1"
+      },
+      "stdout": {
+        "path": ".cache/native-restore-preview-review/helper-test.out",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": ".cache/native-restore-preview-review/helper-test.err",
+        "bytes": 687,
+        "sha256": "8503eb74862cf6dfa663b9985300d2dd5ade30cdfb7ce3cc73d8058f4179a1bc"
+      }
+    },
+    {
+      "status": {
+        "exit": 0,
+        "command": "python lab/native-restore-preview-review/prepare.py '../restore-preview-integration'",
+        "cwd": "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\restore-preview-review-sol"
+      },
+      "stdout": {
+        "path": ".cache/native-restore-preview-review/helper-prepare.out",
+        "bytes": 141,
+        "sha256": "76d28a0ce19948cb6bd57f461203bc42370a7281b283a83c9b654d5065fcbd9c"
+      },
+      "stderr": {
+        "path": ".cache/native-restore-preview-review/helper-prepare.err",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ],
+  "unchanged_historical_authority": [
+    {
+      "path": "lab/native-restore-preview-review/acceptance.json",
+      "bytes": 8830,
+      "sha256": "f2ff03fc0aa186a2ca618fe6b352877e290240b39397e54206f019312148871e"
+    },
+    {
+      "path": "lab/native-restore-preview-review/source-catalog.json",
+      "bytes": 14289,
+      "sha256": "ecc88b6ff231c08e2af89d76e9c8a6c65c219f04370ff081ec4822d2ea44f800"
+    }
+  ],
+  "limits": [
+    "Four stdlib tests use owned temporary synthetic83-input files and local Windows junctions/hardlink sentinel. No product or dependency behavior is inferred from synthetic fixture files.",
+    "Separate actual preparation admits exact original83 source catalog/75 production Go overlay inputs and leaves candidate inputs read-only.",
+    "Original 47 named Go checks/5 targeted race checks/vet authority unchanged and not rerun for helper-only changes.",
+    "Exclusive workspace ownership assumed; component admission/rechecks are not protection against adversarial concurrent filesystem swaps.",
+    "No browser execution, provider calls, dependency installs/shared cache writes or live state changes."
+  ],
+  "prior_tool_error": "Initial multi-operation apply_patch rejected before filesystem edits because delete/add targeted same file; rewritten as owned file replacement before helper tests.",
+  "stdlib_checks_pass": 4,
+  "actual_inputs_admitted": 83,
+  "actual_internal_go_overlays": 75
+}

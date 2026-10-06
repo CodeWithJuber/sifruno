@@ -2,7 +2,8 @@
 import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import io
 import subprocess
 import sys
 import tempfile
@@ -56,7 +57,9 @@ class StartupFixtureTests(unittest.TestCase):
             with self.assertRaises((AssertionError, ValueError)): f.strict_json(raw)
 
     def test_probe_readonly_snapshot_and_exact_command(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, patch.object(f, "admit_socket_path"):
+            # Windows temporary paths model filesystem snapshots; native Linux
+            # socket admission is tested separately against actual planned paths.
             parent = Path(directory)
             before = f.owned_snapshot(parent)
             calls = []
@@ -73,7 +76,9 @@ class StartupFixtureTests(unittest.TestCase):
             self.assertEqual(calls[0][-2:], ["--controller-uid", "65534"])
 
     def test_probe_rejects_added_paths_wrong_exit_and_private_stderr(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, patch.object(f, "admit_socket_path"):
+            # Windows temporary paths model filesystem snapshots; native Linux
+            # socket admission is tested separately against actual planned paths.
             parent = Path(directory)
             def mutate(argv, **options):
                 (parent / "unexpected").write_bytes(b"fixture")
@@ -86,7 +91,9 @@ class StartupFixtureTests(unittest.TestCase):
                     f.startup_observation(Path("owned-broker"), parent)
 
     def test_invalid_grammar_has_no_json_and_no_changes(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, patch.object(f, "admit_socket_path"):
+            # Windows temporary paths model filesystem snapshots; native Linux
+            # socket admission is tested separately against actual planned paths.
             parent = Path(directory)
             good = {"exit_code": 2, "stdout": b"", "stderr": b"Invalid native broker configuration\n", "owned_child_exited": True}
             with patch.object(f, "run_child", return_value=good):
@@ -191,6 +198,67 @@ class StartupFixtureTests(unittest.TestCase):
         with patch.object(f, "trusted_test_temp", side_effect=AssertionError("test_temp_authority")), patch.object(f.subprocess, "Popen") as popen, self.assertRaises(AssertionError):
             f.run_child(["native-test"], test_temp=owned)
         popen.assert_not_called()
+
+    def test_indexed_native_paths_preserve_labels_and_existing_100_byte_cap(self):
+        nonce = "b" * 32
+        planned = f.planned_socket_paths(nonce)
+        self.assertEqual(list(planned), ["stock", "adapted", *f.CASE_LABELS, "broker_smoke"])
+        self.assertEqual(len(planned), 16)
+        for index, label in enumerate(f.CASE_LABELS):
+            self.assertEqual(planned[label].parts[-3], "c%02d" % index)
+        for endpoint in planned.values():
+            f.admit_socket_path(endpoint)
+            self.assertLessEqual(len(endpoint.as_posix().encode()), 100)
+        old = f.startup_paths(PurePosixPath("/run/sp-cases-" + nonce) / "ancestor_untrusted_nontraversable")[3]
+        self.assertEqual(len(old.as_posix().encode()), 106)
+        with self.assertRaisesRegex(AssertionError, "socket_path_admission"): f.admit_socket_path(old)
+        f.admit_socket_path(PurePosixPath("/" + "x" * 99))
+        for value in ["/" + "x" * 100, "/" + "é" * 50, "/run/../private", "//run/socket", "/run/bad\nname"]:
+            with self.assertRaisesRegex(AssertionError, "socket_path_admission"): f.admit_socket_path(PurePosixPath(value))
+
+    def test_overlength_broker_path_never_spawns_a_child(self):
+        parent = PurePosixPath("/run/sp-cases-" + "b" * 32) / "ancestor_untrusted_nontraversable"
+        with patch.object(f.subprocess, "Popen") as popen, self.assertRaisesRegex(AssertionError, "socket_path_admission"):
+            f.OwnedBroker(PurePosixPath("/owned/broker"), parent)
+        popen.assert_not_called()
+        with patch.object(f.subprocess, "Popen") as popen, patch.object(f, "owned_snapshot", return_value="a" * 64), self.assertRaisesRegex(AssertionError, "socket_path_admission"):
+            f.startup_observation(PurePosixPath("/owned/broker"), parent)
+        popen.assert_not_called()
+
+    def test_fixed_failure_context_reports_only_allowlisted_phase_and_check(self):
+        value = report(0)
+        with self.assertRaises(f.PhaseFailure) as caught:
+            f.run_phase("ancestor_untrusted_nontraversable", lambda: f.validate_startup(value, 7))
+        self.assertEqual(caught.exception.diagnostic, {"phase": "ancestor_untrusted_nontraversable", "check_index": 0, "status": "refused", "reason": f.REASONS[0]})
+        value = report(0)
+        value["checks"][0].update(status="/private/status", reason="private credential-like value")
+        with self.assertRaises(f.PhaseFailure) as caught:
+            f.run_phase("stock", lambda: f.validate_startup(value, 7))
+        self.assertEqual(caught.exception.diagnostic, {"phase": "stock", "check_index": 0, "status": "unknown", "reason": "unknown"})
+        self.assertNotIn("private", json.dumps(caught.exception.diagnostic))
+        with self.assertRaisesRegex(AssertionError, "phase_label"):
+            f.run_phase("/private/phase", lambda: None)
+        with self.assertRaises(f.PhaseFailure) as caught:
+            f.run_phase("core_tests", lambda: (_ for _ in ()).throw(ValueError("private raw error")))
+        self.assertEqual(str(caught.exception), "fixture_observation_failed")
+        self.assertEqual(caught.exception.diagnostic, {"phase": "core_tests", "check_index": None, "status": None, "reason": None})
+        with self.assertRaises(f.PhaseFailure) as caught:
+            f.run_phase("core_tests", lambda: (_ for _ in ()).throw(AssertionError("private_secret")))
+        self.assertEqual(str(caught.exception), "fixture_observation_failed")
+
+    def test_main_emits_separate_failure_metadata_without_success_schema_change(self):
+        argv = ["fixture.py", "--disposable-startup-preflight", "--nonce", "b" * 32]
+        for name in ("baseline", "candidate", "fixture", "core-test", "review-test"):
+            argv.extend(["--" + name + "-sha", "a" * 64])
+        argv.extend(["--core-test-names", "TestCore", "--review-test-names", "TestReview"])
+        error = f.PhaseFailure("startup_order_reason", "state_file", 7, "refused", f.REASONS[7])
+        output = io.StringIO()
+        with patch.object(f.sys, "argv", argv), patch.object(f.sys, "stdout", output), patch.object(f, "observe", side_effect=error):
+            self.assertEqual(f.main(), 1)
+        value = json.loads(output.getvalue())
+        self.assertEqual(set(value), {"schema_version", "scope", "nonce", "passed", "failure", "diagnostic"})
+        self.assertFalse(value["passed"])
+        self.assertEqual(value["diagnostic"], error.diagnostic)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,14 @@ metadata digest, policy/public account metadata, subids, mail and listeners.
 
 Thirteen actual negative cases, in decoder order:
 
+Owned negative directories use fixed indices `c00` through `c12`; public labels
+below remain unchanged. Stock, adapted, all thirteen negatives and broker smoke
+socket paths are checked against the existing absolute canonical 100-byte
+contract before any broker spawn. The earlier case-label directory for the long
+ancestor case measured 106 bytes and therefore deterministically violated the
+configuration guard; its first failed VM evidence is preserved without claiming
+the actual failed checkpoint was independently identified.
+
 1. Absent UID60001, after proving absence: controller refusal.
 2. UID0: grammar exit2, generic stderr, no JSON.
 3. State file.
@@ -62,6 +70,13 @@ The core ELF runs exactly `TestStartupNativeFreshStateObservation` and
 and `TestIndependentStartupProtocol`. Missing families, skips, stderr, wrong
 nonce framing, schema additions, false no-writes claims, swapped policy metadata
 or binary hashes, and incomplete owned-child cleanup reject the evidence.
+
+Failure output may include a separate exact diagnostic object containing only
+an allowlisted phase/case label, check index0..8 and allowlisted observed status
+and reason. Missing check context uses nulls; unknown values become `unknown`.
+Paths, arguments, raw errors and configuration never enter this object. Failed
+nonce-framed evidence can be decoded separately for diagnosis but cannot qualify
+the successful guest decoder. Successful report and guest schemas stay unchanged.
 
 Native test children alone receive explicit `TMPDIR` below an exclusively
 created `/run/sp-tests-NONCE` parent0700, with separate core/review directories

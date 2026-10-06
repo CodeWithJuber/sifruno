@@ -4,7 +4,8 @@ from datetime import datetime, timezone, date
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import posixpath
 import platform
 import re
 import signal
@@ -24,6 +25,11 @@ IDS = ["configuration", "privilege", "controller", "utilities", "nss_file", "nss
 REASONS = ["dedicated_paths_and_nonroot_uid_required", "root_required", "unique_local_controller_uid_required", "trusted_utilities_required", "trusted_bounded_regular_nss_file_required", "files_only_nss_required", "supported_service_account_defaults_required", "dedicated_path_and_socket_admission_required", "persisted_state_recovery_not_checked"]
 RESTRICTIONS = ["fresh_setup_admission_only", "host_snapshot_not_startup_grant", "persisted_state_recovery_not_checked", "no_stock_host_or_cpanel_certification"]
 PROVIDERS = {"files", "sss", "systemd", "compat", "nis", "nisplus", "db", "ldap", "winbind"}
+CASE_LABELS = ["missing_uid", "root_uid", "state_file", "homes_file", "homes_symlink", "homes_dangling_symlink", "ancestor_untrusted_nontraversable", "setgid_parent", "socket_file", "socket_bound", "socket_dangling_symlink", "nonempty_state", "unknown_private_argument"]
+PHASES = {"stock", "adapted", "host_policy", "broker_smoke", "core_tests", "review_tests", *CASE_LABELS}
+DIAGNOSTIC_STATUSES = {"pass", "refused", "not_checked", "unknown"}
+DIAGNOSTIC_REASONS = {*REASONS, "satisfied", "prerequisite_refused", "probe_context_unavailable", "linux_required", "unknown"}
+FAILURE_CODES = set(['adapted_readonly', 'ancestor_setup_metadata', 'argument_binding', 'broker_pipe_cleanup', 'broker_shutdown', 'broker_socket', 'broker_startup', 'case_index', 'child_output_limit', 'child_pipe_cleanup', 'child_timeout', 'controller_not_unique', 'controller_uid', 'duplicate_json_key', 'file_bound', 'file_kind', 'file_size_changed', 'final_host_unchanged', 'fixture_observation_failed', 'fresh_paths_created', 'guest_admission', 'guest_inputs_changed', 'guest_platform', 'guest_profile', 'host_policy_exit', 'host_policy_unchanged', 'input_binding', 'inventory_bound', 'inventory_child', 'inventory_empty', 'inventory_http', 'json_number', 'mail_dir_authority', 'mail_dir_declaration', 'mail_directory_alias', 'mail_entries_bound', 'negative_uid_present', 'nss_adaptation', 'nss_leaf_kind', 'nss_only_change', 'nss_parent_authority', 'nss_profile_bound', 'nss_profile_count', 'nss_profile_hash_binding', 'nss_write', 'owned_mail_spool', 'owned_snapshot_bound', 'owned_snapshot_kind', 'owned_subid_allocation', 'passwd_metadata_invalid', 'phase_label', 'public_identity_rows', 'socket_nonce', 'socket_path_admission', 'startup_added_or_changed_paths', 'startup_count', 'startup_exit', 'startup_fields', 'startup_grammar', 'startup_identity', 'startup_order_reason', 'stock_nss_pin', 'stock_readonly', 'subid_kind', 'test_family_execution', 'test_names_binding', 'test_temp_authority', 'test_temp_drift', 'test_temp_parent_drift', 'test_temp_path', 'test_temp_platform', 'test_temp_root_drift'])
 POLICY = (
     ("nss", "/etc/nsswitch.conf"), ("nss_authselect", "/etc/authselect/nsswitch.conf"),
     ("useradd_defaults", "/etc/default/useradd"), ("login_defaults", "/etc/login.defs"),
@@ -254,8 +260,25 @@ def startup_paths(parent):
     return [parent / "state", parent / "homes", parent / "socket-parent", parent / "socket-parent/broker.sock"]
 
 
+def case_parent(owned, index):
+    require(type(index) is int and 0 <= index < len(CASE_LABELS), "case_index")
+    return owned / ("c%02d" % index)
+
+
+def planned_socket_paths(nonce):
+    require(re.fullmatch(r"[0-9a-f]{32}", nonce), "socket_nonce")
+    owned = PurePosixPath("/run/sp-cases-" + nonce)
+    return {"stock": startup_paths(owned / "stock")[3], "adapted": startup_paths(owned / "adapted")[3], **{label: startup_paths(case_parent(owned, i))[3] for i, label in enumerate(CASE_LABELS)}, "broker_smoke": startup_paths(PurePosixPath("/run/sp-smoke-" + nonce))[3]}
+
+
+def admit_socket_path(endpoint):
+    value = endpoint.as_posix()
+    require(0 < len(value.encode("utf-8")) <= 100 and posixpath.isabs(value) and not value.startswith("//") and posixpath.normpath(value) == value and not any(char in value for char in ("\0", "\r", "\n")), "socket_path_admission")
+
+
 def broker_command(binary, parent):
     state, homes, _, endpoint = startup_paths(parent)
+    admit_socket_path(endpoint)
     return [str(binary), "--state", str(state), "--homes", str(homes), "--socket", str(endpoint), "--controller-uid", "65534"]
 
 
@@ -380,8 +403,29 @@ def validate_startup(value, refusal=None, persisted=False):
             status, reason = "not_checked" if persisted else "refused", REASONS[i]
         elif refusal is not None and i > refusal:
             status, reason = "not_checked", "prerequisite_refused"
-        require(type(check) is dict and set(check) == {"id", "status", "reason"} and check == {"id": IDS[i], "status": status, "reason": reason}, "startup_order_reason")
+        if not (type(check) is dict and set(check) == {"id", "status", "reason"} and check == {"id": IDS[i], "status": status, "reason": reason}):
+            actual_status = check.get("status") if type(check) is dict else None
+            actual_reason = check.get("reason") if type(check) is dict else None
+            raise PhaseFailure("startup_order_reason", None, i, actual_status if type(actual_status) is str and actual_status in DIAGNOSTIC_STATUSES else "unknown", actual_reason if type(actual_reason) is str and actual_reason in DIAGNOSTIC_REASONS else "unknown")
     return value
+
+
+class PhaseFailure(AssertionError):
+    def __init__(self, code, phase, check_index=None, status=None, reason=None):
+        super().__init__(code if code in FAILURE_CODES else "fixture_observation_failed")
+        self.diagnostic = {"phase": phase, "check_index": check_index, "status": status, "reason": reason}
+
+
+def run_phase(label, operation):
+    require(type(label) is str and label in PHASES, "phase_label")
+    try:
+        return operation()
+    except PhaseFailure as error:
+        error.diagnostic["phase"] = label
+        raise
+    except Exception as error:
+        code = str(error) if isinstance(error, AssertionError) and str(error) in FAILURE_CODES else "fixture_observation_failed"
+        raise PhaseFailure(code, label) from None
 
 
 def owned_snapshot(parent):
@@ -425,13 +469,15 @@ def startup_observation(binary, parent, refusal=None, persisted=False, uid=65534
 
 def inventory_peer(nonce):
     admitted_guest(nonce)
+    endpoint = planned_socket_paths(nonce)["broker_smoke"]
+    admit_socket_path(endpoint)
     os.setgroups([])
     os.setgid(65534)
     os.setuid(65534)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(5)
     try:
-        connection.connect("/run/sp-smoke-" + nonce + "/socket-parent/broker.sock")
+        connection.connect(str(endpoint))
         connection.sendall(b"GET /v1/accounts HTTP/1.1\r\nHost: unix\r\nConnection: close\r\n\r\n")
         data = bytearray()
         while True:
@@ -470,6 +516,8 @@ def broker_smoke(binary, nonce):
 
 def observe(args):
     admitted_guest(args.nonce)
+    for endpoint in planned_socket_paths(args.nonce).values():
+        admit_socket_path(endpoint)
     root = Path("/opt/sifruno-startup-preflight")
     hashes = {name: getattr(args, name + "_sha") for name in ("baseline", "candidate", "fixture", "core_test", "review_test")}
     paths = {"baseline": "baseline-hostbroker", "candidate": "candidate-hostbroker", "fixture": "fixture.py", "core_test": "core.test", "review_test": "authority.test"}
@@ -490,19 +538,18 @@ def observe(args):
     owned.mkdir(mode=0o755)
     parent = owned / "stock"
     parent.mkdir(mode=0o755)
-    original = startup_observation(root / paths["candidate"], parent, refusal=5)
+    original = run_phase("stock", lambda: startup_observation(root / paths["candidate"], parent, refusal=5))
     require(missing_startup(parent) == ["state", "homes", "socket_parent", "socket"] and policy_snapshot() == before and mail_snapshot(username) == mail_before and subid_snapshot(username) == subids_before and listeners() == listen_before, "stock_readonly")
     adapt_nss(args.nonce)
     adapted = policy_snapshot()
     require([old["id"] for old, new in zip(before, adapted) if old != new] == ["nss"], "nss_only_change")
     parent = owned / "adapted"
     parent.mkdir(mode=0o755)
-    fresh = startup_observation(root / paths["candidate"], parent)
+    fresh = run_phase("adapted", lambda: startup_observation(root / paths["candidate"], parent))
     require(missing_startup(parent) == ["state", "homes", "socket_parent", "socket"], "fresh_paths_created")
     negatives = []
-    cases = ["missing_uid", "root_uid", "state_file", "homes_file", "homes_symlink", "homes_dangling_symlink", "ancestor_untrusted_nontraversable", "setgid_parent", "socket_file", "socket_bound", "socket_dangling_symlink", "nonempty_state", "unknown_private_argument"]
-    for name in cases:
-        parent = owned / name
+    for index, name in enumerate(CASE_LABELS):
+        parent = case_parent(owned, index)
         parent.mkdir(mode=0o755)
         state, homes, socket_parent, endpoint = startup_paths(parent)
         ancestor = None
@@ -529,7 +576,7 @@ def observe(args):
             state.mkdir(mode=0o700); (state / "owned-marker").write_bytes(b"owned fixture state\n")
         refusal = 2 if name == "missing_uid" else 8 if name == "nonempty_state" else 7
         try:
-            entry = startup_observation(root / paths["candidate"], parent, refusal=refusal, persisted=name == "nonempty_state", uid=60001 if name == "missing_uid" else 0 if name == "root_uid" else 65534, invalid=["--unknown", "/private/fixture-value"] if name == "unknown_private_argument" else None)
+            entry = run_phase(name, lambda: startup_observation(root / paths["candidate"], parent, refusal=refusal, persisted=name == "nonempty_state", uid=60001 if name == "missing_uid" else 0 if name == "root_uid" else 65534, invalid=["--unknown", "/private/fixture-value"] if name == "unknown_private_argument" else None))
         finally:
             if conflict_socket is not None: conflict_socket.close()
         negatives.append({"case": name, "fixture_setup_owned": True, "ancestor": ancestor, "observation": entry})
@@ -538,10 +585,10 @@ def observe(args):
     require(host_result["exit_code"] == 0 and host_result["stderr"] == b"", "host_policy_exit")
     host_check = strict_json(host_result["stdout"].decode())
     require(set(host_check) == {"schema_version", "scope", "platform", "supported", "read_only", "checks", "restrictions"} and host_check["scope"] == "native_linux_account_host_policy" and host_check["supported"] is True, "host_policy_unchanged")
-    smoke = broker_smoke(root / paths["candidate"], args.nonce)
+    smoke = run_phase("broker_smoke", lambda: broker_smoke(root / paths["candidate"], args.nonce))
     test_temps = create_test_temps(args.nonce)
-    core = execute_tests(root / paths["core_test"], args.core_test_names.split(","), test_temps["core"])
-    review = execute_tests(root / paths["review_test"], args.review_test_names.split(","), test_temps["review"])
+    core = run_phase("core_tests", lambda: execute_tests(root / paths["core_test"], args.core_test_names.split(","), test_temps["core"]))
+    review = run_phase("review_tests", lambda: execute_tests(root / paths["review_test"], args.review_test_names.split(","), test_temps["review"]))
     after = policy_snapshot()
     require(after == adapted and mail_snapshot(username) == mail_before and subid_snapshot(username) == subids_before and listeners() == listen_before, "final_host_unchanged")
     unchanged = all(sha(bounded_bytes(root / leaf, 64 * 1024 * 1024)) == hashes[name] for name, leaf in paths.items())
@@ -572,8 +619,10 @@ def main():
     try:
         report = observe(args)
     except Exception as error:
-        code = str(error) if isinstance(error, AssertionError) and re.fullmatch(r"[a-z_]{1,64}", str(error)) else "fixture_observation_failed"
+        code = str(error) if isinstance(error, AssertionError) and str(error) in FAILURE_CODES else "fixture_observation_failed"
         report = {"schema_version": 1, "scope": SCOPE, "nonce": args.nonce, "passed": False, "failure": code}
+        if isinstance(error, PhaseFailure):
+            report["diagnostic"] = error.diagnostic
     print(json.dumps(report, separators=(",", ":")))
     return 0 if report["passed"] else 1
 

@@ -14,6 +14,8 @@ const PWSH = 'C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime
 const IMAGE = '.tools/linuxguest/alma9/AlmaLinux-9-GenericCloud-9.8-20260810.x86_64.qcow2';
 const IMAGE_SHA = '6bdab6376d46d42e4203ace3733efafc7c5d37c7cb443a6cc74750097002d74b';
 const QDIR = path.join(PRIMARY, '.tools/linuxguest/qemu-20260811');
+// Imports must never interpret the importing process's command-line arguments.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 const args = process.argv.slice(2);
 assert(args.length === 0 || (args.length===1 && ['--check','--run'].includes(args[0])), 'Only --check or --run is accepted');
 if(args[0]!=='--run'){console.log(JSON.stringify({mode:'check_only',native_observation:false,requires_explicit_run:true}));} else {
@@ -90,5 +92,7 @@ try {
 }catch(error){failure=phase+'_failed';write('failure-private.txt',String(error.stack??error)+'\n');}
 const report={schema_version:1,scope:'populated_native_web_preview_composition',run_id:run,nonce,started_at:start,checked_at:new Date().toISOString(),passed:failure===null,native_observation:guest?.passed===true,failure,sources,tools,guest,iso_sha256:iso?.iso_sha256??null,source_tool_binary_manifest_sha256:fs.existsSync(path.join(work,'source-tool-binary-manifest.json'))?digest(fs.readFileSync(path.join(work,'source-tool-binary-manifest.json'))):null,qemu:qemu?{code:qemu.code,signal:qemu.signal,error:qemu.error,timedout:qemu.timedout,output_limit:qemu.output_limit,owned_child_exited:qemu.owned_child_exited,bytes:qemu.bytes}:null,external_nic:false,host_shares:false,image_sha256:IMAGE_SHA,image_signature_verified:true,inputs_unchanged:stable(sources)&&stable(tools)&&stable(linked),limits:['Disposable NSS-adapted Alma9.8 only; actual guest accounts and isolated broker/controller HTTP/CLI; no host browser connection.','No generated config installation, runtime activation, crash exercise, installer, reboot, CloudLinux or vendor qualification.','Snapshot verification may persist broker recovery on deliberately drifted owned account home mode.','All source closure including embeds is pinned; full Go distribution qualification is not claimed.']};
 write('report.json',report);console.log(JSON.stringify({passed:report.passed,native_observation:report.native_observation,run_id:run,evidence:relative(path.join(work,'report.json')),report_sha256:digest(fs.readFileSync(path.join(work,'report.json'))),failure}));if(!report.passed)process.exitCode=1;
+
+}
 
 }

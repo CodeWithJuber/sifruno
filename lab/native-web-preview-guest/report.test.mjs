@@ -19,3 +19,11 @@ test('default and check mode never reach native path',()=>{
  assert.equal(existsSync(new URL('../../.cache/native-web-preview',import.meta.url)),before);
  const source=readFileSync(new URL('./run.mjs',import.meta.url),'utf8');assert(source.includes("'-nic','none'"));assert(!source.includes('hostfwd'));assert(source.includes("'EmbedFiles'"));
 });
+
+test('import ignores importer --run argument without build or guest side effects',()=>{
+ const before=existsSync(new URL('../../.cache/native-web-preview',import.meta.url));
+ const script="process.argv=['node','unrelated-importer.mjs','--run']; await import('./lab/native-web-preview-guest/run.mjs'); console.log('IMPORT_INERT');";
+ const p=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:10000});
+ assert.equal(p.status,0);assert.equal(p.stdout.trim(),'IMPORT_INERT');assert.equal(p.stderr,'');
+ assert.equal(existsSync(new URL('../../.cache/native-web-preview',import.meta.url)),before);
+});

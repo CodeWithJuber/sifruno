@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "verdict": "CLEAR",
+  "evidence_kind": "restricted_independent_corrected_fixture_source_and_synthetic_review",
+  "native_observation": false,
+  "guest_commit": "4c81b2c96cd6eaf3987b6b7db1c994c61dae0b8f",
+  "original_guest_commit": "2ab283a505dd92c4ce13ea15f06d2b835f8ec140",
+  "guest_source_pins": [
+    {
+      "path": "scripts/verify-startup-preflight.mjs",
+      "bytes": 45875,
+      "sha256": "890b0641aa19e951c901afd3a83ec4698dfd692a502979ea10554b3711e0522f",
+      "canonical_git_sha256": "890b0641aa19e951c901afd3a83ec4698dfd692a502979ea10554b3711e0522f",
+      "git_blob": "2cdac737e76d117df0948e8681bdf294aab1153b"
+    },
+    {
+      "path": "lab/startup-preflight-guest/README.md",
+      "bytes": 6934,
+      "sha256": "da18cc3a41bc00c866a249bc968457f1c914e9057931487ddc7615c281359f50",
+      "canonical_git_sha256": "da18cc3a41bc00c866a249bc968457f1c914e9057931487ddc7615c281359f50",
+      "git_blob": "4a5d872a2892dc64b7115b8a34ab79a9582c1968"
+    },
+    {
+      "path": "lab/startup-preflight-guest/contract.test.mjs",
+      "bytes": 11213,
+      "sha256": "0df4c81aa955e57b325d76b9cf0d305546f064d094e11a386347114846f95911",
+      "canonical_git_sha256": "0df4c81aa955e57b325d76b9cf0d305546f064d094e11a386347114846f95911",
+      "git_blob": "ea34f911322167a8be04acbfa797bdcc7e5b2fee"
+    },
+    {
+      "path": "lab/startup-preflight-guest/fixture.py",
+      "bytes": 32488,
+      "sha256": "cb21451e048e61852229fa55144339bb25170c67033d4926adfbd3936983863e",
+      "canonical_git_sha256": "cb21451e048e61852229fa55144339bb25170c67033d4926adfbd3936983863e",
+      "git_blob": "3ae1d4862fd426a1eb1b6d0ea01d678fdb6dd319"
+    },
+    {
+      "path": "lab/startup-preflight-guest/fixture_test.py",
+      "bytes": 14096,
+      "sha256": "eab647890efdb0ff221c47fe6e6cb076f641dd190757db7c6b61eea385d6455a",
+      "canonical_git_sha256": "eab647890efdb0ff221c47fe6e6cb076f641dd190757db7c6b61eea385d6455a",
+      "git_blob": "0e822e14a0c7dbb96058842385113d623ef5bb81"
+    }
+  ],
+  "prior_provisional_artifacts_unchanged": [
+    {
+      "path": "lab/startup-preflight-review/challenge-harness.mjs",
+      "bytes": 10203,
+      "sha256": "17b3ed4f81477dabff3fca4150a436ed265b838b85e052ba7b120321f7f08725"
+    },
+    {
+      "path": "lab/startup-preflight-review/challenge-fixture.py",
+      "bytes": 6161,
+      "sha256": "c9838fee78cab9032f264125d15d37f518a339513789de7c690c89739419250d"
+    },
+    {
+      "path": "lab/startup-preflight-review/harness-freeze.mjs",
+      "bytes": 8790,
+      "sha256": "f155546b34daafc422e151ff0eb45c8c330759c2b997cfaff725c0170630ce7b"
+    },
+    {
+      "path": "lab/startup-preflight-review/harness-review.json",
+      "bytes": 8140,
+      "sha256": "516f64537d1549018101916ece3486652e5b272219698adb3dca0571900135ac"
+    }
+  ],
+  "commands_and_raw_logs": [
+    {
+      "path": ".cache/startup-preflight-isolation-review/decoder.out",
+      "bytes": 72,
+      "sha256": "2e599cd1764c0844c4e8cb3cf95c8440e76e28a2aeb339f8d123baa70c134839"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/decoder.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "lab/startup-preflight-isolation-review/decoder-challenges.mjs"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "owned_TEMP_TMP_TMPDIR": true
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/isolation.out",
+      "bytes": 80,
+      "sha256": "c16a23524635dfee72f85022a93d9dc57ffffa7ba1a0b27cc717b1fd1cd0518b"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/isolation.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "C:/Users/Administrator/AppData/Local/Programs/Python/Python312/python.exe",
+        "-I",
+        "-B",
+        "lab/startup-preflight-isolation-review/isolation-challenges.py"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "owned_TEMP_TMP_TMPDIR": true
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/fixture.out",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/fixture.err",
+      "bytes": 117,
+      "sha256": "ba27c4377ed119181f3aa446cb0c9e3696550d755a01c4219411fc500c99696a"
+    },
+    {
+      "command": [
+        "C:/Users/Administrator/AppData/Local/Programs/Python/Python312/python.exe",
+        "-I",
+        "-B",
+        "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\startup-preflight-guest-sol\\lab\\startup-preflight-guest\\fixture_test.py"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "owned_TEMP_TMP_TMPDIR": true
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/contract.out",
+      "bytes": 931,
+      "sha256": "c14cd070c810ec3727848f4372d3520bf8644193ff7063dc018dc415f43d671c"
+    },
+    {
+      "path": ".cache/startup-preflight-isolation-review/contract.err",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--test",
+        "C:\\Users\\Administrator\\Documents\\Codex\\2026-10-04\\hi\\.worktrees\\startup-preflight-guest-sol\\lab\\startup-preflight-guest\\contract.test.mjs"
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "owned_TEMP_TMP_TMPDIR": true
+    }
+  ],
+  "review_source": [
+    {
+      "path": "lab/startup-preflight-isolation-review/decoder-challenges.mjs",
+      "bytes": 10203,
+      "sha256": "17b3ed4f81477dabff3fca4150a436ed265b838b85e052ba7b120321f7f08725"
+    },
+    {
+      "path": "lab/startup-preflight-isolation-review/isolation-challenges.py",
+      "bytes": 5259,
+      "sha256": "e60ec0564ff609b071e3fde309fea908fa41d859e4906fce99def5109c34cc71"
+    },
+    {
+      "path": "lab/startup-preflight-isolation-review/run-review.mjs",
+      "bytes": 5857,
+      "sha256": "71f5f4e5709c88364fcf8e6fd482b087855ac73baae56bbe6a589c05a3359f4c"
+    }
+  ],
+  "findings": [],
+  "observed_source": [
+    "Native test children alone receive explicit verified TMPDIR; all other child envs contain only fixed PATH/LANG/LC_ALL",
+    "Dedicated root/core/review dirs use root ownership, exact 0700, no special/write permissions in ancestors, nofollow descriptors, inode/device equality and exclusive descriptor-relative mkdir",
+    "No fallback to shared/global temp; separate native test role roots; fixture writes remain separate from diagnostic command",
+    "Nine-check schema and fixed first-refusal sequence; nonempty fresh state remains not_checked; unknown NSS spelling redacted",
+    "Strict nonce-bound marker order and compact JSON; policy/mail/subid/listener metadata equality enforced",
+    "Child timeout/output/session/pipe cleanup remains bounded; directories retained in disposable guest rather than recursive host cleanup"
+  ],
+  "limits": [
+    "Source review and synthetic data/models only; Linux authority semantics and actual native test success unexecuted",
+    "No Go rerun, provider/network calls, guest boot, privileged/native probes or live system changes",
+    "No hostile root concurrent writer or atomic policy stability certification",
+    "Original provisional CLEAR remains withdrawn; this receipt binds the correction only"
+  ],
+  "recovery": "Reject source adoption or revert correction before any separately gated actual execution; retain all original failure and positive logs; no cleanup of another worker artifacts"
+}

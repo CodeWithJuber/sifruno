@@ -162,6 +162,54 @@ func TestBrokerPathAdmissionLateFailuresReadOnly(t *testing.T) {
 	}
 }
 
+func TestBrokerPathAdmissionMissingUnderSetgidParentReadOnly(t *testing.T) {
+	for _, target := range []string{"state", "homes", "socket"} {
+		t.Run(target, func(t *testing.T) {
+			root, opts := brokerPathsFixture(t)
+			parent := filepath.Join(root, "setgid-parent")
+			brokerFixtureDir(t, parent, 0755|os.ModeSetgid)
+			if authority(parent) != nil {
+				t.Fatal("fixture parent should pass existing root authority")
+			}
+			path := filepath.Join(parent, target)
+			switch target {
+			case "state":
+				opts.StateDir = path
+			case "homes":
+				opts.HomesDir = path
+			case "socket":
+				opts.SocketPath = filepath.Join(path, "broker.sock")
+			}
+			assertBrokerAdmissionReadOnly(t, root, opts, ErrUnavailable)
+		})
+	}
+}
+
+// This exercises the post-mkdir guard directly, as if a privileged actor had
+// changed the parent after admission. Startup is cooperative, not atomic; the
+// guard refuses the inherited mode without chmod or adoption of the parent.
+func TestDeclaredDirRejectsInheritedSetgidMode(t *testing.T) {
+	root, _ := brokerPathsFixture(t)
+	parent := filepath.Join(root, "setgid-parent")
+	brokerFixtureDir(t, parent, 0755|os.ModeSetgid)
+	before, e := os.Lstat(parent)
+	if e != nil {
+		t.Fatal(e)
+	}
+	child := filepath.Join(parent, "state")
+	if e := declaredDir(child, 0700); e != ErrUnavailable {
+		t.Fatal("inherited special mode admitted", e)
+	}
+	info, e := os.Lstat(child)
+	if e != nil || info.Mode() != os.ModeDir|os.ModeSetgid|0700 {
+		t.Fatal("fixture did not exercise inherited setgid mode", info, e)
+	}
+	after, e := os.Lstat(parent)
+	if e != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() {
+		t.Fatal("post-create guard changed parent", after, e)
+	}
+}
+
 func TestBrokerPathAdmissionOccupiedSocketReadOnly(t *testing.T) {
 	for _, kind := range []string{"file", "directory", "dangling_symlink", "socket"} {
 		t.Run(kind, func(t *testing.T) {

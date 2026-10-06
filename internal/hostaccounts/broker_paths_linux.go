@@ -30,6 +30,12 @@ func admitBrokerPaths(opts BrokerOptions) error {
 		}
 		info, e := os.Lstat(d.path)
 		if errors.Is(e, os.ErrNotExist) {
+			// Linux mkdir inherits setgid from its direct parent. Refuse it
+			// before any startup write rather than adopting a special mode.
+			parent, e := os.Lstat(filepath.Dir(d.path))
+			if e != nil || parent.Mode()&os.ModeSetgid != 0 {
+				return ErrUnavailable
+			}
 			continue
 		}
 		if e != nil || authority(d.path) != nil || info.Mode() != os.ModeDir|d.mode {

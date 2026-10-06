@@ -111,7 +111,7 @@ func declaredDir(p string, mode os.FileMode) error {
 		return ErrUnavailable
 	}
 	info, e := os.Lstat(p)
-	if e != nil || info.Mode().Perm() != mode {
+	if e != nil || info.Mode() != os.ModeDir|mode {
 		return ErrUnavailable
 	}
 	return nil

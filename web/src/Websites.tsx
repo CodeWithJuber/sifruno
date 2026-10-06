@@ -130,6 +130,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
     if (active && authenticated) return;
     for (const ref of [createDialog, importDialog, dialog]) if (ref.current?.open) ref.current.close();
     setCreateOpen(false); setImportOpen(false); setRestore(undefined); setRestoreConfirmed(false);
+    if (!authenticated) { setImportArchive(undefined); setDiscardDraftForImport(false); }
     dialogReturnFocus.current = null;
   }, [active, authenticated]);
   useEffect(() => {
@@ -283,7 +284,7 @@ export default function Websites({ revision, active, onStatus }: { revision: num
         <div className="website-inventory-heading"><h2>Website inventory</h2><p>{inventoryLoaded ? <><strong>{sites.length}</strong> {sites.length === 1 ? "website" : "websites"}<span> · {stateCounts("active")} active · {stateCounts("suspended")} suspended{stateCounts("recovery_required") > 0 && <> · {stateCounts("recovery_required")} need recovery</>}</span></> : busy ? "Loading inventory…" : "Inventory could not be loaded. Refresh to try again."}</p></div>
         <div className="website-inventory-actions">
           <Button label="Refresh websites" icon={<RefreshCw />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)} />
-          <Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={Boolean(busy) || sites.length >= 100} onClick={() => { rememberDialogTrigger(); setError(undefined); setImportOpen(true); }} />
+          <Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={Boolean(busy) || sites.length >= 100} onClick={() => { rememberDialogTrigger(); setDiscardDraftForImport(false); setError(undefined); setImportOpen(true); }} />
           <Button label="Create website" icon={<Plus />} variant="primary" size="sm" isDisabled={Boolean(busy) || dirty || sites.length >= 100} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }} />
         </div>
       </Card>

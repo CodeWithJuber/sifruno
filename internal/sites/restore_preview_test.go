@@ -113,7 +113,11 @@ func TestRestorePreviewActualDiffReadOnlyAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer again.Close()
+	defer func() {
+		if err := again.Close(); err != nil {
+			t.Error("owned reopened preview store cleanup", err)
+		}
+	}()
 	p2, err := again.PreviewRestore(site.ID, input)
 	if err != nil || !reflect.DeepEqual(p, p2) {
 		t.Fatal("preview changed after reopening", err)

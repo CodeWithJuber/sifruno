@@ -31,7 +31,11 @@ func TestRestorePreviewCLIActualAuthenticatedHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() {
+		if err := s.Close(); err != nil {
+			t.Error("owned preview store cleanup", err)
+		}
+	}()
 	site, err := s.Create(sites.CreateInput{Name: "CLI preview", Domain: "cli-preview.test"}, "local-operator")
 	if err != nil {
 		t.Fatal(err)

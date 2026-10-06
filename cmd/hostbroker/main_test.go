@@ -12,6 +12,70 @@ import (
 	"time"
 )
 
+func TestStartupCheckGrammarAndIsolation(t *testing.T) {
+	valid := []string{"--check-startup", "--state", "/private/state", "--socket", "/private/run/broker.sock", "--homes", "/private/homes", "--controller-uid", "4294967295"}
+	cases := [][]string{valid, {"--check-startup"}, {"-check-startup"}, {"--check-startup=true"}}
+	for _, replacement := range []string{"0", "-1", "+7", "0x7", "4294967296", "--check-host", "-check-host", "--check-startup", ""} {
+		args := append([]string(nil), valid...)
+		args[8] = replacement
+		cases = append(cases, args)
+	}
+	for _, key := range []string{"-state", "--state=/private/state", "--unknown", "--homes", "--check-host"} {
+		args := append([]string(nil), valid...)
+		args[1] = key
+		cases = append(cases, args)
+	}
+	cases = append(cases, append(append([]string(nil), valid...), "trailing"), append([]string{"--state", "--check-startup"}, valid[3:]...))
+	for i, args := range cases {
+		for _, supported := range []bool{true, false} {
+			var out, errOut bytes.Buffer
+			calls := 0
+			code := runWithAllServices(args, &out, &errOut, func(context.Context) hostaccounts.HostPolicyReport {
+				t.Fatal("host probe entered")
+				return hostaccounts.HostPolicyReport{}
+			}, func(ctx context.Context, opts hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport {
+				calls++
+				if opts.ControllerUID != ^uint32(0) || opts.StateDir != "/private/state" {
+					t.Fatal(opts)
+				}
+				if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 5*time.Second || ctx.Err() != nil {
+					t.Fatal("context")
+				}
+				return hostaccounts.BrokerAdmissionReport{Supported: supported, ReadOnly: true}
+			}, func(context.Context, hostaccounts.BrokerOptions) error { t.Fatal("serve entered"); return nil })
+			if i > 0 {
+				if code != 2 || calls != 0 || out.Len() != 0 || errOut.String() != "Invalid native broker configuration\n" {
+					t.Fatalf("invalid %v code %d calls %d out %q err %q", args, code, calls, out.String(), errOut.String())
+				}
+				continue
+			}
+			wantCode := 1
+			if supported {
+				wantCode = 0
+			}
+			if code != wantCode || calls != 1 || errOut.Len() != 0 {
+				t.Fatal(code, calls, errOut.String())
+			}
+			var r hostaccounts.BrokerAdmissionReport
+			d := json.NewDecoder(&out)
+			if d.Decode(&r) != nil || r.Supported != supported || d.Decode(&r) != io.EOF {
+				t.Fatal("one JSON report required")
+			}
+		}
+	}
+}
+
+func TestStartupOutputFailureAndPairOrder(t *testing.T) {
+	args := []string{"--check-startup", "--controller-uid", "7", "--homes", "/homes", "--socket", "/run/broker.sock", "--state", "/state"}
+	var errOut bytes.Buffer
+	code := runWithAllServices(args, unavailableWriter{}, &errOut, nil, func(context.Context, hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport {
+		return hostaccounts.BrokerAdmissionReport{Supported: true}
+	}, func(context.Context, hostaccounts.BrokerOptions) error { t.Fatal("serve"); return nil })
+	if code != 1 || errOut.String() != "Unable to write native broker startup admission report\n" {
+		t.Fatal(code, errOut.String())
+	}
+}
+
 func TestStandaloneHostCheck(t *testing.T) {
 	for _, supported := range []bool{false, true} {
 		t.Run(map[bool]string{false: "refused", true: "supported"}[supported], func(t *testing.T) {

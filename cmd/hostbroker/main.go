@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sifruno/internal/hostaccounts"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runWithServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, serve func(context.Context, hostaccounts.BrokerOptions) error) int {
+	return runWithAllServices(args, stdout, stderr, probe, hostaccounts.CheckBrokerAdmission, serve)
+}
+
+func runWithAllServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, admission func(context.Context, hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport, serve func(context.Context, hostaccounts.BrokerOptions) error) int {
+	if len(args) > 0 && args[0] == "--check-startup" {
+		opts, ok := startupOptions(args[1:])
+		if !ok {
+			fmt.Fprintln(stderr, "Invalid native broker configuration")
+			return 2
+		}
+		// The deadline is cooperative: synchronous metadata probes are not
+		// preempted. Cancellation causes the report to discard partial checks.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		report := admission(ctx, opts)
+		if json.NewEncoder(stdout).Encode(report) != nil {
+			fmt.Fprintln(stderr, "Unable to write native broker startup admission report")
+			return 1
+		}
+		if !report.Supported {
+			return 1
+		}
+		return 0
+	}
 	// This diagnostic is standalone. Reject diagnostic tokens before flag.Parse
 	// can consume one as the value of a serving option.
 	if len(args) == 1 && args[0] == "--check-host" {
@@ -40,7 +65,7 @@ func runWithServices(args []string, stdout, stderr io.Writer, probe func(context
 	}
 	for _, arg := range args {
 		key, _, _ := strings.Cut(arg, "=")
-		if key == "--check-host" || key == "-check-host" {
+		if key == "--check-host" || key == "-check-host" || key == "--check-startup" || key == "-check-startup" {
 			fmt.Fprintln(stderr, "Invalid native broker configuration")
 			return 2
 		}
@@ -64,4 +89,41 @@ func runWithServices(args []string, stdout, stderr io.Writer, probe func(context
 		return 1
 	}
 	return 0
+}
+
+func startupOptions(args []string) (hostaccounts.BrokerOptions, bool) {
+	opts := hostaccounts.BrokerOptions{}
+	if len(args) != 8 {
+		return opts, false
+	}
+	seen := map[string]bool{}
+	for i := 0; i < len(args); i += 2 {
+		key, value := args[i], args[i+1]
+		if seen[key] || value == "" || strings.HasPrefix(value, "-") {
+			return opts, false
+		}
+		seen[key] = true
+		switch key {
+		case "--state":
+			opts.StateDir = value
+		case "--socket":
+			opts.SocketPath = value
+		case "--homes":
+			opts.HomesDir = value
+		case "--controller-uid":
+			for _, c := range value {
+				if c < '0' || c > '9' {
+					return opts, false
+				}
+			}
+			uid, e := strconv.ParseUint(value, 10, 32)
+			if e != nil || uid == 0 {
+				return opts, false
+			}
+			opts.ControllerUID = uint32(uid)
+		default:
+			return opts, false
+		}
+	}
+	return opts, true
 }

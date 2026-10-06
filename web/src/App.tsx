@@ -6,7 +6,7 @@ import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { Archive, CircleDollarSign, Clock3, FileCheck2, Folder, Globe, HardDrive, Home, Info, Layers, LockKeyhole, Menu, Moon, Network, RefreshCw, Search, Server, Sun, Users, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Overview, ServiceInventory } from "@/Dashboard";
+import { HostingWorkspace, Overview, ServiceInventory } from "@/Dashboard";
 import { useResource, validBudget, validPlatform, validServer, validServices, validStatus, validTrail } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 
@@ -25,7 +25,7 @@ const PanelPreview = lazy(() => import("@/PanelPreview"));
 
 type View = "overview" | "services" | "storage" | "network" | "panel-preview" | "websites" | "accounts" | "backups" | "files" | "access" | "evidence" | "trail" | "budget" | "platform";
 const views = [
-  { id: "overview", label: "Overview", title: "Server overview", subtitle: "A clear view of your server, in real time.", icon: Home },
+  { id: "overview", label: "Overview", title: "Hosting workspace", subtitle: "Manage your websites and server from one workspace.", icon: Home },
   { id: "services", label: "Services", title: "Services", subtitle: "Inspect the services installed on your server.", icon: Server },
   { id: "storage", label: "Storage", title: "Storage", subtitle: "Inspect real host volumes, capacity and available space.", icon: HardDrive },
   { id: "network", label: "Network", title: "Network", subtitle: "Follow measured traffic rates and host transfer counters.", icon: Network },
@@ -105,8 +105,9 @@ export function App() {
     return () => window.removeEventListener("keydown", close);
   }, [menuOpen]);
 
-  const logo = <img src={`/brand/logos/sifruno-logo-${theme === "dark" ? "on-dark" : "primary"}.svg`} alt="Sifruno" width="164" height="46" />;
-  const navItem = ({ id, label, icon: Icon }: (typeof views)[number]) => <SideNavItem key={id} label={label} icon={<Icon aria-hidden="true" />} isSelected={view === id} onClick={() => navigate(id)} className="panel-nav-item" size="lg" data-testid={`nav-${id}`} />;
+  const logo = <img src="/brand/logos/sifruno-logo-on-dark.svg" alt="Sifruno" width="164" height="46" />;
+  const mobileLogo = <img src={`/brand/logos/sifruno-logo-${theme === "dark" ? "on-dark" : "primary"}.svg`} alt="Sifruno" width="164" height="46" />;
+  const navItem = ({ id, label, icon: Icon }: (typeof views)[number]) => <SideNavItem key={id} label={label} icon={<Icon aria-hidden="true" />} isSelected={view === id} onClick={() => navigate(id)} className="panel-nav-item" size="sm" data-testid={`nav-${id}`} />;
 
   return <Theme theme={neutralTheme} mode={theme}>
     <a href="#panel-main" className="skip-link">Skip to panel content</a>
@@ -116,14 +117,16 @@ export function App() {
           header={<button className="brand-link" aria-label="Sifruno server overview" onClick={() => navigate("overview")}>{logo}</button>}
           footer={<div className="sidebar-status"><i className={`status-dot ${!connected || unavailable ? "status-muted" : ""}`} /><div>Local server<small>{server.error ? "Connection lost" : connected ? partial ? "Partial monitoring" : unavailable ? "Measurements unavailable" : `Sampling every ${server.data!.collector.interval_seconds}s` : "Connecting…"}</small></div></div>}
           footerIcons={<div className="theme-switch"><Button label={`Switch to ${theme === "light" ? "dark" : "light"} theme`} variant="ghost" size="lg" icon={theme === "light" ? <Moon /> : <Sun />} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>{theme === "light" ? "Dark theme" : "Light theme"}</Button></div>}>
-          <SideNavSection title="Server" isHeaderHidden className="primary-nav">{visibleViews.filter((v) => ["overview", "services", "storage", "network", "panel-preview", "websites", "accounts", "backups", "files"].includes(v.id)).map(navItem)}</SideNavSection>
-          <SideNavSection title="Tools" className="tools-nav">{visibleViews.filter((v) => !["overview", "services", "storage", "network", "panel-preview", "websites", "accounts", "backups", "files"].includes(v.id)).map(navItem)}</SideNavSection>
+          <SideNavSection title="Workspace" isHeaderHidden className="primary-nav">{visibleViews.filter((v) => ["overview", "panel-preview"].includes(v.id)).map(navItem)}</SideNavSection>
+          {!publicPreview && <SideNavSection title="Hosting" className="hosting-nav">{["websites", "accounts", "backups", "files", "access"].map((id) => navItem(views.find((v) => v.id === id)!))}</SideNavSection>}
+          <SideNavSection title="Monitoring" className="monitoring-nav">{visibleViews.filter((v) => ["services", "storage", "network"].includes(v.id)).map(navItem)}</SideNavSection>
+          <SideNavSection title="System tools" className="tools-nav">{visibleViews.filter((v) => ["evidence", "trail", "budget", "platform"].includes(v.id)).map(navItem)}</SideNavSection>
           {publicPreview && <p className="sidebar-preview">Private tools are available in the local panel.</p>}
         </SideNav>
       </aside>
       <div className="panel-body">
         <header className="topbar">
-          <div className="topbar-location"><div className="mobile-brand">{logo}</div><span className="breadcrumbs">Server <span>/</span> <strong>{active.label}</strong></span></div>
+          <div className="topbar-location"><div className="mobile-brand">{mobileLogo}</div><span className="breadcrumbs">Workspace <span>/</span> <strong>{active.label}</strong></span></div>
           <div className="topbar-actions">
             <div className="panel-search"><label className="compact-search"><Search aria-hidden="true" /><input type="search" aria-label="Search panel" placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setSearch(""); }} aria-controls={results ? "panel-search-results" : undefined} /></label>
               {results && <div id="panel-search-results" className="search-results" aria-label="Panel search results">
@@ -139,9 +142,17 @@ export function App() {
         </header>
         <main id="panel-main" tabIndex={-1}>
           <div className="page-heading"><h1>{active.title}</h1><p>{active.subtitle}</p></div>
-          {publicPreview && <div className="hosting-notice public-preview-notice" role="status"><Info /><span>{view === "panel-preview" ? "Public panel tour · sample content. Private module actions stay in the local panel." : "Public preview · real host monitoring. Private websites, trail and spending records stay in the local panel."}</span>{view === "overview" && <Button label="Explore panel" variant="secondary" size="sm" icon={<Layers aria-hidden="true" />} onClick={() => navigate("panel-preview")} data-testid="open-panel-preview" />}</div>}
-          {(view === "overview" || view === "services") && <div className="hosting-notice"><Info aria-hidden="true" /><span>Hosting engine in development. Compatibility is {status.data?.ready ? "reported ready by the service; review its evidence." : "not verified."}</span>{!publicPreview && <Button label="Review compatibility" variant="ghost" size="sm" onClick={() => navigate("evidence")}>Review</Button>}</div>}
-          {view === "overview" && <div className="content-stack dashboard-stack"><DataState resource={server} retry={refresh}>{server.data && <Overview report={server.data} platform={platform.data} range={range} setRange={setRange} />}</DataState><DataState resource={services} retry={refresh}>{services.data && <ServiceInventory report={services.data} compact query={serviceQuery} setQuery={setServiceQuery} viewAll={() => navigate("services")} />}</DataState></div>}
+          {publicPreview && view !== "overview" && <div className="hosting-notice public-preview-notice" role="status"><Info /><span>{view === "panel-preview" ? "Public panel tour · sample content. Private module actions stay in the local panel." : "Public preview · real host monitoring. Private websites, trail and spending records stay in the local panel."}</span></div>}
+          {view === "services" && <div className="hosting-notice"><Info aria-hidden="true" /><span>Hosting engine in development. Compatibility is {status.data?.ready ? "reported ready by the service; review its evidence." : "not verified."}</span>{!publicPreview && <Button label="Review compatibility" variant="ghost" size="sm" onClick={() => navigate("evidence")}>Review</Button>}</div>}
+          {view === "overview" && <div className="content-stack dashboard-stack">
+            <HostingWorkspace publicPreview={publicPreview} platform={platform.data} onNavigate={navigate} onPreview={() => navigate("panel-preview")} />
+            <section className="monitoring-workspace" aria-labelledby="monitoring-heading">
+              <div className="workspace-section-heading"><div><h2 id="monitoring-heading">Server monitoring</h2><p>Measured resources and installed services.</p></div><span className="workspace-scope">Read-only</span></div>
+              <DataState resource={server} retry={refresh}>{server.data && <Overview report={server.data} platform={platform.data} range={range} setRange={setRange} />}</DataState>
+              <DataState resource={services} retry={refresh}>{services.data && <ServiceInventory report={services.data} compact query={serviceQuery} setQuery={setServiceQuery} viewAll={() => navigate("services")} />}</DataState>
+            </section>
+            <div className="hosting-notice"><Info aria-hidden="true" /><span>Hosting engine in development. Compatibility is {status.data?.ready ? "reported ready by the service; review its evidence." : "not verified."}</span>{!publicPreview && <Button label="Review compatibility" variant="ghost" size="sm" onClick={() => navigate("evidence")}>Review</Button>}</div>
+          </div>}
           {view === "services" && <DataState resource={services} retry={refresh}>{services.data && <ServiceInventory report={services.data} query={serviceQuery} setQuery={setServiceQuery} />}</DataState>}
           <Suspense fallback={<div className="loading-state" role="status" aria-label="Loading panel tool"><Skeleton className="h-64 w-full" /></div>}>
           {view === "panel-preview" && publicPreview && <PanelPreview />}

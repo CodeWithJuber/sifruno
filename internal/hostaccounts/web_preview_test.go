@@ -88,3 +88,18 @@ func TestWebPreviewClientRejectsMalformedMetadata(t *testing.T) {
 		t.Fatal("unconfigured client admitted")
 	}
 }
+
+func TestWebPreviewBrokerRejectsNoncanonicalURL(t *testing.T) {
+	for _, target := range []string{"http://unix/v1/web-preview?", "http://unix/v1/%77eb-preview"} {
+		t.Run(target, func(t *testing.T) {
+			s, _, _ := setupStore(t)
+			calls := 0
+			h := handlerWithWebPreview(s, previewFunc(func(context.Context) (WebPreview, error) { calls++; return fixturePreview(), nil }))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", target, nil))
+			if w.Code != 400 || calls != 0 {
+				t.Fatalf("status=%d calls=%d", w.Code, calls)
+			}
+		})
+	}
+}

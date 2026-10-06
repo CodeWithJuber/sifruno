@@ -27,6 +27,10 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 		defer cancel()
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/v1/web-preview":
+			if r.URL.ForceQuery || r.URL.RawPath != "" {
+				writeError(w, ErrInvalid)
+				return
+			}
 			if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
 				writeError(w, ErrInvalid)
 				return

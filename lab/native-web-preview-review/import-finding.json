@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "verdict": "FINDINGS",
+  "author_commit": "a6b9628d90c454c3087e55bc90a0759aafd5f539",
+  "supersedes_provisional_verdict": "source-review.json CLEAR withdrawn before root execution",
+  "finding": {
+    "path": "lab/native-web-preview-guest/run.mjs",
+    "evidence": "Top-level process.argv branching has no main-module guard; an importing entry invoked with --run would enter build/ISO/QEMU path.",
+    "required_fix": "Require main-module identity for execution, add import-with--run no-side-effect regression"
+  },
+  "scope": "Static only; no --run or guest execution performed"
+}

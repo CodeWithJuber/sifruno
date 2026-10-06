@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "assembled-native-static-site-backup-schedule-acceptance",
-  "checked_at": "2026-10-06T03:02:15.566Z",
+  "checked_at": "2026-10-06T03:06:43.497Z",
   "baseline": "835d9213154179aa77e35267c0c5cb81acb840e3",
   "platform": "Windows",
   "passed": true,
@@ -47,10 +47,6 @@
       {
         "test": "TestOptInScheduleRunnerProcess",
         "elapsed_seconds": 5.99
-      },
-      {
-        "test": null,
-        "elapsed_seconds": 7.179
       }
     ],
     "prior_failed_process_fixture_observations": [

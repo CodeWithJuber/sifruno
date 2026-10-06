@@ -1,0 +1,137 @@
+//go:build linux
+
+package hostaccounts
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// These tests call the candidate helper. They do not emulate admission or
+// replace a production function. The non-root cases own only testing.TempDir.
+func TestIndependentBrokerDirectoryIdentity(t *testing.T) {
+	dir := t.TempDir()
+	before, err := os.Lstat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := brokerDirectoryEmpty(dir, before)
+	if err != nil || !empty {
+		t.Fatal("empty directory", empty, err)
+	}
+	// The probe must never follow an entry, even one pointing to missing data.
+	if err := os.Symlink(filepath.Join(dir, "missing"), filepath.Join(dir, "entry")); err != nil {
+		t.Fatal(err)
+	}
+	empty, err = brokerDirectoryEmpty(dir, before)
+	if err != nil || empty {
+		t.Fatal("dangling entry is nonempty", empty, err)
+	}
+	other := t.TempDir()
+	if empty, err = brokerDirectoryEmpty(other, before); err != ErrUnavailable || empty {
+		t.Fatal("foreign descriptor identity", empty, err)
+	}
+	link := filepath.Join(other, "linked")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if empty, err = brokerDirectoryEmpty(link, before); err != ErrUnavailable || empty {
+		t.Fatal("final symlink", empty, err)
+	}
+	file := filepath.Join(other, "regular")
+	if err := os.WriteFile(file, []byte("unopened fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if empty, err = brokerDirectoryEmpty(file, before); err != ErrUnavailable || empty {
+		t.Fatal("non-directory", empty, err)
+	}
+}
+
+func TestIndependentBrokerFreshVersusNonemptyState(t *testing.T) {
+	if os.Geteuid() != 0 || authority("/root") != nil {
+		t.Skip("requires admitted root-owned fixture")
+	}
+	root, err := os.MkdirTemp("/root", "sifruno-independent-paths-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Error("owned cleanup", err)
+		}
+	})
+	options := BrokerOptions{StateDir: filepath.Join(root, "state"), HomesDir: filepath.Join(root, "homes"), SocketPath: filepath.Join(root, "socket", "broker.sock"), ControllerUID: 65534}
+	if err := os.Mkdir(options.HomesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(options.HomesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := filepath.Join(options.HomesDir, "foreign")
+	if err := os.Symlink(filepath.Join(root, "missing"), unrelated); err != nil {
+		t.Fatal(err)
+	}
+	if err := admitBrokerPaths(options); err != ErrUnavailable {
+		t.Fatal("missing state with unrelated homes", err)
+	}
+	if _, err := os.Lstat(options.StateDir); !os.IsNotExist(err) {
+		t.Fatal("refusal created state", err)
+	}
+	if _, err := os.Lstat(filepath.Dir(options.SocketPath)); !os.IsNotExist(err) {
+		t.Fatal("refusal created socket parent", err)
+	}
+	if err := os.Mkdir(options.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(options.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := admitBrokerPaths(options); err != ErrUnavailable {
+		t.Fatal("empty state with unrelated homes", err)
+	}
+	// Classification is deliberately metadata-only. Admission of nonempty
+	// state is not database/recovery qualification, even for invalid contents.
+	checkpoint := filepath.Join(options.StateDir, "untrusted-content")
+	if err := os.Symlink(filepath.Join(root, "absent-checkpoint"), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := admitBrokerPaths(options); err != nil {
+		t.Fatal("nonempty state retains later recovery boundary", err)
+	}
+	if _, err := os.Lstat(filepath.Dir(options.SocketPath)); !os.IsNotExist(err) {
+		t.Fatal("read-only positive created parent", err)
+	}
+	if got, err := os.Readlink(checkpoint); err != nil || got != filepath.Join(root, "absent-checkpoint") {
+		t.Fatal("changed checkpoint", err)
+	}
+}
+
+func TestIndependentBrokerOptionBoundary(t *testing.T) {
+	base := BrokerOptions{StateDir: "/owned/state", HomesDir: "/owned/homes", SocketPath: "/owned/socket/broker.sock", ControllerUID: 65534}
+	if !validBrokerPaths(base) {
+		t.Fatal("canonical independent paths")
+	}
+	cases := []BrokerOptions{base, base, base, base, base, base, base}
+	cases[0].SocketPath = "/broker.sock"
+	cases[1].HomesDir = "/owned/state/child"
+	cases[2].StateDir = "/owned"
+	cases[3].SocketPath = "/owned/homes/broker.sock"
+	cases[4].StateDir = "/owned/state/../state"
+	cases[5].HomesDir = "/owned/ho\x00mes"
+	cases[6].ControllerUID = 0
+	for i, options := range cases {
+		if validBrokerPaths(options) || admitBrokerPaths(options) != ErrInvalid {
+			t.Fatalf("invalid options %d", i)
+		}
+	}
+	if RunBroker(nil, base) != ErrInvalid {
+		t.Fatal("nil context")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if RunBroker(ctx, base) != ErrUnavailable {
+		t.Fatal("pre-cancel must refuse without policy/identity reads")
+	}
+}

@@ -23,7 +23,7 @@ func requireUncheckedPolicy(t *testing.T, report HostPolicyReport, reason string
 }
 
 func TestHostPolicyReportAdmissionAndRedaction(t *testing.T) {
-	reasons := []string{"trusted_utilities_required", "files_only_nss_required", "mail_disabled_defaults_required"}
+	reasons := []string{"trusted_utilities_required", "files_only_nss_required", "supported_service_account_defaults_required"}
 	for failures := 0; failures < 8; failures++ {
 		probes := [3]func() error{}
 		order := []int{}
@@ -64,7 +64,7 @@ func TestHostPolicyReportJSONContract(t *testing.T) {
 	fail := func() error { return ErrUnavailable }
 	report := probeHostPolicy(context.Background(), "linux", [3]func() error{pass, fail, fail})
 	raw, e := json.Marshal(report)
-	const expected = `{"schema_version":1,"scope":"native_linux_account_host_policy","platform":"linux","supported":false,"read_only":true,"checks":[{"id":"utilities","status":"pass","reason":"satisfied"},{"id":"nss","status":"refused","reason":"files_only_nss_required"},{"id":"useradd_defaults","status":"refused","reason":"mail_disabled_defaults_required"}],"restrictions":["host_policy_only","controller_paths_state_not_checked","no_stock_host_or_cpanel_certification"]}`
+	const expected = `{"schema_version":1,"scope":"native_linux_account_host_policy","platform":"linux","supported":false,"read_only":true,"checks":[{"id":"utilities","status":"pass","reason":"satisfied"},{"id":"nss","status":"refused","reason":"files_only_nss_required"},{"id":"useradd_defaults","status":"refused","reason":"supported_service_account_defaults_required"}],"restrictions":["host_policy_only","controller_paths_state_not_checked","no_stock_host_or_cpanel_certification"]}`
 	if e != nil || string(raw) != expected {
 		t.Fatal("report JSON contract changed", string(raw), e)
 	}

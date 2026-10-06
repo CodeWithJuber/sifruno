@@ -34,8 +34,9 @@ func filesOnlyNSS(b []byte) error {
 }
 
 // Shadow reads this key from useradd defaults, not login.defs/-K. Require
-// exactly the literal that the supported utility will interpret as disabled.
-func mailDisabledDefaults(b []byte) error {
+// exactly one bounded yes/no literal. Managed creation always uses --system,
+// which skips mail-spool creation independently of this default.
+func serviceAccountDefaults(b []byte) error {
 	if len(b) > maxUseraddDefaultsBytes || bytes.IndexByte(b, 0) >= 0 {
 		return ErrUnavailable
 	}
@@ -53,7 +54,7 @@ func mailDisabledDefaults(b []byte) error {
 		if !ok || strings.TrimSpace(key) != "CREATE_MAIL_SPOOL" {
 			continue
 		}
-		if found || key != "CREATE_MAIL_SPOOL" || value != "no" {
+		if found || key != "CREATE_MAIL_SPOOL" || (value != "no" && value != "yes") {
 			return ErrUnavailable
 		}
 		found = true

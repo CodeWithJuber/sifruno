@@ -53,7 +53,7 @@ func probeHostPolicy(ctx context.Context, platform string, probes [3]func() erro
 	if platform != "linux" {
 		return report
 	}
-	reasons := [3]string{"trusted_utilities_required", "files_only_nss_required", "mail_disabled_defaults_required"}
+	reasons := [3]string{"trusted_utilities_required", "files_only_nss_required", "supported_service_account_defaults_required"}
 	report.Supported = true
 	for i, probe := range probes {
 		if ctx.Err() != nil {

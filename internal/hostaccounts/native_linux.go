@@ -64,7 +64,7 @@ func supportedUseraddDefaults() error {
 	if e != nil {
 		return ErrUnavailable
 	}
-	return mailDisabledDefaults(b)
+	return serviceAccountDefaults(b)
 }
 
 func supportedNSS() error {
@@ -465,7 +465,7 @@ func (n *linuxSystem) Create(ctx context.Context, r record, persist func(ownersh
 }
 
 func useraddArgs(r record, skel string) []string {
-	return []string{"-K", "SUB_UID_COUNT=0", "-K", "SUB_GID_COUNT=0", "--uid", strconv.Itoa(r.Account.UID), "--gid", strconv.Itoa(r.Account.GID), "--no-user-group", "--groups", "", "--create-home", "--home-dir", r.Account.Home, "--skel", skel, "--shell", nologin, "--comment", r.Tag, "--password", "!", "--expiredate", "", "--", r.Account.Username}
+	return []string{"--system", "-K", "SUB_UID_COUNT=0", "-K", "SUB_GID_COUNT=0", "--uid", strconv.Itoa(r.Account.UID), "--gid", strconv.Itoa(r.Account.GID), "--no-user-group", "--groups", "", "--create-home", "--home-dir", r.Account.Home, "--skel", skel, "--shell", nologin, "--comment", r.Tag, "--password", "!", "--expiredate", "", "--", r.Account.Username}
 }
 
 func lockedStatus(token string) bool { return token == "L" || token == "LK" }

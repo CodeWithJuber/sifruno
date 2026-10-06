@@ -104,5 +104,5 @@ func unavailable(reason string) Capability {
 	return Capability{Reason: reason, Backend: "unavailable", Restrictions: restrictions()}
 }
 func restrictions() []string {
-	return []string{"domain_is_metadata_only", "files_only_nss_and_mail_disabled_useradd_defaults_required", "private_primary_group_only", "password_locked_and_nologin_in_all_states", "suspension_is_pam_account_expiry_only", "existing_processes_mail_web_and_databases_unaffected", "no_delete_or_original_backup_restore", "no_cpanel_compatibility_certification"}
+	return []string{"domain_is_metadata_only", "managed_service_identities_with_system_flag", "files_only_nss_and_bounded_yes_or_no_useradd_defaults_required", "private_primary_group_only", "password_locked_and_nologin_in_all_states", "suspension_is_pam_account_expiry_only", "existing_processes_mail_web_and_databases_unaffected", "no_delete_or_original_backup_restore", "no_cpanel_compatibility_certification"}
 }

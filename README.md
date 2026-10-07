@@ -13,12 +13,12 @@ retain their own licenses. See [licensing and contribution policy](LICENSING.md)
 
 ## Local panel
 
-```powershell
-npm run panel:build
-./scripts/go.ps1 build -buildvcs=false -o bin/sifruno.exe ./cmd/sifruno
-./scripts/go.ps1 build -buildvcs=false -o bin/panelctl.exe ./cmd/panelctl
-./bin/sifruno.exe --listen 127.0.0.1:8080 --state .state/sifruno --ui web/dist
-```
+Start with the numbered [source installation guide](docs/installation.md): install
+Git, Node.js 24.19.0 and Go 1.27.1; install both locked npm dependency sets;
+build the UI and binaries; then run the panel as an ordinary user on loopback
+with dedicated private state. The guide covers Windows and manual Linux/macOS
+builds, private sign-in, response/CLI checks, stopping and troubleshooting.
+No automatic service installer or prebuilt release download is promised.
 
 Open `http://127.0.0.1:8080`. The compact dashboard shows real CPU, memory, local volume capacity, uptime, network rates and service inventory. Actual Meta Astryx 0.6.5 components provide the sidebar, cards, buttons, progress bars, theme and time-range controls, alongside React/TypeScript/Tailwind and reused shadcn/Base UI tools. Search, service-state filters, details, pagination, mobile navigation and light/dark themes work. Compatibility, change trail, AI budget and platforms remain secondary tools. Go/Huma provides typed APIs; local `panelctl` commands operate recovery, budget and authenticated website workflows. See [commands and limitations](docs/workbench.md) and [dashboard design](docs/dashboard-design.md).
 

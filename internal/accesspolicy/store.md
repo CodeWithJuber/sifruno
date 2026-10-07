@@ -43,3 +43,23 @@ primary Go wrapper with GOPROXY=off and GOSUMDB=off for package tests and vet.
 Recovery for a corrupt database requires an explicit trusted operator procedure;
 there is no silent reset or repair API. Reverting this source addition does not
 migrate or delete stored data. No production caller is activated by this commit.
+
+## Transaction-backed admission
+
+`Store.AuthorizeAt(expected, actor, action, resource)` validates a fresh bbolt
+read snapshot and checks both its StoreVersion and the existing permission matrix
+in that same transaction. It does not reuse a loaded Policy or an Authority cache.
+A matching permitted request returns `(true, nil)`; a matching permission denial
+returns `(false, nil)`. Zero, foreign, or stale versions return `(false,
+ErrConflict)`. Unavailable, missing, or corrupt storage returns `(false, ErrStore)`
+before version comparison. No error returns an allowed decision or repairs data.
+
+Admission linearizes at the database read snapshot. Checks whose transactions
+begin after a replacement commits see the replacement; old tokens fail even if
+the same grants are subsequently restored or the database is reopened. An
+already-running read may complete against its older snapshot. Replacement does
+not lock, cancel, or undo effects following a successful check. Identity must
+still be independently authenticated, and callers must establish their own
+operation-admission contract. No caller wiring is introduced here. Existing
+storage trust, clone/rollback limitations, and transaction waiting constraints
+above still apply.

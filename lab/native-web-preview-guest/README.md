@@ -9,6 +9,7 @@ entry points: they do not build, create an overlay, or start a guest. Pure tests
 
 ```
 node --test lab/native-web-preview-guest/report.test.mjs
+node --test lab/native-web-preview-guest/tool-pins.test.mjs
 ```
 
 Only `node lab/native-web-preview-guest/run.mjs --run` builds four Linux binaries
@@ -43,6 +44,11 @@ bookkeeping on drift is allowed; this is not a global no-write assertion.
 
 Host receipts bind Go dependency source and EmbedFiles for all four commands,
 module go.mod files, tools, payloads and ELF hashes before and after execution.
+The cached tool inventory and image-verification receipt have fixed SHA-256
+identities, as do both QEMU executables. The runner admits those four identities
+before interpreting either inventory or executing a child. Replacing an
+inventory together with its file hashes cannot silently establish new trusted
+tools. Updating an approved tool requires an independently reviewed pin change.
 Helpers are explicitly hash pinned. Go's normal approved compilation cache may
 change; shared dependency inputs may not. Outputs stay in the assigned tree's
 `.cache/native-web-preview/<run>`; failures and raw private serial are retained.
@@ -56,3 +62,7 @@ activation, current serving health, stock-host provisioning, reboot, CloudLinux,
 tenant authentication, original cPanel compatibility or all supported systems.
 Recovery is to stop the owned run and discard its disposable overlay after
 preserving evidence. Shared image, live host state and services are never changed.
+
+The tool-identity regression delivery uses local Node checks only. It does not
+rerun or extend the historical native qualification. Recover the earlier runner
+by reverting the tool-pins change; no live state migration is involved.

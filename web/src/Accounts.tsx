@@ -6,9 +6,11 @@ import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import {
   ACCOUNT_RECOVERY_REQUIRED, AccountsApiError, createAccount, getAccounts, getAccountsCapability, getAccountsSession,
-  loginAccountsSession, logoutAccountsSession, setAccountState, validAccountDomain, validAccountReason,
+  loginAccountsSession, logoutAccountsSession, setAccountState, validAccountDomain, validAccountReason, getAccountsWebPreview,
 } from "@/lib/accounts-api";
 import type { Account, AccountsCapability, AccountsSession } from "@/lib/accounts-api";
+import { AccountsWebPreviewError, PreviewRequestGate } from "@/lib/accounts-web-preview";
+import type { AccountsWebPreview } from "@/lib/accounts-web-preview";
 import "@/accounts.css";
 
 interface PendingStateChange { accountId: string; state: "active" | "suspended"; reason: string }
@@ -48,8 +50,32 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
   const [createOpen, setCreateOpen] = useState(false);
   const dialogReturnFocus = useRef<HTMLElement | null>(null);
 
+  const [webPreview, setWebPreview] = useState<AccountsWebPreview>();
+  const [previewError, setPreviewError] = useState<string>();
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const previewGate = useRef(new PreviewRequestGate());
+  const previewBusyRef = useRef(false);
+  const previewTriggerRef = useRef<HTMLSpanElement>(null);
+  const previewDismissFocus = useRef(false);
+  // Update the comparison identity during render so late callbacks cannot win
+  // the interval between a changed prop/state commit and effect cleanup.
+  const previewContext = JSON.stringify([active, revision, session, refreshAttempt, sessionAttempt, busy, hasFreshList, hasFreshCapability, capability, accounts]);
+  const previewContextRef = useRef(previewContext);
+  previewContextRef.current = previewContext;
+  const invalidatePreview = useCallback(() => {
+    previewGate.current.invalidate(); previewBusyRef.current = false;
+    setWebPreview(undefined); setPreviewError(undefined); setPreviewLoading(false); setPreviewOpen(false);
+  }, []);
+  useEffect(() => { invalidatePreview(); return () => previewGate.current.invalidate(); }, [previewContext, invalidatePreview]);
+
   const selected = accounts.find((account) => account.id === selectedId);
   const authenticated = session?.authenticated === true;
+  useEffect(() => {
+    if (!previewDismissFocus.current || previewOpen || previewLoading) return;
+    previewDismissFocus.current = false;
+    if (active && authenticated && !busy) previewTriggerRef.current?.querySelector("button")?.focus();
+  }, [previewOpen, previewLoading, active, authenticated, busy]);
   const recoveryBlocked = capability?.reason === ACCOUNT_RECOVERY_REQUIRED || accounts.some((account) => account.state === "recovery_required");
   const mutationContextValid = Boolean(active && authenticated && capability?.available && hasFreshCapability && hasFreshList && !recoveryBlocked);
   const canMutate = mutationContextValid && !busy;
@@ -76,6 +102,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
 
   const reload = useCallback(async (live?: () => boolean) => {
     const isLive = () => live?.() !== false;
+    invalidatePreview();
     setBusy("Checking local operator session");
     setError(undefined);
     setHasFreshList(false);
@@ -111,7 +138,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     } finally {
       if (isLive()) setBusy(undefined);
     }
-  }, [fail]);
+  }, [fail, invalidatePreview]);
 
   useEffect(() => {
     if (!active) { setAccessKey(""); return; }
@@ -159,6 +186,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     if (busy || !accessKey.trim()) return;
     const key = accessKey;
     setAccessKey("");
+    invalidatePreview();
     setBusy("Signing in locally"); setError(undefined); setNotice(undefined);
     try {
       const nextSession = await loginAccountsSession(key);
@@ -193,6 +221,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     if (!validAccountDomain(cleanDomain)) { setError("Enter a lowercase DNS domain with at least two valid labels, no trailing dot, and no IP address."); return; }
     if (!validAccountReason(cleanReason)) { setError("Reason must be 1–500 UTF-8 bytes after trimming, with no control characters."); return; }
     if (!cleanDomain || !cleanReason || !session?.authenticated || !capability?.available || recoveryBlocked) return;
+    invalidatePreview();
     setBusy("Creating Linux account"); setError(undefined); setNotice(undefined);
     try {
       const account = await createAccount({ username: cleanUsername, domain: cleanDomain, reason: cleanReason }, session.csrf_token);
@@ -210,6 +239,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     if (recoveryBlocked) { setError("Account changes are disabled while an account requires recovery."); return; }
     const current = accounts.find((account) => account.id === pending.accountId);
     if (!current) { setError("This account is no longer in the current list. Refresh and review before trying again."); return; }
+    invalidatePreview();
     setBusy("Updating account state"); setError(undefined); setNotice(undefined);
     try {
       const account = await setAccountState(current, pending.state, pending.reason.trim(), session.csrf_token);
@@ -225,6 +255,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
 
   async function signOut() {
     if (!session?.authenticated || busy) return;
+    invalidatePreview();
     setBusy("Signing out locally"); setError(undefined); setNotice(undefined);
     try {
       const signedOut = await logoutAccountsSession(session.csrf_token);
@@ -232,6 +263,29 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
       setSession(signedOut); setCapability(undefined); setHasFreshCapability(false); setHasFreshList(false); setAccounts([]); setSelectedId(undefined);
     } catch (failure) { fail(failure); }
     finally { setBusy(undefined); }
+  }
+
+  async function requestWebPreview() {
+    if (!active || !authenticated || busy || previewBusyRef.current) return;
+    previewBusyRef.current = true;
+    const identity = previewContextRef.current;
+    const request = previewGate.current.begin();
+    const current = () => request.current() && previewContextRef.current === identity;
+    setWebPreview(undefined); setPreviewError(undefined); setPreviewOpen(true); setPreviewLoading(true);
+    try {
+      const result = await getAccountsWebPreview(request.signal);
+      if (current()) setWebPreview(result);
+    } catch (failure) {
+      if (!current()) return;
+      const detail = failure instanceof AccountsWebPreviewError ? failure.message : "The preview could not be read. Retry after checking the local connection.";
+      setPreviewError(detail);
+      if (failure instanceof AccountsWebPreviewError && failure.status === 401) {
+        setSession({ authenticated: false }); setCapability(undefined); setHasFreshCapability(false); setHasFreshList(false);
+        setError(detail);
+      } else if (failure instanceof AccountsWebPreviewError && failure.status === 409) {
+        setHasFreshList(false); setError(detail);
+      }
+    } finally { if (current()) { previewBusyRef.current = false; setPreviewLoading(false); } }
   }
 
   return <section className="accounts-view accounts-workspace" data-testid="accounts-view">
@@ -255,14 +309,30 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
         <div><strong>Linux account identities and home directories.</strong><span> Web, DNS and mail setup is still in development.</span>
           {capability && <p>{capabilityCopy(capability, hasFreshCapability)}</p>}
         </div>
-        {capability && !capability.available && capability.reason !== ACCOUNT_RECOVERY_REQUIRED && <Button label="Check broker again" variant="ghost" size="sm" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => setRefreshAttempt((value) => value + 1)} />}
+        {capability && !capability.available && capability.reason !== ACCOUNT_RECOVERY_REQUIRED && <Button label="Check broker again" variant="ghost" size="sm" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => { invalidatePreview(); setRefreshAttempt((value) => value + 1); }} />}
       </div>
+      <Card className="dashboard-card account-web-preview" padding={0}>
+        <div className="account-preview-heading"><div><h2>Inventory web configuration preview</h2><p>Broker snapshot for the full managed inventory, independent of selection or search.</p></div>
+          <span className="account-preview-trigger" ref={previewTriggerRef}><Button label={previewLoading ? "Reading web preview…" : "Preview web configuration"} variant="secondary" size="sm" isDisabled={!active || !authenticated || Boolean(busy) || previewLoading} isLoading={previewLoading} onClick={() => void requestWebPreview()} /></span>
+        </div>
+        <p className="account-preview-limit">Configuration preview only; no files applied or serving status checked. Existing broker verification may record recovery when native identity drift is detected.</p>
+        {previewOpen && <div className="account-preview-result" aria-live="polite" aria-busy={previewLoading}>
+          {previewLoading && <p role="status">Reading a verified broker snapshot…</p>}
+          {previewError && <p className="account-error" role="alert">{previewError}</p>}
+          {webPreview && <><p role="status">Preview received. It is a point-in-time broker snapshot, not a guarantee that the inventory remains unchanged.</p>
+            <dl className="account-preview-summary"><div><dt>Profile</dt><dd>{webPreview.profile}</dd></div><div><dt>Snapshot accounts</dt><dd>{webPreview.accounts} total · {webPreview.active_accounts} active · {webPreview.suspended_accounts} suspended</dd></div></dl>
+            <details><summary>Snapshot fingerprints</summary><dl className="account-preview-summary"><div><dt>Profile SHA-256</dt><dd><code>{webPreview.profile_sha256}</code></dd></div><div><dt>Snapshot SHA-256</dt><dd><code>{webPreview.snapshot_sha256}</code></dd></div><div><dt>Bundle SHA-256</dt><dd><code>{webPreview.bundle_sha256}</code></dd></div></dl></details>
+            <details><summary>Generated artifact metadata ({webPreview.files.length})</summary><ul className="account-preview-files">{webPreview.files.map((file) => <li key={file.path}><strong>{file.path}</strong><span>{file.bytes.toLocaleString()} bytes · mode {file.mode.toString(8).padStart(4, "0")}</span><code>{file.sha256}</code></li>)}</ul></details>
+          </>}
+          <Button label="Dismiss web preview" variant="ghost" size="sm" onClick={() => { previewDismissFocus.current = true; invalidatePreview(); }} />
+        </div>}
+      </Card>
       {(capability?.available || capability?.reason === ACCOUNT_RECOVERY_REQUIRED) && <>
         {recoveryBlocked && <div className="account-message account-recovery-notice" role="alert"><Info /><span>An account requires recovery. All account changes are disabled until recovery is resolved.</span></div>}
         {capability.available && !hasFreshList && <div className="account-message account-refresh-notice" role="status"><Info /><span>The account list is not current. Refresh and review it before changing accounts.</span></div>}
         <Card className="dashboard-card account-inventory-toolbar" padding={0}>
           <div className="account-inventory-heading"><h2>Account inventory</h2><p>{hasFreshList ? <><strong>{accounts.length}</strong> {accounts.length === 1 ? "account" : "accounts"} · {stateCount("active")} active · {stateCount("suspended")} suspended{stateCount("recovery_required") > 0 && <> · {stateCount("recovery_required")} need recovery</>}</> : busy ? "Refreshing account inventory…" : accounts.length ? `${accounts.length} previously loaded accounts · refresh required` : "Account inventory unavailable · refresh required"}</p></div>
-          <div className="account-inventory-actions"><Button label="Refresh accounts" icon={<RefreshCw />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => { setError(undefined); setRefreshAttempt((value) => value + 1); }} /><Button label="Create Linux account" icon={<Plus />} variant="primary" size="sm" isDisabled={!canMutate} onClick={() => { if (!canMutate) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }} /></div>
+          <div className="account-inventory-actions"><Button label="Refresh accounts" icon={<RefreshCw />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => { invalidatePreview(); setError(undefined); setRefreshAttempt((value) => value + 1); }} /><Button label="Create Linux account" icon={<Plus />} variant="primary" size="sm" isDisabled={!canMutate} onClick={() => { if (!canMutate) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }} /></div>
         </Card>
         <div className="account-layout">
           <Card className="dashboard-card account-list" padding={0}>
@@ -303,7 +373,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
           <label htmlFor="account-state-reason">Reason</label>
           <textarea id="account-state-reason" value={pending.reason} onChange={(event) => setPending({ ...pending, reason: event.target.value })} required maxLength={500} rows={3} disabled={!canMutate} aria-invalid={Boolean(pending.reason.trim()) && !validAccountReason(pending.reason)} aria-describedby="account-state-reason-help" />
           <p id="account-state-reason-help" className={`account-help ${Boolean(pending.reason.trim()) && !validAccountReason(pending.reason) ? "account-error" : ""}`}>{utf8Bytes(pending.reason)}/500 UTF-8 bytes · trimmed, without control characters.</p>
-          <div className="account-dialog-actions">{error && <Button label="Refresh accounts" type="button" variant="ghost" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => { setError(undefined); setRefreshAttempt((value) => value + 1); }} />}<Button label="Cancel" type="button" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setPending(undefined)} /><Button label={`Confirm ${pending.state === "suspended" ? "suspension" : "activation"}`} type="submit" variant="primary" isLoading={busy === "Updating account state"} isDisabled={!canMutate || !validAccountReason(pending.reason) || !account} /></div>
+          <div className="account-dialog-actions">{error && <Button label="Refresh accounts" type="button" variant="ghost" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => { invalidatePreview(); setError(undefined); setRefreshAttempt((value) => value + 1); }} />}<Button label="Cancel" type="button" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setPending(undefined)} /><Button label={`Confirm ${pending.state === "suspended" ? "suspension" : "activation"}`} type="submit" variant="primary" isLoading={busy === "Updating account state"} isDisabled={!canMutate || !validAccountReason(pending.reason) || !account} /></div>
         </form>;
       })()}
     </dialog>

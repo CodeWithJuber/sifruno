@@ -125,3 +125,5 @@ export const setAccountState = (account: Account, state: "active" | "suspended",
   request(`/api/v1/accounts/${encodeURIComponent(account.id)}/state`, validAccount, {
     method: "POST", csrf, body: { state, expected_revision: account.revision, reason },
   });
+
+export { fetchAccountsWebPreview as getAccountsWebPreview } from "./accounts-web-preview";

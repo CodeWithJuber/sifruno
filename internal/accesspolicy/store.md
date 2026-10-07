@@ -79,7 +79,10 @@ commit the replacement. Candidate roles cannot authorize their own installation.
 An administrator may demote or remove itself; subsequent writes by that actor
 are denied unless a trusted authority grants permission again.
 
-Failure returns a zero version without changing committed state. Error precedence
+Admission and validation refusals return a zero version without changing committed state.
+A commit I/O error also returns no version, but its durable outcome can be ambiguous.
+Inspect and reload trusted stored state before deciding what to do next; do not
+infer a grant from the error or blindly retry the write. Error precedence
 is ErrStore for unavailable/corrupt storage, ErrConflict for zero/foreign/stale
 versions, ErrDenied for an unauthorized current actor, then ErrExhausted or
 ErrInvalid for exhaustion or an invalid candidate. Ordinary permission refusal

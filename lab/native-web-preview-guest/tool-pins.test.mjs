@@ -33,7 +33,12 @@ test('substituted input identity refuses even with another admitted digest',()=>
 function inventory(root){return fs.readdirSync(root,{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name)).flatMap(e=>{const p=path.join(root,e.name);return e.isDirectory()?[e.name+'/',...inventory(p).map(x=>e.name+'/'+x)]:[e.name+':'+fs.readFileSync(p).toString('base64')];});}
 for(const mode of ['default','check','import'])test(`temporary isolated runner ${mode} is inert`,t=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'sifruno-preview-pins-'));
- t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+ t.after(()=>{
+  const target=path.resolve(temp);
+  assert.equal(path.dirname(target),path.resolve(os.tmpdir()));
+  assert(path.basename(target).startsWith('sifruno-preview-pins-'));
+  fs.rmSync(target,{recursive:true,force:true});
+ });
  for(const name of ['lab/native-web-preview-guest/run.mjs','lab/native-web-preview-guest/tool-pins.mjs','lab/native-web-preview-guest/report.mjs','scripts/verify-startup-preflight.mjs']){
   const target=path.join(temp,name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(own,name),target);
  }

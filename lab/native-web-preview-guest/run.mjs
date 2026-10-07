@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {randomBytes} from 'node:crypto';
 import {admitted, child, digest} from '../../scripts/verify-startup-preflight.mjs';
 import {decodePreviewSerial} from './report.mjs';
+import {admitToolPins} from './tool-pins.mjs';
 
 const OWN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PRIMARY = path.resolve(OWN, '../..');
@@ -32,7 +33,9 @@ const relative = file => path.relative(OWN, file).replaceAll('\\', '/');
 const pin = (root, name, maximum) => { const file = admitted(root, path.join(root, name), maximum); const data = fs.readFileSync(file); return {root, path:name, bytes:data.length, sha256:digest(data)}; };
 const scan = (dir, accepted) => fs.readdirSync(dir,{withFileTypes:true}).flatMap(e => { assert(!e.isSymbolicLink()); const file=path.join(dir,e.name); return e.isDirectory() ? scan(file,accepted) : accepted(file) ? [file] : []; });
 const sources = ['go.mod','go.sum',...scan(path.join(OWN,'internal'),p=>p.endsWith('.go')).map(relative),...scan(path.join(OWN,'cmd'),p=>p.endsWith('.go')).map(relative), ...scan(path.join(OWN,'config'),()=>true).map(relative), ...scan(path.join(OWN,'lab/native-web-preview-guest'),()=>true).map(relative),'lab/startup-preflight-guest/fixture.py','scripts/verify-startup-preflight.mjs','lab/controller-layout-guest/make_iso.py'].sort().map(p=>pin(OWN,p));
-const tools = ['scripts/go.ps1','.tools/go/bin/go.exe','.tools/linuxguest/prepared.json','.tools/linuxguest/alma9/verified.json','.tools/linuxguest/downloads/pycdlib-1.21.0-py3-none-any.whl'].map(p=>pin(PRIMARY,p));
+// Admit independent authority identities before parsing either catalogue.
+const authorities = admitToolPins(name=>pin(PRIMARY,name));
+const tools = [...authorities, ...['scripts/go.ps1','.tools/go/bin/go.exe','.tools/linuxguest/downloads/pycdlib-1.21.0-py3-none-any.whl'].map(p=>pin(PRIMARY,p))];
 const prepared = JSON.parse(fs.readFileSync(path.join(PRIMARY,'.tools/linuxguest/prepared.json')));
 assert(prepared.schema_version === 1 && prepared.files.length === 125);
 for(const p of prepared.files) { const actual=pin(PRIMARY,p.path); assert(actual.bytes===p.bytes && actual.sha256===p.sha256); if(!tools.some(x=>x.path===p.path))tools.push(actual); }

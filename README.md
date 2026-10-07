@@ -3,8 +3,8 @@
 Sifruno is a modern hosting-panel project with the original WHM/cPanel ecosystem compatibility contract. The approved V3 brand and local engineering panel are implemented. The hosting engine remains incomplete; this is not a production cPanel replacement.
 
 Start with the [installation guide](docs/installation.md). The
-[closeout and PR inventory](docs/CLOSEOUT.md) records the delivered source,
-unfinished work and paused development loop.
+[historical closeout](docs/CLOSEOUT.md) records the earlier delivered source
+and unfinished work. Current progress is maintained in the project state below.
 
 Use [the documentation index](docs/README.md) and [current project state](docs/PROJECT-STATE.md)
 for the delivered source and remaining acceptance gates. Evidence below describes
@@ -14,8 +14,11 @@ Main includes the Accounts metadata-preview UI, broker/API/CLI web preview,
 controller layout preparation and runtime input diagnostic. Preview metadata is
 not applied configuration or serving health. The merged runtime-input guest
 archive remains **non-runnable**: its parser is absent and approval is unresolved.
-The automated development loop remains paused; this documentation update does
-not resume feature work.
+Development resumed on the user's 2026-10-07 instruction. The recurring loop uses
+one focused delivery per run, existing dependencies, bounded implementation and
+independent review. The [policy admission foundation](docs/access-policy-admission.md)
+adds revision-aware authorization checks, and [trusted policy persistence](docs/access-policy-store.md)
+stores validated bindings across restarts. Production tenant integration remains open.
 
 ## Community and Pro
 

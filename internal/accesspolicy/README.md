@@ -1,6 +1,6 @@
 # Native hosting account access policy foundation
 
-This package is a pure, immutable authorization policy. It is not connected to
+This package provides an immutable authorization policy and an in-memory revisioned authority. It is not connected to
 HTTP, the local operator session, the host-account broker, or a database. It does
 not provide tenant authentication, credential revocation, production multiuser
 isolation, or vendor compatibility certification.
@@ -71,7 +71,7 @@ A policy is immutable and safe for concurrent reads. Role changes, ownership
 changes, removal, and revocation of assignments require constructing/replacing
 the trusted policy and disposing of stale references. An old policy still grants
 its old permissions. This package has no credential/session revocation mechanism
-and no freshness guarantee. Future integration must synchronize policy replacement
+for raw policy references. Future integration must synchronize policy replacement
 with operation admission and authentication changes; retaining a snapshot is not
 a revocation strategy. Nil and zero policies deny all operations.
 
@@ -89,3 +89,34 @@ Use the primary workspace `scripts/go.ps1` with this worktree as cwd and
 this README are added; recovery is reverting the standalone commit. No state
 migration or running-process change is required because no existing caller uses
 this package.
+
+## Revisioned admission
+
+`NewAuthority(policy)` validates and copies a complete trusted policy. `Revision()`
+returns an opaque comparable token bound to that authority. `Replace(expected,
+next)` performs a synchronized compare-and-swap, advancing the revision even for
+identical bindings. Stale, zero, and foreign tokens fail; invalid snapshots and
+revision exhaustion leave the previous state intact. Revisions never wrap or
+revive after removal and re-addition. Copied Authority handles share one state.
+Nil and zero authorities deny admission; no policy getter exposes a snapshot.
+
+`AuthorizeAt(expected, actor, action, resource)` checks current revision and the
+existing permission matrix together. Capture a revision before preparatory work
+and recheck immediately before protected dispatch. Replacement invalidates old
+tokens, including when the same grants are subsequently restored. A false result
+requires fresh admission; it must not silently retry using old consent.
+
+This is an admission checkpoint, not an execution lock. Replacement after a
+successful check cannot cancel, undo, or synchronize a subsequent effect. There
+are no callbacks, credential/session revocation, persistence, HTTP adapters, or
+new identity/ownership sources. Independently authenticated identity remains a
+caller obligation. Do not treat a revision as a credential or accept requester
+claims as trusted bindings. Raw Policy references still retain their old grants.
+
+Construction and replacement copy at most 256 actors and 100 accounts using the
+existing policy validator. Admission allocates no memory and performs bounded
+lookups under a read lock; lock waiting has no deadline guarantee. Tests cover
+matrix equivalence, role/ownership changes, stale and foreign tokens, no ABA,
+invalid snapshots, overflow, copies, and concurrent single-winner replacement.
+Run `test -race ./internal/accesspolicy` when the existing toolchain supports it.
+Recovery is reverting the authority addition; no production caller is activated.

@@ -1,5 +1,9 @@
 # WIP archive: native runtime input guest
 
+Publication refresh, 2026-10-07: PR44 was merged externally into main. Its
+archival status, missing parser and approval boundary are unchanged. This merge
+does not authorize running or completing the draft. See [current project state](../../docs/PROJECT-STATE.md).
+
 **NON-RUNNABLE. Not suitable for installation, qualification, or execution.**
 
 This directory preserves unfinished work at the user's explicit closeout request.
@@ -51,6 +55,6 @@ raw and canonical hashes differ.
 Earlier runner before/after/content-address snapshots, their bounded diff, and
 local receipts remain in the original author's ignored artifact area. They are
 not shipped in this source archive; private artifacts and logs are excluded.
-The archival PR should remain explicitly marked unfinished and unsuitable for
-installation. Recovery is to revert the archive-only commit; there is no native
+The merged archive remains explicitly unfinished and unsuitable for
+installation. Recovery is to revert the archive-only changes; there is no native
 state, migration, or service operation to undo.

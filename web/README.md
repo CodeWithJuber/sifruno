@@ -1,10 +1,15 @@
 # Sifruno server panel UI
 
+For prerequisites and a complete source build, use the [installation guide](../docs/installation.md).
+The [documentation index](../docs/README.md) covers each UI workflow and its
+historical evidence. Current publication and remaining acceptance gates are in
+[project state](../docs/PROJECT-STATE.md); no live preview is certified here.
+
 React 19, TypeScript, Vite and Tailwind render the approved V3 Sifruno identity with local Inter fonts. The dashboard reuses actual Meta Astryx 0.6.5 components: Button, Card, SideNav, SegmentedControl, ProgressBar and the precompiled neutral Theme. Secondary tools retain official shadcn source and Base UI primitives. See NOTICE.md for source and license attribution.
 
 ```powershell
 cd web
-npm ci
+npm ci --ignore-scripts --no-audit --no-fund
 npm run dev
 ```
 
@@ -35,11 +40,19 @@ Each response is validated against its typed contract, with a ten-second timeout
 
 Default Overview is a real monitoring screen. Services are inspected read-only; this UI does not expose placeholder provisioning/restart actions. Compatibility remains uncertified unless the service's actual evidence changes. Scoped-file recovery is experimental and does not certify server/database backups or migration. Platforms distinguish compiled targets from unverified legacy candidates. No paid-model calls occur from these screens.
 
-The slim white/slate interface follows the approved dashboard concept at `../assets/design/sifruno-dashboard-concept.png`, replacing all illustration values with API data. Local CSS deliberately orders reset/Tailwind/Astryx layers and overrides only product tokens and layout. Astryx's built neutral theme avoids runtime stylesheet injection and custom StyleX compilation. The optional `sifruno-public-preview` meta marker visibly identifies a public preview, hides Websites/trail/budget navigation and prevents their components or private requests from loading; backend authorization remains responsible for route access.
+The slim white/slate interface follows the approved dashboard concept at `../assets/design/sifruno-dashboard-concept.png`, replacing all illustration values with API data. Local CSS deliberately orders reset/Tailwind/Astryx layers and overrides only product tokens and layout. Astryx's built neutral theme avoids runtime stylesheet injection and custom StyleX compilation. The optional `sifruno-public-preview` meta marker visibly identifies a public preview and excludes private workspaces and their requests; backend authorization remains responsible for route access. Its explicitly labelled sample tour is separate from private Files, Backups, Websites, Accounts and Access workflows.
+
+The private UI also includes [session controls](../docs/operator-sessions.md),
+[File Manager](../docs/file-manager-ui.md), [Backups](../docs/backups-ui.md),
+[backup schedules](../docs/native-backup-schedules.md) and
+[restore preview](../docs/native-restore-preview.md) for app-owned static sites.
+The [Accounts workspace](../docs/accounts-workflow.md) requires a separately
+admitted broker. Its [web-configuration preview](../docs/accounts-web-preview.md)
+shows metadata only; it neither applies configuration nor proves serving health.
 
 ```powershell
 npm run typecheck
 npm run build
 ```
 
-Build success is separate from browser verification. Validate the running real collectors, missing/error states, filters/details, all seven views, time ranges, theme persistence and 390/768/1440-pixel layouts. Test operator and website mutations against isolated fixture state, including actual preview, stale-draft preservation, ZIP restore confirmation and zero private requests in public preview. The package lock pins dependencies. The Astryx package's optional postinstall CLI nudge is not required for its precompiled exports.
+Build success is separate from browser verification. Validate real collectors, missing/error states, filters/details, each available workspace, time ranges, theme persistence and 390/768/1440-pixel layouts. Test operator and website mutations against isolated fixture state, including actual preview, stale-draft preservation, ZIP restore confirmation and zero private requests in public preview. Recorded UI evidence belongs to its original source and fixtures; no new browser run was made for this documentation update. The package lock pins dependencies. The Astryx package's optional postinstall CLI nudge is not required for its precompiled exports.

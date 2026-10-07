@@ -1,5 +1,11 @@
 # Disposable characterization lab
 
+See the [complete documentation index](../docs/README.md) and
+[current project state](../docs/PROJECT-STATE.md) before selecting a harness.
+These tools and dated receipts have distinct prerequisites and qualification
+limits. Their presence in main is not evidence of execution on current main.
+The runtime-input guest archive is non-runnable WIP.
+
 This is Phase 0 evidence tooling. It does not install a panel, validate a license,
 reverse engineer an unavailable native artifact, or certify compatibility. The
 Windows workspace has no supplied licensed reference Linux host. Original

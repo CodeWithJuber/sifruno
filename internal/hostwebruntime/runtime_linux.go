@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"sifruno/internal/hostweb"
 	"sifruno/internal/hostwebgeneration"
 )
 
@@ -515,39 +516,71 @@ func (r *Runtime) checkPins(v record) error {
 }
 
 func (r *Runtime) inputDigest() (string, error) {
-	var parts []string
-	if r.binaries == nil {
-		r.binaries = map[string]string{}
+	value, binaries, err := installationInputDigest(context.Background(), r.opts.Profile)
+	if err == nil {
+		// Commit admitted hashes only after every input succeeds. Open discards an
+		// error and guard refuses all operations on error; partial caches are not
+		// valid admission. Preserve any existing process-pin cache entries.
+		if r.binaries == nil {
+			r.binaries = map[string]string{}
+		}
+		for path, value := range binaries {
+			r.binaries[path] = value
+		}
 	}
-	for _, p := range []string{r.opts.Profile.ApacheBinary, r.opts.Profile.FPMBinary} {
+	return value, err
+}
+
+// installationInputDigest uses the same bounded trusted input admission as the
+// executor. Cancellation is checked between reads and before returning success.
+func installationInputDigest(ctx context.Context, profile hostweb.Profile) (string, map[string]string, error) {
+	if ctx == nil {
+		return "", nil, ErrInvalid
+	}
+	var parts []string
+	binaries := map[string]string{}
+	for _, p := range []string{profile.ApacheBinary, profile.FPMBinary} {
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
 		h, err := executableHash(p)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		parts = append(parts, p+":"+h)
-		// Only installation/repeated guard refresh uses this cache; the
-		// aggregate digest is checked against persisted installation identity.
-		r.binaries[p] = h
+		binaries[p] = h
 	}
-	fd, err := checkedDir(r.opts.Profile.ApacheModuleRoot, false)
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	fd, err := checkedDir(profile.ApacheModuleRoot, false)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	unix.Close(fd)
 	for _, name := range []string{"mpm_event", "unixd", "authz_core", "authz_host", "dir", "log_config", "proxy", "proxy_http", "proxy_fcgi", "ssl", "mime"} {
-		p := filepath.Join(r.opts.Profile.ApacheModuleRoot, "mod_"+name+".so")
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
+		p := filepath.Join(profile.ApacheModuleRoot, "mod_"+name+".so")
 		h, err := trustedHash(p, 64<<20, false)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		parts = append(parts, name+":"+h)
 	}
-	ca, err := trustedHash(r.opts.Profile.CAFile, 256<<10, false)
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	ca, err := trustedHash(profile.CAFile, 256<<10, false)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	parts = append(parts, "ca:"+ca)
-	return hash([]byte(strings.Join(parts, "\n"))), nil
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	return hash([]byte(strings.Join(parts, "\n"))), binaries, nil
 }
 func trustedRead(p string, limit int64, executable bool) ([]byte, error) {
 	fd, err := checkedDir(filepath.Dir(p), false)

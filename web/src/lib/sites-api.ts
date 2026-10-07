@@ -72,7 +72,7 @@ function message(status: number): string {
 export async function siteRequest<T>(
   url: string,
   validate: (value: unknown) => value is T,
-  options: { method?: "GET" | "POST" | "PUT"; body?: unknown; csrf?: string; unauthenticatedSession?: boolean } = {},
+  options: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown; csrf?: string; unauthenticatedSession?: boolean } = {},
 ): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);

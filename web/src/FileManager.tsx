@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { File, FilePlus, Folder, Info, LockKeyhole, LogOut, RefreshCw, Save, Search } from "lucide-react";
+import { File, FilePlus, Folder, Info, LockKeyhole, LogOut, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { bytes } from "@/Dashboard";
 import { dateLabel } from "@/lib/api";
@@ -12,6 +12,7 @@ import "./file-manager.css";
 
 interface Editor { siteId: string; path: string; draft: string; savedContent: string; sha256: string; revision: number; isNew: boolean }
 interface Conflict { path: string; revision?: number; file?: SiteFileContent; compared: boolean }
+interface DeleteTarget { siteId: string; path: string; sha256: string; revision: number }
 const maxFileBytes = 2 * 1024 * 1024, maxSiteBytes = 32 * 1024 * 1024, maxFiles = 64;
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).length;
 const dirtyEditor = (editor?: Editor) => Boolean(editor && (editor.isNew || editor.draft !== editor.savedContent));
@@ -52,6 +53,8 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
   const [notice, setNotice] = useState<string>();
   const [loadedAt, setLoadedAt] = useState<Date>();
   const [attempt, setAttempt] = useState(0);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>();
+  const deleteDialog = useRef<HTMLDialogElement>(null), deleteReturnFocus = useRef<HTMLElement | null>(null);
   const latestEditor = useRef(editor); latestEditor.current = editor;
   const selectedId = useRef<string | undefined>(undefined);
   const epoch = useRef(0), actionPending = useRef(false), activeRef = useRef(active); activeRef.current = active;
@@ -64,6 +67,8 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
   const validDraft = Boolean(editor && validPath(editor.path, editor.isNew) && validUtf16(editor.draft) && draftBytes <= maxFileBytes && projectedBytes <= maxSiteBytes && !pathCollision && (!editor.isNew || files.length < maxFiles));
   const matchingBase = Boolean(editor && selected?.id === editor.siteId && editor.revision === selected.revision && (editor.isNew ? !currentFile : currentFile?.sha256 === editor.sha256));
   const canSave = Boolean(active && authenticated && fresh && !busy && dirty && validDraft && matchingBase && !conflict && selected?.state !== "recovery_required");
+  const canDelete = Boolean(active && authenticated && fresh && !busy && !dirty && !conflict && selected && viewedFile && selected.state !== "recovery_required" && (!editor || (!editor.isNew && matchingBase && editor.path === viewedFile.path)));
+  const matchingDelete = Boolean(canDelete && deleteTarget && selected?.id === deleteTarget.siteId && selected.revision === deleteTarget.revision && viewedFile?.path === deleteTarget.path && viewedFile.sha256 === deleteTarget.sha256);
   const clearPrivate = useCallback(() => { setSites([]); setSelected(undefined); setFiles([]); setFresh(false); }, []);
   const fail = useCallback((failure: unknown) => {
     setError(fileError(failure)); setFresh(false);
@@ -98,7 +103,7 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
     if (!active) { setAccessKey(""); return; }
     if (actionPending.current) return;
     const isLive = () => activeRef.current && generation === epoch.current;
-    setBusy("Checking file records"); setFresh(false); setError(undefined);
+    setBusy("Checking file records"); setFresh(false); setDeleteTarget(undefined); setError(undefined);
     void (async () => {
       try { const next = await siteRequest("/api/v1/session", validSession, { unauthenticatedSession: true }); if (!isLive()) return; setSession(next); if (next.authenticated) await loadInventory(undefined, isLive); else clearPrivate(); if (isLive()) setLoadedAt(new Date()); }
       catch (failure) { if (isLive()) fail(failure); }
@@ -113,6 +118,12 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
     return () => clearTimeout(timer);
   }, [session, clearPrivate]);
   useEffect(() => { if (!dirty) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty]);
+  useEffect(() => {
+    if (!active || !authenticated) { deleteDialog.current?.close(); setDeleteTarget(undefined); deleteReturnFocus.current = null; return; }
+    if (deleteTarget && deleteDialog.current && !deleteDialog.current.open) deleteDialog.current.showModal();
+    else if (!deleteTarget && deleteDialog.current?.open) deleteDialog.current.close();
+    if (!deleteTarget && !busy && deleteReturnFocus.current) { if (deleteReturnFocus.current.isConnected) deleteReturnFocus.current.focus(); deleteReturnFocus.current = null; }
+  }, [active, authenticated, deleteTarget, busy]);
   async function run(label: string, action: (isLive: () => boolean) => Promise<void>) {
     if (!activeRef.current || actionPending.current || busy) return;
     actionPending.current = true; const generation = epoch.current, isLive = () => activeRef.current && generation === epoch.current;
@@ -120,7 +131,7 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
     try { await action(isLive); if (isLive()) setLoadedAt(new Date()); } catch (failure) { if (isLive()) fail(failure); }
     finally { actionPending.current = false; if (isLive()) setBusy(undefined); else if (activeRef.current) setAttempt((value) => value + 1); }
   }
-  const requireClean = () => { if (!dirtyEditor(latestEditor.current)) return true; setError("Save or discard your draft before opening another file, switching websites or signing out. Panel navigation keeps your draft."); return false; };
+  const requireClean = () => { if (!dirtyEditor(latestEditor.current)) return true; setError("Save or discard your draft before deleting a file, opening another file, switching websites or signing out. Panel navigation keeps your draft."); return false; };
   async function login(event: React.FormEvent) {
     event.preventDefault(); if (!accessKey.trim()) return; const key = accessKey; setAccessKey("");
     await run("Signing in", async (isLive) => { const next = await siteRequest("/api/v1/session/login", validSession, { method: "POST", body: { access_key: key } }); if (!isLive()) return; if (!next.authenticated) throw new SiteApiError(401, "unauthorized", "The operator access key was not accepted."); setSession(next); await loadInventory(undefined, isLive); });
@@ -160,6 +171,23 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
       } catch (failure) { if (isLive() && failure instanceof SiteApiError && failure.status === 409) setConflict({ path: draft.path, compared: false }); throw failure; }
     });
   }
+  async function deleteFile() {
+    if (!matchingDelete || !deleteTarget || !session?.authenticated || !requireClean()) return;
+    const target = deleteTarget;
+    await run("Deleting file", async (isLive) => {
+      try {
+        const site = await siteRequest(siteURL(target.siteId, "/file"), validSite, { method: "DELETE", csrf: session.csrf_token, body: { path: target.path, expected_sha256: target.sha256, expected_revision: target.revision } });
+        if (!isLive()) return;
+        if (site.id !== target.siteId || site.revision !== target.revision + 1) throw new SiteApiError(0, "invalid_response", "Deletion did not confirm the expected website revision. Refresh records before trying again.");
+        setDeleteTarget(undefined); setFresh(false); setSelected(site); setSites((old) => old.map((item) => item.id === site.id ? site : item)); setFiles((old) => old.filter((file) => file.path !== target.path));
+        setEditor(undefined); latestEditor.current = undefined; setViewedPath(undefined); setConflict(undefined); setNotice(`Deleted ${target.path} · revision ${site.revision}.`);
+        await loadInventory(site.id, isLive);
+      } catch (failure) {
+        if (isLive()) { setDeleteTarget(undefined); if (failure instanceof SiteApiError && failure.status === 409 && latestEditor.current?.path === target.path) setConflict({ path: target.path, compared: false }); }
+        throw failure;
+      }
+    });
+  }
 
   const prefix = folder ? `${folder}/` : "", term = query.trim().toLowerCase();
   const visibleFiles = files.filter((file) => term ? file.path.toLowerCase().includes(term) : file.path.startsWith(prefix) && !file.path.slice(prefix.length).includes("/"));
@@ -174,7 +202,8 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
       <div className="website-session"><span><LockKeyhole />Signed in locally · expires {dateLabel(session?.authenticated ? session.expires_at : "")}</span><Button label="Sign out locally" icon={<LogOut />} size="sm" variant="ghost" isDisabled={Boolean(busy) || dirty} onClick={() => { if (!requireClean()) return; void run("Signing out", async (isLive) => { if (!session?.authenticated) return; const next = await siteRequest("/api/v1/session/logout", validSession, { method: "POST", csrf: session.csrf_token, body: {} }); if (!isLive()) return; if (next.authenticated) throw new SiteApiError(0, "invalid_response", "Sign-out was not confirmed."); setSession(next); clearPrivate(); setEditor(undefined); latestEditor.current = undefined; setViewedPath(undefined); setConflict(undefined); }); }} /></div>
       <Card className="dashboard-card fm-picker" padding={0}><div><label htmlFor="file-manager-site-picker">Website</label><NativeSelect id="file-manager-site-picker" data-testid="file-manager-site-picker" aria-label="Website for files" value={selected?.id ?? ""} disabled={Boolean(busy) || dirty || !sites.length} onChange={(event) => { if (!requireClean()) return; const id = event.target.value; setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); setViewedPath(undefined); setFolder(""); setQuery(""); setFresh(false); void run("Loading website files", (isLive) => loadInventory(id, isLive)); }}>{!sites.length && <NativeSelectOption value="">No websites available</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}</NativeSelect></div><Button label="Refresh file records" variant="secondary" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => setAttempt((value) => value + 1)} /></Card>
       {selected && <div className="fm-context"><span>{selected.domain} · current revision {selected.revision}</span><span>{files.length} / 64 files · {bytes(totalBytes)} / 32 MiB</span></div>}
-      {selected?.state === "recovery_required" && <p className="fm-status" role="alert">This website requires recovery. File writes are disabled until its recovery is resolved.</p>}
+      {selected && fresh && files.length === 0 && <p className="fm-status" role="status">This website has no files. Active empty websites serve 404 responses. Add a text file or restore an existing ZIP backup in Websites. New ZIP backups require at least one file.</p>}
+      {selected?.state === "recovery_required" && <p className="fm-status" role="alert">This website requires recovery. File changes are disabled until its recovery is resolved.</p>}
       {selected ? <div className="fm-layout">
         <Card className="dashboard-card fm-browser" padding={0} data-testid="file-manager-inventory" data-site-id={selected.id} data-revision={selected.revision} data-fresh={fresh}>
           <div className="card-heading"><h2>Site files</h2><Button label="New text file" icon={<FilePlus />} size="sm" variant="secondary" isDisabled={Boolean(busy) || !fresh || dirty || selected.state === "recovery_required" || files.length >= maxFiles} onClick={() => { if (!requireClean()) return; const next = { siteId: selected.id, path: prefix, draft: "", savedContent: "", sha256: "", revision: selected.revision, isNew: true }; setEditor(next); latestEditor.current = next; setViewedPath(undefined); setConflict(undefined); setError(undefined); }} /></div>
@@ -184,7 +213,7 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
           {!visibleFiles.length && !folders.length && <div className="inventory-empty"><Folder /><h3>{term ? "No matching files" : "No reported files in this folder"}</h3><p>{term ? "Try another path or clear the search." : "Folders are derived from the actual file paths returned by the server."}</p></div>}
           <div className="table-footer"><span>{!fresh ? "Records need refreshing" : `${visibleFiles.length} files shown`}</span><span>{loadedAt ? `Checked ${loadedAt.toLocaleTimeString()}` : "Reading inventory"}</span></div>
         </Card>
-        <Card className="dashboard-card fm-facts" padding={0} data-testid="file-manager-file-details"><div className="card-heading"><h2>File details</h2></div>{viewedFile ? <dl><div><dt>Relative path</dt><dd>{viewedFile.path}</dd></div><div><dt>Saved bytes</dt><dd>{bytes(viewedFile.bytes)}</dd></div><div><dt>Inventory revision</dt><dd>{selected.revision}</dd></div><div><dt>SHA-256</dt><dd><code>{viewedFile.sha256}</code></dd></div></dl> : <p>Select a reported file to inspect its saved size and hash.</p>}</Card>
+        <Card className="dashboard-card fm-facts" padding={0} data-testid="file-manager-file-details"><div className="card-heading"><h2>File details</h2><Button label="Delete file" data-testid="file-manager-delete" icon={<Trash2 />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; deleteReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setDeleteTarget({ siteId: selected.id, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision }); }} /></div>{viewedFile ? <dl><div><dt>Relative path</dt><dd>{viewedFile.path}</dd></div><div><dt>Saved bytes</dt><dd>{bytes(viewedFile.bytes)}</dd></div><div><dt>Inventory revision</dt><dd>{selected.revision}</dd></div><div><dt>SHA-256</dt><dd><code>{viewedFile.sha256}</code></dd></div></dl> : <p>Select a reported file to inspect its saved size and hash.</p>}</Card>
       </div> : <Card className="dashboard-card" padding={0}><div className="inventory-empty"><Folder /><h2>{busy ? "Loading website files" : error ? "File records unavailable" : "No websites available"}</h2><p>{busy ? "Reading the actual app-owned site inventory." : error ? "Refresh records to check the current inventory. Retained drafts remain below." : "Create an app-owned static site in Websites to manage its files."}</p></div></Card>}
       {editor && <Card className="dashboard-card fm-editor" padding={0}><form onSubmit={save} data-testid="file-manager-editor" data-file-path={editor.path} data-read-revision={editor.revision} data-read-sha256={editor.sha256}>
         <div className="card-heading"><div><h2>{editor.isNew ? "New UTF-8 text file" : editor.path}</h2><p>Read revision {editor.revision} · {dirty ? "Unsaved draft" : "Saved version"}</p></div><Button label="Save file" type="submit" icon={<Save />} size="sm" variant="primary" isDisabled={!canSave} isLoading={busy === "Saving file"} /></div>
@@ -196,6 +225,7 @@ export default function FileManager({ revision, active, onStatus }: { revision: 
         </div>
       </form></Card>}
     </>}
+    {authenticated && <dialog ref={deleteDialog} className="fm-delete-dialog" data-testid="file-manager-delete-dialog" aria-labelledby="fm-delete-title" aria-describedby="fm-delete-description" onClose={() => setDeleteTarget(undefined)} onCancel={(event) => { if (busy) event.preventDefault(); else setDeleteTarget(undefined); }}><h2 id="fm-delete-title">Delete this file?</h2><p id="fm-delete-description">Remove <strong>{deleteTarget?.path}</strong> from this website at revision {deleteTarget?.revision}. The file will stop being served. An existing ZIP backup can restore it.</p>{files.length === 1 && <p>This is the last file. An active empty website serves 404 responses; new ZIP backups require at least one file.</p>}<div><Button label="Cancel deletion" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setDeleteTarget(undefined)} /><Button label="Confirm file deletion" icon={<Trash2 />} variant="primary" isDisabled={!matchingDelete} isLoading={busy === "Deleting file"} onClick={() => void deleteFile()} /></div></dialog>}
     {busy && <p className="website-busy" role="status">{busy}…</p>}
   </section>;
 }

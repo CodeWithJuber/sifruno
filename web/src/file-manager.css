@@ -23,6 +23,12 @@
 .fm-facts dd { font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
 .fm-facts code { font-size: 11px; }
 .fm-facts > p { font-size: 12px; padding: 0 16px 16px; }
+.fm-facts .card-heading { flex-wrap: wrap; gap: 12px; }
+.fm-delete-dialog { width: min(520px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; margin: auto; padding: 24px; color: var(--foreground); background: var(--card); border: 1px solid var(--input); border-radius: 6px; }
+.fm-delete-dialog::backdrop { background: rgb(0 0 0 / .5); }
+.fm-delete-dialog h2 { font-size: 18px; font-weight: 600; }
+.fm-delete-dialog > p { margin-top: 12px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.fm-delete-dialog > div { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
 .fm-editor .card-heading { border-bottom: 1px solid var(--border); }
 .fm-editor .card-heading > div { min-width: 0; }
 .fm-editor h2 { overflow-wrap: anywhere; }

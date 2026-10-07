@@ -297,7 +297,7 @@ func (s *Store) siteRoot(id string) (*os.Root, error) {
 	return r, nil
 }
 func (s *Store) verify(r record) error {
-	if r.Pending != nil || len(r.Files) == 0 || len(r.ChangeIDs) == 0 || s.journal.Verify() != nil {
+	if r.Pending != nil || len(r.ChangeIDs) == 0 || s.journal.Verify() != nil {
 		return ErrUnavailable
 	}
 	rt, err := s.siteRoot(r.Site.ID)
@@ -531,6 +531,59 @@ func (s *Store) WriteFile(id string, input WriteInput, actor string) (Site, erro
 	}
 	return next.Site, nil
 }
+
+// DeleteInput binds a deletion to the exact saved file and site revision.
+type DeleteInput struct {
+	Path             string `json:"path"`
+	ExpectedSHA256   string `json:"expected_sha256"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+}
+
+// DeleteFile removes one existing regular static-site file through the same
+// signed checkpoints and interruption recovery used by writes and restores.
+// It never recursively removes directories; an empty site remains valid.
+func (s *Store) DeleteFile(id string, input DeleteInput, actor string) (Site, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !validActor(actor) || safeFile(input.Path) != nil || !hashPattern.MatchString(input.ExpectedSHA256) {
+		return Site{}, ErrInvalid
+	}
+	r, err := s.checked(id)
+	if err != nil {
+		return Site{}, err
+	}
+	if r.Site.Revision != input.ExpectedRevision || r.Site.Revision == math.MaxUint64 {
+		return Site{}, ErrConflict
+	}
+	data, err := s.snapshot(r)
+	if err != nil {
+		return Site{}, err
+	}
+	existing, found := data[input.Path]
+	if !found {
+		return Site{}, ErrNotFound
+	}
+	if sum(existing) != input.ExpectedSHA256 {
+		return Site{}, ErrConflict
+	}
+	delete(data, input.Path)
+	files := []FileInfo{}
+	if len(data) != 0 {
+		files, err = fileCatalog(data)
+		if err != nil {
+			return Site{}, err
+		}
+	}
+	next := r
+	next.Site.Revision++
+	next.Site.UpdatedAt = time.Now().UTC()
+	next.Files = files
+	if err = s.change(r, next, data, "delete", actor); err != nil {
+		return Site{}, err
+	}
+	return next.Site, nil
+}
+
 func (s *Store) SetState(id string, input StateInput, actor string) (Site, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

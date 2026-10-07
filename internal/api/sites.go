@@ -27,6 +27,10 @@ type writeSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.WriteInput
 }
+type deleteSiteInput struct {
+	ID   string `path:"id"`
+	Body sites.DeleteInput
+}
 type stateSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.StateInput
@@ -135,6 +139,13 @@ func registerSites(a huma.API, o Options) {
 		}
 		return &siteOutput{Body: v}, nil
 	})
+	huma.Register(a, siteOperation("delete-site-file", "DELETE", "/api/v1/sites/{id}/file"), func(ctx context.Context, in *deleteSiteInput) (*siteOutput, error) {
+		v, err := o.Sites.DeleteFile(in.ID, in.Body, siteActor(ctx))
+		if err != nil {
+			return nil, websiteError(err)
+		}
+		return &siteOutput{Body: v}, nil
+	})
 	huma.Register(a, siteOperation("set-site-state", "POST", "/api/v1/sites/{id}/state"), func(ctx context.Context, in *stateSiteInput) (*siteOutput, error) {
 		v, err := o.Sites.SetState(in.ID, in.Body, siteActor(ctx))
 		if err != nil {
@@ -186,7 +197,7 @@ func allowedSiteMutation(r *http.Request) bool {
 	if len(parts) != 2 || parts[0] == "" {
 		return false
 	}
-	return (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview"))
+	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview"))
 }
 
 func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -201,8 +212,12 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 	case r.URL.Path == "/api/v1/sites":
 		target = &sites.CreateInput{}
 	case strings.HasSuffix(r.URL.Path, "/file"):
-		target = &sites.WriteInput{}
-		limit = sites.MaxFileBytes*6 + 8192
+		if r.Method == http.MethodDelete {
+			target = &sites.DeleteInput{}
+		} else {
+			target = &sites.WriteInput{}
+			limit = sites.MaxFileBytes*6 + 8192
+		}
 	case strings.HasSuffix(r.URL.Path, "/state"):
 		target = &sites.StateInput{}
 	case strings.HasSuffix(r.URL.Path, "/backups"):

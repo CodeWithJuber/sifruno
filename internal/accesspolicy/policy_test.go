@@ -50,7 +50,7 @@ func TestPermissionMatrix(t *testing.T) {
 		id      ActorID
 		allowed []permit
 	}{
-		{"admin", actor("admin"), []permit{{ReadCapability, resources[0]}, {ListAccounts, resources[0]}, {CreateAccount, resources[0]}, {ReadAccount, resources[1]}, {ReadAccount, resources[2]}, {ReadAccount, resources[3]}, {SetAccountState, resources[1]}, {SetAccountState, resources[2]}, {SetAccountState, resources[3]}}},
+		{"admin", actor("admin"), []permit{{ReadCapability, resources[0]}, {ListAccounts, resources[0]}, {CreateAccount, resources[0]}, {ManagePolicy, resources[0]}, {ReadAccount, resources[1]}, {ReadAccount, resources[2]}, {ReadAccount, resources[3]}, {SetAccountState, resources[1]}, {SetAccountState, resources[2]}, {SetAccountState, resources[3]}}},
 		{"reseller-a", actor("reseller-a"), []permit{{ReadAccount, resources[1]}, {SetAccountState, resources[1]}}},
 		{"reseller-b", actor("reseller-b"), []permit{{ReadAccount, resources[2]}, {SetAccountState, resources[2]}}},
 		{"user-a", actor("user-a"), []permit{{ReadAccount, resources[1]}}},

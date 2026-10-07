@@ -78,6 +78,7 @@ const (
 	CreateAccount
 	ReadAccount
 	SetAccountState
+	ManagePolicy
 )
 
 type Resource struct {
@@ -165,7 +166,7 @@ func (p *Policy) Authorize(actor ActorID, action Action, resource Resource) bool
 		return false
 	}
 	switch action {
-	case ReadCapability, ListAccounts, CreateAccount:
+	case ReadCapability, ListAccounts, CreateAccount, ManagePolicy:
 		return resource == ServerResource() && a.Role == ServerAdmin
 	case ReadAccount, SetAccountState:
 		if resource.kind != 2 {

@@ -13,6 +13,8 @@ import (
 
 var ErrStore = errors.New("access policy store unavailable or invalid")
 
+var ErrDenied = errors.New("access policy management denied")
+
 var policyBucket = []byte("accesspolicy-v1")
 var snapshotKey = []byte("snapshot")
 
@@ -188,18 +190,33 @@ func (s *Store) Load() (*Policy, StoreVersion, error) {
 
 // Replace validates the existing record and atomically replaces the entire
 // snapshot only when expected matches. Any failure returns a zero version.
+// This privileged bootstrap/recovery API does not authorize an actor.
 func (s *Store) Replace(expected StoreVersion, next *Policy) (StoreVersion, error) {
+	return s.replace(expected, next, nil)
+}
+
+// ReplaceAuthorized authorizes an independently authenticated actor against the
+// current stored policy, never the candidate, in the replacement transaction.
+// It does not authenticate identity or authorize effects outside this database.
+func (s *Store) ReplaceAuthorized(expected StoreVersion, actor ActorID, next *Policy) (StoreVersion, error) {
+	return s.replace(expected, next, &actor)
+}
+
+func (s *Store) replace(expected StoreVersion, next *Policy, actor *ActorID) (StoreVersion, error) {
 	if !s.usable() {
 		return StoreVersion{}, ErrStore
 	}
 	var result StoreVersion
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		_, current, e := readSnapshot(tx)
+		policy, current, e := readSnapshot(tx)
 		if e != nil {
 			return e
 		}
 		if expected != current {
 			return ErrConflict
+		}
+		if actor != nil && !policy.Authorize(*actor, ManagePolicy, ServerResource()) {
+			return ErrDenied
 		}
 		if current.sequence == ^uint64(0) {
 			return ErrExhausted
@@ -212,7 +229,7 @@ func (s *Store) Replace(expected StoreVersion, next *Policy) (StoreVersion, erro
 		return tx.Bucket(policyBucket).Put(snapshotKey, data)
 	})
 	if err != nil {
-		if errors.Is(err, ErrConflict) || errors.Is(err, ErrExhausted) || errors.Is(err, ErrInvalid) {
+		if errors.Is(err, ErrConflict) || errors.Is(err, ErrDenied) || errors.Is(err, ErrExhausted) || errors.Is(err, ErrInvalid) {
 			return StoreVersion{}, err
 		}
 		return StoreVersion{}, ErrStore

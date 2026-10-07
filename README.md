@@ -2,6 +2,10 @@
 
 Sifruno is a modern hosting-panel project with the original WHM/cPanel ecosystem compatibility contract. The approved V3 brand and local engineering panel are implemented. The hosting engine remains incomplete; this is not a production cPanel replacement.
 
+Start with the [installation guide](docs/installation.md). The
+[closeout and PR inventory](docs/CLOSEOUT.md) records the delivered source,
+unfinished work and paused development loop.
+
 ## Community and Pro
 
 Original Sifruno Community code uses [AGPL-3.0-only](LICENSE), with commercial
@@ -13,16 +17,16 @@ retain their own licenses. See [licensing and contribution policy](LICENSING.md)
 
 ## Local panel
 
-```powershell
-npm run panel:build
-./scripts/go.ps1 build -buildvcs=false -o bin/sifruno.exe ./cmd/sifruno
-./scripts/go.ps1 build -buildvcs=false -o bin/panelctl.exe ./cmd/panelctl
-./bin/sifruno.exe --listen 127.0.0.1:8080 --state .state/sifruno --ui web/dist
-```
+Start with the numbered [source installation guide](docs/installation.md): install
+Git, Node.js 24.19.0 and Go 1.27.1; install both locked npm dependency sets;
+build the UI and binaries; then run the panel as an ordinary user on loopback
+with dedicated private state. The guide covers Windows and manual Linux/macOS
+builds, private sign-in, response/CLI checks, stopping and troubleshooting.
+No automatic service installer or prebuilt release download is promised.
 
 Open `http://127.0.0.1:8080`. The compact dashboard shows real CPU, memory, local volume capacity, uptime, network rates and service inventory. Actual Meta Astryx 0.6.5 components provide the sidebar, cards, buttons, progress bars, theme and time-range controls, alongside React/TypeScript/Tailwind and reused shadcn/Base UI tools. Search, service-state filters, details, pagination, mobile navigation and light/dark themes work. Compatibility, change trail, AI budget and platforms remain secondary tools. Go/Huma provides typed APIs; local `panelctl` commands operate recovery, budget and authenticated website workflows. See [commands and limitations](docs/workbench.md) and [dashboard design](docs/dashboard-design.md).
 
-The new Websites section manages actual app-owned static files: persisted sites, explicit file saves with revision/hash checks, suspend/resume, bounded ZIP backups and validated restores using scoped Ponytrail checkpoints. It requires the private operator key at `.state/sifruno/operator/access.key`; open it privately on the server and never post it in chat. Signed/encrypted cookies and CSRF protect local writes. Static previews use `http://site-<id>.localhost:8082/`. Native Windows filesystem/API/CLI tests and isolated real browser workflows pass; Linux/macOS native execution remains unverified. It does not provision Linux users, PHP, DNS, TLS, mail or databases. Public monitoring previews hide Websites and block its APIs. See [website scope and evidence](docs/sites-slice.md).
+The new Websites section manages actual app-owned static files: persisted sites, explicit file saves with revision/hash checks, suspend/resume, bounded ZIP backups and validated restores using scoped Ponytrail checkpoints. It requires the private operator key at `operator/access.key` beneath the chosen `--state` directory; open it privately on the server and never post it in chat. Signed/encrypted cookies and CSRF protect local writes. Static previews use `http://site-<id>.localhost:8082/`. Native Windows filesystem/API/CLI tests and isolated real browser workflows pass; Linux/macOS native execution remains unverified. It does not provision Linux users, PHP, DNS, TLS, mail or databases. Public monitoring previews hide Websites and block its APIs. See [website scope and evidence](docs/sites-slice.md).
 
 Storage and Network have dedicated views backed by real collector values.
 Private File Manager adds folder navigation, search, hash-checked UTF-8 editing,

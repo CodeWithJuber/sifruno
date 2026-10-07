@@ -6,6 +6,17 @@ Start with the [installation guide](docs/installation.md). The
 [closeout and PR inventory](docs/CLOSEOUT.md) records the delivered source,
 unfinished work and paused development loop.
 
+Use [the documentation index](docs/README.md) and [current project state](docs/PROJECT-STATE.md)
+for the delivered source and remaining acceptance gates. Evidence below describes
+recorded commits and isolated environments, not a fresh checkout test or current
+deployment. Historical public preview URLs are not availability assurances.
+Main includes the Accounts metadata-preview UI, broker/API/CLI web preview,
+controller layout preparation and runtime input diagnostic. Preview metadata is
+not applied configuration or serving health. The merged runtime-input guest
+archive remains **non-runnable**: its parser is absent and approval is unresolved.
+The automated development loop remains paused; this documentation update does
+not resume feature work.
+
 ## Community and Pro
 
 Original Sifruno Community code uses [AGPL-3.0-only](LICENSE), with commercial
@@ -26,13 +37,13 @@ No automatic service installer or prebuilt release download is promised.
 
 Open `http://127.0.0.1:8080`. The compact dashboard shows real CPU, memory, local volume capacity, uptime, network rates and service inventory. Actual Meta Astryx 0.6.5 components provide the sidebar, cards, buttons, progress bars, theme and time-range controls, alongside React/TypeScript/Tailwind and reused shadcn/Base UI tools. Search, service-state filters, details, pagination, mobile navigation and light/dark themes work. Compatibility, change trail, AI budget and platforms remain secondary tools. Go/Huma provides typed APIs; local `panelctl` commands operate recovery, budget and authenticated website workflows. See [commands and limitations](docs/workbench.md) and [dashboard design](docs/dashboard-design.md).
 
-The new Websites section manages actual app-owned static files: persisted sites, explicit file saves with revision/hash checks, suspend/resume, bounded ZIP backups and validated restores using scoped Ponytrail checkpoints. It requires the private operator key at `operator/access.key` beneath the chosen `--state` directory; open it privately on the server and never post it in chat. Signed/encrypted cookies and CSRF protect local writes. Static previews use `http://site-<id>.localhost:8082/`. Native Windows filesystem/API/CLI tests and isolated real browser workflows pass; Linux/macOS native execution remains unverified. It does not provision Linux users, PHP, DNS, TLS, mail or databases. Public monitoring previews hide Websites and block its APIs. See [website scope and evidence](docs/sites-slice.md).
+The Websites section manages actual app-owned static files: persisted sites, explicit file saves with revision/hash checks, suspend/resume, bounded ZIP backups and validated restores using scoped Ponytrail checkpoints. It requires the private operator key at `operator/access.key` beneath the chosen `--state` directory; open it privately on the server and never post it in chat. Signed/encrypted cookies and CSRF protect local writes. Static previews use `http://site-<id>.localhost:8082/`. Native Windows filesystem/API/CLI tests and isolated real browser workflows pass; Linux/macOS native execution remains unverified. It does not provision Linux users, PHP, DNS, TLS, mail or databases. Public monitoring previews hide Websites and block its APIs. See [website scope and evidence](docs/sites-slice.md).
 
 Storage and Network have dedicated views backed by real collector values.
 Private File Manager adds folder navigation, search, hash-checked UTF-8 editing,
 nested new files and revision-conflict comparison for app-owned static sites.
 Private Backups adds actual ZIP creation, hash-matched downloads and confirmed
-restore with conflict handling. Real isolated browser/API tests and actual
+restore with conflict handling. Historical isolated browser/API tests and actual
 public HTTPS privacy checks pass at390/768/1440px in both themes. These private
 tools require the local operator session and are excluded from the approved
 public monitoring preview. See [File Manager](docs/file-manager-ui.md),
@@ -41,13 +52,13 @@ public monitoring preview. See [File Manager](docs/file-manager-ui.md),
 The approved public dashboard now offers **Explore panel** on Overview and
 **Panel preview** in navigation. Its Files, Backups and Websites tour uses
 clearly labelled sample content with local selection/search only. It exposes
-no customer files, operator login, write actions or private APIs. Six actual
-HTTPS viewport/theme checks pass. See [public panel tour](docs/public-panel-preview.md).
+no customer files, operator login, write actions or private APIs. Six historical
+HTTPS viewport/theme checks passed. See [public panel tour](docs/public-panel-preview.md).
 
 The private **Access** page lists local operator sessions with confirmed
-single/bulk revocation and sign-out. Actual isolated TCP/browser flows, replay
+single/bulk revocation and sign-out. Historical isolated TCP/browser flows, replay
 refusal, race tests and six responsive theme cases pass; public mode excludes
-the page and session calls. This source batch is staged for review, with remote
+the page and session calls. This source is in main, with remote
 roles/ingress still required. See [session controls](docs/operator-sessions.md).
 
 Portable builds target Windows/Linux/macOS amd64/arm64: `npm run runtime:build`. Build verification and runtime qualification are separate. Historical systems remain connector/remote candidates, not guaranteed native targets. See [platform scope](docs/platform-support.md) and [archive contract](docs/runtime-builds.md).
@@ -80,7 +91,7 @@ Native Sifruno v1 ZIP export/import uses the same authenticated API from the loc
 
 Development uses isolated Git worktrees for UI, CLI and review. The session permits four concurrent agents including the integrating root; the [twenty-four workstreams](docs/parallel-development.md) run in batches. This base checkout is connected to [CodeWithJuber/sifruno](https://github.com/CodeWithJuber/sifruno), with reviewed changes proposed on feature branches. Running private state is excluded from Git and source snapshots.
 
-The [full delivery plan](docs/DELIVERY-PLAN.md) maps42focused PR scopes to
+The [full delivery plan](docs/DELIVERY-PLAN.md) maps focused PR scopes to
 service, compatibility, migration, vendor, AI, platform and release gates.
 [Machine-readable status](docs/WORKSTREAM-STATUS.json) tracks evidence and
 dependencies separately from implementation or qualification claims.

@@ -2,6 +2,12 @@
 
 Sifruno currently provides a local engineering panel, not a production hosting installer. These steps build source and run a private loopback panel. They do not install services, provision hosting identities, configure DNS/TLS/mail, or certify vendor compatibility.
 
+See [the documentation index](README.md) and [current project state](PROJECT-STATE.md)
+for delivered source and acceptance limits. This guide is in main; its commands
+were source-reviewed, not replayed as a fresh clean-machine installation. The
+merged WIP runtime-input guest archive is not runnable and is not an installation
+step. Historical guest/browser results do not certify a current deployment.
+
 ## Windows (PowerShell)
 
 1. Install Git, Node.js **24.19.0** (including npm), and Go **1.27.1**. Obtain them from their official distributors. The repository also provides the pinned Windows tool bootstrap described below; it downloads tools only when you explicitly run it. Open PowerShell as your ordinary user.

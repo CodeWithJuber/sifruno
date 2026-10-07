@@ -48,6 +48,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Storage and network views](host-resources.md) | `host-resources.md` |
 | [Local Access and sessions](operator-sessions.md) | `operator-sessions.md` |
 | [Revisioned account-policy admission](access-policy-admission.md) | `access-policy-admission.md` |
+| [Trusted account-policy persistence](access-policy-store.md) | `access-policy-store.md` |
 | [Account mutation session admission](account-session-admission.md) | `account-session-admission.md` |
 | [Site request session admission](site-session-admission.md) | `site-session-admission.md` |
 | [Native account host-policy admission](stock-account-preflight.md) | `stock-account-preflight.md` |
@@ -119,6 +120,7 @@ These describe local development, licensing, architecture or historical UI revie
 - [README.md](../README.md) — Sifruno
 - [design-qa.md](../design-qa.md) — Accounts preview design QA
 - [internal/accesspolicy/README.md](../internal/accesspolicy/README.md) — Native hosting account access policy foundation
+- [internal/accesspolicy/store.md](../internal/accesspolicy/store.md) — Trusted policy binding persistence
 - [internal/hostaccounts/README.md](../internal/hostaccounts/README.md) — Native Linux account foundation
 - [internal/hostweb/README.md](../internal/hostweb/README.md) — Native hostweb compiler
 - [internal/hostwebgeneration/README.md](../internal/hostwebgeneration/README.md) — Unactivated web generation coordinator
@@ -173,6 +175,6 @@ The following copies belong to recorded test inputs. They are intentionally pres
 - [lab/hostweb-recovery-review/testdata/candidate/internal/hostwebruntime/README.md](../lab/hostweb-recovery-review/testdata/candidate/internal/hostwebruntime/README.md)
 - [lab/hostwebruntime-review/testdata/candidate/README.md](../lab/hostwebruntime-review/testdata/candidate/README.md)
 
-The inventory contains 113 Markdown files, including this index and PR history.
+The inventory contains 115 Markdown files, including this index and PR history.
 All are linked here; this index is the only self-entry omitted. Stable technical
 contracts and historical receipts retain their original verification scope.

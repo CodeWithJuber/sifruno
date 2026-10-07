@@ -17,7 +17,8 @@ archive remains **non-runnable**: its parser is absent and approval is unresolve
 Development resumed on the user's 2026-10-07 instruction. The recurring loop uses
 one focused delivery per run, existing dependencies, bounded implementation and
 independent review. The [policy admission foundation](docs/access-policy-admission.md)
-adds revision-aware authorization checks; production tenant integration remains open.
+adds revision-aware authorization checks, and [trusted policy persistence](docs/access-policy-store.md)
+stores validated bindings across restarts. Production tenant integration remains open.
 
 ## Community and Pro
 

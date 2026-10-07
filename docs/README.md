@@ -48,7 +48,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Storage and network views](host-resources.md) | `host-resources.md` |
 | [Local Access and sessions](operator-sessions.md) | `operator-sessions.md` |
 | [Revisioned account-policy admission](access-policy-admission.md) | `access-policy-admission.md` |
-| [Trusted account-policy persistence](access-policy-store.md) | `access-policy-store.md` |
+| [Trusted account-policy persistence and durable admission](access-policy-store.md) | `access-policy-store.md` |
 | [Account mutation session admission](account-session-admission.md) | `account-session-admission.md` |
 | [Site request session admission](site-session-admission.md) | `site-session-admission.md` |
 | [Native account host-policy admission](stock-account-preflight.md) | `stock-account-preflight.md` |

@@ -43,3 +43,54 @@ primary Go wrapper with GOPROXY=off and GOSUMDB=off for package tests and vet.
 Recovery for a corrupt database requires an explicit trusted operator procedure;
 there is no silent reset or repair API. Reverting this source addition does not
 migrate or delete stored data. No production caller is activated by this commit.
+
+## Transaction-backed admission
+
+`Store.AuthorizeAt(expected, actor, action, resource)` validates a fresh bbolt
+read snapshot and checks both its StoreVersion and the existing permission matrix
+in that same transaction. It does not reuse a loaded Policy or an Authority cache.
+A matching permitted request returns `(true, nil)`; a matching permission denial
+returns `(false, nil)`. Zero, foreign, or stale versions return `(false,
+ErrConflict)`. Unavailable, missing, or corrupt storage returns `(false, ErrStore)`
+before version comparison. No error returns an allowed decision or repairs data.
+
+Admission linearizes at the database read snapshot. Checks whose transactions
+begin after a replacement commits see the replacement; old tokens fail even if
+the same grants are subsequently restored or the database is reopened. An
+already-running read may complete against its older snapshot. Replacement does
+not lock, cancel, or undo effects following a successful check. Identity must
+still be independently authenticated, and callers must establish their own
+operation-admission contract. No caller wiring is introduced here. Existing
+storage trust, clone/rollback limitations, and transaction waiting constraints
+above still apply.
+
+## Authorized policy replacement
+
+`ManagePolicy` is an explicit server-scoped action appended after the existing
+five actions, preserving their numeric values. Only a current ServerAdmin may
+perform it on exactly ServerResource; resellers, account users, unknown actors,
+and account resources deny. This extends the original foundation matrix with
+policy management; it does not enable a tenant-facing route.
+
+`ReplaceAuthorized(expected, actor, next)` uses one write transaction to validate
+the current stored snapshot, compare its version, and authorize ManagePolicy using
+that snapshot. Only then does it check exhaustion, validate the candidate and
+commit the replacement. Candidate roles cannot authorize their own installation.
+An administrator may demote or remove itself; subsequent writes by that actor
+are denied unless a trusted authority grants permission again.
+
+Admission and validation refusals return a zero version without changing committed state.
+A commit I/O error also returns no version, but its durable outcome can be ambiguous.
+Inspect and reload trusted stored state before deciding what to do next; do not
+infer a grant from the error or blindly retry the write. Error precedence
+is ErrStore for unavailable/corrupt storage, ErrConflict for zero/foreign/stale
+versions, ErrDenied for an unauthorized current actor, then ErrExhausted or
+ErrInvalid for exhaustion or an invalid candidate. Ordinary permission refusal
+from Store.AuthorizeAt still returns false with no error.
+
+The existing `Replace` remains a privileged trusted bootstrap/recovery API that
+performs no actor authorization; it must not be exposed as a tenant route. Neither
+method establishes the caller's identity. An independently authenticated actor
+and trusted candidate bindings remain integration obligations. The transaction
+covers only this database replacement, not callbacks or external effects. No
+HTTP, session, native account, or production authentication wiring is added.

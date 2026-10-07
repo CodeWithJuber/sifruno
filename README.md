@@ -18,7 +18,9 @@ Development resumed on the user's 2026-10-07 instruction. The recurring loop use
 one focused delivery per run, existing dependencies, bounded implementation and
 independent review. The [policy admission foundation](docs/access-policy-admission.md)
 adds revision-aware authorization checks, and [trusted policy persistence](docs/access-policy-store.md)
-stores validated bindings across restarts. Production tenant integration remains open.
+stores validated bindings across restarts, checks permissions against a
+versioned database snapshot and admits policy updates using current admin
+permissions. Production tenant integration remains open.
 
 ## Community and Pro
 

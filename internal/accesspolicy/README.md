@@ -1,7 +1,8 @@
 # Native hosting account access policy foundation
 
-This package provides an immutable authorization policy and an in-memory revisioned authority. It is not connected to
-HTTP, the local operator session, the host-account broker, or a database. It does
+This package provides an immutable authorization policy, an in-memory revisioned
+authority and a [caller-owned durable store](store.md). It is not connected to
+HTTP, the local operator session or the host-account broker. It does
 not provide tenant authentication, credential revocation, production multiuser
 isolation, or vendor compatibility certification.
 
@@ -37,11 +38,15 @@ authentication expiry, or broker admission.
 | CreateAccount | ServerResource | Allow | Deny | Deny |
 | ReadAccount | Admitted AccountResource | Allow | Own admitted account | Assigned account |
 | SetAccountState | Admitted AccountResource | Allow | Own admitted account | Deny |
+| ManagePolicy | ServerResource | Allow | Deny | Deny |
 
 All other action/resource/role combinations deny, including zero/unknown values
 and unknown accounts for admins. Capability is server-scoped only. There is no
-wildcard, default allow, ownership reassignment action, role management action,
-credential action, arbitrary command, deletion, or other resource type.
+wildcard, default allow, credential action, arbitrary command, deletion, or
+other resource type. `ManagePolicy` governs complete binding replacement through
+`Store.ReplaceAuthorized`; the current policy determines permission, never the
+candidate's proposed roles. Existing trusted `Store.Replace` remains a separate
+privileged primitive and must not be exposed directly to tenant requests.
 
 Actor identifiers are 1–64 ASCII bytes, start with lowercase `a`–`z`, and contain
 only lowercase letters, digits, `_`, or `-`. Account IDs preserve the native

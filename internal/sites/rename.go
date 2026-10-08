@@ -64,9 +64,9 @@ func (s *Store) RenameFile(id string, input RenameInput, actor string) (Site, er
 		if err != nil {
 			return Site{}, ErrUnavailable
 		}
-		entries, err := dir.ReadDir(MaxFiles + 1)
+		entries, err := dir.ReadDir(MaxFiles*9 + 1)
 		dir.Close()
-		if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > MaxFiles {
+		if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > MaxFiles*9 {
 			return Site{}, ErrUnavailable
 		}
 		found := false

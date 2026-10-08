@@ -3,6 +3,7 @@ package sites
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -196,5 +197,51 @@ func TestRenameCompetingClientsCommitOnce(t *testing.T) {
 	}
 	if served(s, site.Domain, "/", "GET").Code != 404 {
 		t.Fatal("renamed index root still served")
+	}
+}
+
+func TestRenameAtFileCapacityWithEmptyFolder(t *testing.T) {
+	s, journal, base := fixture(t)
+	data := map[string][]byte{"index.html": []byte("capacity index"), "empty.png/file.txt": []byte("preserved at capacity")}
+	for i := 0; i < MaxFiles-2; i++ {
+		data[fmt.Sprintf("asset%02d.txt", i)] = []byte(fmt.Sprintf("asset %d", i))
+	}
+	site, err := s.create(CreateInput{Name: "Capacity", Domain: "capacity.test"}, data, "test", "local-operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This move leaves 64 saved files plus an empty folder at the root.
+	site, err = s.RenameFile(site.ID, RenameInput{"empty.png/file.txt", "moved.txt", sum(data["empty.png/file.txt"]), site.Revision}, "local-operator")
+	if err != nil {
+		t.Fatal("first move", err)
+	}
+	files, err := s.Files(site.ID)
+	if err != nil || len(files) != MaxFiles {
+		t.Fatal("valid catalog with empty folder", err, len(files))
+	}
+	next, err := s.RenameFile(site.ID, RenameInput{"asset00.txt", "renamed.txt", sum(data["asset00.txt"]), site.Revision}, "local-operator")
+	if err != nil || next.Revision != site.Revision+1 {
+		t.Fatal("rename with 65 directory entries", next, err)
+	}
+	if served(s, site.Domain, "/asset00.txt", "GET").Code != 404 {
+		t.Fatal("old capacity URL")
+	}
+	if w := served(s, site.Domain, "/renamed.txt", "GET"); w.Code != 200 || !bytes.Equal(w.Body.Bytes(), data["asset00.txt"]) {
+		t.Fatal("new capacity bytes", w.Code)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(filepath.Join(base, "sites"), journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	files, err = again.Files(site.ID)
+	if err != nil || len(files) != MaxFiles {
+		t.Fatal("reopened capacity catalog", err, len(files))
+	}
+	if got, err := again.Get(site.ID); err != nil || got != next {
+		t.Fatal("reopened capacity identity", got, err)
 	}
 }

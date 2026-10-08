@@ -232,6 +232,58 @@ export async function downloadSiteBackup(siteId: string, backupId: string, expec
   } finally { clearTimeout(timer); }
 }
 
+// Saved file downloads use raw bytes, never editor drafts or text decoding.
+export async function downloadSiteFile(input: { siteId: string; file: SiteFile; expectedRevision: number; isLive: () => boolean }): Promise<Blob> {
+  const maxBytes = 2 * 1024 * 1024, filename = input.file.path.split("/").at(-1);
+  if (!id(input.siteId) || !path(input.file.path) || input.file.path.length > 200 || !input.file.path.split("/").every((part) => /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/.test(part)) || !filename || !sha(input.file.sha256) || !count(input.file.bytes) || input.file.bytes > maxBytes || !count(input.expectedRevision) || input.expectedRevision < 1) {
+    throw new SiteApiError(422, "invalid_request", "Review the saved file record before downloading.");
+  }
+  if (!input.isLive()) throw new SiteApiError(401, "session_changed", "The download context changed. Sign in and review the file again.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const query = new URLSearchParams({ path: input.file.path, expected_revision: String(input.expectedRevision), expected_sha256: input.file.sha256 });
+    const response = await fetch(siteURL(input.siteId, `/files/download?${query}`), {
+      method: "GET", credentials: "same-origin", cache: "no-store", signal: controller.signal,
+      headers: { Accept: "application/octet-stream" },
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new SiteApiError(response.status, "website_transfer_failed", message(response.status));
+    }
+    const body = response.body, length = response.headers.get("Content-Length");
+    if (response.headers.get("Content-Type") !== "application/octet-stream" || response.headers.get("Content-Disposition") !== `attachment; filename="${filename}"` || !body || length === null || !/^\d+$/.test(length) || Number(length) !== input.file.bytes) {
+      await body?.cancel().catch(() => undefined);
+      throw new SiteApiError(0, "invalid_response", "The download did not match the saved file attachment or size.");
+    }
+    const reader = body.getReader(), chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > maxBytes || size > input.file.bytes || !input.isLive()) {
+        await reader.cancel().catch(() => undefined);
+        throw new SiteApiError(0, "invalid_response", "The download exceeded its saved size or its context changed.");
+      }
+      chunks.push(value);
+    }
+    if (size !== input.file.bytes) throw new SiteApiError(0, "invalid_response", "The download did not match the saved file size.");
+    const raw = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { raw.set(chunk, offset); offset += chunk.byteLength; }
+    const digest = await crypto.subtle.digest("SHA-256", raw);
+    const actualSha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (actualSha256 !== input.file.sha256) throw new SiteApiError(0, "invalid_response", "The downloaded file hash does not match the saved record. Your draft is kept.");
+    if (!input.isLive()) throw new SiteApiError(401, "session_changed", "The download context changed. Review the file again.");
+    return new Blob([raw], { type: "application/octet-stream" });
+  } catch (error) {
+    if (error instanceof SiteApiError) throw error;
+    throw new SiteApiError(0, "connection_failed", "The file download could not be confirmed. Your draft is kept; refresh file records before trying again.");
+  } finally { clearTimeout(timer); }
+}
+
 export async function importSiteArchive(input: { name: string; domain: string; archive: File; csrf: string }): Promise<Site> {
   const nameBytes = new TextEncoder().encode(input.name.trim()).length;
   const domainBytes = new TextEncoder().encode(input.domain.trim()).length;

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Confirmed rename/move of a saved website file in File Manager, preserving
+  bytes and refusing stale revisions, changed checksums and occupied paths.
 - Download a saved text or binary file from File Manager, verified against the
   displayed revision, byte count and SHA-256 while retaining unsaved drafts.
 - Main integration of the reviewed website domain-routing update, selected-site

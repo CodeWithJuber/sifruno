@@ -97,6 +97,19 @@ export async function siteRequest<T>(
 }
 
 export const siteURL = (siteId: string, suffix = "") => `/api/v1/sites/${encodeURIComponent(siteId)}${suffix}`;
+export async function renameSiteFile(input: { siteId: string; path: string; destination: string; expectedSHA256: string; expectedRevision: number; csrf: string; isLive: () => boolean }): Promise<Site> {
+  if (!id(input.siteId) || !path(input.path) || !path(input.destination) || input.path.toLowerCase() === input.destination.toLowerCase() || !sha(input.expectedSHA256) || !count(input.expectedRevision) || input.expectedRevision < 1 || !input.csrf) throw new SiteApiError(422, "invalid_request", "Review the source, new relative path and website revision before renaming.");
+  if (!input.isLive()) throw new SiteApiError(401, "session_changed", "The rename context changed. Sign in and review the file again.");
+  try {
+    const site = await siteRequest(siteURL(input.siteId, "/rename"), validSite, { method: "POST", csrf: input.csrf, body: { path: input.path, destination: input.destination, expected_sha256: input.expectedSHA256, expected_revision: input.expectedRevision } });
+    if (!input.isLive()) throw new SiteApiError(401, "session_changed", "The rename context changed. Refresh the file records before continuing.");
+    if (site.id !== input.siteId || site.revision !== input.expectedRevision + 1) throw new SiteApiError(0, "invalid_response", "Rename did not confirm the expected website revision. Refresh file records before retrying.");
+    return site;
+  } catch (error) {
+    if (error instanceof SiteApiError && error.status === 409) throw new SiteApiError(409, error.code, "The saved source, destination or website revision changed. Your destination path is kept; refresh the rename target and review it before confirming again.");
+    throw error;
+  }
+}
 export function sitePreviewPort(): number | undefined {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="sifruno-sites-port"]');
   if (!meta) return 8082;

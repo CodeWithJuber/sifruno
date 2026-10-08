@@ -656,12 +656,12 @@ func (s *Store) snapshot(r record) (map[string][]byte, error) {
 		if err != nil {
 			return ErrUnavailable
 		}
-		entries, err := f.ReadDir(MaxFiles + 1)
+		entries, err := f.ReadDir(MaxFiles*9 + 1)
 		f.Close()
 		if err != nil && !errors.Is(err, io.EOF) {
 			return ErrUnavailable
 		}
-		if len(entries) > MaxFiles {
+		if len(entries) > MaxFiles*9 {
 			return ErrUnavailable
 		}
 		for _, e := range entries {

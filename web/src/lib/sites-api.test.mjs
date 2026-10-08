@@ -8,10 +8,47 @@ const api = await import(`data:text/javascript;base64,${Buffer.from(source).toSt
 const id = "a".repeat(32);
 const site = { id, name: "Recovered", domain: "recovered.test", preview_host: `site-${id}.localhost`, state: "active", revision: 1, created_at: "2026-10-07T10:00:00Z", updated_at: "2026-10-07T10:00:00Z" };
 const bytes = Uint8Array.of(0x50, 0x4b, 0x03, 0x04, 0, 0xff, 0x80, 0x0a);
+const renameInput = { siteId: id, path: "assets/old.png", destination: "images/new.png", expectedSHA256: "d".repeat(64), expectedRevision: 1, csrf: "fixture-csrf", isLive: () => true };
 async function mockFetch(mock, operation) {
   const original = globalThis.fetch; globalThis.fetch = mock;
   try { await operation(); } finally { globalThis.fetch = original; }
 }
+
+test("rename dispatches one authenticated checked mutation without file bytes", async () => {
+  let calls = 0;
+  await mockFetch(async (url, options) => {
+    ++calls;
+    assert.equal(url, `/api/v1/sites/${id}/rename`); assert.equal(options.method, "POST");
+    assert.equal(options.credentials, "same-origin"); assert.equal(options.headers["X-CSRF-Token"], "fixture-csrf");
+    assert.deepEqual(JSON.parse(options.body), { path: renameInput.path, destination: renameInput.destination, expected_sha256: renameInput.expectedSHA256, expected_revision: 1 });
+    return new Response(JSON.stringify({ ...site, revision: 2 }), { status: 200 });
+  }, async () => assert.equal((await api.renameSiteFile(renameInput)).revision, 2));
+  assert.equal(calls, 1);
+});
+test("rename rejects no-op, invalid source metadata and expired context before dispatch", async () => {
+  await mockFetch(async () => assert.fail("must not dispatch"), async () => {
+    for (const change of [{ destination: renameInput.path.toUpperCase() }, { expectedRevision: 0 }, { expectedSHA256: "" }, { siteId: "other" }, { destination: "../outside.html" }]) {
+      await assert.rejects(api.renameSiteFile({ ...renameInput, ...change }), { status: 422 });
+    }
+    await assert.rejects(api.renameSiteFile({ ...renameInput, isLive: () => false }), { status: 401 });
+  });
+});
+for (const status of [401, 403, 404, 409, 422, 503]) {
+  test(`rename surfaces HTTP ${status} once, keeping source and destination`, async () => {
+    let calls = 0;
+    await mockFetch(async () => { ++calls; return new Response("{}", { status }); }, async () => {
+      await assert.rejects(api.renameSiteFile(renameInput), { status });
+    });
+    assert.equal(calls, 1); assert.equal(renameInput.destination, "images/new.png"); assert.equal(renameInput.path, "assets/old.png");
+  });
+}
+test("rename rejects unrelated site/revision and context lost during response", async () => {
+  for (const changed of [{ revision: 1 }, { revision: 3 }, { id: "b".repeat(32), preview_host: `site-${"b".repeat(32)}.localhost` }]) {
+    await mockFetch(async () => new Response(JSON.stringify({ ...site, revision: 2, ...changed })), async () => assert.rejects(api.renameSiteFile(renameInput), { code: "invalid_response" }));
+  }
+  let live = true;
+  await mockFetch(async () => { live = false; return new Response(JSON.stringify({ ...site, revision: 2 })); }, async () => assert.rejects(api.renameSiteFile({ ...renameInput, isLive: () => live }), { status: 401 }));
+});
 
 for (const type of ["application/x-zip-compressed", "application/zip", ""]) {
   test(`native ZIP upload normalizes ${type || "missing MIME"} and preserves filename, bytes and authentication`, async () => {

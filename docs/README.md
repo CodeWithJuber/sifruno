@@ -38,6 +38,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Website inventory and workflow](websites-workflow.md) | `websites-workflow.md` |
 | [Private static-site File Manager](file-manager-ui.md) | `file-manager-ui.md` |
 | [Download a saved website file](site-file-download.md) | `site-file-download.md` |
+| [Rename or move a saved website file](site-file-rename.md) | `site-file-rename.md` |
 | [Private website backups](backups-ui.md) | `backups-ui.md` |
 | [Public panel tour](public-panel-preview.md) | `public-panel-preview.md` |
 

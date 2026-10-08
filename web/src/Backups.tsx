@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Archive, ArrowDownToLine, Globe, Info, LockKeyhole, LogOut, RefreshCw } from "lucide-react";
+import { Archive, ArrowDownToLine, Globe, Info, LockKeyhole, LogOut, RefreshCw, Upload } from "lucide-react";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { bytes } from "@/Dashboard";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
+import type { SiteHandoff } from "@/App";
 import { downloadSiteBackup, SiteApiError, siteRequest, siteURL, validBackup, validBackupList, validSession, validSite, validSiteList } from "@/lib/sites-api";
 import type { OperatorSession, Site, SiteBackup } from "@/lib/sites-api";
 import { canConfirmRestorePreview, getRestorePreview, restorePreviewError, restorePreviewMatches, restoreKinds } from "@/lib/restorePreview";
@@ -18,7 +19,7 @@ const backupError = (error: unknown) => error instanceof SiteApiError && error.s
   ? "The website changed on the server. Refresh backup records and review the current revision before confirming again. Your Websites editor draft is kept."
   : error instanceof SiteApiError ? error.message : "The backup operation could not be confirmed. Refresh backup records before trying again.";
 
-export default function Backups({ revision, active, onStatus }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void }) {
+export default function Backups({ revision, active, onStatus, siteHandoff, onHandoffConsumed, onImportZIP }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; siteHandoff?: SiteHandoff; onHandoffConsumed: (requestId: number) => void; onImportZIP: () => void }) {
   const [session, setSession] = useState<OperatorSession>();
   const [accessKey, setAccessKey] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
@@ -39,10 +40,17 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
   const restoreReturnFocus = useRef(false);
   const previewEpoch = useRef(0);
   const selectedId = useRef<string | undefined>(undefined);
+  const handoff = useRef(siteHandoff), handledHandoff = useRef(0);
+  if (siteHandoff) handoff.current = siteHandoff;
+  const handoffRequestId = handoff.current?.requestId;
+  const scheduleDraft = useRef(false);
+  const [scheduleDirty, setScheduleDirty] = useState(false);
+  const onScheduleDirty = useCallback((dirty: boolean) => { scheduleDraft.current = dirty; setScheduleDirty(dirty); }, []);
   const epoch = useRef(0);
   const actionPending = useRef(false);
   const activeRef = useRef(active);
   activeRef.current = active;
+  const authEpoch = useRef(0);
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const authenticated = session?.authenticated === true;
@@ -51,49 +59,62 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
   const canRestore = Boolean(canChange && previewVerified && selected && restore && canConfirmRestorePreview(preview, selected.id, selected.revision, restore.backup));
 
   const clearRestore = useCallback(() => { ++previewEpoch.current; restoreReturnFocus.current = false; setRestore(undefined); setPreview(undefined); setPreviewError(undefined); setConfirmed(false); }, []);
-  const clearPrivateRecords = useCallback(() => { setSites([]); setSelected(undefined); setBackups([]); setFresh(false); clearRestore(); }, [clearRestore]);
+  const clearPrivateRecords = useCallback(() => { setSites([]); setSelected(undefined); setBackups([]); setFresh(false); scheduleDraft.current = false; setScheduleDirty(false); clearRestore(); }, [clearRestore]);
   const fail = useCallback((failure: unknown) => {
     setError(backupError(failure)); setFresh(false); setConfirmed(false); setPreview(undefined);
-    if (failure instanceof SiteApiError && failure.status === 401) { setSession({ authenticated: false }); clearPrivateRecords(); setNotice(undefined); }
+    if (failure instanceof SiteApiError && failure.status === 401) { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); clearPrivateRecords(); setNotice(undefined); }
   }, [clearPrivateRecords]);
 
   const loadInventory = useCallback(async (preferredId?: string, isLive: () => boolean = () => true) => {
+    if (!isLive()) return;
+    const wanted = preferredId ?? selectedId.current;
+    if (wanted !== undefined && !/^[a-f0-9]{32}$/.test(wanted)) { selectedId.current = wanted; clearPrivateRecords(); throw new SiteApiError(404, "not_found", "The requested website is unavailable. Choose a website explicitly."); }
     const list = await siteRequest("/api/v1/sites", validSiteList);
     if (!isLive()) return;
-    const chosen = list.items.find((site) => site.id === (preferredId ?? selectedId.current)) ?? list.items[0];
+    const chosen = wanted === undefined ? list.items[0] : list.items.find((site) => site.id === wanted);
+    if (wanted !== undefined && !chosen) { selectedId.current = wanted; clearPrivateRecords(); setSites(list.items); throw new SiteApiError(404, "not_found", "The requested website is no longer in the inventory. Choose a website explicitly."); }
     if (!chosen) { setSites(list.items); setSelected(undefined); setBackups([]); setFresh(true); setLoadedAt(new Date()); return; }
     const [site, listBackups] = await Promise.all([siteRequest(siteURL(chosen.id), validSite), siteRequest(siteURL(chosen.id, "/backups"), validBackupList)]);
     if (!isLive()) return;
     if (site.id !== chosen.id || listBackups.items.some((backup) => backup.site_id !== chosen.id)) throw new SiteApiError(0, "invalid_response", "The backup inventory did not match the selected website. Refresh before trying again.");
+    if (scheduleDraft.current && selectedId.current !== site.id) throw new SiteApiError(409, "draft_kept", "Your backup schedule draft is kept. Save or discard it, then open the requested website again from Websites.");
     selectedId.current = site.id;
     setSites(list.items.map((item) => item.id === site.id ? site : item));
     setSelected(site); setBackups(listBackups.items); setFresh(true); setLoadedAt(new Date());
-  }, []);
+  }, [clearPrivateRecords]);
 
   useEffect(() => {
     const generation = ++epoch.current;
     clearRestore();
     if (!active) { setAccessKey(""); return; }
     if (actionPending.current) return;
-    const isLive = () => activeRef.current && generation === epoch.current;
+    const request = handoff.current && handoff.current.requestId !== handledHandoff.current ? handoff.current : undefined;
+    if (request) {
+      handledHandoff.current = request.requestId;
+      if (scheduleDraft.current) { setBusy(undefined); setError(`Cannot open ${request.siteName}: your backup schedule draft is kept. Save or discard it, then use Open Backups in Websites again.`); onHandoffConsumed(request.requestId); return; }
+      selectedId.current = request.siteId; setNotice(undefined); clearPrivateRecords();
+    }
+    const authGeneration = authEpoch.current;
+    let token: string | undefined;
+    const isLive = () => activeRef.current && generation === epoch.current && authGeneration === authEpoch.current && (token === undefined || (sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now()));
     setBusy("Checking backup records"); setFresh(false); setError(undefined);
     void (async () => {
       try {
         const next = await siteRequest("/api/v1/session", validSession, { unauthenticatedSession: true });
         if (!isLive()) return;
-        setSession(next);
-        if (next.authenticated) await loadInventory(undefined, isLive);
+        sessionRef.current = next; setSession(next);
+        if (next.authenticated) { token = next.csrf_token; await loadInventory(request?.siteId, isLive); }
         else clearPrivateRecords();
         if (isLive()) setLoadedAt(new Date());
       } catch (failure) { if (isLive()) fail(failure); }
-      finally { if (isLive()) setBusy(undefined); }
+      finally { if (activeRef.current && generation === epoch.current) setBusy(undefined); if (request) onHandoffConsumed(request.requestId); }
     })();
     return () => { if (generation === epoch.current) ++epoch.current; };
-  }, [active, revision, attempt, loadInventory, fail, clearPrivateRecords, clearRestore]);
+  }, [active, revision, attempt, handoffRequestId, onHandoffConsumed, loadInventory, fail, clearPrivateRecords, clearRestore]);
   useEffect(() => { onStatus({ data: session, loading: Boolean(busy), error, loadedAt }); }, [session, busy, error, loadedAt, onStatus]);
   useEffect(() => {
     if (!session?.authenticated) return;
-    const timer = setTimeout(() => { setSession({ authenticated: false }); clearPrivateRecords(); setError("Your local operator session expired. Sign in again to access backups. Your Websites editor draft is kept."); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
+    const timer = setTimeout(() => { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); clearPrivateRecords(); setError("Your local operator session expired. Sign in again to access backups. Your Websites editor draft is kept."); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
     return () => clearTimeout(timer);
   }, [session, clearPrivateRecords]);
   useEffect(() => {
@@ -150,7 +171,7 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
       const next = await siteRequest("/api/v1/session/login", validSession, { method: "POST", body: { access_key: key } });
       if (!isLive()) return;
       if (!next.authenticated) throw new SiteApiError(401, "unauthorized", "The operator access key was not accepted.");
-      setSession(next); await loadInventory(undefined, isLive);
+      sessionRef.current = next; setSession(next); await loadInventory(undefined, isLive);
     });
   }
   async function createBackup() {
@@ -208,15 +229,17 @@ export default function Backups({ revision, active, onStatus }: { revision: numb
         if (next.authenticated) throw new SiteApiError(0, "invalid_response", "Sign-out was not confirmed.");
         setSession(next); clearPrivateRecords();
       })} /></div>
-      <Card className="dashboard-card backup-picker" padding={0}><div><label htmlFor="backups-site-picker">Website</label><NativeSelect id="backups-site-picker" data-testid="backups-site-picker" aria-label="Website for backups" value={selected?.id ?? ""} disabled={Boolean(busy) || Boolean(restore) || !sites.length} onChange={(event) => { if (actionPending.current || busy || restore) return; const id = event.target.value; clearRestore(); setFresh(false); void run("Loading website backups", (isLive) => loadInventory(id, isLive)); }}>
-        {!sites.length && <NativeSelectOption value="">No websites available</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}
+      <div className="website-actions"><Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={!active || !fresh || Boolean(busy) || Boolean(restore) || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()} onClick={() => { if (!activeRef.current || actionPending.current || busy || restore || !fresh || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; clearRestore(); onImportZIP(); }} /></div>
+      <p className="website-help">Import a downloaded native Sifruno ZIP into a new website. To replace the saved files of this website, use its snapshot Restore action. Your schedule draft stays here while you navigate.</p>
+      <Card className="dashboard-card backup-picker" padding={0}><div><label htmlFor="backups-site-picker">Website</label><NativeSelect id="backups-site-picker" data-testid="backups-site-picker" aria-label="Website for backups" value={selected?.id ?? ""} disabled={Boolean(busy) || Boolean(restore) || scheduleDirty || !sites.length} onChange={(event) => { if (actionPending.current || busy || restore || scheduleDraft.current) return; const id = event.target.value; if (!id) return; clearRestore(); setFresh(false); void run("Loading website backups", (isLive) => loadInventory(id, isLive)); }}>
+        {!selected && <NativeSelectOption value="">{sites.length ? "Choose a website" : "No websites available"}</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}
       </NativeSelect></div><Button label="Refresh backup records" variant="secondary" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={refreshRecords} /></Card>
       {selected ? <>
         <div className="backup-site-context"><span><Globe aria-hidden="true" />{selected.domain}</span><span>Current revision {selected.revision} · {selected.state.replaceAll("_", " ")}</span></div>
         {!fresh && !busy && <p className="backup-status" role="status">Records need to be refreshed before another backup or restore.</p>}
         {selected.state === "recovery_required" && <p className="backup-status" role="alert">This website requires recovery. Backup creation and restore are disabled until its recovery is resolved.</p>}
         <div className="backup-summary"><Card className="dashboard-card" padding={0}><span>Recorded snapshots</span><strong>{backups.length}</strong></Card><Card className="dashboard-card" padding={0}><span>Archive storage</span><strong>{bytes(backups.reduce((sum, backup) => sum + backup.bytes, 0))}</strong></Card><Card className="dashboard-card" padding={0}><span>Latest snapshot</span><strong className="backup-latest">{backups.length ? dateLabel([...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0].created_at) : "No backups yet"}</strong></Card></div>
-        <BackupSchedule key={selected.id} site={selected} session={session} active={active} fresh={fresh} busy={Boolean(busy) || Boolean(restore)} archives={backups.length} onRefresh={refreshRecords} onAction={run} onUnauthorized={fail} />
+        <BackupSchedule key={selected.id} site={selected} session={session} active={active} fresh={fresh} busy={Boolean(busy) || Boolean(restore)} archives={backups.length} onRefresh={refreshRecords} onAction={run} onUnauthorized={fail} onDirtyChange={onScheduleDirty} />
         <Card className="dashboard-card" padding={0} data-testid="backups-inventory" data-site-id={selected.id} data-revision={selected.revision} data-fresh={fresh}>
           <div className="card-heading backup-inventory-heading"><div><h2>ZIP backups · {selected.name}</h2><p>Saved site files only. Unsaved Websites editor drafts stay in the editor.</p></div><Button label="Create ZIP backup" icon={<Archive />} variant="secondary" size="sm" isDisabled={!canChange || Boolean(restore) || backups.length >= 8} isLoading={busy === "Creating ZIP backup"} onClick={() => void createBackup()} /></div>
           {backups.length ? <div className="backup-records">{[...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map((backup) => <article key={backup.id} data-testid="backup-row" data-backup-id={backup.id}>

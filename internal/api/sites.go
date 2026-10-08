@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -27,6 +28,14 @@ type writeSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.WriteInput
 }
+type uploadSiteInput struct {
+	ID   string `path:"id"`
+	Body sites.UploadInput
+}
+type replaceSiteInput struct {
+	ID   string `path:"id"`
+	Body sites.ReplaceInput
+}
 type deleteSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.DeleteInput
@@ -34,6 +43,10 @@ type deleteSiteInput struct {
 type stateSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.StateInput
+}
+type domainSiteInput struct {
+	ID   string `path:"id"`
+	Body sites.DomainInput
 }
 type backupBody struct {
 	ExpectedRevision uint64 `json:"expected_revision"`
@@ -88,6 +101,20 @@ func siteOperation(id, method, path string) huma.Operation {
 }
 
 func registerSites(a huma.API, o Options) {
+	huma.Register(a, siteOperation("replace-site-file", "PUT", "/api/v1/sites/{id}/upload"), func(ctx context.Context, in *replaceSiteInput) (*siteOutput, error) {
+		v, err := o.Sites.ReplaceFile(in.ID, in.Body, siteActor(ctx))
+		if err != nil {
+			return nil, websiteError(err)
+		}
+		return &siteOutput{Body: v}, nil
+	})
+	huma.Register(a, siteOperation("upload-site-file", "POST", "/api/v1/sites/{id}/upload"), func(ctx context.Context, in *uploadSiteInput) (*siteOutput, error) {
+		v, err := o.Sites.UploadFile(in.ID, in.Body, siteActor(ctx))
+		if err != nil {
+			return nil, websiteError(err)
+		}
+		return &siteOutput{Body: v}, nil
+	})
 	huma.Register(a, siteOperation("list-sites", "GET", "/api/v1/sites"), func(ctx context.Context, in *struct{}) (*sitesOutput, error) {
 		v, err := o.Sites.List()
 		if err != nil {
@@ -146,6 +173,13 @@ func registerSites(a huma.API, o Options) {
 		}
 		return &siteOutput{Body: v}, nil
 	})
+	huma.Register(a, siteOperation("change-site-domain", "PUT", "/api/v1/sites/{id}/domain"), func(ctx context.Context, in *domainSiteInput) (*siteOutput, error) {
+		v, err := o.Sites.ChangeDomain(in.ID, in.Body, siteActor(ctx))
+		if err != nil {
+			return nil, websiteError(err)
+		}
+		return &siteOutput{Body: v}, nil
+	})
 	huma.Register(a, siteOperation("set-site-state", "POST", "/api/v1/sites/{id}/state"), func(ctx context.Context, in *stateSiteInput) (*siteOutput, error) {
 		v, err := o.Sites.SetState(in.ID, in.Body, siteActor(ctx))
 		if err != nil {
@@ -197,7 +231,7 @@ func allowedSiteMutation(r *http.Request) bool {
 	if len(parts) != 2 || parts[0] == "" {
 		return false
 	}
-	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview"))
+	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "upload" || parts[1] == "domain" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "upload" || parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview"))
 }
 
 func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -211,6 +245,13 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case r.URL.Path == "/api/v1/sites":
 		target = &sites.CreateInput{}
+	case strings.HasSuffix(r.URL.Path, "/upload"):
+		if r.Method == http.MethodPut {
+			target = &sites.ReplaceInput{}
+		} else {
+			target = &sites.UploadInput{}
+		}
+		limit = ((sites.MaxFileBytes+2)/3)*4 + 8192
 	case strings.HasSuffix(r.URL.Path, "/file"):
 		if r.Method == http.MethodDelete {
 			target = &sites.DeleteInput{}
@@ -220,6 +261,8 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		}
 	case strings.HasSuffix(r.URL.Path, "/state"):
 		target = &sites.StateInput{}
+	case strings.HasSuffix(r.URL.Path, "/domain"):
+		target = &sites.DomainInput{}
 	case strings.HasSuffix(r.URL.Path, "/backups"):
 		target = &backupBody{}
 	case strings.HasSuffix(r.URL.Path, "/restore"):
@@ -248,11 +291,35 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		operator.WriteError(w, 400, "invalid_request", "JSON object required")
 		return false
 	}
-	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) {
+	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) {
 		operator.WriteError(w, 400, "invalid_request", "Invalid JSON request")
 		return false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(b))
 	r.ContentLength = int64(len(b))
+	return true
+}
+
+// Require exact keys and types, including a present (possibly empty) base64
+// string. encoding/json also accepts byte arrays for []byte; this API does not.
+func uploadShape(raw []byte, replacement bool) bool {
+	keys := []string{"path", "content", "expected_revision"}
+	if replacement {
+		keys = append(keys, "expected_sha256")
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != len(keys) {
+		return false
+	}
+	for _, key := range keys {
+		value, ok := fields[key]
+		value = bytes.TrimSpace(value)
+		if !ok || len(value) == 0 || bytes.Equal(value, []byte("null")) {
+			return false
+		}
+		if key != "expected_revision" && value[0] != '"' {
+			return false
+		}
+	}
 	return true
 }

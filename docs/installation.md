@@ -47,7 +47,9 @@ step. Historical guest/browser results do not certify a current deployment.
 
 6. Open the generated operator key privately on this machine using a local editor, then enter it into the panel's private sign-in form. The file is `operator/access.key` inside the chosen state directory. Do not print it to the terminal, paste it into chat, commit it, include it in screenshots, or serve the state directory. Session cookies and CSRF protect the private workflows; this is not remote multi-tenant authentication.
 
-7. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
+7. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](site-file-upload.md) for the exact scope and limits.
+
+8. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
 
 ### Pinned Windows Go toolchain (alternative to installed Go)
 

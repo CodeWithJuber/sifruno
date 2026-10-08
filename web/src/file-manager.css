@@ -60,3 +60,13 @@
   .fm-editor-footer { align-items: flex-start; }
   .fm-editor-footer .astryx-button { min-width: 80px; }
 }
+
+.fm-file-actions, .fm-upload-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.fm-browser .card-heading { flex-wrap: wrap; gap: 12px; }
+.fm-upload-dialog form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.fm-upload-dialog p { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.fm-upload-dialog input { width: 100%; min-width: 0; }
+.fm-upload-actions { justify-content: flex-end; margin-top: 8px; }
+
+.fm-replace-dialog dl { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.fm-replace-dialog dd { margin-top: 4px; overflow-wrap: anywhere; }

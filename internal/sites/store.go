@@ -492,32 +492,54 @@ func (s *Store) ReadFile(id, p string) (FileContent, error) {
 	return FileContent{Path: p, Content: string(data), SHA256: expected.SHA256, Revision: r.Site.Revision}, nil
 }
 func (s *Store) WriteFile(id string, input WriteInput, actor string) (Site, error) {
+	if len(input.Content) > MaxFileBytes || !utf8.ValidString(input.Content) {
+		return Site{}, ErrInvalid
+	}
+	return s.writeFile(id, input.Path, []byte(input.Content), input.ExpectedSHA256, input.ExpectedRevision, actor)
+}
+
+// UploadFile requires an absent destination and reuses signed writes and recovery.
+// Even an existing empty file has a nonempty hash, so it cannot be overwritten.
+func (s *Store) UploadFile(id string, input UploadInput, actor string) (Site, error) {
+	return s.writeFile(id, input.Path, input.Content, "", input.ExpectedRevision, actor)
+}
+
+// ReplaceFile never creates a missing destination; its nonempty hash requires
+// the exact existing bytes through the same signed write and recovery path.
+func (s *Store) ReplaceFile(id string, input ReplaceInput, actor string) (Site, error) {
+	if !hashPattern.MatchString(input.ExpectedSHA256) || input.ExpectedRevision == 0 {
+		return Site{}, ErrInvalid
+	}
+	return s.writeFile(id, input.Path, input.Content, input.ExpectedSHA256, input.ExpectedRevision, actor)
+}
+
+func (s *Store) writeFile(id, path string, content []byte, expectedSHA256 string, expectedRevision uint64, actor string) (Site, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !validActor(actor) || safeFile(input.Path) != nil || len(input.Content) > MaxFileBytes || !utf8.ValidString(input.Content) || (input.ExpectedSHA256 != "" && !hashPattern.MatchString(input.ExpectedSHA256)) {
+	if !validActor(actor) || safeFile(path) != nil || len(content) > MaxFileBytes || (expectedSHA256 != "" && !hashPattern.MatchString(expectedSHA256)) {
 		return Site{}, ErrInvalid
 	}
 	r, err := s.checked(id)
 	if err != nil {
 		return Site{}, err
 	}
-	if r.Site.Revision != input.ExpectedRevision || r.Site.Revision == math.MaxUint64 {
+	if r.Site.Revision != expectedRevision || r.Site.Revision == math.MaxUint64 {
 		return Site{}, ErrConflict
 	}
 	data, err := s.snapshot(r)
 	if err != nil {
 		return Site{}, err
 	}
-	existing, found := data[input.Path]
-	if (!found && input.ExpectedSHA256 != "") || (found && sum(existing) != input.ExpectedSHA256) {
+	existing, found := data[path]
+	if (!found && expectedSHA256 != "") || (found && sum(existing) != expectedSHA256) {
 		return Site{}, ErrConflict
 	}
 	for p := range data {
-		if p != input.Path && strings.EqualFold(p, input.Path) {
+		if p != path && strings.EqualFold(p, path) {
 			return Site{}, ErrInvalid
 		}
 	}
-	data[input.Path] = []byte(input.Content)
+	data[path] = content
 	files, err := fileCatalog(data)
 	if err != nil {
 		return Site{}, err

@@ -246,7 +246,9 @@ export async function importSiteArchive(input: { name: string; domain: string; a
   const form = new FormData();
   form.append("name", input.name);
   form.append("domain", input.domain);
-  form.append("archive", input.archive, input.archive.name || "site.zip");
+  // Windows choosers may label ZIPs application/x-zip-compressed. The server
+  // validates archive bytes; normalize only this multipart part's MIME type.
+  form.append("archive", input.archive.slice(0, input.archive.size, "application/zip"), input.archive.name || "site.zip");
   try {
     const response = await fetch("/api/v1/sites/import", {
       method: "POST", credentials: "same-origin", cache: "no-store", signal: controller.signal,
@@ -261,4 +263,30 @@ export async function importSiteArchive(input: { name: string; domain: string; a
     if (error instanceof SiteApiError) throw error;
     throw new SiteApiError(0, "connection_failed", "The import result could not be confirmed. Refresh websites before trying again.");
   } finally { clearTimeout(timer); }
+}
+
+// File bytes are encoded without text decoding, preserving arbitrary binary assets.
+type SiteByteInput = { siteId: string; path: string; file: Blob; expectedRevision: number; csrf: string; isLive: () => boolean };
+export const uploadSiteFile = (input: SiteByteInput): Promise<Site> => writeSiteFileBytes(input);
+export function replaceSiteFile(input: SiteByteInput & { expectedSHA256: string }): Promise<Site> {
+  if (!sha(input.expectedSHA256)) return Promise.reject(new SiteApiError(422, "invalid_request", "Review the saved file hash before replacing it."));
+  return writeSiteFileBytes(input, input.expectedSHA256);
+}
+async function writeSiteFileBytes(input: SiteByteInput, expectedSHA256?: string): Promise<Site> {
+  if (!id(input.siteId) || !path(input.path) || !count(input.expectedRevision) || input.expectedRevision < 1 || !input.csrf) throw new SiteApiError(422, "invalid_request", "Check the destination and website revision before uploading.");
+  if (input.file.size > 2 * 1024 * 1024) throw new SiteApiError(413, "invalid_request", "Choose one static file up to 2 MiB.");
+  const raw = new Uint8Array(await input.file.arrayBuffer());
+  if (!input.isLive()) throw new SiteApiError(401, "session_changed", "The operator session changed before upload. Sign in and review the destination again.");
+  if (raw.length !== input.file.size || raw.length > 2 * 1024 * 1024) throw new SiteApiError(413, "invalid_request", "The local file exceeded its expected size.");
+  let binary = "";
+  for (let offset = 0; offset < raw.length; offset += 8192) binary += String.fromCharCode(...raw.subarray(offset, offset + 8192));
+  try {
+    const site = await siteRequest(siteURL(input.siteId, "/upload"), validSite, { method: expectedSHA256 === undefined ? "POST" : "PUT", csrf: input.csrf, body: { path: input.path, content: btoa(binary), expected_revision: input.expectedRevision, ...(expectedSHA256 === undefined ? {} : { expected_sha256: expectedSHA256 }) } });
+    if (site.id !== input.siteId || site.revision !== input.expectedRevision + 1) throw new SiteApiError(0, "invalid_response", "The upload did not confirm the expected website revision. Refresh file records before retrying.");
+    return site;
+  } catch (error) {
+    if (error instanceof SiteApiError && error.status === 409) throw new SiteApiError(409, error.code, expectedSHA256 === undefined ? "The destination already exists or the website revision changed. Your selected file and path are kept; refresh file records and review them before confirming again." : "The saved file or website revision changed. Your selected replacement is kept; refresh records and explicitly review the latest target before confirming again.");
+    if (error instanceof SiteApiError && error.status === 413) throw new SiteApiError(413, error.code, "The upload exceeds the request or 2 MiB file limit.");
+    throw error;
+  }
 }

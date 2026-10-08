@@ -121,6 +121,9 @@
 .website-backup-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .website-transfer-dialog { width: min(520px, calc(100vw - 32px)); max-height: min(90vh, 720px); overflow-y: auto; margin: auto; color: var(--foreground); background: var(--card); padding: 24px; border: 1px solid var(--input); border-radius: 8px; }
 .website-transfer-dialog::backdrop { background: rgb(0 0 0 / .5); }
+.website-domain-current { overflow-wrap: anywhere; }
+.website-domain-conflict { padding: 12px; border: 1px solid var(--input); border-radius: 4px; background: var(--muted); gap: 10px; }
+.website-domain-conflict p { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .website-transfer-dialog > p { font-size: 12px; line-height: 1.7; margin-top: 12px; }
 .website-transfer-dialog form { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; }
 .website-transfer-dialog form > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -223,3 +226,11 @@
   .website-transfer-dialog { padding: 20px; }
   .website-backup-actions { flex-wrap: wrap; justify-content: flex-end; }
 }
+
+.website-asset-details { padding: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; }
+.website-asset-details h3 { font-size: 13px; font-weight: 600; }
+.website-asset-details p { font-size: 12px; line-height: 1.7; }
+.website-asset-details dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.website-asset-details dt { color: var(--muted-foreground); font-size: 10px; }
+.website-asset-details dd { margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .website-asset-details dl { grid-template-columns: 1fr; } }

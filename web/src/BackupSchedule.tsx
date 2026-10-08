@@ -15,12 +15,13 @@ type Props = {
   onRefresh: () => void;
   onAction: (label: string, action: (isLive: () => boolean) => Promise<void>) => Promise<void>;
   onUnauthorized: (failure: unknown) => void;
+  onDirtyChange: (dirty: boolean) => void;
 };
 const intervalLabel = { hourly: "Hourly · every 1 hour", daily: "Daily · every 24 hours", weekly: "Weekly · every 168 hours" };
 const statusLabel = { never: "No scheduled run yet", completed: "Completed", failed: "Failed", interrupted: "Interrupted" };
 const runError = { "": "", archive_capacity: "Archive limit reached. No archive was removed.", backup_failed: "The backup could not be completed.", interrupted: "The previous run was interrupted. Review the current backup records." };
 
-export default function BackupSchedule({ site, session, active, fresh: siteFresh, busy: parentBusy, archives, onRefresh, onAction, onUnauthorized }: Props) {
+export default function BackupSchedule({ site, session, active, fresh: siteFresh, busy: parentBusy, archives, onRefresh, onAction, onUnauthorized, onDirtyChange }: Props) {
   const [records, setRecords] = useState<BackupScheduleEnvelope>();
   const [interval, setInterval] = useState<BackupInterval>("daily");
   const [enabled, setEnabled] = useState(false);
@@ -39,19 +40,24 @@ export default function BackupSchedule({ site, session, active, fresh: siteFresh
   latest.current = { siteId: site.id, active, session };
   const authenticated = session.authenticated;
   const csrf = session.authenticated ? session.csrf_token : undefined;
+  const draftSession = useRef(csrf);
   const schedule = records?.schedule;
   const recovery = stoppedBackupRecovery(schedule);
   const changed = recovery || (schedule ? interval !== schedule.interval || enabled !== schedule.enabled : true);
   const canSave = active && authenticated && siteFresh && fresh && Boolean(records) && changed && !parentBusy && !loading && !saving && (!schedule?.pending || recovery) && site.state !== "recovery_required" && (!enabled || records?.runner_enabled === true);
+  const draftDirty = edited.current && (schedule ? interval !== schedule.interval || enabled !== schedule.enabled : interval !== "daily" || enabled);
+  useEffect(() => { onDirtyChange(draftDirty); }, [draftDirty, onDirtyChange]);
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; ++readEpoch.current; }; }, []);
   useEffect(() => {
     const generation = ++readEpoch.current;
     setFresh(false); if (!submitting.current) setConfirmation(undefined);
-    if (!active || !authenticated) {
+    if (draftSession.current !== csrf) { draftSession.current = csrf; edited.current = false; setRecords(undefined); setInterval("daily"); setEnabled(false); setError(undefined); setNotice(undefined); }
+    if (!authenticated) {
       setRecords(undefined); setInterval("daily"); setEnabled(false); setError(undefined); setNotice(undefined); setLoading(false); edited.current = false;
       return;
     }
+    if (!active) { setLoading(false); return; }
     if (!siteFresh || parentBusy) { setLoading(false); return; }
     const isLive = () => mounted.current && latest.current.active && generation === readEpoch.current;
     setLoading(true);
@@ -122,6 +128,7 @@ export default function BackupSchedule({ site, session, active, fresh: siteFresh
         </NativeSelect></div>
         <label className="backup-schedule-toggle"><input type="checkbox" checked={enabled} disabled={parentBusy || saving || loading || !fresh || (!enabled && !records.runner_enabled)} onChange={(event) => { edited.current = true; setEnabled(event.target.checked); setConfirmation(undefined); setNotice(undefined); }} />Enable scheduled backups</label>
         <Button label={recovery ? "Review interrupted recovery" : !schedule ? "Review new schedule" : enabled ? "Review schedule change" : "Review schedule pause"} type="submit" variant="secondary" isDisabled={!canSave} data-testid="backup-schedule-review" />
+        <Button label="Discard schedule draft" variant="ghost" isDisabled={!draftDirty || parentBusy || saving || loading || !fresh} onClick={() => { edited.current = false; setInterval(schedule?.interval ?? "daily"); setEnabled(schedule?.enabled ?? false); setConfirmation(undefined); setError(undefined); setNotice(undefined); }} />
       </form>
       <p className="website-help">One schedule per website; up to 100 website schedules. Manual and scheduled snapshots share the 8-archive and 128 MiB storage limits. Existing archives are not automatically deleted. Scheduled backups do not include server, database, mail or cPanel backups.</p>
     </> : !loading && <p className="backup-status">{error ? "Schedule records are unavailable. Refresh to retry." : "Waiting for current website records."}</p>}

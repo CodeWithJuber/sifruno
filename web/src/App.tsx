@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { SideNav, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
 import { Theme } from "@astryxdesign/core/theme";
@@ -24,6 +24,7 @@ const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ def
 const PanelPreview = lazy(() => import("@/PanelPreview"));
 
 type View = "overview" | "services" | "storage" | "network" | "panel-preview" | "websites" | "accounts" | "backups" | "files" | "access" | "evidence" | "trail" | "budget" | "platform";
+export interface SiteHandoff { requestId: number; siteId: string; siteName: string }
 const views = [
   { id: "overview", label: "Overview", title: "Hosting workspace", subtitle: "Manage your websites and server from one workspace.", icon: Home },
   { id: "services", label: "Services", title: "Services", subtitle: "Inspect the services installed on your server.", icon: Server },
@@ -66,6 +67,13 @@ export function App() {
   const [accountsVisited, setAccountsVisited] = useState(false);
   const [backupsVisited, setBackupsVisited] = useState(false);
   const [filesVisited, setFilesVisited] = useState(false);
+  const [filesHandoff, setFilesHandoff] = useState<SiteHandoff>();
+  const [backupsHandoff, setBackupsHandoff] = useState<SiteHandoff>();
+  const [importRequest, setImportRequest] = useState<number>();
+  const handoffSequence = useRef(0);
+  const consumeImportRequest = useCallback((requestId: number) => setImportRequest((current) => current === requestId ? undefined : current), []);
+  const consumeFilesHandoff = useCallback((requestId: number) => setFilesHandoff((current) => current?.requestId === requestId ? undefined : current), []);
+  const consumeBackupsHandoff = useCallback((requestId: number) => setBackupsHandoff((current) => current?.requestId === requestId ? undefined : current), []);
   const [websitesResource, setWebsitesResource] = useState<Resource<unknown>>({ loading: false });
   const [accountsResource, setAccountsResource] = useState<Resource<unknown>>({ loading: false });
   const [backupsResource, setBackupsResource] = useState<Resource<unknown>>({ loading: false });
@@ -86,6 +94,13 @@ export function App() {
   const partial = server.data?.collector.status === "partial";
   const unavailable = server.data?.collector.status === "unavailable";
   const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "access", "trail", "budget"].includes(next))) return; if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
+  const openSiteTool = (destination: "files" | "backups", siteId: string, siteName: string) => {
+    if (publicPreview) return;
+    const request = { requestId: ++handoffSequence.current, siteId, siteName };
+    if (destination === "files") setFilesHandoff(request); else setBackupsHandoff(request);
+    navigate(destination);
+  };
+  const openZIPImport = () => { if (publicPreview) return; setImportRequest(++handoffSequence.current); navigate("websites"); };
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? {
@@ -158,10 +173,10 @@ export function App() {
           {view === "panel-preview" && publicPreview && <PanelPreview />}
           {view === "storage" && <DataState resource={server} retry={refresh}>{server.data && <Storage report={server.data} />}</DataState>}
           {view === "network" && <DataState resource={server} retry={refresh}>{server.data && <NetworkResources report={server.data} range={range} setRange={setRange} />}</DataState>}
-          {websitesVisited && !publicPreview && <div hidden={view !== "websites"}><Websites revision={revision} active={view === "websites"} onStatus={setWebsitesResource} /></div>}
+          {websitesVisited && !publicPreview && <div hidden={view !== "websites"}><Websites revision={revision} active={view === "websites"} onStatus={setWebsitesResource} onOpenSiteTool={openSiteTool} importRequest={importRequest} onImportRequestConsumed={consumeImportRequest} /></div>}
           {accountsVisited && !publicPreview && <div hidden={view !== "accounts"}><Accounts revision={revision} active={view === "accounts"} onStatus={setAccountsResource} /></div>}
-          {backupsVisited && !publicPreview && <div hidden={view !== "backups"}><Backups revision={revision} active={view === "backups"} onStatus={setBackupsResource} /></div>}
-          {filesVisited && !publicPreview && <div hidden={view !== "files"}><FileManager revision={revision} active={view === "files"} onStatus={setFilesResource} /></div>}
+          {backupsVisited && !publicPreview && <div hidden={view !== "backups"}><Backups revision={revision} active={view === "backups"} onStatus={setBackupsResource} siteHandoff={backupsHandoff} onHandoffConsumed={consumeBackupsHandoff} onImportZIP={openZIPImport} /></div>}
+          {filesVisited && !publicPreview && <div hidden={view !== "files"}><FileManager revision={revision} active={view === "files"} onStatus={setFilesResource} siteHandoff={filesHandoff} onHandoffConsumed={consumeFilesHandoff} /></div>}
           {view === "access" && !publicPreview && <Access revision={revision} onStatus={setAccessResource} />}
           {view === "evidence" && <DataState resource={status} retry={refresh}>{status.data && <Evidence report={status.data} />}</DataState>}
           {view === "trail" && !publicPreview && <DataState resource={trail} retry={refresh}>{trail.data && <Trail report={trail.data} />}</DataState>}

@@ -63,6 +63,23 @@ type WriteInput struct {
 	ExpectedSHA256   string `json:"expected_sha256"`
 	ExpectedRevision uint64 `json:"expected_revision"`
 }
+
+// UploadInput creates one static file; JSON content is base64 encoded.
+// No overwrite flag or expected hash is accepted.
+type UploadInput struct {
+	Path             string `json:"path"`
+	Content          []byte `json:"content"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+}
+
+// ReplaceInput binds byte replacement to an existing file and site revision.
+type ReplaceInput struct {
+	Path             string `json:"path"`
+	Content          []byte `json:"content"`
+	ExpectedSHA256   string `json:"expected_sha256"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+}
+
 type StateInput struct {
 	State            string `json:"state"`
 	ExpectedRevision uint64 `json:"expected_revision"`

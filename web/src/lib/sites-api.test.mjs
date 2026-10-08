@@ -110,3 +110,80 @@ test("replacement conflict keeps its refusal without retry or create fallback", 
     await assert.rejects(api.replaceSiteFile({ siteId: id, path: "missing.png", file: new Blob([bytes]), expectedRevision: 1, expectedSHA256: "d".repeat(64), csrf: "fixture-csrf", isLive: () => true }), { status: 409 });
   }); assert.equal(calls, 1);
 });
+
+const fileSHA = async (data) => Buffer.from(await crypto.subtle.digest("SHA-256", data)).toString("hex");
+async function downloadInput(data = bytes) {
+  return { siteId: id, file: { path: "assets/saved.png", bytes: data.length, sha256: await fileSHA(data) }, expectedRevision: 2, isLive: () => true };
+}
+function fileResponse(data, input, overrides = {}) {
+  return new Response(data, { headers: { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="saved.png"', "Content-Length": String(input.file.bytes), ...overrides } });
+}
+for (const [name, data] of [["binary", bytes], ["UTF-8", new TextEncoder().encode("مرحبا saved\n")], ["empty", new Uint8Array()], ["maximum-size", new Uint8Array(2 * 1024 * 1024)]]) {
+  test(`saved ${name} file download binds record, preserves bytes and verifies SHA`, async () => {
+    const input = await downloadInput(data);
+    await mockFetch(async (url, options) => {
+      const target = new URL(url, "http://127.0.0.1");
+      assert.equal(target.pathname, `/api/v1/sites/${id}/files/download`);
+      assert.deepEqual(Object.fromEntries(target.searchParams), { path: input.file.path, expected_revision: "2", expected_sha256: input.file.sha256 });
+      assert.equal(options.method, "GET"); assert.equal(options.credentials, "same-origin"); assert.equal(options.cache, "no-store");
+      assert.equal(options.headers.Accept, "application/octet-stream"); assert(options.signal instanceof AbortSignal);
+      assert.equal(options.body, undefined); assert.equal(options.headers["X-CSRF-Token"], undefined);
+      return fileResponse(data, input);
+    }, async () => {
+      const result = await api.downloadSiteFile(input);
+      assert.equal(result.type, "application/octet-stream"); assert.equal(result.size, data.length);
+      assert.deepEqual(new Uint8Array(await result.arrayBuffer()), data);
+    });
+  });
+}
+for (const [name, headers] of [
+  ["wrong MIME", { "Content-Type": "text/html" }],
+  ["inline attachment", { "Content-Disposition": 'inline; filename="saved.png"' }],
+  ["wrong filename", { "Content-Disposition": 'attachment; filename="other.png"' }],
+  ["invalid length", { "Content-Length": "invalid" }],
+  ["oversized header", { "Content-Length": String(2 * 1024 * 1024 + 1) }],
+  ["wrong saved size", { "Content-Length": "0" }],
+]) {
+  test(`saved file download rejects ${name} before consuming bytes`, async () => {
+    const input = await downloadInput(); let cancelled = false;
+    const stream = new ReadableStream({ cancel() { cancelled = true; } });
+    await mockFetch(async () => fileResponse(stream, input, headers), async () => assert.rejects(api.downloadSiteFile(input), { code: "invalid_response" }));
+    assert.equal(cancelled, true);
+  });
+}
+test("saved file download rejects missing length, missing stream and hash mismatch", async () => {
+  const input = await downloadInput();
+  await mockFetch(async () => { const response = fileResponse(bytes, input); response.headers.delete("Content-Length"); return response; }, async () => assert.rejects(api.downloadSiteFile(input), { code: "invalid_response" }));
+  await mockFetch(async () => fileResponse(null, input), async () => assert.rejects(api.downloadSiteFile(input), { code: "invalid_response" }));
+  const wrong = Uint8Array.from(bytes); wrong[0] ^= 1;
+  await mockFetch(async () => fileResponse(wrong, input), async () => assert.rejects(api.downloadSiteFile(input), { code: "invalid_response" }));
+});
+test("saved file download bounds actual stream and rejects truncation", async () => {
+  const input = await downloadInput();
+  for (const data of [bytes.subarray(1), new Uint8Array(2 * 1024 * 1024 + 1)]) {
+    await mockFetch(async () => fileResponse(data, input), async () => assert.rejects(api.downloadSiteFile(input), { code: "invalid_response" }));
+  }
+});
+test("saved file download reassembles streamed chunks before verifying hash", async () => {
+  const input = await downloadInput();
+  const stream = new ReadableStream({ start(controller) { controller.enqueue(bytes.subarray(0, 3)); controller.enqueue(bytes.subarray(3)); controller.close(); } });
+  await mockFetch(async () => fileResponse(stream, input), async () => assert.deepEqual(new Uint8Array(await (await api.downloadSiteFile(input)).arrayBuffer()), bytes));
+});
+test("saved file download refuses invalid records and expired context before dispatch", async () => {
+  const input = await downloadInput();
+  await mockFetch(async () => assert.fail("must not dispatch"), async () => {
+    for (const change of [{ expectedRevision: 0 }, { file: { ...input.file, bytes: 2 * 1024 * 1024 + 1 } }, { file: { ...input.file, sha256: "" } }, { file: { ...input.file, path: "../saved.png" } }]) await assert.rejects(api.downloadSiteFile({ ...input, ...change }), { status: 422 });
+    await assert.rejects(api.downloadSiteFile({ ...input, isLive: () => false }), { code: "session_changed" });
+  });
+});
+test("saved file download suppresses a response after its context changes", async () => {
+  const input = await downloadInput(); let live = true;
+  await mockFetch(async () => { live = false; return fileResponse(bytes, input); }, async () => assert.rejects(api.downloadSiteFile({ ...input, isLive: () => live })));
+});
+for (const status of [401, 403, 404, 409, 422, 503]) {
+  test(`saved file download preserves HTTP ${status} refusal without retry`, async () => {
+    const input = await downloadInput(); let calls = 0;
+    await mockFetch(async () => { ++calls; return new Response("{}", { status }); }, async () => assert.rejects(api.downloadSiteFile(input), { status, code: "website_transfer_failed" }));
+    assert.equal(calls, 1);
+  });
+}

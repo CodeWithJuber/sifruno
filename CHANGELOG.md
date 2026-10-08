@@ -4,6 +4,8 @@
 
 ### Added
 
+- Download a saved text or binary file from File Manager, verified against the
+  displayed revision, byte count and SHA-256 while retaining unsaved drafts.
 - Main integration of the reviewed website domain-routing update, selected-site
   File Manager/Backups navigation and downloaded native ZIP recovery workflow.
 - Local static-file upload and confirmed replacement bound to a file checksum

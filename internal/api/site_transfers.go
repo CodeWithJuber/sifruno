@@ -6,6 +6,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -31,6 +33,28 @@ func registerSiteTransfers(mux *http.ServeMux, a huma.API, o Options) {
 			return false
 		}
 	}
+	mux.HandleFunc("GET /api/v1/sites/{id}/files/download", func(w http.ResponseWriter, r *http.Request) {
+		if !admit(w) {
+			return
+		}
+		defer func() { <-slots }()
+		input, err := readFileDownloadQuery(r.URL.RawQuery)
+		if err != nil {
+			transferError(w, err)
+			return
+		}
+		data, file, err := o.Sites.DownloadFile(r.PathValue("id"), input)
+		if err != nil {
+			transferError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+path.Base(file.Path)+`"`)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(data)
+		}
+	})
 	mux.HandleFunc("GET /api/v1/sites/{id}/backups/{backupID}/download", func(w http.ResponseWriter, r *http.Request) {
 		if !admit(w) {
 			return
@@ -77,6 +101,28 @@ func registerSiteTransfers(mux *http.ServeMux, a huma.API, o Options) {
 		_ = json.NewEncoder(w).Encode(site)
 	})
 	documentSiteTransfers(a)
+}
+
+func readFileDownloadQuery(raw string) (sites.DownloadInput, error) {
+	var input sites.DownloadInput
+	if len(raw) > 1024 {
+		return input, sites.ErrInvalid
+	}
+	query, err := url.ParseQuery(raw)
+	if err != nil || len(query) != 3 {
+		return input, sites.ErrInvalid
+	}
+	for _, key := range []string{"path", "expected_sha256", "expected_revision"} {
+		if len(query[key]) != 1 || query[key][0] == "" {
+			return input, sites.ErrInvalid
+		}
+	}
+	input.Path, input.ExpectedSHA256 = query.Get("path"), query.Get("expected_sha256")
+	input.ExpectedRevision, err = strconv.ParseUint(query.Get("expected_revision"), 10, 64)
+	if err != nil || input.ExpectedRevision == 0 || strconv.FormatUint(input.ExpectedRevision, 10) != query.Get("expected_revision") {
+		return sites.DownloadInput{}, sites.ErrInvalid
+	}
+	return input, nil
 }
 
 func transferError(w http.ResponseWriter, err error) {
@@ -203,6 +249,15 @@ func documentSiteTransfers(a huma.API) {
 	download := &huma.Operation{OperationID: "download-site-backup", Method: "GET", Path: "/api/v1/sites/{id}/backups/{backupID}/download", Summary: "Download a verified native Sifruno v1 static-site ZIP", Parameters: []*huma.Param{{Name: "id", In: "path", Required: true, Schema: &huma.Schema{Type: "string"}}, {Name: "backupID", In: "path", Required: true, Schema: &huma.Schema{Type: "string"}}}, Responses: responses()}
 	download.Responses["200"] = &huma.Response{Description: "Hash-verified native site ZIP; fixed safe attachment filename sifruno-site.zip", Content: map[string]*huma.MediaType{"application/zip": {Schema: &huma.Schema{Type: "string", Format: "binary", MaxLength: &max}}}}
 	spec.Paths[download.Path] = &huma.PathItem{Get: download}
+	fileMax, pathMax, hashLength := sites.MaxFileBytes, 200, 64
+	fileDownload := &huma.Operation{OperationID: "download-site-file", Method: "GET", Path: "/api/v1/sites/{id}/files/download", Summary: "Download verified saved static-site file bytes at an expected revision and hash", Parameters: []*huma.Param{
+		{Name: "id", In: "path", Required: true, Schema: &huma.Schema{Type: "string"}},
+		{Name: "path", In: "query", Required: true, Schema: &huma.Schema{Type: "string", MaxLength: &pathMax}},
+		{Name: "expected_revision", In: "query", Required: true, Schema: &huma.Schema{Type: "integer", Format: "uint64", Description: "Positive canonical decimal saved inventory revision"}},
+		{Name: "expected_sha256", In: "query", Required: true, Schema: &huma.Schema{Type: "string", Pattern: "^[a-f0-9]{64}$", MinLength: &hashLength, MaxLength: &hashLength}},
+	}, Responses: responses()}
+	fileDownload.Responses["200"] = &huma.Response{Description: "Hash-verified raw saved bytes; attachment filename is the safe relative path basename. Empty files are supported. Operator admission required; no-store and nosniff.", Content: map[string]*huma.MediaType{"application/octet-stream": {Schema: &huma.Schema{Type: "string", Format: "binary", MaxLength: &fileMax}}}}
+	spec.Paths[fileDownload.Path] = &huma.PathItem{Get: fileDownload}
 	nameMax, domainMax := 80, 253
 	imp := &huma.Operation{OperationID: "import-site-archive", Method: "POST", Path: "/api/v1/sites/import", Summary: "Import a native Sifruno v1 ZIP into a new static website", RequestBody: &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{"multipart/form-data": {Schema: &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"name", "domain", "archive"}, Properties: map[string]*huma.Schema{"name": {Type: "string", MaxLength: &nameMax, Description: "UTF-8, maximum 80 bytes"}, "domain": {Type: "string", MaxLength: &domainMax}, "archive": {Type: "string", Format: "binary", MaxLength: &max, Description: "Nonempty application/zip or application/octet-stream file; maximum 34 MiB. Native Sifruno v1 only; no cPanel host migration."}}}}}}, Responses: responses()}
 	imp.Responses["200"] = &huma.Response{Description: "Actual persisted new website", Content: map[string]*huma.MediaType{"application/json": {Schema: &huma.Schema{Ref: "#/components/schemas/Site"}}}}

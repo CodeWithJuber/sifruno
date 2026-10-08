@@ -37,6 +37,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Accounts preview delivery to main](accounts-preview-main.md) | `accounts-preview-main.md` |
 | [Website inventory and workflow](websites-workflow.md) | `websites-workflow.md` |
 | [Private static-site File Manager](file-manager-ui.md) | `file-manager-ui.md` |
+| [Download a saved website file](site-file-download.md) | `site-file-download.md` |
 | [Private website backups](backups-ui.md) | `backups-ui.md` |
 | [Public panel tour](public-panel-preview.md) | `public-panel-preview.md` |
 

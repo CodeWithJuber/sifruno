@@ -28,6 +28,24 @@ test("mixed preview and zero-change snapshot have correct kind counts and select
   const sizeChanged = preview(); sizeChanged.files[1].after = file("index.html", 11);
   assert(api.validRestorePreview(sizeChanged), "bytes alone identify a modification");
 });
+test("empty current site accepts an all-added nonempty backup through preview and confirmation", async () => {
+  const value = preview();
+  value.files = value.files.filter(entry => entry.after !== null).map(entry => ({ ...entry, kind: "added", before: null }));
+  value.counts = { added: 3, modified: 0, removed: 0, unchanged: 0 };
+  assert(api.validRestorePreview(value));
+  assert(api.restorePreviewMatches(value, siteId, 9, backup()));
+  assert(api.canConfirmRestorePreview(value, siteId, 9, backup()));
+  await mockFetch(async () => response(value), async () => assert.deepEqual(await api.getRestorePreview(siteId, 9, backup(), "fixture-csrf"), value));
+});
+test("empty backup results and empty archives remain invalid", () => {
+  const removed = preview();
+  removed.files = removed.files.filter(entry => entry.before !== null).map(entry => ({ ...entry, kind: "removed", after: null }));
+  removed.counts = { added: 0, modified: 0, removed: 3, unchanged: 0 };
+  assert.equal(api.validRestorePreview(removed), false);
+  assert.equal(api.validRestorePreview({ ...preview(), files: [], counts: { added: 0, modified: 0, removed: 0, unchanged: 0 } }), false);
+  assert.equal(api.canConfirmRestorePreview(preview(), siteId, 9, { ...backup(), files: 0 }), false);
+  assert.throws(() => api.getRestorePreview(siteId, 9, { ...backup(), files: 0 }, "fixture-csrf"), { code: "invalid_preview" });
+});
 test("every object rejects omitted and extra fields, including file metadata and counts", () => {
   for (const target of [value => value, value => value.counts, value => value.files[1], value => value.files[1].before, value => value.files[1].after]) {
     const expected = target(preview());

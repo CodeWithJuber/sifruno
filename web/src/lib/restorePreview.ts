@@ -42,7 +42,7 @@ export function validRestorePreview(value: unknown): value is RestorePreview {
     if (before) { beforeCount++; beforeBytes += before.bytes; }
     if (after) { afterCount++; afterBytes += after.bytes; }
   }
-  return beforeCount >= 1 && beforeCount <= 64 && afterCount >= 1 && afterCount <= 64 && beforeBytes <= 32 << 20 && afterBytes <= 32 << 20 && restoreKinds.every(kind => counts[kind] === (value.counts as ObjectValue)[kind]);
+  return beforeCount <= 64 && afterCount >= 1 && afterCount <= 64 && beforeBytes <= 32 << 20 && afterBytes <= 32 << 20 && restoreKinds.every(kind => counts[kind] === (value.counts as ObjectValue)[kind]);
 }
 export function restorePreviewMatches(value: unknown, siteId: string, revision: number, backup: SiteBackup): value is RestorePreview {
   return validRestorePreview(value) && value.site_id === siteId && value.current_revision === revision && backup.site_id === siteId &&

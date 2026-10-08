@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Download, File, FilePlus, Folder, Info, LockKeyhole, LogOut, RefreshCw, Save, Search, Trash2, Upload } from "lucide-react";
+import { Download, File, FilePlus, Folder, Info, LockKeyhole, LogOut, RefreshCw, Save, Search, Trash2, Upload, Pencil } from "lucide-react";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { bytes } from "@/Dashboard";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import type { SiteHandoff } from "@/App";
-import { SiteApiError, downloadSiteFile, uploadSiteFile, replaceSiteFile, siteRequest, siteURL, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
+import { SiteApiError, downloadSiteFile, uploadSiteFile, replaceSiteFile, renameSiteFile, siteRequest, siteURL, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
 import type { OperatorSession, Site, SiteFile, SiteFileContent } from "@/lib/sites-api";
 import "./file-manager.css";
 
@@ -61,6 +61,9 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
   const [uploadPath, setUploadPath] = useState("");
   const [replaceTarget, setReplaceTarget] = useState<ReplaceTarget>();
   const [replacementFile, setReplacementFile] = useState<globalThis.File>();
+  const [renameTarget, setRenameTarget] = useState<ReplaceTarget>();
+  const [renamePath, setRenamePath] = useState("");
+  const renameDialog = useRef<HTMLDialogElement>(null), renameReturnFocus = useRef<HTMLElement | null>(null);
   const replacementPicker = useRef<HTMLInputElement>(null);
   const replacementDialog = useRef<HTMLDialogElement>(null), replacementReturnFocus = useRef<HTMLElement | null>(null);
   const uploadPicker = useRef<HTMLInputElement>(null);
@@ -95,6 +98,11 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
   const replacementProblem = !replacementFile ? "Choose one local replacement file." : replacementFile.size > maxFileBytes ? "The replacement exceeds the 2 MiB limit." : totalBytes - (currentReplacement?.bytes ?? 0) + replacementFile.size > maxSiteBytes ? "Replacing this file would exceed the 32 MiB site limit." : undefined;
   const canReplace = canDelete;
   const canConfirmReplacement = Boolean(canUpload && !conflict && matchingReplacement && !replacementProblem);
+  const currentRename = files.find((file) => file.path === renameTarget?.path);
+  const matchingRename = Boolean(renameTarget && selected?.id === renameTarget.siteId && selected.revision === renameTarget.revision && viewedFile?.path === renameTarget.path && currentRename?.sha256 === renameTarget.sha256 && currentRename.bytes === renameTarget.bytes);
+  const renameCollision = files.some((file) => { const a = file.path.toLowerCase(), b = renamePath.toLowerCase(); return a === b || a.startsWith(b + "/") || b.startsWith(a + "/"); });
+  const renameProblem = !validPath(renamePath) ? "Use a relative static-file path up to 200 bytes and 8 segments, with a supported static extension." : renamePath.toLowerCase() === renameTarget?.path.toLowerCase() ? "Choose a different path. Case-only changes are not supported." : renameCollision ? "This destination already exists or conflicts with a file or folder." : undefined;
+  const canConfirmRename = Boolean(canUpload && !conflict && matchingRename && !renameProblem);
   const clearPrivate = useCallback(() => { setSites([]); setSelected(undefined); setFiles([]); setFresh(false); }, []);
   const fail = useCallback((failure: unknown) => {
     setError(fileError(failure)); setFresh(false);
@@ -115,10 +123,11 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
     if (site.id !== chosen.id || catalog.items.length > maxFiles || new Set(catalog.items.map((file) => file.path.toLowerCase())).size !== catalog.items.length || catalog.items.some((file) => !validPath(file.path) || file.bytes > maxFileBytes) || catalog.items.reduce((sum, file) => sum + file.bytes, 0) > maxSiteBytes) throw new SiteApiError(0, "invalid_response", "The file inventory did not match the static-site limits or selected website.");
     const previous = latestEditor.current;
     if (dirtyEditor(previous) && previous?.siteId !== site.id) throw new SiteApiError(409, "draft_kept", "Your File Manager draft is kept. Save or discard it, then open the requested website again from Websites.");
-    if (previous?.siteId !== site.id) { setEditor(undefined); latestEditor.current = undefined; setViewedPath(undefined); setConflict(undefined); setFolder(""); setQuery(""); }
+    if ((previous && previous.siteId !== site.id) || (!previous && selectedId.current !== site.id)) { setEditor(undefined); latestEditor.current = undefined; setViewedPath(undefined); setConflict(undefined); setFolder(""); setQuery(""); }
     selectedId.current = site.id; setSites(list.items.map((item) => item.id === site.id ? site : item)); setSelected(site); setFiles(catalog.items); setFresh(true); setLoadedAt(new Date());
     const actual = catalog.items.find((file) => file.path === previous?.path);
     if (previous?.siteId === site.id && (previous.revision !== site.revision || (previous.isNew ? Boolean(actual) : actual?.sha256 !== previous.sha256))) setConflict({ path: previous.path, compared: false });
+    return { site, catalog };
   }, [clearPrivate]);
   const readFile = async (siteId: string, path: string) => {
     const file = await siteRequest(siteURL(siteId, `/file?path=${encodeURIComponent(path)}`), validFileContent);
@@ -176,6 +185,13 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
     if (!replaceTarget && !busy && replacementReturnFocus.current) { if (replacementReturnFocus.current.isConnected) replacementReturnFocus.current.focus(); replacementReturnFocus.current = null; }
   }, [active, authenticated, replaceTarget, busy]);
   useEffect(() => { setReplaceTarget(undefined); setReplacementFile(undefined); if (replacementPicker.current) replacementPicker.current.value = ""; }, [session?.authenticated ? session.csrf_token : undefined]);
+  useEffect(() => {
+    if (!active || !authenticated) { renameDialog.current?.close(); setRenameTarget(undefined); setRenamePath(""); renameReturnFocus.current = null; return; }
+    if (renameTarget && renameDialog.current && !renameDialog.current.open) renameDialog.current.showModal();
+    else if (!renameTarget && renameDialog.current?.open) renameDialog.current.close();
+    if (!renameTarget && !busy && renameReturnFocus.current) { if (renameReturnFocus.current.isConnected) renameReturnFocus.current.focus(); renameReturnFocus.current = null; }
+  }, [active, authenticated, renameTarget, busy]);
+  useEffect(() => { setRenameTarget(undefined); setRenamePath(""); }, [session?.authenticated ? session.csrf_token : undefined, selected?.id, viewedPath]);
   async function run(label: string, action: (isLive: () => boolean) => Promise<void>) {
     if (!activeRef.current || actionPending.current || busy) return;
     actionPending.current = true; const generation = epoch.current, isLive = () => activeRef.current && generation === epoch.current;
@@ -183,7 +199,7 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
     try { await action(isLive); if (isLive()) setLoadedAt(new Date()); } catch (failure) { if (isLive()) fail(failure); }
     finally { actionPending.current = false; if (isLive()) setBusy(undefined); else if (activeRef.current) setAttempt((value) => value + 1); }
   }
-  const requireClean = () => { if (!dirtyEditor(latestEditor.current)) return true; setError("Save or discard your draft before uploading, replacing or deleting a file, opening another file, switching websites or signing out. Panel navigation keeps your draft."); return false; };
+  const requireClean = () => { if (!dirtyEditor(latestEditor.current)) return true; setError("Save or discard your draft before uploading, replacing, renaming or deleting a file, opening another file, switching websites or signing out. Panel navigation keeps your draft."); return false; };
   async function login(event: React.FormEvent) {
     event.preventDefault(); if (!accessKey.trim()) return; const key = accessKey; setAccessKey("");
     await run("Signing in", async (isLive) => { const next = await siteRequest("/api/v1/session/login", validSession, { method: "POST", body: { access_key: key } }); if (!isLive()) return; if (!next.authenticated) throw new SiteApiError(401, "unauthorized", "The operator access key was not accepted."); sessionRef.current = next; setSession(next); await loadInventory(undefined, isLive); });
@@ -277,6 +293,43 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
       } catch (failure) { if (replacementLive()) fail(failure); }
     });
   }
+  async function refreshRenameTarget() {
+    if (!renameTarget || !session?.authenticated || !requireClean() || selectedId.current !== renameTarget.siteId) return;
+    const target = renameTarget, token = session.csrf_token, authGeneration = authEpoch.current;
+    await run("Refreshing rename target", async (isLive) => {
+      const renameLive = () => isLive() && selectedId.current === target.siteId && authGeneration === authEpoch.current && sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now();
+      try {
+        setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); setFresh(false);
+        const latest = await loadInventory(target.siteId, renameLive);
+        if (!renameLive() || !latest) return;
+        const file = latest.catalog.items.find((item) => item.path === target.path);
+        if (!file) throw new SiteApiError(404, "not_found", "The saved source no longer exists. Your destination is kept; cancel rename and select another file.");
+        setRenameTarget({ ...target, domain: latest.site.domain, revision: latest.site.revision, sha256: file.sha256, bytes: file.bytes });
+        setNotice("Latest rename target loaded. Review its revision, bytes and checksum, then confirm explicitly.");
+      } catch (failure) { if (renameLive()) fail(failure); }
+    });
+  }
+  async function renameFile(event: React.FormEvent) {
+    event.preventDefault();
+    if (!canConfirmRename || !renameTarget || !session?.authenticated || !requireClean()) return;
+    const target = renameTarget, destination = renamePath, token = session.csrf_token, authGeneration = authEpoch.current;
+    await run("Renaming file", async (isLive) => {
+      const renameLive = () => isLive() && selectedId.current === target.siteId && authGeneration === authEpoch.current && sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now();
+      const sourceLive = () => renameLive() && downloadContext.current.selected?.id === target.siteId && downloadContext.current.selected.revision === target.revision && downloadContext.current.viewedFile?.path === target.path && downloadContext.current.viewedFile.sha256 === target.sha256;
+      try {
+        const site = await renameSiteFile({ siteId: target.siteId, path: target.path, destination, expectedSHA256: target.sha256, expectedRevision: target.revision, csrf: token, isLive: sourceLive });
+        if (!sourceLive()) return;
+        setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); setFresh(false);
+        setSelected(site); setSites((old) => old.map((item) => item.id === site.id ? site : item)); setFiles((old) => old.map((file) => file.path === target.path ? { ...file, path: destination } : file));
+        setViewedPath(destination); setFolder(destination.includes("/") ? destination.slice(0, destination.lastIndexOf("/")) : ""); setQuery(""); setRenameTarget(undefined); setRenamePath("");
+        const latest = await loadInventory(site.id, renameLive);
+        if (!renameLive() || !latest) return;
+        const file = latest.catalog.items.find((item) => item.path === destination);
+        if (latest.site.revision !== site.revision || latest.catalog.items.some((item) => item.path === target.path) || file?.sha256 !== target.sha256 || file.bytes !== target.bytes) throw new SiteApiError(409, "conflict", "Rename committed, but the website changed before verification. Refresh file records before continuing.");
+        setViewedPath(destination); setFolder(destination.includes("/") ? destination.slice(0, destination.lastIndexOf("/")) : ""); setNotice(`Renamed ${target.path} to ${destination} - revision ${site.revision}. Saved bytes preserved.`);
+      } catch (failure) { if (renameLive()) fail(failure); }
+    });
+  }
   async function deleteFile() {
     if (!matchingDelete || !deleteTarget || !session?.authenticated || !requireClean()) return;
     const target = deleteTarget;
@@ -306,7 +359,7 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
     {error && <div className="website-message website-error" role="alert"><Info /><span>{error}</span></div>}{notice && <div className="website-message" role="status"><Info /><span>{notice}</span></div>}
     {!session ? <Card className="dashboard-card website-auth" padding={0}><p role="status">{busy || "Operator session could not be checked."}</p>{error && <Button label="Retry operator session" isDisabled={Boolean(busy)} icon={<RefreshCw />} onClick={() => setAttempt((value) => value + 1)} />}</Card> : !authenticated ? <Card className="dashboard-card website-auth" padding={0}><div className="auth-heading"><LockKeyhole /><div><h2>Local operator sign-in</h2><p>Use the access key created by this server in its private state directory.</p></div></div><form onSubmit={login} data-testid="operator-login" autoComplete="off"><label htmlFor="file-manager-key">Operator access key</label><input id="file-manager-key" type="password" autoComplete="off" spellCheck={false} value={accessKey} onChange={(event) => setAccessKey(event.target.value)} required disabled={Boolean(busy)} /><Button label="Sign in locally" type="submit" variant="primary" isDisabled={Boolean(busy) || !accessKey.trim()} isLoading={busy === "Signing in"} /></form><p className="website-help">The key is cleared after submission. Your draft stays in this browser tab; credentials and drafts are not persisted by File Manager.</p></Card> : <>
       <div className="website-session"><span><LockKeyhole />Signed in locally · expires {dateLabel(session?.authenticated ? session.expires_at : "")}</span><Button label="Sign out locally" icon={<LogOut />} size="sm" variant="ghost" isDisabled={Boolean(busy) || dirty} onClick={() => { if (!requireClean()) return; void run("Signing out", async (isLive) => { if (!session?.authenticated) return; const next = await siteRequest("/api/v1/session/logout", validSession, { method: "POST", csrf: session.csrf_token, body: {} }); if (!isLive()) return; if (next.authenticated) throw new SiteApiError(0, "invalid_response", "Sign-out was not confirmed."); setSession(next); clearPrivate(); setEditor(undefined); latestEditor.current = undefined; setViewedPath(undefined); setConflict(undefined); }); }} /></div>
-      <Card className="dashboard-card fm-picker" padding={0}><div><label htmlFor="file-manager-site-picker">Website</label><NativeSelect id="file-manager-site-picker" data-testid="file-manager-site-picker" aria-label="Website for files" value={selected?.id ?? ""} disabled={Boolean(busy) || dirty || !sites.length} onChange={(event) => { if (!requireClean()) return; const id = event.target.value; if (!id) return; setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); setViewedPath(undefined); setFolder(""); setQuery(""); setFresh(false); void run("Loading website files", (isLive) => loadInventory(id, isLive)); }}>{!selected && <NativeSelectOption value="">{sites.length ? "Choose a website" : "No websites available"}</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}</NativeSelect></div><Button label="Refresh file records" variant="secondary" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => setAttempt((value) => value + 1)} /></Card>
+      <Card className="dashboard-card fm-picker" padding={0}><div><label htmlFor="file-manager-site-picker">Website</label><NativeSelect id="file-manager-site-picker" data-testid="file-manager-site-picker" aria-label="Website for files" value={selected?.id ?? ""} disabled={Boolean(busy) || dirty || !sites.length} onChange={(event) => { if (!requireClean()) return; const id = event.target.value; if (!id) return; setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); setViewedPath(undefined); setFolder(""); setQuery(""); setFresh(false); void run("Loading website files", async (isLive) => { await loadInventory(id, isLive); }); }}>{!selected && <NativeSelectOption value="">{sites.length ? "Choose a website" : "No websites available"}</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}</NativeSelect></div><Button label="Refresh file records" variant="secondary" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => setAttempt((value) => value + 1)} /></Card>
       {selected && <div className="fm-context"><span>{selected.domain} · current revision {selected.revision}</span><span>{files.length} / 64 files · {bytes(totalBytes)} / 32 MiB</span></div>}
       {selected && fresh && files.length === 0 && <p className="fm-status" role="status">This website has no files. Active empty websites serve 404 responses. Upload a static file, add a text file or restore an existing ZIP backup in Websites. New ZIP backups require at least one file.</p>}
       {selected?.state === "recovery_required" && <p className="fm-status" role="alert">This website requires recovery. File changes are disabled until its recovery is resolved.</p>}
@@ -319,7 +372,7 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
           {!visibleFiles.length && !folders.length && <div className="inventory-empty"><Folder /><h3>{term ? "No matching files" : "No reported files in this folder"}</h3><p>{term ? "Try another path or clear the search." : "Folders are derived from the actual file paths returned by the server."}</p></div>}
           <div className="table-footer"><span>{!fresh ? "Records need refreshing" : `${visibleFiles.length} files shown`}</span><span>{loadedAt ? `Checked ${loadedAt.toLocaleTimeString()}` : "Reading inventory"}</span></div>
         </Card>
-        <Card className="dashboard-card fm-facts" padding={0} data-testid="file-manager-file-details"><div className="card-heading"><h2>File details</h2><div className="fm-file-actions"><Button label="Download file" data-testid="file-manager-download" icon={<Download />} size="sm" variant="secondary" isDisabled={!canDownload} isLoading={busy === "Downloading saved file"} onClick={() => void downloadFile()} /><Button label="Replace file" data-testid="file-manager-replace" icon={<Upload />} size="sm" variant="secondary" isDisabled={!canReplace} onClick={() => { if (!canReplace || !viewedFile || !requireClean()) return; replacementReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setReplacementFile(undefined); if (replacementPicker.current) replacementPicker.current.value = ""; setReplaceTarget({ siteId: selected.id, domain: selected.domain, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision, bytes: viewedFile.bytes }); }} /><Button label="Delete file" data-testid="file-manager-delete" icon={<Trash2 />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; deleteReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setDeleteTarget({ siteId: selected.id, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision }); }} /></div></div>{viewedFile ? <dl><div><dt>Relative path</dt><dd>{viewedFile.path}</dd></div><div><dt>Saved bytes</dt><dd>{bytes(viewedFile.bytes)}</dd></div><div><dt>Inventory revision</dt><dd>{selected.revision}</dd></div><div><dt>SHA-256</dt><dd><code>{viewedFile.sha256}</code></dd></div></dl> : <p>Select a reported file to inspect its saved size and hash.</p>}</Card>
+        <Card className="dashboard-card fm-facts" padding={0} data-testid="file-manager-file-details"><div className="card-heading"><h2>File details</h2><div className="fm-file-actions"><Button label="Download file" data-testid="file-manager-download" icon={<Download />} size="sm" variant="secondary" isDisabled={!canDownload} isLoading={busy === "Downloading saved file"} onClick={() => void downloadFile()} /><Button label="Replace file" data-testid="file-manager-replace" icon={<Upload />} size="sm" variant="secondary" isDisabled={!canReplace} onClick={() => { if (!canReplace || !viewedFile || !requireClean()) return; replacementReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setReplacementFile(undefined); if (replacementPicker.current) replacementPicker.current.value = ""; setReplaceTarget({ siteId: selected.id, domain: selected.domain, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision, bytes: viewedFile.bytes }); }} /><Button label="Rename / move file" data-testid="file-manager-rename" icon={<Pencil />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; renameReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setRenamePath(viewedFile.path); setRenameTarget({ siteId: selected.id, domain: selected.domain, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision, bytes: viewedFile.bytes }); }} /><Button label="Delete file" data-testid="file-manager-delete" icon={<Trash2 />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; deleteReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setDeleteTarget({ siteId: selected.id, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision }); }} /></div></div>{viewedFile ? <dl><div><dt>Relative path</dt><dd>{viewedFile.path}</dd></div><div><dt>Saved bytes</dt><dd>{bytes(viewedFile.bytes)}</dd></div><div><dt>Inventory revision</dt><dd>{selected.revision}</dd></div><div><dt>SHA-256</dt><dd><code>{viewedFile.sha256}</code></dd></div></dl> : <p>Select a reported file to inspect its saved size and hash.</p>}</Card>
       </div> : <Card className="dashboard-card" padding={0}><div className="inventory-empty"><Folder /><h2>{busy ? "Loading website files" : error ? "File records unavailable" : "No websites available"}</h2><p>{busy ? "Reading the actual app-owned site inventory." : error ? "Refresh records to check the current inventory. Retained drafts remain below." : "Create an app-owned static site in Websites to manage its files."}</p></div></Card>}
       {editor && <Card className="dashboard-card fm-editor" padding={0}><form onSubmit={save} data-testid="file-manager-editor" data-file-path={editor.path} data-read-revision={editor.revision} data-read-sha256={editor.sha256}>
         <div className="card-heading"><div><h2>{editor.isNew ? "New UTF-8 text file" : editor.path}</h2><p>Read revision {editor.revision} · {dirty ? "Unsaved draft" : "Saved version"}</p></div><Button label="Save file" type="submit" icon={<Save />} size="sm" variant="primary" isDisabled={!canSave} isLoading={busy === "Saving file"} /></div>
@@ -362,6 +415,18 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
         {fresh && !matchingReplacement && (currentReplacement && selected && selected.id === replaceTarget?.siteId ? <><p>Latest revision {selected.revision} - saved bytes {bytes(currentReplacement.bytes)} - SHA-256 {currentReplacement.sha256}</p><Button label="Review latest replacement target" size="sm" variant="secondary" isDisabled={!canUpload || Boolean(conflict)} onClick={() => { if (!selected || !currentReplacement || !replaceTarget || !canUpload || conflict) return; setReplaceTarget({ ...replaceTarget, domain: selected.domain, bytes: currentReplacement.bytes, sha256: currentReplacement.sha256, revision: selected.revision }); setError(undefined); }} /></> : <p role="alert">The saved target no longer exists. Cancel replacement; a missing file cannot be created here.</p>)}
         {conflict && <p role="status">Compare or discard the retained editor version before replacing this file.</p>}
         <div className="fm-upload-actions"><Button label="Cancel replacement" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setReplaceTarget(undefined)} /><Button label="Confirm replacement" icon={<Upload />} type="submit" variant="primary" isDisabled={!canConfirmReplacement} isLoading={busy === "Replacing file"} /></div>
+      </form>
+    </dialog>}
+    {authenticated && <dialog ref={renameDialog} className="fm-delete-dialog fm-upload-dialog fm-replace-dialog" data-testid="file-manager-rename-dialog" aria-labelledby="fm-rename-title" aria-describedby="fm-rename-description" onClose={(event) => { if (event.target === event.currentTarget && !event.currentTarget.open) setRenameTarget(undefined); }} onCancel={(event) => { if (event.target !== event.currentTarget) return; if (busy) event.preventDefault(); else setRenameTarget(undefined); }}>
+      <form onSubmit={renameFile}>
+        <h2 id="fm-rename-title">Rename or move this saved file?</h2>
+        <p id="fm-rename-description">Move <strong>{renameTarget?.path}</strong> within <strong>{renameTarget?.domain}</strong>. Saved bytes stay unchanged. Existing files and folders cannot be overwritten.</p>
+        <dl><div><dt>Saved bytes</dt><dd>{bytes(renameTarget?.bytes ?? 0)}</dd></div><div><dt>Expected website revision</dt><dd>{renameTarget?.revision}</dd></div><div><dt>Expected SHA-256</dt><dd><code>{renameTarget?.sha256}</code></dd></div></dl>
+        <label htmlFor="fm-rename-path">Relative destination path</label><input id="fm-rename-path" data-testid="file-manager-rename-path" value={renamePath} placeholder="assets/image.png" disabled={Boolean(busy)} onChange={(event) => setRenamePath(event.target.value)} aria-invalid={Boolean(renameProblem)} />
+        <p className="website-help">Parent folders are created from the relative path. Links and references inside HTML or CSS are not rewritten. Renaming index.html makes the website root return 404. Rename back to restore the old URL, or restore an existing ZIP backup.</p>
+        {renameProblem && <p role="status">{renameProblem}</p>}{error && <p className="website-error" role="alert">{error}</p>}
+        {(!fresh || !matchingRename) && <><p role="status">Refresh this rename target and review its latest revision and checksum before confirming. Your destination path is kept. A refresh never submits the rename.</p><Button label="Refresh rename target" data-testid="file-manager-rename-refresh" icon={<RefreshCw />} size="sm" variant="secondary" isDisabled={Boolean(busy) || dirty || selected?.id !== renameTarget?.siteId} onClick={() => void refreshRenameTarget()} /></>}
+        <div className="fm-upload-actions"><Button label="Cancel rename" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setRenameTarget(undefined)} /><Button label="Rename / move" data-testid="file-manager-rename-confirm" icon={<Pencil />} type="submit" variant="primary" isDisabled={!canConfirmRename} isLoading={busy === "Renaming file"} /></div>
       </form>
     </dialog>}
     {authenticated && <dialog ref={deleteDialog} className="fm-delete-dialog" data-testid="file-manager-delete-dialog" aria-labelledby="fm-delete-title" aria-describedby="fm-delete-description" onClose={() => setDeleteTarget(undefined)} onCancel={(event) => { if (busy) event.preventDefault(); else setDeleteTarget(undefined); }}><h2 id="fm-delete-title">Delete this file?</h2><p id="fm-delete-description">Remove <strong>{deleteTarget?.path}</strong> from this website at revision {deleteTarget?.revision}. The file will stop being served. An existing ZIP backup can restore it.</p>{files.length === 1 && <p>This is the last file. An active empty website serves 404 responses; new ZIP backups require at least one file.</p>}<div><Button label="Cancel deletion" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setDeleteTarget(undefined)} /><Button label="Confirm file deletion" icon={<Trash2 />} variant="primary" isDisabled={!matchingDelete} isLoading={busy === "Deleting file"} onClick={() => void deleteFile()} /></div></dialog>}

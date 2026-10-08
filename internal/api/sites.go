@@ -40,6 +40,10 @@ type deleteSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.DeleteInput
 }
+type renameSiteInput struct {
+	ID   string `path:"id"`
+	Body sites.RenameInput
+}
 type stateSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.StateInput
@@ -101,6 +105,13 @@ func siteOperation(id, method, path string) huma.Operation {
 }
 
 func registerSites(a huma.API, o Options) {
+	huma.Register(a, siteOperation("rename-site-file", "POST", "/api/v1/sites/{id}/rename"), func(ctx context.Context, in *renameSiteInput) (*siteOutput, error) {
+		v, err := o.Sites.RenameFile(in.ID, in.Body, siteActor(ctx))
+		if err != nil {
+			return nil, websiteError(err)
+		}
+		return &siteOutput{Body: v}, nil
+	})
 	huma.Register(a, siteOperation("replace-site-file", "PUT", "/api/v1/sites/{id}/upload"), func(ctx context.Context, in *replaceSiteInput) (*siteOutput, error) {
 		v, err := o.Sites.ReplaceFile(in.ID, in.Body, siteActor(ctx))
 		if err != nil {
@@ -231,7 +242,7 @@ func allowedSiteMutation(r *http.Request) bool {
 	if len(parts) != 2 || parts[0] == "" {
 		return false
 	}
-	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "upload" || parts[1] == "domain" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "upload" || parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview"))
+	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "upload" || parts[1] == "domain" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "rename" || parts[1] == "upload" || parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview"))
 }
 
 func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -261,6 +272,8 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		}
 	case strings.HasSuffix(r.URL.Path, "/state"):
 		target = &sites.StateInput{}
+	case strings.HasSuffix(r.URL.Path, "/rename"):
+		target = &sites.RenameInput{}
 	case strings.HasSuffix(r.URL.Path, "/domain"):
 		target = &sites.DomainInput{}
 	case strings.HasSuffix(r.URL.Path, "/backups"):
@@ -291,12 +304,27 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		operator.WriteError(w, 400, "invalid_request", "JSON object required")
 		return false
 	}
-	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) {
+	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/rename") && !renameShape(b)) || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) {
 		operator.WriteError(w, 400, "invalid_request", "Invalid JSON request")
 		return false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(b))
 	r.ContentLength = int64(len(b))
+	return true
+}
+
+func renameShape(raw []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 4 {
+		return false
+	}
+	for _, key := range []string{"path", "destination", "expected_sha256", "expected_revision"} {
+		value, ok := fields[key]
+		value = bytes.TrimSpace(value)
+		if !ok || len(value) == 0 || bytes.Equal(value, []byte("null")) || (key != "expected_revision" && value[0] != '"') {
+			return false
+		}
+	}
 	return true
 }
 

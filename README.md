@@ -48,6 +48,17 @@ The Websites section manages actual app-owned static files: persisted sites, exp
 Storage and Network have dedicated views backed by real collector values.
 Private File Manager adds folder navigation, search, hash-checked UTF-8 editing,
 nested new files and revision-conflict comparison for app-owned static sites.
+Its [Upload file workflow](docs/site-file-upload.md) adds local static assets
+(including images, fonts and PDFs) at a new relative path, with a 2 MiB file
+limit and explicit revision checks. Existing paths are refused.
+Select a saved file and use [Replace file](docs/site-file-replacement.md) to
+confirm new content against its current hash and revision. A prior native ZIP
+backup can restore the earlier content.
+Websites shows [saved asset details](docs/website-assets.md) when a selected file
+cannot be read as text, including when an image is the first or only file.
+The [website workflow integration](docs/website-main-integration.md) carries
+domain changes, selected-site navigation, ZIP recovery and these file actions
+onto the main baseline while preserving its account-policy inventory.
 Private Backups adds actual ZIP creation, hash-matched downloads and confirmed
 restore with conflict handling. Historical isolated browser/API tests and actual
 public HTTPS privacy checks pass at390/768/1440px in both themes. These private

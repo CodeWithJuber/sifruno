@@ -19,6 +19,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Install and run from source](installation.md) | `installation.md` |
 | [Sifruno delivery state](PROJECT-STATE.md) | `PROJECT-STATE.md` |
 | [Sifruno delivery plan](DELIVERY-PLAN.md) | `DELIVERY-PLAN.md` |
+| [Website workflow main integration](website-main-integration.md) | `website-main-integration.md` |
 | [Parallel development](parallel-development.md) | `parallel-development.md` |
 | [Development closeout — 7 October 2026](CLOSEOUT.md) | `CLOSEOUT.md` |
 | [Server monitoring and local workbench](workbench.md) | `workbench.md` |
@@ -65,6 +66,9 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | --- | --- |
 | [Working website slice](sites-slice.md) | `sites-slice.md` |
 | [Native static-site transfers](native-transfers.md) | `native-transfers.md` |
+| [Local static-file upload](site-file-upload.md) | `site-file-upload.md` |
+| [Confirmed file replacement](site-file-replacement.md) | `site-file-replacement.md` |
+| [Binary assets in Websites](website-assets.md) | `website-assets.md` |
 | [Native Sifruno transfer review](native-transfer-review.md) | `native-transfer-review.md` |
 | [Native static-site backup schedules](native-backup-schedules.md) | `native-backup-schedules.md` |
 | [Native restore preview](native-restore-preview.md) | `native-restore-preview.md` |

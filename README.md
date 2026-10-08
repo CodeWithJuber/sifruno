@@ -20,7 +20,8 @@ independent review. The [policy admission foundation](docs/access-policy-admissi
 adds revision-aware authorization checks, and [trusted policy persistence](docs/access-policy-store.md)
 stores validated bindings across restarts, checks permissions against a
 versioned database snapshot and admits policy updates using current admin
-permissions. Production tenant integration remains open.
+permissions. A scoped projection returns only account IDs readable by the
+authenticated actor. Production tenant integration remains open.
 
 ## Community and Pro
 

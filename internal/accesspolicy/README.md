@@ -24,8 +24,12 @@ that value to a policy actor. Requesters cannot supply roles/owners to
 Any future adapter must establish identity, load authoritative ownership and
 assignments, and revalidate admission at the protected operation boundary.
 Existing routes return a global account inventory: do not expose that inventory
-to resellers or account users. This package neither filters lists nor authorizes
-bulk work from an individual account decision. An allowed decision also does not
+to resellers or account users. `Store.VisibleAccountsAt` returns only the sorted
+account IDs admitted by that actor's `ReadAccount` permissions in one validated
+database snapshot. It does not change the admin-only global `ListAccounts`
+action or wire existing routes to that projection. Each later operation still
+needs fresh admission; a returned list does not authorize bulk work. An allowed
+decision also does not
 replace native input validation, lifecycle checks, revision/CAS checks, CSRF,
 authentication expiry, or broker admission.
 

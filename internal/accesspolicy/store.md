@@ -94,3 +94,31 @@ method establishes the caller's identity. An independently authenticated actor
 and trusted candidate bindings remain integration obligations. The transaction
 covers only this database replacement, not callbacks or external effects. No
 HTTP, session, native account, or production authentication wiring is added.
+
+## Account inventory projection
+
+`Store.VisibleAccountsAt(expected, actor)` returns only admitted account IDs for
+which the existing policy permits `ReadAccount`. It validates storage, compares
+the version, checks actor registration, and evaluates permissions in one bbolt
+read transaction. ServerAdmins see all admitted accounts, Resellers see accounts
+they own, and AccountUsers see their assigned account. `ListAccounts` remains an
+admin-only server action; the projection introduces no new action or permission.
+Results expose no owners, roles, global account counts, or other metadata.
+
+IDs are sorted by their canonical strings. Each successful result is a separately
+owned slice, including a nonnil empty slice for a registered actor with no visible
+accounts. Only authorized IDs enter the slice, and its capacity equals its length.
+Every error returns nil: unavailable, closed, missing, or corrupt
+storage yields `ErrStore` first; zero, foreign, or stale versions yield
+`ErrConflict` next; zero or unregistered actors yield `ErrDenied` last. Existing
+snapshot validation bounds inventory to at most 100 admitted accounts. Reads do
+not repair storage, and caller mutations of a returned slice cannot change policy.
+
+Inventory linearizes at its read snapshot. A read overlapping replacement may
+finish with the previous inventory; reads beginning after commit refuse its old
+version. Retained lists are historical data and grant no permission for later
+operations: those operations must recheck current authorization at admission.
+The caller must independently authenticate the actor; a request-claimed ID is
+not proof of identity. No tenant HTTP/CLI route or production caller is wired.
+The storage trust, clone/rollback, waiting, and recovery limits above still apply.
+Reverting the inventory source addition leaves persisted bindings unchanged.

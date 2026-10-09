@@ -4,6 +4,8 @@
 
 ### Added
 
+- Confirmed native website removal with exact domain/revision admission, bounded
+  cleanup, preserved unrelated sites and reusable domain after completion.
 - Confirmed removal of a selected saved native ZIP, freeing backup capacity while
   preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing

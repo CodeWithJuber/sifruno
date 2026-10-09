@@ -66,6 +66,10 @@ tools require the local operator session and are excluded from the approved
 public monitoring preview. See [File Manager](docs/file-manager-ui.md),
 [Backups](docs/backups-ui.md) and [host resources](docs/host-resources.md).
 
+[Remove a native website](docs/website-removal.md) explicitly after exporting any
+ZIPs you need to retain. Removal clears its current files and local snapshots,
+keeps the audit history and releases the domain; unrelated websites are preserved.
+
 The approved public dashboard now offers **Explore panel** on Overview and
 **Panel preview** in navigation. Its Files, Backups and Websites tour uses
 clearly labelled sample content with local selection/search only. It exposes

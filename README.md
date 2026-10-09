@@ -53,7 +53,9 @@ Its [Upload file workflow](docs/site-file-upload.md) adds local static assets
 limit and explicit revision checks. Existing paths are refused.
 Select a saved file and use [Replace file](docs/site-file-replacement.md) to
 confirm new content against its current hash and revision. A prior native ZIP
-backup can restore the earlier content.
+backup can restore the earlier content. [Single-file recovery](docs/single-file-restore.md)
+lets you preview and restore one archived file while retaining the other saved
+website files.
 Websites shows [saved asset details](docs/website-assets.md) when a selected file
 cannot be read as text, including when an image is the first or only file.
 The [website workflow integration](docs/website-main-integration.md) carries

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Preview and explicitly restore one file from a saved native website ZIP,
+  preserving unrelated current files, website routing and backup history.
 - Confirmed removal of a selected saved native ZIP, freeing backup capacity while
   preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing

@@ -97,3 +97,11 @@ type RestoreInput struct {
 	BackupID         string `json:"backup_id"`
 	ExpectedRevision uint64 `json:"expected_revision"`
 }
+
+// RemoveBackupInput confirms one exact saved native ZIP at the current site revision.
+type RemoveBackupInput struct {
+	BackupID             string `json:"backup_id"`
+	ExpectedBackupSHA256 string `json:"expected_backup_sha256"`
+	ExpectedRevision     uint64 `json:"expected_revision"`
+	Confirmed            bool   `json:"confirmed"`
+}

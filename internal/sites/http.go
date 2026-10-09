@@ -70,7 +70,8 @@ func (s *Store) Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		if found.Pending != nil || s.verify(*found) != nil {
+		removal, removalErr := s.loadBackupRemoval(found.Site.ID)
+		if found.Pending != nil || removalErr != nil || removal != nil || s.verify(*found) != nil {
 			s.mu.Unlock()
 			http.Error(w, "Website recovery required", http.StatusServiceUnavailable)
 			return

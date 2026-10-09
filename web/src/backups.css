@@ -29,7 +29,7 @@
 .backup-record-info dt { font-size: 10px; color: var(--muted-foreground); }
 .backup-record-info dd { font-size: 11px; margin-top: 4px; overflow-wrap: anywhere; }
 .backup-record-info code { font-family: ui-monospace, monospace; }
-.backup-record-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.backup-record-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; max-width: 100%; }
 .backup-restore-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
 .backup-restore-dialog label input[type="checkbox"] { margin-top: 4px; }
 .backup-restore-dialog > .website-error { overflow-wrap: anywhere; }

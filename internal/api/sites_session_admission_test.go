@@ -73,7 +73,7 @@ func siteAdmissionSnapshot(t *testing.T, f siteFixture) []byte {
 }
 
 func TestSiteSessionAdmissionAfterBody(t *testing.T) {
-	for _, operation := range []string{"create", "file", "state", "import", "backups", "restore", "restore-preview", "backup-schedule", "archive-restore", "archive-restore-preview"} {
+	for _, operation := range []string{"create", "file", "state", "import", "backups", "restore", "restore-preview", "remove-backup", "backup-schedule", "archive-restore", "archive-restore-preview"} {
 		changes := []string{"logout"}
 		if operation == "create" || operation == "file" || operation == "state" || operation == "import" || operation == "archive-restore" || operation == "archive-restore-preview" {
 			changes = []string{"logout", "targeted-revoke", "revoke-others", "active"}
@@ -137,6 +137,8 @@ func TestSiteSessionAdmissionAfterBody(t *testing.T) {
 					input = backupBody{ExpectedRevision: source.Revision}
 				case "restore", "restore-preview":
 					input = sites.RestoreInput{BackupID: backup.ID, ExpectedRevision: source.Revision}
+				case "remove-backup":
+					input = sites.RemoveBackupInput{BackupID: backup.ID, ExpectedBackupSHA256: backup.SHA256, ExpectedRevision: source.Revision, Confirmed: true}
 				case "backup-schedule":
 					method = "PUT"
 					disabled := false

@@ -15,6 +15,7 @@ import { previewArchiveRestore, confirmArchiveRestore } from "@/lib/archiveResto
 import type { ArchiveRestorePreview } from "@/lib/archiveRestore";
 import "./backups.css";
 import BackupSchedule from "./BackupSchedule";
+import { backupRemovalError, canRemoveBackup, removeSiteBackup } from "@/lib/backupRemoval";
 
 type Restore = { site: Site; backup: SiteBackup };
 const backupError = (error: unknown) => error instanceof SiteApiError && error.status === 409
@@ -34,6 +35,13 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   const [loadedAt, setLoadedAt] = useState<Date>();
   const [attempt, setAttempt] = useState(0);
   const [restore, setRestore] = useState<Restore>();
+  const [removal, setRemoval] = useState<Restore>();
+  const [removalConfirmed, setRemovalConfirmed] = useState(false);
+  const [removalError, setRemovalError] = useState<string>();
+  const removalDialog = useRef<HTMLDialogElement>(null);
+  const removalOpener = useRef<HTMLButtonElement | null>(null);
+  const removalEpoch = useRef(0);
+  const clearRemoval = useCallback(() => { ++removalEpoch.current; setRemoval(undefined); setRemovalConfirmed(false); setRemovalError(undefined); }, []);
   const [confirmed, setConfirmed] = useState(false);
   const [preview, setPreview] = useState<RestorePreview>();
   const [previewError, setPreviewError] = useState<string>();
@@ -65,15 +73,17 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const authenticated = session?.authenticated === true;
-  const canChange = Boolean(active && authenticated && fresh && selected && selected.state !== "recovery_required" && !busy && !uploadTarget);
+  const canChange = Boolean(active && authenticated && fresh && selected && selected.state !== "recovery_required" && !busy && !uploadTarget && !removal);
+  const canConfirmRemoval = Boolean(active && authenticated && fresh && selected && removal && !busy && !restore && !uploadTarget && !scheduleDirty && !removalError && selected.id === removal.site.id && selected.revision === removal.site.revision && canRemoveBackup(selected, removal.backup) && backups.some(item => item.id === removal.backup.id && item.sha256 === removal.backup.sha256));
   const previewVerified = Boolean(restore && selected && selected.id === restore.site.id && selected.revision === restore.site.revision && restorePreviewMatches(preview, selected.id, selected.revision, restore.backup) && backups.some(item => item.id === restore.backup.id && item.sha256 === restore.backup.sha256 && item.revision === restore.backup.revision && item.files === restore.backup.files));
   const canRestore = Boolean(canChange && previewVerified && selected && restore && canConfirmRestorePreview(preview, selected.id, selected.revision, restore.backup));
 
   const clearRestore = useCallback(() => { ++previewEpoch.current; restoreReturnFocus.current = false; setRestore(undefined); setPreview(undefined); setPreviewError(undefined); setConfirmed(false); }, []);
-  const clearPrivateRecords = useCallback(() => { setSites([]); setSelected(undefined); setBackups([]); setFresh(false); scheduleDraft.current = false; setScheduleDirty(false); clearRestore(); clearUpload(); }, [clearRestore, clearUpload]);
+  const clearPrivateRecords = useCallback(() => { setSites([]); setSelected(undefined); setBackups([]); setFresh(false); scheduleDraft.current = false; setScheduleDirty(false); clearRestore(); clearUpload(); clearRemoval(); }, [clearRestore, clearUpload, clearRemoval]);
   const fail = useCallback((failure: unknown) => {
     setError(backupError(failure)); setFresh(false); setConfirmed(false); setPreview(undefined);
     setUploadPreview(undefined); setUploadConfirmed(false);
+    setRemovalConfirmed(false);
     if (failure instanceof SiteApiError && failure.status === 401) { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); clearPrivateRecords(); setNotice(undefined); }
   }, [clearPrivateRecords]);
 
@@ -125,6 +135,11 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   }, [active, revision, attempt, handoffRequestId, onHandoffConsumed, loadInventory, fail, clearPrivateRecords, clearRestore]);
   useEffect(() => { onStatus({ data: session, loading: Boolean(busy), error, loadedAt }); }, [session, busy, error, loadedAt, onStatus]);
   useEffect(() => { clearUpload(); }, [active, revision, handoffRequestId, selected?.id, clearUpload]);
+  useEffect(() => { clearRemoval(); }, [active, revision, handoffRequestId, selected?.id, session?.authenticated === true ? session.csrf_token : undefined, clearRemoval]);
+  useEffect(() => {
+    if (removal && active && authenticated && removalDialog.current && !removalDialog.current.open) { removalDialog.current.showModal(); removalDialog.current.querySelector<HTMLButtonElement>("button")?.focus(); }
+    else if ((!removal || !active || !authenticated) && removalDialog.current?.open) removalDialog.current.close();
+  }, [removal, active, authenticated]);
   useEffect(() => {
     if (uploadTarget && active && authenticated && uploadDialog.current && !uploadDialog.current.open) { uploadDialog.current.showModal(); uploadDialog.current.querySelector<HTMLButtonElement>("button")?.focus(); }
     else if ((!uploadTarget || !active || !authenticated) && uploadDialog.current?.open) uploadDialog.current.close();
@@ -160,7 +175,29 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
     }
   }
 
-  const refreshRecords = () => { if (actionPending.current || busy || uploadTarget) return; clearRestore(); setNotice(undefined); setAttempt((value) => value + 1); };
+  const refreshRecords = () => { if (actionPending.current || busy || uploadTarget || removal) return; clearRestore(); setNotice(undefined); setAttempt((value) => value + 1); };
+  function closeRemoval() {
+    if (busy === "Removing ZIP backup") return;
+    clearRemoval(); if (removalOpener.current?.isConnected) removalOpener.current.focus();
+  }
+  function openRemoval(backup: SiteBackup, opener: HTMLButtonElement) {
+    if (!canChange || !selected || !session?.authenticated || Date.parse(session.expires_at) <= Date.now() || restore || uploadTarget || scheduleDirty || actionPending.current || !canRemoveBackup(selected, backup)) return;
+    removalOpener.current = opener; setRemovalError(undefined); setRemovalConfirmed(false); setRemoval({ site: selected, backup });
+  }
+  async function confirmRemoval() {
+    if (!canConfirmRemoval || !removal || !removalConfirmed || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()) return;
+    const target = removal, token = session.csrf_token, generation = removalEpoch.current, authGeneration = authEpoch.current;
+    await run("Removing ZIP backup", async parentLive => {
+      const sessionLive = () => parentLive() && selectedId.current === target.site.id && authGeneration === authEpoch.current && sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now();
+      const isLive = () => sessionLive() && generation === removalEpoch.current && !scheduleDraft.current;
+      try {
+        const site = await removeSiteBackup(target.site, target.backup, token, isLive);
+        if (!isLive()) return;
+        clearRemoval(); setFresh(false); setNotice(`Removed one saved native ZIP from ${site.name}. Current files, routing, other ZIPs and schedule are preserved. If the schedule paused at capacity, review and re-enable it separately.`);
+        await loadInventory(site.id, sessionLive);
+      } catch (failure) { if (isLive()) { setRemovalConfirmed(false); setRemovalError(backupRemovalError(failure)); throw failure; } }
+    });
+  }
   function closeRestore() {
     if (busy === "Restoring ZIP backup") return;
     clearRestore(); restoreReturnFocus.current = true;
@@ -203,7 +240,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
     });
   }
   async function downloadBackup(backup: SiteBackup) {
-    if (!authenticated || !selected || !fresh || restore || uploadTarget) return;
+    if (!authenticated || !selected || !fresh || restore || uploadTarget || removal) return;
     const target = selected;
     await run("Downloading ZIP backup", async (isLive) => {
       const archive = await downloadSiteBackup(target.id, backup.id, backup.sha256);
@@ -236,7 +273,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
     uploadInput.current?.focus();
   }
   async function reviewUploadedRestore() {
-    if (!active || !authenticated || !selected || !uploadFile || busy || restore || uploadTarget || scheduleDirty || selected.state === "recovery_required" || !session?.authenticated) return;
+    if (!active || !authenticated || !selected || !uploadFile || busy || restore || uploadTarget || removal || scheduleDirty || selected.state === "recovery_required" || !session?.authenticated) return;
     const file = uploadFile, target = selected, token = session.csrf_token, generation = ++uploadEpoch.current;
     setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(undefined); setUploadTarget(target);
     await run("Previewing uploaded ZIP", async parentLive => {
@@ -282,35 +319,44 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
         if (next.authenticated) throw new SiteApiError(0, "invalid_response", "Sign-out was not confirmed.");
         setSession(next); clearPrivateRecords();
       })} /></div>
-      <div className="website-actions"><Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={!active || !fresh || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()} onClick={() => { if (!activeRef.current || actionPending.current || busy || restore || uploadTarget || !fresh || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; clearRestore(); onImportZIP(); }} /></div>
+      <div className="website-actions"><Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={!active || !fresh || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()} onClick={() => { if (!activeRef.current || actionPending.current || busy || restore || uploadTarget || removal || !fresh || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; clearRestore(); onImportZIP(); }} /></div>
       <p className="website-help">Import creates a new website. Restore from an uploaded native ZIP below replaces static files in the selected existing website. Your schedule draft stays here while you navigate.</p>
-      <Card className="dashboard-card backup-picker" padding={0}><div><label htmlFor="backups-site-picker">Website</label><NativeSelect id="backups-site-picker" data-testid="backups-site-picker" aria-label="Website for backups" value={selected?.id ?? ""} disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || scheduleDirty || !sites.length} onChange={(event) => { if (actionPending.current || busy || restore || uploadTarget || scheduleDraft.current) return; const id = event.target.value; if (!id) return; clearRestore(); setFresh(false); void run("Loading website backups", (isLive) => loadInventory(id, isLive)); }}>
+      <Card className="dashboard-card backup-picker" padding={0}><div><label htmlFor="backups-site-picker">Website</label><NativeSelect id="backups-site-picker" data-testid="backups-site-picker" aria-label="Website for backups" value={selected?.id ?? ""} disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || !sites.length} onChange={(event) => { if (actionPending.current || busy || restore || uploadTarget || removal || scheduleDraft.current) return; const id = event.target.value; if (!id) return; clearRestore(); setFresh(false); void run("Loading website backups", (isLive) => loadInventory(id, isLive)); }}>
         {!selected && <NativeSelectOption value="">{sites.length ? "Choose a website" : "No websites available"}</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}
       </NativeSelect></div><Button label="Refresh backup records" variant="secondary" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={refreshRecords} /></Card>
       {selected ? <>
         <div className="backup-site-context"><span><Globe aria-hidden="true" />{selected.domain}</span><span>Current revision {selected.revision} · {selected.state.replaceAll("_", " ")}</span></div>
         <Card className="dashboard-card uploaded-restore-card" padding={0}>
           <h2>Restore from a downloaded ZIP</h2><p>Replace the static files of <strong>{selected.name}</strong> · {selected.domain}. Website identity, routing, backup history and schedule are preserved. Native Sifruno ZIP files only.</p>
-          <label htmlFor="uploaded-restore-file">Choose native ZIP</label><input ref={uploadInput} id="uploaded-restore-file" data-testid="uploaded-restore-file" type="file" accept=".zip,application/zip" disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || scheduleDirty || selected.state === "recovery_required"} onChange={event => { ++uploadEpoch.current; setUploadFile(event.target.files?.[0]); setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(undefined); }} />
+          <label htmlFor="uploaded-restore-file">Choose native ZIP</label><input ref={uploadInput} id="uploaded-restore-file" data-testid="uploaded-restore-file" type="file" accept=".zip,application/zip" disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || selected.state === "recovery_required"} onChange={event => { ++uploadEpoch.current; setUploadFile(event.target.files?.[0]); setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(undefined); }} />
           {uploadFile && <p>{uploadFile.name} · {bytes(uploadFile.size)}</p>}
-          <Button label="Preview uploaded ZIP" icon={<Upload />} variant="secondary" isDisabled={!active || !uploadFile || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || scheduleDirty || selected.state === "recovery_required"} onClick={() => void reviewUploadedRestore()} />
+          <Button label="Preview uploaded ZIP" icon={<Upload />} variant="secondary" isDisabled={!active || !uploadFile || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || selected.state === "recovery_required"} onClick={() => void reviewUploadedRestore()} />
           {scheduleDirty && <p className="website-help">Save or discard your schedule draft before reviewing an uploaded ZIP.</p>}
         </Card>
         {!fresh && !busy && <p className="backup-status" role="status">Records need to be refreshed before another backup or restore.</p>}
         {selected.state === "recovery_required" && <p className="backup-status" role="alert">This website requires recovery. Backup creation and restore are disabled until its recovery is resolved.</p>}
         <div className="backup-summary"><Card className="dashboard-card" padding={0}><span>Recorded snapshots</span><strong>{backups.length}</strong></Card><Card className="dashboard-card" padding={0}><span>Archive storage</span><strong>{bytes(backups.reduce((sum, backup) => sum + backup.bytes, 0))}</strong></Card><Card className="dashboard-card" padding={0}><span>Latest snapshot</span><strong className="backup-latest">{backups.length ? dateLabel([...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0].created_at) : "No backups yet"}</strong></Card></div>
-        <BackupSchedule key={selected.id} site={selected} session={session} active={active} fresh={fresh} busy={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget)} archives={backups.length} onRefresh={refreshRecords} onAction={run} onUnauthorized={fail} onDirtyChange={onScheduleDirty} />
+        <BackupSchedule key={selected.id} site={selected} session={session} active={active} fresh={fresh} busy={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal)} archives={backups.length} onRefresh={refreshRecords} onAction={run} onUnauthorized={fail} onDirtyChange={onScheduleDirty} />
         <Card className="dashboard-card" padding={0} data-testid="backups-inventory" data-site-id={selected.id} data-revision={selected.revision} data-fresh={fresh}>
           <div className="card-heading backup-inventory-heading"><div><h2>ZIP backups · {selected.name}</h2><p>Saved site files only. Unsaved Websites editor drafts stay in the editor.</p></div><Button label="Create ZIP backup" icon={<Archive />} variant="secondary" size="sm" isDisabled={!canChange || Boolean(restore) || backups.length >= 8} isLoading={busy === "Creating ZIP backup"} onClick={() => void createBackup()} /></div>
           {backups.length ? <div className="backup-records">{[...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map((backup) => <article key={backup.id} data-testid="backup-row" data-backup-id={backup.id}>
             <Archive aria-hidden="true" /><div className="backup-record-info"><h3><time dateTime={backup.created_at}>{dateLabel(backup.created_at)}</time></h3><p>{backup.files} files · {bytes(backup.bytes)} · snapshot revision {backup.revision}</p><details><summary>Backup ID and SHA-256</summary><dl><div><dt>Backup ID</dt><dd>{backup.id}</dd></div><div><dt>SHA-256</dt><dd><code>{backup.sha256}</code></dd></div></dl></details></div>
-            <div className="backup-record-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || !fresh} onClick={() => void downloadBackup(backup)}>Download ZIP</Button><Button label={`Restore backup ${backup.id}`} variant="secondary" size="sm" isDisabled={!canChange || Boolean(restore)} onClick={event => void openRestore(backup, event.currentTarget)}>Restore</Button></div>
+            <div className="backup-record-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !fresh} onClick={() => void downloadBackup(backup)}>Download ZIP</Button><Button label={`Restore backup ${backup.id}`} variant="secondary" size="sm" isDisabled={!canChange || Boolean(restore)} onClick={event => void openRestore(backup, event.currentTarget)}>Restore</Button><Button label={`Remove ZIP backup ${backup.id}`} data-testid="backup-remove-open" variant="ghost" size="sm" isDisabled={!canChange || Boolean(restore) || scheduleDirty || !canRemoveBackup(selected, backup)} onClick={event => openRemoval(backup, event.currentTarget)}>Remove ZIP</Button></div>
           </article>)}</div> : <div className="inventory-empty"><Archive /><h3>No ZIP backups recorded</h3><p>Create a snapshot of this website’s saved static files.</p></div>}
           <div className="table-footer"><span>{backups.length} / 8 snapshots for this site</span><span>{loadedAt ? `Checked ${loadedAt.toLocaleTimeString()}` : "Waiting for backup records"}</span></div>
         </Card>
       </> : <Card className="dashboard-card" padding={0}><div className="inventory-empty"><Globe /><h2>{busy ? "Loading website backups" : error ? "Website records unavailable" : "No websites available"}</h2><p>{busy ? "Reading the actual website and backup inventory." : error ? "Refresh backup records to check the current inventory." : "Create an app-owned static website in Websites before creating a ZIP backup."}</p></div></Card>}
     </>}
     {busy && <p className="website-busy" role="status">{busy}…</p>}
+    {removal && active && authenticated && <dialog ref={removalDialog} className="website-restore-dialog backup-restore-dialog" data-testid="backup-remove-confirm" aria-labelledby="backup-remove-title" onCancel={event => { event.preventDefault(); closeRemoval(); }}>
+      <h2 id="backup-remove-title">Remove saved native ZIP</h2>
+      <p>Permanently remove this one ZIP snapshot from <strong>{removal.site.name}</strong> · {removal.site.domain}. The current saved website files, routing, other ZIPs and schedule are preserved.</p>
+      <dl><div><dt>Backup ID</dt><dd data-testid="backup-remove-id"><code>{removal.backup.id}</code></dd></div><div><dt>SHA-256</dt><dd><code>{removal.backup.sha256}</code></dd></div><div><dt>Expected website revision</dt><dd>{removal.site.revision}</dd></div><div><dt>Snapshot</dt><dd>{dateLabel(removal.backup.created_at)} · {bytes(removal.backup.bytes)} · {removal.backup.files} files</dd></div></dl>
+      <p>Download the ZIP first if you need to keep it. Removal frees its saved archive storage and slot. Your unsaved Websites editor draft is kept. A schedule paused at capacity stays paused; review and re-enable it separately.</p>
+      {removalError && <p role="alert" className="website-error" data-testid="backup-remove-error">{removalError}</p>}
+      <label><input type="checkbox" data-testid="backup-remove-checkbox" checked={removalConfirmed} disabled={!canConfirmRemoval} onChange={event => setRemovalConfirmed(event.target.checked)} />I understand this selected saved ZIP will be permanently removed.</label>
+      <div><Button label="Cancel ZIP removal" variant="ghost" isDisabled={busy === "Removing ZIP backup"} onClick={closeRemoval} /><Button label="Confirm ZIP removal" data-testid="backup-remove-submit" variant="primary" isDisabled={!removalConfirmed || !canConfirmRemoval} isLoading={busy === "Removing ZIP backup"} onClick={() => void confirmRemoval()} /></div>
+    </dialog>}
     {uploadTarget && active && authenticated && <dialog ref={uploadDialog} className="website-restore-dialog backup-restore-dialog" data-testid="uploaded-restore-confirm" aria-labelledby="uploaded-restore-title" onCancel={event => { event.preventDefault(); closeUploadedRestore(); }}>
       <h2 id="uploaded-restore-title">Review uploaded ZIP restore</h2><p>Replace saved static files in <strong>{uploadTarget.name}</strong> · {uploadTarget.domain} with <strong>{uploadFile?.name}</strong>. Routing, backup history and schedule stay with this website.</p>
       {busy === "Previewing uploaded ZIP" && <p role="status">Verifying current files and uploaded ZIP. No restore has been sent…</p>}

@@ -34,6 +34,9 @@
 .backup-restore-dialog label input[type="checkbox"] { margin-top: 4px; }
 .backup-restore-dialog > .website-error { overflow-wrap: anywhere; }
 .backup-restore-dialog { width: min(640px, calc(100vw - 32px)); }
+[data-testid="backup-remove-confirm"] dl, [data-testid="backup-remove-confirm"] dl > div { min-width: 0; max-width: 100%; }
+[data-testid="backup-remove-confirm"] dd { min-width: 0; max-width: 100%; margin-inline-start: 0; overflow-wrap: anywhere; }
+[data-testid="backup-remove-confirm"] code { display: block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .restore-preview { min-width: 0; }
 .restore-preview-status, .restore-preview-help { font-size: 12px; line-height: 1.6; }
 .backup-restore-dialog .restore-preview-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }

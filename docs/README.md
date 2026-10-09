@@ -70,6 +70,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Working website slice](sites-slice.md) | `sites-slice.md` |
 | [Native static-site transfers](native-transfers.md) | `native-transfers.md` |
 | [Local static-file upload](site-file-upload.md) | `site-file-upload.md` |
+| [Upload multiple static files](multi-file-upload.md) | `multi-file-upload.md` |
 | [Confirmed file replacement](site-file-replacement.md) | `site-file-replacement.md` |
 | [Binary assets in Websites](website-assets.md) | `website-assets.md` |
 | [Native Sifruno transfer review](native-transfer-review.md) | `native-transfer-review.md` |

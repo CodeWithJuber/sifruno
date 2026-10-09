@@ -4,6 +4,8 @@
 
 ### Added
 
+- Reviewed multiple-file uploads in File Manager, using existing revisioned
+  uploads with upfront limit/collision checks and explicit partial outcomes.
 - Confirmed removal of a selected saved native ZIP, freeing backup capacity while
   preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing

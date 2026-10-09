@@ -19,6 +19,13 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Install and run from source](installation.md) | `installation.md` |
 | [Sifruno delivery state](PROJECT-STATE.md) | `PROJECT-STATE.md` |
 | [Sifruno delivery plan](DELIVERY-PLAN.md) | `DELIVERY-PLAN.md` |
+| [Combined native website lifecycle](website-lifecycle-integration.md) | `website-lifecycle-integration.md` |
+| [Single-file snapshot restore](single-file-restore.md) | `single-file-restore.md` |
+| [Snapshot recovery as a separate website](backup-copy.md) | `backup-copy.md` |
+| [Website removal](website-removal.md) | `website-removal.md` |
+| [Website name editing](website-name.md) | `website-name.md` |
+| [Multiple-file upload](multi-file-upload.md) | `multi-file-upload.md` |
+| [Saved-file HTTP preview](saved-file-preview.md) | `saved-file-preview.md` |
 | [Website workflow main integration](website-main-integration.md) | `website-main-integration.md` |
 | [Website backup restore review](website-restore-handoff.md) | `website-restore-handoff.md` |
 | [Parallel development](parallel-development.md) | `parallel-development.md` |

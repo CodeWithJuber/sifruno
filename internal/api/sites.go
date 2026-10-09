@@ -63,6 +63,12 @@ type restoreSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.RestoreInput
 }
+type removeSiteInput struct {
+	ID   string `path:"id"`
+	Body sites.RemoveInput
+}
+type removedSiteOutput struct{ Body sites.RemovedSite }
+
 type removeBackupInput struct {
 	ID   string `path:"id"`
 	Body sites.RemoveBackupInput
@@ -110,6 +116,17 @@ func siteOperation(id, method, path string) huma.Operation {
 
 func registerSites(a huma.API, o Options) {
 	registerFileRestore(a, o)
+	remove := siteOperation("remove-native-site", "DELETE", "/api/v1/sites/{id}")
+	remove.MaxBodyBytes = 4096
+	remove.Summary = "Confirm permanent removal of one native static website"
+	remove.Description = "Exact expected_revision, confirmation_domain and confirmed:true required. Removes owned static files, native ZIPs, schedule and local routing only after signed bounded cleanup. Unknown files or recovery refuse. Interrupted committed cleanup remains unavailable until exact recovery on reopen. Signed audit remains; this is not a host or cPanel operation."
+	huma.Register(a, remove, func(ctx context.Context, in *removeSiteInput) (*removedSiteOutput, error) {
+		v, err := o.Sites.Remove(in.ID, in.Body, siteActor(ctx))
+		if err != nil {
+			return nil, websiteError(err)
+		}
+		return &removedSiteOutput{Body: v}, nil
+	})
 	op := siteOperation("remove-native-site-backup", "POST", "/api/v1/sites/{id}/remove-backup")
 	op.MaxBodyBytes = 4096
 	op.Summary = "Confirm removal of one exact saved native static-site ZIP"
@@ -266,6 +283,9 @@ func allowedSiteMutation(r *http.Request) bool {
 		return r.Method == http.MethodPost
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/sites/"), "/")
+	if len(parts) == 1 && parts[0] != "" {
+		return r.Method == http.MethodDelete
+	}
 	if len(parts) != 2 || parts[0] == "" {
 		return false
 	}
@@ -283,6 +303,8 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case r.URL.Path == "/api/v1/sites":
 		target = &sites.CreateInput{}
+	case isRemoveSiteRequest(r):
+		target = &sites.RemoveInput{}
 	case strings.HasSuffix(r.URL.Path, "/upload"):
 		if r.Method == http.MethodPut {
 			target = &sites.ReplaceInput{}
@@ -337,7 +359,7 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		operator.WriteError(w, 400, "invalid_request", "JSON object required")
 		return false
 	}
-	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/restore-file-preview") && !fileRestoreShape(b, false)) || (strings.HasSuffix(r.URL.Path, "/restore-file") && !fileRestoreShape(b, true)) || (strings.HasSuffix(r.URL.Path, "/rename") && !renameShape(b)) || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) || (strings.HasSuffix(r.URL.Path, "/remove-backup") && !removeBackupShape(b)) {
+	if operator.DecodeObject(b, target) != nil || (isRemoveSiteRequest(r) && !removeSiteShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-file-preview") && !fileRestoreShape(b, false)) || (strings.HasSuffix(r.URL.Path, "/restore-file") && !fileRestoreShape(b, true)) || (strings.HasSuffix(r.URL.Path, "/rename") && !renameShape(b)) || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) || (strings.HasSuffix(r.URL.Path, "/remove-backup") && !removeBackupShape(b)) {
 		operator.WriteError(w, 400, "invalid_request", "Invalid JSON request")
 		return false
 	}
@@ -393,6 +415,23 @@ func uploadShape(raw []byte, replacement bool) bool {
 			return false
 		}
 		if key != "expected_revision" && value[0] != '"' {
+			return false
+		}
+	}
+	return true
+}
+
+func isRemoveSiteRequest(r *http.Request) bool {
+	return r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/sites/") && len(strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/sites/"), "/")) == 1
+}
+func removeSiteShape(raw []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 3 {
+		return false
+	}
+	for _, key := range []string{"expected_revision", "confirmation_domain", "confirmed"} {
+		v, ok := fields[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
 			return false
 		}
 	}

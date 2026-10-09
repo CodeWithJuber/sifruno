@@ -234,3 +234,7 @@
 .website-asset-details dt { color: var(--muted-foreground); font-size: 10px; }
 .website-asset-details dd { margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .website-asset-details dl { grid-template-columns: 1fr; } }
+
+.website-import-snapshot { margin-block: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.website-import-snapshot p { margin-block: 6px; }
+.website-import-snapshot code { overflow-wrap: anywhere; }

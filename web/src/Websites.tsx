@@ -10,6 +10,8 @@ import { downloadSiteBackup, importSiteArchive, previewURL, sitePreviewPort, Sit
 import type { OperatorSession, Site, SiteBackup, SiteFile, SiteFileContent } from "@/lib/sites-api";
 import { restoreHandoffFor } from "@/lib/restoreHandoff";
 import type { RestoreHandoff } from "@/lib/restoreHandoff";
+import { prepareBackupCopy } from "@/lib/backupCopy";
+import type { PreparedBackupCopy, ZIPImportRequest } from "@/lib/backupCopy";
 
 interface Editor {
   path: string;
@@ -23,7 +25,7 @@ interface FileConflict { revision: number; file?: SiteFileContent }
 const fromFile = (file: SiteFileContent): Editor => ({ path: file.path, draft: file.content, savedContent: file.content, sha256: file.sha256, revision: file.revision, isNew: false });
 const errorText = (error: unknown) => error instanceof SiteApiError ? error.message : "The local operation could not be confirmed. Your editor draft is kept.";
 
-export default function Websites({ revision, active, onStatus, onOpenSiteTool, importRequest, onImportRequestConsumed }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; onOpenSiteTool: (destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => void; importRequest?: number; onImportRequestConsumed: (requestId: number) => void }) {
+export default function Websites({ revision, active, onStatus, onOpenSiteTool, importRequest, onImportRequestConsumed }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; onOpenSiteTool: (destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => void; importRequest?: ZIPImportRequest; onImportRequestConsumed: (requestId: number) => void }) {
   const [session, setSession] = useState<OperatorSession>();
   const [accessKey, setAccessKey] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
@@ -55,6 +57,12 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   const [importDomain, setImportDomain] = useState("");
   const [importArchive, setImportArchive] = useState<File>();
   const [discardDraftForImport, setDiscardDraftForImport] = useState(false);
+  const [preparedCopy, setPreparedCopy] = useState<PreparedBackupCopy>();
+  const importInput = useRef<HTMLInputElement>(null);
+  const importFormPending = useRef(false);
+  importFormPending.current = Boolean(importArchive || importName || importDomain);
+  const clearImportForm = useCallback(() => { setPreparedCopy(undefined); setImportArchive(undefined); setImportName(""); setImportDomain(""); setDiscardDraftForImport(false); if (importInput.current) importInput.current.value = ""; }, []);
+  const closeImport = () => { ++importGeneration.current; setImportOpen(false); clearImportForm(); };
   const createDialog = useRef<HTMLDialogElement>(null);
   const importDialog = useRef<HTMLDialogElement>(null);
   const domainDialog = useRef<HTMLDialogElement>(null);
@@ -62,7 +70,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   const importGeneration = useRef(0), importPending = useRef(false), authEpoch = useRef(0);
   const requestedImport = useRef(importRequest), handledImport = useRef(0);
   if (importRequest !== undefined) requestedImport.current = importRequest;
-  const importRequestId = requestedImport.current;
+  const importRequestId = requestedImport.current?.requestId;
   const activeRef = useRef(active), sessionRef = useRef(session); activeRef.current = active; sessionRef.current = session;
   const dialogReturnFocus = useRef<HTMLElement | null>(null);
   const latestEditor = useRef(editor);
@@ -132,11 +140,13 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   }
 
   useEffect(() => {
-    const request = requestedImport.current !== undefined && requestedImport.current !== handledImport.current ? requestedImport.current : undefined;
-    if (!active) { if (request !== undefined) { handledImport.current = request; onImportRequestConsumed(request); } return; }
+    const request = requestedImport.current !== undefined && requestedImport.current.requestId !== handledImport.current ? requestedImport.current : undefined;
+    if (!active) { if (request !== undefined) { handledImport.current = request.requestId; onImportRequestConsumed(request.requestId); } return; }
+    if (request?.snapshot && importFormPending.current) { handledImport.current = request.requestId; onImportRequestConsumed(request.requestId); setError("An import ZIP or target form is already pending. Open Import native ZIP in Websites and choose Cancel import to discard it, then select the snapshot again in Backups. Your editor draft is kept."); return; }
     let live = true, csrf: string | undefined, inventoryCount = 0;
     const authGeneration = authEpoch.current;
-    if (request !== undefined) { handledImport.current = request; setDiscardDraftForImport(false); setNotice(undefined); setImportOpen(false); }
+    let listForImport: Site[] = [];
+    if (request !== undefined) { handledImport.current = request.requestId; setDiscardDraftForImport(false); setNotice(undefined); setImportOpen(false); }
     const isLive = () => live && activeRef.current && authGeneration === authEpoch.current && (csrf === undefined || (sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === csrf && Date.parse(sessionRef.current.expires_at) > Date.now()));
     setBusy("Loading websites");
     setError(undefined);
@@ -150,7 +160,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
           if (!isLive()) return;
           const list = await siteRequest("/api/v1/sites", validSiteList);
           if (!isLive()) return;
-          inventoryCount = list.items.length; setSites(list.items);
+          inventoryCount = list.items.length; listForImport = list.items; setSites(list.items);
           setInventoryLoaded(true);
           const previous = latestSelected.current;
           const draft = latestEditor.current;
@@ -164,10 +174,16 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
         if (request !== undefined && nextSession.authenticated) {
           if (importPending.current || domainPending.current) throw new SiteApiError(409, "operation_pending", "The previous operation is still settling. Open Import native ZIP again after it completes.");
           if (inventoryCount >= 100) throw new SiteApiError(422, "capacity", "The website inventory is full. A ZIP import creates a new website.");
+          if (request.snapshot) {
+            setBusy("Verifying saved snapshot");
+            const prepared = await prepareBackupCopy(request.snapshot, listForImport, isLive);
+            if (!isLive()) return;
+            setPreparedCopy(prepared); setImportArchive(prepared.archive); setImportName(""); setImportDomain("");
+          }
           setCreateOpen(false); setDomainTarget(undefined); setImportOpen(true);
         }
       } catch (failure) { if (isLive()) fail(failure); }
-      finally { if (live && activeRef.current) setBusy(undefined); if (request !== undefined) onImportRequestConsumed(request); }
+      finally { if (live && activeRef.current) setBusy(undefined); if (request !== undefined) onImportRequestConsumed(request.requestId); }
     })();
     return () => { live = false; };
   }, [revision, active, fail, sessionAttempt, importRequestId, onImportRequestConsumed]);
@@ -179,9 +195,9 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
     if (active && authenticated) return;
     for (const ref of [createDialog, importDialog, domainDialog]) if (ref.current?.open) ref.current.close();
     setCreateOpen(false); setImportOpen(false);
-    if (!authenticated) { setImportArchive(undefined); setDiscardDraftForImport(false); }
+    if (!authenticated) { clearImportForm(); }
     dialogReturnFocus.current = null;
-  }, [active, authenticated]);
+  }, [active, authenticated, clearImportForm]);
   useEffect(() => {
     ++domainGeneration.current;
     if (!active || !authenticated || domainTarget?.id !== selected?.id) { setDomainTarget(undefined); setNextDomain(""); setDomainNeedsRefresh(false); }
@@ -203,8 +219,9 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   }, [dirty]);
   useEffect(() => {
     ++importGeneration.current; setImportOpen(false); setDiscardDraftForImport(false);
+    if (preparedCopy) clearImportForm();
     setBusy((current) => current === "Importing native ZIP" ? undefined : current);
-  }, [active, authenticated, session?.authenticated ? session.csrf_token : undefined, revision, importRequestId]);
+  }, [active, authenticated, session?.authenticated ? session.csrf_token : undefined, revision, clearImportForm]);
   useEffect(() => {
     if (active && authenticated && importOpen && importDialog.current && !importDialog.current.open) importDialog.current.showModal();
     else if (!importOpen && importDialog.current?.open) importDialog.current.close();
@@ -307,9 +324,10 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
     try {
       const site = await importSiteArchive({ name: importName.trim(), domain: importDomain.trim(), archive: importArchive, csrf });
       if (!isLive()) return;
+      if (sites.some(existing => existing.id === site.id) || (preparedCopy && site.id === preparedCopy.site.id)) throw new SiteApiError(0, "invalid_response", "The import did not acknowledge a new website identity. Your editor draft, selected ZIP and inputs are kept. Refresh records before retrying.");
       if (dirty) { setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); }
       updateSite(site);
-      setImportOpen(false); setImportName(""); setImportDomain(""); setImportArchive(undefined); setDiscardDraftForImport(false);
+      setImportOpen(false); clearImportForm();
       setSection("files"); setNotice(`Imported native Sifruno ZIP as new website ${site.name}.`);
       await loadSite(site.id, false, isLive);
       if (isLive()) setLoadedAt(new Date());
@@ -426,12 +444,12 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
         <div className="website-transfer-actions"><Button label="Cancel creation" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setCreateOpen(false)} /><Button label="Create website" type="submit" variant="primary" isLoading={busy === "Creating website"} isDisabled={Boolean(busy) || dirty || sites.length >= 100 || nameBytes > 80 || domainBytes > 253 || !name.trim() || !domain.trim()} /></div>
       </form>{error && <p role="alert" className="website-error">{error}</p>}
     </dialog>}
-    {authenticated && <dialog ref={importDialog} className="website-transfer-dialog" aria-labelledby="import-title" onClose={() => { setImportOpen(false); setDiscardDraftForImport(false); }} onCancel={(event) => { if (busy) event.preventDefault(); else { setImportOpen(false); setDiscardDraftForImport(false); } }}><h2 id="import-title">Import native Sifruno ZIP</h2><p>Import an app-owned static website archive into a new website. This accepts native Sifruno site ZIPs only; cPanel host backups are not compatible.</p><form onSubmit={submitImportArchive}>
+    {authenticated && <dialog ref={importDialog} className="website-transfer-dialog" aria-labelledby="import-title" onClose={() => { setImportOpen(false); setDiscardDraftForImport(false); }} onCancel={(event) => { if (busy) event.preventDefault(); else closeImport(); }}><h2 id="import-title">Import native Sifruno ZIP</h2><p>Import an app-owned static website archive into a new website. This accepts native Sifruno site ZIPs only; cPanel host backups are not compatible.</p>{preparedCopy && <div className="website-import-snapshot" data-testid="website-import-snapshot" data-source-site-id={preparedCopy.site.id} data-backup-id={preparedCopy.backup.id} data-sha256={preparedCopy.backup.sha256}><strong>Verified saved snapshot · {preparedCopy.site.name}</strong><p>{dateLabel(preparedCopy.backup.created_at)} · revision {preparedCopy.backup.revision} · {preparedCopy.backup.files} files · {bytes(preparedCopy.backup.bytes)}</p><p>Source: {preparedCopy.site.domain}. Choose a new website name and domain below. The source website stays unchanged.</p><details><summary>Verified backup ID and SHA-256</summary><p>{preparedCopy.backup.id}</p><code>{preparedCopy.backup.sha256}</code></details></div>}<form onSubmit={submitImportArchive}>
       <div><label htmlFor="import-website-name">Website name</label><input id="import-website-name" value={importName} onChange={(event) => setImportName(event.target.value)} required maxLength={80} aria-invalid={importNameBytes > 80} disabled={Boolean(busy)} /><span className="website-help">{importNameBytes}/80 UTF-8 bytes</span></div>
       <div><label htmlFor="import-website-domain">Domain</label><input id="import-website-domain" value={importDomain} onChange={(event) => setImportDomain(event.target.value)} required maxLength={253} autoCapitalize="none" spellCheck={false} disabled={Boolean(busy)} /><span className="website-help">{importDomainBytes}/253 UTF-8 bytes</span></div>
-      <div><label htmlFor="import-website-archive">Native site ZIP</label><input id="import-website-archive" type="file" accept=".zip,application/zip,application/octet-stream" required disabled={Boolean(busy)} onChange={(event) => setImportArchive(event.target.files?.[0])} /><span className="website-help">Maximum 34 MiB Â· ZIP only</span>{importArchive && <span className="website-help">{importArchive.name} Â· {bytes(importArchive.size)}</span>}</div>
+      <div><label htmlFor="import-website-archive">{preparedCopy ? "Verified native site ZIP" : "Native site ZIP"}</label>{!preparedCopy && <input ref={importInput} id="import-website-archive" type="file" accept=".zip,application/zip,application/octet-stream" required disabled={Boolean(busy)} onChange={(event) => setImportArchive(event.target.files?.[0])} />}<span className="website-help">Maximum 34 MiB Â· ZIP only</span>{importArchive && <span className="website-help">{importArchive.name} Â· {bytes(importArchive.size)}</span>}</div>
       {dirty && <label className="website-discard-draft"><input type="checkbox" checked={discardDraftForImport} onChange={(event) => setDiscardDraftForImport(event.target.checked)} disabled={Boolean(busy)} />Discard the unsaved editor draft after the import succeeds.</label>}
-      <div className="website-transfer-actions"><Button label="Cancel import" variant="ghost" isDisabled={Boolean(busy)} onClick={() => { setImportOpen(false); setDiscardDraftForImport(false); }} /><Button label="Import website" type="submit" variant="primary" isLoading={busy === "Importing native ZIP"} isDisabled={Boolean(busy) || importPending.current || !active || !importName.trim() || importNameBytes > 80 || !importDomain.trim() || importDomainLength > 253 || importDomainBytes > 253 || !importArchive || importArchive.size === 0 || importArchive.size > maxTransferArchive || (dirty && !discardDraftForImport)} /></div>
+      <div className="website-transfer-actions"><Button label="Cancel import" variant="ghost" isDisabled={Boolean(busy)} onClick={closeImport} /><Button label="Import website" type="submit" variant="primary" isLoading={busy === "Importing native ZIP"} isDisabled={Boolean(busy) || importPending.current || !active || !importName.trim() || importNameBytes > 80 || !importDomain.trim() || importDomainLength > 253 || importDomainBytes > 253 || !importArchive || importArchive.size === 0 || importArchive.size > maxTransferArchive || (dirty && !discardDraftForImport)} /></div>
     </form>{error && <p role="alert" className="website-error">{error}</p>}</dialog>}
   </section>;
 }

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Edit an existing website's display name with revision checks while preserving
+  its identity, domain routing, files, backups and schedule.
 - Confirmed removal of a selected saved native ZIP, freeing backup capacity while
   preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing

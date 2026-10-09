@@ -66,6 +66,9 @@ tools require the local operator session and are excluded from the approved
 public monitoring preview. See [File Manager](docs/file-manager-ui.md),
 [Backups](docs/backups-ui.md) and [host resources](docs/host-resources.md).
 
+[Edit a website display name](docs/website-name.md) in Websites without changing
+its domain, files or backup contents. Conflicting changes require explicit review.
+
 The approved public dashboard now offers **Explore panel** on Overview and
 **Panel preview** in navigation. Its Files, Backups and Websites tour uses
 clearly labelled sample content with local selection/search only. It exposes

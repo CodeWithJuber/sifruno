@@ -4,6 +4,8 @@
 
 ### Added
 
+- Open the selected saved static file from File Manager in its local HTTP preview
+  without saving or discarding an editor draft.
 - Confirmed removal of a selected saved native ZIP, freeing backup capacity while
   preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing

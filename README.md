@@ -66,6 +66,9 @@ tools require the local operator session and are excluded from the approved
 public monitoring preview. See [File Manager](docs/file-manager-ui.md),
 [Backups](docs/backups-ui.md) and [host resources](docs/host-resources.md).
 
+[Open a saved file](docs/saved-file-preview.md) directly from File Manager in
+the local HTTP preview while keeping any unsaved editor draft.
+
 The approved public dashboard now offers **Explore panel** on Overview and
 **Panel preview** in navigation. Its Files, Backups and Websites tour uses
 clearly labelled sample content with local selection/search only. It exposes

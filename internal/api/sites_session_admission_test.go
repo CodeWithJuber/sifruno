@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -72,9 +73,9 @@ func siteAdmissionSnapshot(t *testing.T, f siteFixture) []byte {
 }
 
 func TestSiteSessionAdmissionAfterBody(t *testing.T) {
-	for _, operation := range []string{"create", "file", "state", "import", "backups", "restore", "restore-preview", "backup-schedule"} {
+	for _, operation := range []string{"create", "file", "state", "import", "backups", "restore", "restore-preview", "backup-schedule", "archive-restore", "archive-restore-preview"} {
 		changes := []string{"logout"}
-		if operation == "create" || operation == "file" || operation == "state" || operation == "import" {
+		if operation == "create" || operation == "file" || operation == "state" || operation == "import" || operation == "archive-restore" || operation == "archive-restore-preview" {
 			changes = []string{"logout", "targeted-revoke", "revoke-others", "active"}
 		}
 		for _, change := range changes {
@@ -140,19 +141,32 @@ func TestSiteSessionAdmissionAfterBody(t *testing.T) {
 					method = "PUT"
 					disabled := false
 					input = sites.BackupScheduleInput{ExpectedRevision: source.Revision, ExpectedScheduleRevision: 0, Interval: "daily", Enabled: &disabled}
-				case "import":
-					path = "/api/v1/sites/import"
+				case "import", "archive-restore", "archive-restore-preview":
+					if operation == "import" {
+						path = "/api/v1/sites/import"
+					}
 					archive, _, err := f.store.ExportBackup(source.ID, backup.ID)
 					if err != nil {
 						t.Fatal(err)
 					}
 					var buf bytes.Buffer
 					mw := multipart.NewWriter(&buf)
-					if err = mw.WriteField("name", "Imported"); err != nil {
-						t.Fatal(err)
-					}
-					if err = mw.WriteField("domain", "imported.example"); err != nil {
-						t.Fatal(err)
+					if operation == "import" {
+						if err = mw.WriteField("name", "Imported"); err != nil {
+							t.Fatal(err)
+						}
+						if err = mw.WriteField("domain", "imported.example"); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						if err = mw.WriteField("expected_revision", strconv.FormatUint(source.Revision, 10)); err != nil {
+							t.Fatal(err)
+						}
+						if operation == "archive-restore" {
+							if err = mw.WriteField("expected_archive_sha256", backup.SHA256); err != nil {
+								t.Fatal(err)
+							}
+						}
 					}
 					part, err := mw.CreateFormFile("archive", "site.zip")
 					if err != nil {
@@ -276,7 +290,11 @@ func TestSiteSessionAdmissionAfterBody(t *testing.T) {
 						t.Fatal("state or revision not persisted")
 					}
 				}
-				if bytes.Equal(before, siteAdmissionSnapshot(t, f)) {
+				if operation == "archive-restore-preview" {
+					if !bytes.Equal(before, siteAdmissionSnapshot(t, f)) {
+						t.Fatal("active preview mutated")
+					}
+				} else if bytes.Equal(before, siteAdmissionSnapshot(t, f)) {
 					t.Fatal("active mutation did not persist")
 				}
 			})

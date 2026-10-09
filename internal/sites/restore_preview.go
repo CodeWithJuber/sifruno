@@ -81,24 +81,33 @@ func (s *Store) PreviewRestore(id string, input RestoreInput) (RestorePreview, e
 	if err != nil {
 		return RestorePreview{}, ErrUnavailable
 	}
+	result := RestorePreview{SiteID: id, CurrentRevision: r.Site.Revision, BackupID: found.ID, BackupSHA256: found.SHA256, BackupRevision: found.Revision}
+	result.Files, result.Counts, err = restoreDiff(r.Files, after)
+	if err != nil {
+		return RestorePreview{}, ErrUnavailable
+	}
+	return result, err
+}
+
+func restoreDiff(before, after []FileInfo) ([]RestorePreviewFile, RestorePreviewCounts, error) {
+	result := RestorePreview{Files: []RestorePreviewFile{}}
 	files := map[string]RestorePreviewFile{}
 	aliases := map[string]string{}
-	for _, f := range r.Files {
+	for _, f := range before {
 		files[f.Path] = RestorePreviewFile{Path: f.Path, Before: &f}
 		aliases[strings.ToLower(f.Path)] = f.Path
 	}
 	for _, f := range after {
 		if existing, ok := aliases[strings.ToLower(f.Path)]; ok && existing != f.Path {
-			return RestorePreview{}, ErrUnavailable
+			return nil, RestorePreviewCounts{}, ErrInvalid
 		}
 		entry := files[f.Path]
 		entry.Path, entry.After = f.Path, &f
 		files[f.Path] = entry
 	}
 	if len(files) > 2*MaxFiles {
-		return RestorePreview{}, ErrUnavailable
+		return nil, RestorePreviewCounts{}, ErrInvalid
 	}
-	result := RestorePreview{SiteID: id, CurrentRevision: r.Site.Revision, BackupID: found.ID, BackupSHA256: found.SHA256, BackupRevision: found.Revision, Files: []RestorePreviewFile{}}
 	for _, f := range files {
 		switch {
 		case f.Before == nil:
@@ -117,5 +126,5 @@ func (s *Store) PreviewRestore(id string, input RestoreInput) (RestorePreview, e
 		result.Files = append(result.Files, f)
 	}
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
-	return result, nil
+	return result.Files, result.Counts, nil
 }

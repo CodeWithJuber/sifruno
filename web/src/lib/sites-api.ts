@@ -142,7 +142,7 @@ async function transferError(response: Response): Promise<SiteApiError> {
   return new SiteApiError(response.status, "website_transfer_failed", transferMessage(response.status));
 }
 
-async function readBoundedJson(response: Response, limit: number): Promise<unknown> {
+export async function readBoundedJson(response: Response, limit: number): Promise<unknown> {
   const contentType = response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase();
   const body = response.body;
   if (contentType !== "application/json" || !body) {

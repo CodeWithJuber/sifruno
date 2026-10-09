@@ -236,7 +236,7 @@ func New(o Options) http.Handler {
 				operator.WriteError(w, 503, "unavailable", "Website storage unavailable")
 				return
 			}
-			if mutation && r.URL.Path != "/api/v1/sites/import" {
+			if mutation && !isSiteTransferMutation(r) {
 				if !prepareSiteJSON(w, r) {
 					return
 				}

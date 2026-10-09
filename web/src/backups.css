@@ -65,3 +65,7 @@
   .backup-records article { gap: 8px; }
   .backup-records article > svg { display: none; }
 }
+.uploaded-restore-card { display: grid; gap: 12px; padding: 20px; min-width: 0; }
+.uploaded-restore-card p { overflow-wrap: anywhere; }
+.uploaded-restore-card input[type="file"] { max-width: 100%; }
+.uploaded-restore-card h2 { margin: 0; font-size: 1rem; }

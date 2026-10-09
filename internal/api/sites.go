@@ -109,6 +109,7 @@ func siteOperation(id, method, path string) huma.Operation {
 }
 
 func registerSites(a huma.API, o Options) {
+	registerFileRestore(a, o)
 	op := siteOperation("remove-native-site-backup", "POST", "/api/v1/sites/{id}/remove-backup")
 	op.MaxBodyBytes = 4096
 	op.Summary = "Confirm removal of one exact saved native static-site ZIP"
@@ -268,7 +269,7 @@ func allowedSiteMutation(r *http.Request) bool {
 	if len(parts) != 2 || parts[0] == "" {
 		return false
 	}
-	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "upload" || parts[1] == "domain" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "rename" || parts[1] == "upload" || parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview" || parts[1] == "remove-backup"))
+	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "upload" || parts[1] == "domain" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "rename" || parts[1] == "upload" || parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview" || parts[1] == "restore-file-preview" || parts[1] == "restore-file" || parts[1] == "remove-backup"))
 }
 
 func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -304,6 +305,10 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		target = &sites.DomainInput{}
 	case strings.HasSuffix(r.URL.Path, "/backups"):
 		target = &backupBody{}
+	case strings.HasSuffix(r.URL.Path, "/restore-file-preview"):
+		target = &sites.FileRestoreInput{}
+	case strings.HasSuffix(r.URL.Path, "/restore-file"):
+		target = &sites.ConfirmFileRestoreInput{}
 	case strings.HasSuffix(r.URL.Path, "/restore"):
 		target = &sites.RestoreInput{}
 	case strings.HasSuffix(r.URL.Path, "/restore-preview"):
@@ -332,7 +337,7 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		operator.WriteError(w, 400, "invalid_request", "JSON object required")
 		return false
 	}
-	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/rename") && !renameShape(b)) || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) || (strings.HasSuffix(r.URL.Path, "/remove-backup") && !removeBackupShape(b)) {
+	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/restore-file-preview") && !fileRestoreShape(b, false)) || (strings.HasSuffix(r.URL.Path, "/restore-file") && !fileRestoreShape(b, true)) || (strings.HasSuffix(r.URL.Path, "/rename") && !renameShape(b)) || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) || (strings.HasSuffix(r.URL.Path, "/remove-backup") && !removeBackupShape(b)) {
 		operator.WriteError(w, 400, "invalid_request", "Invalid JSON request")
 		return false
 	}

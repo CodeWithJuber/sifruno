@@ -63,6 +63,13 @@ func TestFileRestoreAPIContractAndAdmission(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &p) != nil || p.File.Path != "index.html" || p.File.Kind != "unchanged" || p.BackupSHA256 != b.SHA256 {
 		t.Fatalf("preview DTO %d %s", w.Code, w.Body.String())
 	}
+	// Assert the actual wire envelope too: decoding into a Go struct silently
+	// ignores Huma's schema metadata, which strict browser validation must admit.
+	var envelope map[string]json.RawMessage
+	var schema string
+	if json.Unmarshal(w.Body.Bytes(), &envelope) != nil || len(envelope) != 8 || json.Unmarshal(envelope["$schema"], &schema) != nil || schema != "http://127.0.0.1:8080/FileRestorePreview.json" {
+		t.Fatal("unexpected single-file preview HTTP envelope")
+	}
 	if w = websiteRequest(f.handler, "POST", endpoint+"/restore-file", input, c, csrf); w.Code != 400 {
 		t.Fatal("missing confirmation", w.Code)
 	}

@@ -17,6 +17,17 @@ test("one-file metadata is strict and binds exact context",()=>{
  for(const mutate of [p=>p.current_revision++,p=>p.backup_sha256="e".repeat(64),p=>p.backup_id="f".repeat(32),p=>p.site_id="f".repeat(32)]){const p=preview();mutate(p);assert.equal(api.fileRestoreMatches(p,site,backup,info.path),false)}
 });
 
+test("actual Huma HTTP envelope admits only the known schema metadata",async()=>{
+ const wire={...preview(),$schema:"http://127.0.0.1:18640/FileRestorePreview.json"};
+ assert(api.validFileRestorePreview(wire));assert(api.fileRestoreMatches(wire,site,backup,info.path));
+ for(const schema of [null,{},"javascript:alert(1)","http://127.0.0.1:18640/Other.json","http://user:password@127.0.0.1/FileRestorePreview.json","http://127.0.0.1/FileRestorePreview.json?extra=1","http://127.0.0.1/FileRestorePreview.json#other"]){assert.equal(api.validFileRestorePreview({...wire,$schema:schema}),false)}
+ assert.equal(api.validFileRestorePreview({...wire,unknown:true}),false);
+ assert.equal(api.validFileRestorePreview({...wire,file:{...wire.file,$schema:wire.$schema}}),false);
+ const old=globalThis.fetch;
+ try { globalThis.fetch=async()=>new Response(JSON.stringify(wire),{status:200});assert.deepEqual(await api.previewFileRestore(site,backup,info.path,"test-csrf"),wire); }
+ finally {globalThis.fetch=old}
+});
+
 test("preview and confirmation send exactly one file and do not retry failures",async()=>{
  const old=globalThis.fetch;let requests=[];
  try{

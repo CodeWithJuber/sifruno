@@ -25,23 +25,26 @@ type pendingChange struct {
 	Checkpoints []string `json:"checkpoints"`
 }
 type record struct {
-	Version   int            `json:"version"`
-	Site      Site           `json:"site"`
-	Owner     string         `json:"owner"`
-	Files     []FileInfo     `json:"files"`
-	Backups   []BackupInfo   `json:"backups"`
-	ChangeIDs []string       `json:"change_ids"`
-	Pending   *pendingChange `json:"pending,omitempty"`
+	Version                  int            `json:"version"`
+	Site                     Site           `json:"site"`
+	Owner                    string         `json:"owner"`
+	Files                    []FileInfo     `json:"files"`
+	Backups                  []BackupInfo   `json:"backups"`
+	ChangeIDs                []string       `json:"change_ids"`
+	Pending                  *pendingChange `json:"pending,omitempty"`
+	RemovedBackup            *backupRemoval `json:"removed_backup,omitempty"` // signed last explicit removal, not a ZIP restore checkpoint
+	RetiredScheduledBackupID string         `json:"retired_scheduled_backup_id,omitempty"`
 }
 type Store struct {
-	mu       sync.Mutex
-	dir      string
-	root     *os.Root
-	rootInfo os.FileInfo
-	dbInfo   os.FileInfo
-	db       *bolt.DB
-	journal  *trail.Store
-	closed   bool
+	mu                sync.Mutex
+	dir               string
+	root              *os.Root
+	rootInfo          os.FileInfo
+	dbInfo            os.FileInfo
+	db                *bolt.DB
+	journal           *trail.Store
+	closed            bool
+	backupRemovalStep func(string) error // isolated failure injection, never configured by production
 }
 
 var bucket = []byte("sites-v1")
@@ -95,7 +98,10 @@ func Open(dir string, journal *trail.Store) (*Store, error) {
 		if _, err := tx.CreateBucketIfNotExists(bucket); err != nil {
 			return err
 		}
-		_, err := tx.CreateBucketIfNotExists(backupScheduleBucket)
+		if _, err := tx.CreateBucketIfNotExists(backupScheduleBucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(backupRemovalBucket)
 		return err
 	}); err != nil {
 		db.Close()
@@ -110,12 +116,24 @@ func Open(dir string, journal *trail.Store) (*Store, error) {
 		db.Close()
 		return nil, ErrUnavailable
 	}
+	if err = s.validateBackupRemovals(); err != nil {
+		db.Close()
+		return nil, ErrUnavailable
+	}
 	for _, r := range items {
 		if r.Pending == nil {
 			if err = s.verify(r); err != nil {
 				db.Close()
 				return nil, ErrUnavailable
 			}
+		}
+		v, e := s.loadBackupRemoval(r.Site.ID)
+		if e != nil {
+			db.Close()
+			return nil, ErrUnavailable
+		}
+		if v != nil {
+			_ = s.finishBackupRemoval(*v)
 		}
 	}
 	d, err := root.Open("data")
@@ -176,6 +194,12 @@ func (s *Store) healthy() error {
 	return nil
 }
 func validateRecord(r record) error {
+	if r.RetiredScheduledBackupID != "" && !identifier.MatchString(r.RetiredScheduledBackupID) {
+		return ErrUnavailable
+	}
+	if r.RemovedBackup != nil && (!validBackupRemoval(*r.RemovedBackup) || r.RemovedBackup.SiteID != r.Site.ID || r.RemovedBackup.Revision >= r.Site.Revision) {
+		return ErrUnavailable
+	}
 	if r.Version != 1 || r.Owner != "local-operator" || !identifier.MatchString(r.Site.ID) || r.Site.Revision == 0 || !validName(r.Site.Name) || r.Site.PreviewHost != "site-"+r.Site.ID+".localhost" || r.Site.CreatedAt.IsZero() || r.Site.UpdatedAt.IsZero() || (r.Site.State != "active" && r.Site.State != "suspended") {
 		return ErrUnavailable
 	}
@@ -328,6 +352,9 @@ func (s *Store) checked(id string) (record, error) {
 	if err != nil {
 		return r, err
 	}
+	if v, e := s.loadBackupRemoval(id); e != nil || v != nil {
+		return r, ErrUnavailable
+	}
 	return r, s.verify(r)
 }
 func exposed(r record) Site {
@@ -352,7 +379,13 @@ func (s *Store) List() ([]Site, error) {
 		if r.Pending == nil && s.verify(r) != nil {
 			return nil, ErrUnavailable
 		}
-		result = append(result, exposed(r))
+		v := exposed(r)
+		if pending, e := s.loadBackupRemoval(r.Site.ID); e != nil {
+			return nil, e
+		} else if pending != nil {
+			v.State = "recovery_required"
+		}
+		result = append(result, v)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
 	return result, nil
@@ -370,7 +403,13 @@ func (s *Store) Get(id string) (Site, error) {
 	if r.Pending == nil && s.verify(r) != nil {
 		return Site{}, ErrUnavailable
 	}
-	return exposed(r), nil
+	v := exposed(r)
+	if pending, e := s.loadBackupRemoval(id); e != nil {
+		return Site{}, e
+	} else if pending != nil {
+		v.State = "recovery_required"
+	}
+	return v, nil
 }
 
 func (s *Store) Create(input CreateInput, actor string) (Site, error) {
@@ -780,6 +819,11 @@ func (s *Store) change(current, next record, data map[string][]byte, action, act
 	if !failed {
 		raw, _ := json.Marshal(next)
 		failed = atomicRoot(rt, "state.json", raw) != nil
+	}
+	// A crash here leaves the signed state transition incomplete. Explicit ZIP
+	// removal retains its intent and bytes; reopening does not infer a commit.
+	if action == "remove-backup" && !failed && s.removalStep("after_state_write") != nil {
+		return ErrUnavailable
 	}
 	for _, id := range pending.Pending.Checkpoints {
 		if _, e := s.journal.Seal(id); e != nil {

@@ -139,6 +139,11 @@ func backupScheduleParent(r backupScheduleRecord, raw []byte) error {
 				return nil // Historical membership, not a claim of current ZIP health.
 			}
 		}
+		// The signed catalog retains the explicit retirement of this historical
+		// result even after other removals. Pending Run verification is unchanged.
+		if parent.RetiredScheduledBackupID == r.Schedule.LastBackupID {
+			return nil
+		}
 		return ErrUnavailable
 	}
 	return nil
@@ -408,6 +413,11 @@ func (s *Store) RunDueBackups(now time.Time) (bool, error) {
 		return rows[i].Schedule.NextRunAt.Before(rows[j].Schedule.NextRunAt)
 	})
 	for _, row := range rows {
+		if removal, err := s.loadBackupRemoval(row.Schedule.SiteID); err != nil {
+			return false, err
+		} else if removal != nil {
+			continue
+		}
 		if now.Before(row.Schedule.UpdatedAt) {
 			continue // A backward clock never rewrites an already observed time.
 		}

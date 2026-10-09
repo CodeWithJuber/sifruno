@@ -75,6 +75,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Native static-site backup schedules](native-backup-schedules.md) | `native-backup-schedules.md` |
 | [Native restore preview](native-restore-preview.md) | `native-restore-preview.md` |
 | [Restore an existing website from an uploaded ZIP](uploaded-zip-restore.md) | `uploaded-zip-restore.md` |
+| [Remove a saved native website backup](backup-removal.md) | `backup-removal.md` |
 | [Original backup characterization for migration](cpanel-backup-inspection.md) | `cpanel-backup-inspection.md` |
 | [Independent review: original backup characterization](cpanel-backup-review.md) | `cpanel-backup-review.md` |
 

@@ -66,6 +66,10 @@ tools require the local operator session and are excluded from the approved
 public monitoring preview. See [File Manager](docs/file-manager-ui.md),
 [Backups](docs/backups-ui.md) and [host resources](docs/host-resources.md).
 
+Use [Recover as new website](docs/backup-copy.md) on a saved snapshot to prepare
+its verified ZIP in the import form. Choose a new name/domain and confirm; the
+original website keeps its current files and backups.
+
 The approved public dashboard now offers **Explore panel** on Overview and
 **Panel preview** in navigation. Its Files, Backups and Websites tour uses
 clearly labelled sample content with local selection/search only. It exposes

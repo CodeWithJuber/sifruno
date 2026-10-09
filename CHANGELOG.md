@@ -4,6 +4,8 @@
 
 ### Added
 
+- Recover a saved native ZIP into a separate website through the existing import
+  flow, with verified archive selection and explicit target-name/domain entry.
 - Confirmed removal of a selected saved native ZIP, freeing backup capacity while
   preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing

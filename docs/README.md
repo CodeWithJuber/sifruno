@@ -21,6 +21,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Sifruno delivery plan](DELIVERY-PLAN.md) | `DELIVERY-PLAN.md` |
 | [Website workflow main integration](website-main-integration.md) | `website-main-integration.md` |
 | [Website backup restore review](website-restore-handoff.md) | `website-restore-handoff.md` |
+| [Recover a backup as a separate website](backup-copy.md) | `backup-copy.md` |
 | [Parallel development](parallel-development.md) | `parallel-development.md` |
 | [Development closeout — 7 October 2026](CLOSEOUT.md) | `CLOSEOUT.md` |
 | [Server monitoring and local workbench](workbench.md) | `workbench.md` |

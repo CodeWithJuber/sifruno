@@ -231,8 +231,19 @@ func isSessionPath(path string) bool {
 	return path == "/api/v1/session" || strings.HasPrefix(path, "/api/v1/session/")
 }
 
-func allowedSiteMutation(r *http.Request) bool {
+func isSiteTransferMutation(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
 	if r.URL.Path == "/api/v1/sites/import" {
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/sites/"), "/")
+	return len(parts) == 2 && parts[0] != "" && (parts[1] == "archive-restore-preview" || parts[1] == "archive-restore")
+}
+
+func allowedSiteMutation(r *http.Request) bool {
+	if isSiteTransferMutation(r) {
 		return r.Method == http.MethodPost
 	}
 	if r.URL.Path == "/api/v1/sites" {

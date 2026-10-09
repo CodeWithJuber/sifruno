@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"reflect"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -100,6 +101,49 @@ func registerSiteTransfers(mux *http.ServeMux, a huma.API, o Options) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(site)
 	})
+	for _, preview := range []bool{true, false} {
+		route := "POST /api/v1/sites/{id}/archive-restore"
+		if preview {
+			route += "-preview"
+		}
+		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
+			if !admit(w) {
+				return
+			}
+			defer func() { <-slots }()
+			fields := map[string]int64{"archive": maxTransferArchive, "expected_revision": 16}
+			if !preview {
+				fields["expected_archive_sha256"] = 64
+			}
+			parts, status := readTransferParts(w, r, fields)
+			if status != 0 {
+				operator.WriteError(w, status, "invalid_request", "Invalid website archive request")
+				return
+			}
+			revision, err := strconv.ParseUint(string(parts["expected_revision"]), 10, 64)
+			if err != nil || revision == 0 || strconv.FormatUint(revision, 10) != string(parts["expected_revision"]) {
+				transferError(w, sites.ErrInvalid)
+				return
+			}
+			actor, ok := o.Operator.Authorize(w, r, true)
+			if !ok {
+				return
+			}
+			input := sites.ArchiveRestoreInput{Archive: parts["archive"], ExpectedRevision: revision, ExpectedArchiveSHA256: string(parts["expected_archive_sha256"])}
+			var result any
+			if preview {
+				result, err = o.Sites.PreviewArchiveRestore(r.PathValue("id"), input)
+			} else {
+				result, err = o.Sites.RestoreArchive(r.PathValue("id"), input, actor)
+			}
+			if err != nil {
+				transferError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(result)
+		})
+	}
 	documentSiteTransfers(a)
 }
 
@@ -138,7 +182,15 @@ func transferError(w http.ResponseWriter, err error) {
 }
 
 func readSiteImport(w http.ResponseWriter, r *http.Request) (sites.ImportInput, int) {
-	var in sites.ImportInput
+	parts, status := readTransferParts(w, r, map[string]int64{"name": 80, "domain": 253, "archive": maxTransferArchive})
+	if status != 0 {
+		return sites.ImportInput{}, status
+	}
+	return sites.ImportInput{Name: string(parts["name"]), Domain: string(parts["domain"]), Archive: parts["archive"]}, 0
+}
+
+func readTransferParts(w http.ResponseWriter, r *http.Request, fields map[string]int64) (map[string][]byte, int) {
+	in := map[string][]byte{}
 	ct, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || ct != "multipart/form-data" || params["boundary"] == "" || len(params["boundary"]) > 70 || len(params) != 1 {
 		return in, 415
@@ -163,7 +215,8 @@ func readSiteImport(w http.ResponseWriter, r *http.Request) (sites.ImportInput, 
 			return in, importReadStatus(err)
 		}
 		name := part.FormName()
-		if seen[name] || len(seen) >= 3 || (name != "name" && name != "domain" && name != "archive") || len(part.Header) > 2 {
+		limit, allowed := fields[name]
+		if seen[name] || len(seen) >= len(fields) || !allowed || len(part.Header) > 2 {
 			return in, 400
 		}
 		seen[name] = true
@@ -175,10 +228,6 @@ func readSiteImport(w http.ResponseWriter, r *http.Request) (sites.ImportInput, 
 		disp, dp, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
 		if err != nil || disp != "form-data" || dp["name"] != name || len(dp) > 2 || part.Header.Get("Content-Transfer-Encoding") != "" {
 			return in, 400
-		}
-		limit := int64(80)
-		if name == "domain" {
-			limit = 253
 		}
 		if name == "archive" {
 			if part.FileName() == "" || dp["filename"] == "" {
@@ -202,22 +251,12 @@ func readSiteImport(w http.ResponseWriter, r *http.Request) (sites.ImportInput, 
 		if len(data) == 0 {
 			return in, 400
 		}
-		switch name {
-		case "archive":
-			in.Archive = data
-		case "name":
-			if !utf8.Valid(data) {
-				return in, 400
-			}
-			in.Name = string(data)
-		case "domain":
-			if !utf8.Valid(data) {
-				return in, 400
-			}
-			in.Domain = string(data)
+		if name != "archive" && !utf8.Valid(data) {
+			return in, 400
 		}
+		in[name] = data
 	}
-	if len(seen) != 3 {
+	if len(seen) != len(fields) {
 		return in, 400
 	}
 	// Multipart's closing boundary can be followed by an epilogue. Consume it
@@ -262,4 +301,24 @@ func documentSiteTransfers(a huma.API) {
 	imp := &huma.Operation{OperationID: "import-site-archive", Method: "POST", Path: "/api/v1/sites/import", Summary: "Import a native Sifruno v1 ZIP into a new static website", RequestBody: &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{"multipart/form-data": {Schema: &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"name", "domain", "archive"}, Properties: map[string]*huma.Schema{"name": {Type: "string", MaxLength: &nameMax, Description: "UTF-8, maximum 80 bytes"}, "domain": {Type: "string", MaxLength: &domainMax}, "archive": {Type: "string", Format: "binary", MaxLength: &max, Description: "Nonempty application/zip or application/octet-stream file; maximum 34 MiB. Native Sifruno v1 only; no cPanel host migration."}}}}}}, Responses: responses()}
 	imp.Responses["200"] = &huma.Response{Description: "Actual persisted new website", Content: map[string]*huma.MediaType{"application/json": {Schema: &huma.Schema{Ref: "#/components/schemas/Site"}}}}
 	spec.Paths[imp.Path] = &huma.PathItem{Post: imp}
+	for _, preview := range []bool{true, false} {
+		path, operation := "/api/v1/sites/{id}/archive-restore", "restore-uploaded-site-archive"
+		if preview {
+			path += "-preview"
+			operation += "-preview"
+		}
+		required := []string{"archive", "expected_revision"}
+		properties := map[string]*huma.Schema{"archive": {Type: "string", Format: "binary", MaxLength: &max, Description: "Native Sifruno v1 static-files ZIP; source site identity is not applied"}, "expected_revision": {Type: "string", Pattern: "^[1-9][0-9]{0,15}$"}}
+		if !preview {
+			required = append(required, "expected_archive_sha256")
+			properties["expected_archive_sha256"] = &huma.Schema{Type: "string", Pattern: "^[a-f0-9]{64}$", Description: "SHA-256 returned by preview of these exact archive bytes"}
+		}
+		op := &huma.Operation{OperationID: operation, Method: "POST", Path: path, Summary: "Preview or restore uploaded native ZIP files into an existing website; identity, routing, schedule and backup history preserved", Parameters: []*huma.Param{{Name: "id", In: "path", Required: true, Schema: &huma.Schema{Type: "string"}}}, RequestBody: &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{"multipart/form-data": {Schema: &huma.Schema{Type: "object", AdditionalProperties: false, Required: required, Properties: properties}}}}, Responses: responses()}
+		result := spec.Components.Schemas.Schema(reflect.TypeOf(sites.Site{}), true, "Site")
+		if preview {
+			result = spec.Components.Schemas.Schema(reflect.TypeOf(sites.ArchiveRestorePreview{}), true, "ArchiveRestorePreview")
+		}
+		op.Responses["200"] = &huma.Response{Description: "Read-only verified diff, or persisted file replacement at exactly the next revision. Archive backup metadata is not a new saved backup record.", Content: map[string]*huma.MediaType{"application/json": {Schema: result}}}
+		spec.Paths[path] = &huma.PathItem{Post: op}
+	}
 }

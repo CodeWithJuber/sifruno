@@ -26,8 +26,14 @@ export function validRestorePath(value: unknown): value is string {
 }
 const fileInfo = (value: unknown, path: string): value is SiteFile => object(value) && exact(value, ["path", "bytes", "sha256"]) && value.path === path && integer(value.bytes, 0, 2 << 20) && sha(value.sha256);
 export function validRestorePreview(value: unknown): value is RestorePreview {
+  return validPreview(value, true);
+}
+export function validUploadedRestorePreview(value: unknown): value is RestorePreview {
+  return validPreview(value, false);
+}
+function validPreview(value: unknown, saved: boolean): value is RestorePreview {
   if (!object(value) || !exact(value, ["site_id", "current_revision", "backup_id", "backup_sha256", "backup_revision", "files", "counts"]) ||
-      !id(value.site_id) || !id(value.backup_id) || !sha(value.backup_sha256) || !integer(value.current_revision, 1) || !integer(value.backup_revision, 1, value.current_revision) ||
+      !id(value.site_id) || !id(value.backup_id) || !sha(value.backup_sha256) || !integer(value.current_revision, 1) || !integer(value.backup_revision, 1, saved ? value.current_revision : Number.MAX_SAFE_INTEGER) ||
       !Array.isArray(value.files) || value.files.length < 1 || value.files.length > 128 || !object(value.counts) || !exact(value.counts, restoreKinds) || !restoreKinds.every(kind => integer((value.counts as ObjectValue)[kind], 0, 128))) return false;
   const counts = { added: 0, modified: 0, removed: 0, unchanged: 0 };
   const aliases = new Set<string>(); let previous = "", beforeCount = 0, afterCount = 0, beforeBytes = 0, afterBytes = 0;

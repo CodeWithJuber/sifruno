@@ -52,6 +52,10 @@ type domainSiteInput struct {
 	ID   string `path:"id"`
 	Body sites.DomainInput
 }
+type nameSiteInput struct {
+	ID   string `path:"id"`
+	Body sites.NameInput
+}
 type backupBody struct {
 	ExpectedRevision uint64 `json:"expected_revision"`
 }
@@ -126,6 +130,16 @@ func registerSites(a huma.API, o Options) {
 			return nil, websiteError(err)
 		}
 		return &removedSiteOutput{Body: v}, nil
+	})
+	nameOp := siteOperation("change-site-name", "PUT", "/api/v1/sites/{id}/name")
+	nameOp.MaxBodyBytes = 4096
+	nameOp.Summary = "Edit one website display name at its expected revision"
+	huma.Register(a, nameOp, func(ctx context.Context, in *nameSiteInput) (*siteOutput, error) {
+		v, err := o.Sites.ChangeName(in.ID, in.Body, siteActor(ctx))
+		if err != nil {
+			return nil, websiteError(err)
+		}
+		return &siteOutput{Body: v}, nil
 	})
 	op := siteOperation("remove-native-site-backup", "POST", "/api/v1/sites/{id}/remove-backup")
 	op.MaxBodyBytes = 4096
@@ -289,7 +303,7 @@ func allowedSiteMutation(r *http.Request) bool {
 	if len(parts) != 2 || parts[0] == "" {
 		return false
 	}
-	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "upload" || parts[1] == "domain" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "rename" || parts[1] == "upload" || parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview" || parts[1] == "restore-file-preview" || parts[1] == "restore-file" || parts[1] == "remove-backup"))
+	return (r.Method == http.MethodDelete && parts[1] == "file") || (r.Method == http.MethodPut && (parts[1] == "file" || parts[1] == "upload" || parts[1] == "domain" || parts[1] == "name" || parts[1] == "backup-schedule")) || (r.Method == http.MethodPost && (parts[1] == "rename" || parts[1] == "upload" || parts[1] == "state" || parts[1] == "backups" || parts[1] == "restore" || parts[1] == "restore-preview" || parts[1] == "restore-file-preview" || parts[1] == "restore-file" || parts[1] == "remove-backup"))
 }
 
 func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -325,6 +339,8 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		target = &sites.RenameInput{}
 	case strings.HasSuffix(r.URL.Path, "/domain"):
 		target = &sites.DomainInput{}
+	case strings.HasSuffix(r.URL.Path, "/name"):
+		target = &sites.NameInput{}
 	case strings.HasSuffix(r.URL.Path, "/backups"):
 		target = &backupBody{}
 	case strings.HasSuffix(r.URL.Path, "/restore-file-preview"):
@@ -359,12 +375,27 @@ func prepareSiteJSON(w http.ResponseWriter, r *http.Request) bool {
 		operator.WriteError(w, 400, "invalid_request", "JSON object required")
 		return false
 	}
-	if operator.DecodeObject(b, target) != nil || (isRemoveSiteRequest(r) && !removeSiteShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-file-preview") && !fileRestoreShape(b, false)) || (strings.HasSuffix(r.URL.Path, "/restore-file") && !fileRestoreShape(b, true)) || (strings.HasSuffix(r.URL.Path, "/rename") && !renameShape(b)) || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) || (strings.HasSuffix(r.URL.Path, "/remove-backup") && !removeBackupShape(b)) {
+	if operator.DecodeObject(b, target) != nil || (strings.HasSuffix(r.URL.Path, "/name") && !nameShape(b)) || (isRemoveSiteRequest(r) && !removeSiteShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-file-preview") && !fileRestoreShape(b, false)) || (strings.HasSuffix(r.URL.Path, "/restore-file") && !fileRestoreShape(b, true)) || (strings.HasSuffix(r.URL.Path, "/rename") && !renameShape(b)) || (strings.HasSuffix(r.URL.Path, "/upload") && !uploadShape(b, r.Method == http.MethodPut)) || (strings.HasSuffix(r.URL.Path, "/backup-schedule") && !backupScheduleShape(b)) || (strings.HasSuffix(r.URL.Path, "/restore-preview") && !restorePreviewShape(b)) || (strings.HasSuffix(r.URL.Path, "/remove-backup") && !removeBackupShape(b)) {
 		operator.WriteError(w, 400, "invalid_request", "Invalid JSON request")
 		return false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(b))
 	r.ContentLength = int64(len(b))
+	return true
+}
+
+func nameShape(raw []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 2 {
+		return false
+	}
+	for _, key := range []string{"name", "expected_revision"} {
+		v, ok := fields[key]
+		v = bytes.TrimSpace(v)
+		if !ok || len(v) == 0 || bytes.Equal(v, []byte("null")) || (key == "name" && v[0] != '"') {
+			return false
+		}
+	}
 	return true
 }
 

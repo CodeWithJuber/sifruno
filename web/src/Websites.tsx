@@ -8,6 +8,8 @@ import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import { downloadSiteBackup, importSiteArchive, previewURL, sitePreviewPort, SiteApiError, siteRequest, siteURL, validBackup, validBackupList, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
 import type { OperatorSession, Site, SiteBackup, SiteFile, SiteFileContent } from "@/lib/sites-api";
+import { restoreHandoffFor } from "@/lib/restoreHandoff";
+import type { RestoreHandoff } from "@/lib/restoreHandoff";
 
 interface Editor {
   path: string;
@@ -21,7 +23,7 @@ interface FileConflict { revision: number; file?: SiteFileContent }
 const fromFile = (file: SiteFileContent): Editor => ({ path: file.path, draft: file.content, savedContent: file.content, sha256: file.sha256, revision: file.revision, isNew: false });
 const errorText = (error: unknown) => error instanceof SiteApiError ? error.message : "The local operation could not be confirmed. Your editor draft is kept.";
 
-export default function Websites({ revision, active, onStatus, onOpenSiteTool, importRequest, onImportRequestConsumed }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; onOpenSiteTool: (destination: "files" | "backups", siteId: string, siteName: string) => void; importRequest?: number; onImportRequestConsumed: (requestId: number) => void }) {
+export default function Websites({ revision, active, onStatus, onOpenSiteTool, importRequest, onImportRequestConsumed }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; onOpenSiteTool: (destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => void; importRequest?: number; onImportRequestConsumed: (requestId: number) => void }) {
   const [session, setSession] = useState<OperatorSession>();
   const [accessKey, setAccessKey] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
@@ -43,8 +45,6 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [loadedAt, setLoadedAt] = useState<Date>();
-  const [restore, setRestore] = useState<{ site: Site; backup: SiteBackup }>();
-  const [restoreConfirmed, setRestoreConfirmed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [section, setSection] = useState("files");
   const [importOpen, setImportOpen] = useState(false);
@@ -55,7 +55,6 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   const [importDomain, setImportDomain] = useState("");
   const [importArchive, setImportArchive] = useState<File>();
   const [discardDraftForImport, setDiscardDraftForImport] = useState(false);
-  const dialog = useRef<HTMLDialogElement>(null);
   const createDialog = useRef<HTMLDialogElement>(null);
   const importDialog = useRef<HTMLDialogElement>(null);
   const domainDialog = useRef<HTMLDialogElement>(null);
@@ -85,7 +84,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
 
   const fail = useCallback((failure: unknown) => {
     setError(errorText(failure));
-    if (failure instanceof SiteApiError && failure.status === 401) { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); setRestore(undefined); setNotice(undefined); }
+    if (failure instanceof SiteApiError && failure.status === 401) { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); setNotice(undefined); }
   }, []);
   const updateSite = (site: Site) => {
     setSelected(site);
@@ -165,7 +164,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
         if (request !== undefined && nextSession.authenticated) {
           if (importPending.current || domainPending.current) throw new SiteApiError(409, "operation_pending", "The previous operation is still settling. Open Import native ZIP again after it completes.");
           if (inventoryCount >= 100) throw new SiteApiError(422, "capacity", "The website inventory is full. A ZIP import creates a new website.");
-          setCreateOpen(false); setRestore(undefined); setDomainTarget(undefined); setImportOpen(true);
+          setCreateOpen(false); setDomainTarget(undefined); setImportOpen(true);
         }
       } catch (failure) { if (isLive()) fail(failure); }
       finally { if (live && activeRef.current) setBusy(undefined); if (request !== undefined) onImportRequestConsumed(request); }
@@ -178,8 +177,8 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   useEffect(() => { if (!active) setAccessKey(""); }, [active]);
   useEffect(() => {
     if (active && authenticated) return;
-    for (const ref of [createDialog, importDialog, dialog, domainDialog]) if (ref.current?.open) ref.current.close();
-    setCreateOpen(false); setImportOpen(false); setRestore(undefined); setRestoreConfirmed(false);
+    for (const ref of [createDialog, importDialog, domainDialog]) if (ref.current?.open) ref.current.close();
+    setCreateOpen(false); setImportOpen(false);
     if (!authenticated) { setImportArchive(undefined); setDiscardDraftForImport(false); }
     dialogReturnFocus.current = null;
   }, [active, authenticated]);
@@ -193,7 +192,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   }, [domainTarget, active, authenticated]);
   useEffect(() => {
     if (!session?.authenticated) return;
-    const timer = setTimeout(() => { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); setRestore(undefined); setNotice(undefined); setError("Your operator session expired. Sign in again; your editor draft is kept."); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
+    const timer = setTimeout(() => { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); setNotice(undefined); setError("Your operator session expired. Sign in again; your editor draft is kept."); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
     return () => clearTimeout(timer);
   }, [session]);
   useEffect(() => {
@@ -202,9 +201,6 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
-  useEffect(() => {
-    if (active && authenticated && restore && dialog.current && !dialog.current.open) dialog.current.showModal();
-  }, [restore, active, authenticated]);
   useEffect(() => {
     ++importGeneration.current; setImportOpen(false); setDiscardDraftForImport(false);
     setBusy((current) => current === "Importing native ZIP" ? undefined : current);
@@ -218,11 +214,11 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
     else if (!createOpen && createDialog.current?.open) createDialog.current.close();
   }, [createOpen, active, authenticated]);
   useEffect(() => {
-    if (active && authenticated && !busy && !createOpen && !importOpen && !restore && !domainTarget && dialogReturnFocus.current) {
+    if (active && authenticated && !busy && !createOpen && !importOpen && !domainTarget && dialogReturnFocus.current) {
       if (dialogReturnFocus.current.isConnected) dialogReturnFocus.current.focus();
       dialogReturnFocus.current = null;
     }
-  }, [active, authenticated, busy, createOpen, importOpen, restore, domainTarget]);
+  }, [active, authenticated, busy, createOpen, importOpen, domainTarget]);
   const rememberDialogTrigger = () => { dialogReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; };
 
   async function run(label: string, action: () => Promise<void>) {
@@ -368,7 +364,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
       <div className="website-session"><span><LockKeyhole />Signed in locally · expires {dateLabel(session.expires_at)}</span><Button label="Sign out locally" icon={<LogOut />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => { if (!requireClean()) return; void run("Signing out", async () => {
         const next = await siteRequest("/api/v1/session/logout", validSession, { method: "POST", csrf: session.csrf_token, body: {} });
         if (next.authenticated) throw new SiteApiError(0, "invalid_response", "Sign-out was not confirmed.");
-        setSession(next); setSites([]); setInventoryLoaded(false); setSelected(undefined); setFiles([]); setBackups([]); setEditor(undefined); clearAsset(); setConflict(undefined); setRestore(undefined);
+        setSession(next); setSites([]); setInventoryLoaded(false); setSelected(undefined); setFiles([]); setBackups([]); setEditor(undefined); clearAsset(); setConflict(undefined);
       }); }} /></div>
       <Card className="dashboard-card website-inventory-toolbar" padding={0}>
         <div className="website-inventory-heading"><h2>Website inventory</h2><p>{inventoryLoaded ? <><strong>{sites.length}</strong> {sites.length === 1 ? "website" : "websites"}<span> · {stateCounts("active")} active · {stateCounts("suspended")} suspended{stateCounts("recovery_required") > 0 && <> · {stateCounts("recovery_required")} need recovery</>}</span></> : busy ? "Loading inventory…" : "Inventory could not be loaded. Refresh to try again."}</p></div>
@@ -408,7 +404,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
           </div>
           <div className="website-section-pane" hidden={section !== "backups"}>
           <Card className="dashboard-card website-backups" padding={0}><div className="card-heading"><div><h2><Archive />ZIP backups</h2><p>App-owned site files only · {backups.length} recorded</p></div><Button label="Create ZIP backup" icon={<Archive />} size="sm" variant="secondary" isLoading={busy === "Creating backup"} isDisabled={Boolean(busy) || !editable || dirty} onClick={() => { if (!session.authenticated) return; void run("Creating backup", async () => { const backup = await siteRequest(siteURL(selected.id, "/backups"), validBackup, { method: "POST", csrf: session.csrf_token, body: { expected_revision: selected.revision } }); await loadSite(selected.id); setNotice(`Created ZIP backup with ${backup.files} files.`); }); }} /></div>
-            {!backups.length ? <p className="website-empty">No ZIP backups recorded. Create a backup of this site's current files.</p> : <div className="website-backup-list">{backups.map((backup) => <article key={backup.id}><div><strong>{dateLabel(backup.created_at)}</strong><p>{backup.files} files · {bytes(backup.bytes)} · revision {backup.revision}</p><details><summary>Backup hash</summary><code>{backup.sha256}</code></details></div><div className="website-backup-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || !authenticated} isLoading={busy === "Downloading ZIP backup"} onClick={() => { if (authenticated) void exportBackup(selected, backup); }}>Download ZIP</Button><Button label={`Restore backup ${backup.id}`} size="sm" variant="secondary" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setRestore({ site: selected, backup }); setRestoreConfirmed(false); }}>Restore</Button></div></article>)}</div>}
+            {!backups.length ? <p className="website-empty">No ZIP backups recorded. Create a backup of this site's current files.</p> : <div className="website-backup-list">{backups.map((backup) => <article key={backup.id}><div><strong>{dateLabel(backup.created_at)}</strong><p>{backup.files} files · {bytes(backup.bytes)} · revision {backup.revision}</p><details><summary>Backup hash</summary><code>{backup.sha256}</code></details></div><div className="website-backup-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || !authenticated} isLoading={busy === "Downloading ZIP backup"} onClick={() => { if (authenticated) void exportBackup(selected, backup); }}>Download ZIP</Button><Button label={`Review restore backup ${backup.id}`} data-testid="website-restore-review" data-backup-id={backup.id} size="sm" variant="secondary" isDisabled={Boolean(busy) || !active || !editable} onClick={() => { if (!activeRef.current || busy || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; try { onOpenSiteTool("backups", selected.id, selected.name, restoreHandoffFor(selected, backup)); } catch (failure) { fail(failure); } }}>Review restore</Button></div></article>)}</div>}
           </Card>
           </div>
         </div> : <Card className="dashboard-card website-no-selection" padding={0}><Globe aria-hidden="true" /><h2>{busy ? "Loading website records" : !inventoryLoaded ? "Website records unavailable" : sites.length ? "Select a website" : "Your website workspace"}</h2><p>{!inventoryLoaded ? "Check the operator session and inventory before working with website files." : sites.length ? "Choose a website to manage its files, state and native ZIP backups." : "Create a static website or import a native site ZIP. Its files and backups will appear here."}</p></Card>}
@@ -437,6 +433,5 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
       {dirty && <label className="website-discard-draft"><input type="checkbox" checked={discardDraftForImport} onChange={(event) => setDiscardDraftForImport(event.target.checked)} disabled={Boolean(busy)} />Discard the unsaved editor draft after the import succeeds.</label>}
       <div className="website-transfer-actions"><Button label="Cancel import" variant="ghost" isDisabled={Boolean(busy)} onClick={() => { setImportOpen(false); setDiscardDraftForImport(false); }} /><Button label="Import website" type="submit" variant="primary" isLoading={busy === "Importing native ZIP"} isDisabled={Boolean(busy) || importPending.current || !active || !importName.trim() || importNameBytes > 80 || !importDomain.trim() || importDomainLength > 253 || importDomainBytes > 253 || !importArchive || importArchive.size === 0 || importArchive.size > maxTransferArchive || (dirty && !discardDraftForImport)} /></div>
     </form>{error && <p role="alert" className="website-error">{error}</p>}</dialog>}
-    {restore && <dialog ref={dialog} className="website-restore-dialog" aria-labelledby="restore-title" onCancel={(event) => { if (busy) event.preventDefault(); else setRestore(undefined); }}><h2 id="restore-title">Restore ZIP backup?</h2><p>Replace the app-owned files of <strong>{restore.site.name}</strong> with the backup from {dateLabel(restore.backup.created_at)}.</p><dl><div><dt>Backup</dt><dd>{restore.backup.files} files · {bytes(restore.backup.bytes)} · revision {restore.backup.revision}</dd></div><div><dt>Expected current revision</dt><dd>{restore.site.revision}</dd></div></dl><p>This restores site files through scoped recovery. It does not restore a server, database or mail system.</p><label><input type="checkbox" checked={restoreConfirmed} onChange={(e) => setRestoreConfirmed(e.target.checked)} disabled={Boolean(busy)} />I understand that the current site files will be replaced.</label><div><Button label="Cancel restore" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setRestore(undefined)} /><Button label="Confirm restore" variant="primary" isDisabled={!restoreConfirmed || Boolean(busy)} isLoading={busy === "Restoring backup"} onClick={() => { if (!session?.authenticated || !restoreConfirmed || !requireClean()) return; void run("Restoring backup", async () => { const site = await siteRequest(siteURL(restore.site.id, "/restore"), validSite, { method: "POST", csrf: session.csrf_token, body: { backup_id: restore.backup.id, expected_revision: restore.site.revision } }); updateSite(site); setEditor(undefined); latestEditor.current = undefined; await loadSite(site.id); setRestore(undefined); setNotice(`Restored ${site.name} from its ZIP backup.`); }); }} /></div>{error && <p role="alert" className="website-error">{error}</p>}</dialog>}
   </section>;
 }

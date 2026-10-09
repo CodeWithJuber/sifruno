@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { HostingWorkspace, Overview, ServiceInventory } from "@/Dashboard";
 import { useResource, validBudget, validPlatform, validServer, validServices, validStatus, validTrail } from "@/lib/api";
 import type { Resource } from "@/lib/api";
+import type { RestoreHandoff } from "@/lib/restoreHandoff";
 
 const Evidence = lazy(() => import("@/Tools").then((m) => ({ default: m.Evidence })));
 const Trail = lazy(() => import("@/Tools").then((m) => ({ default: m.Trail })));
@@ -24,7 +25,7 @@ const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ def
 const PanelPreview = lazy(() => import("@/PanelPreview"));
 
 type View = "overview" | "services" | "storage" | "network" | "panel-preview" | "websites" | "accounts" | "backups" | "files" | "access" | "evidence" | "trail" | "budget" | "platform";
-export interface SiteHandoff { requestId: number; siteId: string; siteName: string }
+export interface SiteHandoff { requestId: number; siteId: string; siteName: string; restore?: RestoreHandoff }
 const views = [
   { id: "overview", label: "Overview", title: "Hosting workspace", subtitle: "Manage your websites and server from one workspace.", icon: Home },
   { id: "services", label: "Services", title: "Services", subtitle: "Inspect the services installed on your server.", icon: Server },
@@ -93,10 +94,10 @@ export function App() {
   const connected = Boolean(server.data && !server.error);
   const partial = server.data?.collector.status === "partial";
   const unavailable = server.data?.collector.status === "unavailable";
-  const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "access", "trail", "budget"].includes(next))) return; if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
-  const openSiteTool = (destination: "files" | "backups", siteId: string, siteName: string) => {
+  const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "access", "trail", "budget"].includes(next))) return; if (next !== "backups") setBackupsHandoff(current => current?.restore ? undefined : current); if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
+  const openSiteTool = (destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => {
     if (publicPreview) return;
-    const request = { requestId: ++handoffSequence.current, siteId, siteName };
+    const request = { requestId: ++handoffSequence.current, siteId, siteName, ...(destination === "backups" && restore ? { restore } : {}) };
     if (destination === "files") setFilesHandoff(request); else setBackupsHandoff(request);
     navigate(destination);
   };

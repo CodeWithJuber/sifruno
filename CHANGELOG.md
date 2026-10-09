@@ -4,6 +4,8 @@
 
 ### Added
 
+- Preview and explicitly restore a downloaded native Sifruno ZIP into an existing
+  static website, preserving its identity, domain, backup history and schedule.
 - Confirmed rename/move of a saved website file in File Manager, preserving
   bytes and refusing stale revisions, changed checksums and occupied paths.
 - Download a saved text or binary file from File Manager, verified against the

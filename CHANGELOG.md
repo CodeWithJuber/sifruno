@@ -4,6 +4,8 @@
 
 ### Added
 
+- Confirmed removal of a selected saved native ZIP, freeing backup capacity while
+  preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing
   static website, preserving its identity, domain, backup history and schedule.
 - Confirmed rename/move of a saved website file in File Manager, preserving
@@ -17,6 +19,8 @@
 
 ### Fixed
 
+- Websites' saved ZIP restore now uses Backups' verified file comparison and
+  explicit confirmation, retaining editor drafts and rejecting stale targets.
 - Websites can display saved binary-asset details when the first or only file
   cannot be opened as UTF-8 text. Text editing, File Manager navigation and
   backup recovery remain available in the same website workflow.

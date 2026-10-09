@@ -20,6 +20,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Sifruno delivery state](PROJECT-STATE.md) | `PROJECT-STATE.md` |
 | [Sifruno delivery plan](DELIVERY-PLAN.md) | `DELIVERY-PLAN.md` |
 | [Website workflow main integration](website-main-integration.md) | `website-main-integration.md` |
+| [Website backup restore review](website-restore-handoff.md) | `website-restore-handoff.md` |
 | [Parallel development](parallel-development.md) | `parallel-development.md` |
 | [Development closeout — 7 October 2026](CLOSEOUT.md) | `CLOSEOUT.md` |
 | [Server monitoring and local workbench](workbench.md) | `workbench.md` |
@@ -75,6 +76,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Native static-site backup schedules](native-backup-schedules.md) | `native-backup-schedules.md` |
 | [Native restore preview](native-restore-preview.md) | `native-restore-preview.md` |
 | [Restore an existing website from an uploaded ZIP](uploaded-zip-restore.md) | `uploaded-zip-restore.md` |
+| [Remove a saved native website backup](backup-removal.md) | `backup-removal.md` |
 | [Original backup characterization for migration](cpanel-backup-inspection.md) | `cpanel-backup-inspection.md` |
 | [Independent review: original backup characterization](cpanel-backup-review.md) | `cpanel-backup-review.md` |
 

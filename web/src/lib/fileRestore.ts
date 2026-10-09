@@ -7,10 +7,23 @@ export interface FileRestorePreview {
   site_id: string; current_revision: number; backup_id: string; backup_sha256: string; backup_revision: number;
   file: RestorePreviewFile; preserved_files: number;
 }
+// Huma adds this response-only metadata to typed HTTP responses. It is never
+// fetched or used as restore authority; all restore fields remain exact.
+function validSchemaLink(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.pathname === "/FileRestorePreview.json" && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
 export function validFileRestorePreview(value: unknown): value is FileRestorePreview {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const v = value as FileRestorePreview;
   const keys = ["site_id", "current_revision", "backup_id", "backup_sha256", "backup_revision", "file", "preserved_files"];
+  if (Object.hasOwn(v, "$schema")) {
+    if (!validSchemaLink((v as unknown as Record<string, unknown>).$schema)) return false;
+    keys.push("$schema");
+  }
   if (Object.keys(v).length !== keys.length || !keys.every(key => Object.hasOwn(v, key)) || !v.file || !["added", "modified", "unchanged"].includes(v.file.kind) || !Number.isSafeInteger(v.preserved_files) || v.preserved_files < 0 || v.preserved_files > 63) return false;
   return validRestorePreview({ site_id: v.site_id, current_revision: v.current_revision, backup_id: v.backup_id, backup_sha256: v.backup_sha256, backup_revision: v.backup_revision, files: [v.file], counts: { added: Number(v.file.kind === "added"), modified: Number(v.file.kind === "modified"), unchanged: Number(v.file.kind === "unchanged"), removed: 0 } });
 }

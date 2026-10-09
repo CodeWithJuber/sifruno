@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- Websites' saved ZIP restore now uses Backups' verified file comparison and
+  explicit confirmation, retaining editor drafts and rejecting stale targets.
 - Websites can display saved binary-asset details when the first or only file
   cannot be opened as UTF-8 text. Text editing, File Manager navigation and
   backup recovery remain available in the same website workflow.

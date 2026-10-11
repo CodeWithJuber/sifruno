@@ -122,6 +122,11 @@ export const previewURL = (site: Site) => {
   const port = sitePreviewPort();
   return validSite(site) && port ? `http://${site.preview_host}:${port}/` : undefined;
 };
+export function savedFilePreviewURL(site: Site, savedPath: string, validPath: (value: string) => boolean): string | undefined {
+  if (!path(savedPath) || !validPath(savedPath)) return undefined;
+  const base = previewURL(site);
+  return base ? base + savedPath : undefined;
+}
 
 const maxTransferArchive = 34 * 1024 * 1024;
 

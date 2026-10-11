@@ -23,6 +23,16 @@ versioned database snapshot and admits policy updates using current admin
 permissions. A scoped projection returns only account IDs readable by the
 authenticated actor. Production tenant integration remains open.
 
+## Combined website workflow candidate
+
+The [native website lifecycle guide](docs/website-lifecycle-integration.md)
+combines the reviewed PR62–67 features in one build: name editing, multiple-file
+upload, saved-file preview, single-file backup restore, recovery as a separate
+website and confirmed removal. The integrated browser flow passed with real
+HTTP bytes and a retained backup download; desktop/mobile screenshots and exact
+checks are linked in the guide. Follow the existing installation steps for this
+branch. This candidate has not been merged or deployed.
+
 ## Community and Pro
 
 Original Sifruno Community code uses [AGPL-3.0-only](LICENSE), with commercial

@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Download, File, FilePlus, Folder, Info, LockKeyhole, LogOut, RefreshCw, Save, Search, Trash2, Upload, Pencil } from "lucide-react";
+import { ArrowUpRight, Download, File, FilePlus, Folder, Info, LockKeyhole, LogOut, RefreshCw, Save, Search, Trash2, Upload, Pencil } from "lucide-react";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { bytes } from "@/Dashboard";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import type { SiteHandoff } from "@/App";
-import { SiteApiError, downloadSiteFile, uploadSiteFile, replaceSiteFile, renameSiteFile, siteRequest, siteURL, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
+import { SiteApiError, downloadSiteFile, uploadSiteFile, replaceSiteFile, renameSiteFile, savedFilePreviewURL, siteRequest, siteURL, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
 import type { OperatorSession, Site, SiteFile, SiteFileContent } from "@/lib/sites-api";
+import { reviewMultiUpload, uploadMultipleFiles } from "@/lib/multiUpload";
+import type { UploadEntry, UploadOutcome } from "@/lib/multiUpload";
 import "./file-manager.css";
 
 interface Editor { siteId: string; path: string; draft: string; savedContent: string; sha256: string; revision: number; isNew: boolean }
 interface Conflict { path: string; revision?: number; file?: SiteFileContent; compared: boolean }
 interface ReplaceTarget { siteId: string; domain: string; path: string; sha256: string; revision: number; bytes: number }
 interface DeleteTarget { siteId: string; path: string; sha256: string; revision: number }
+interface MultiUploadTarget { site: Site; folder: string; entries: UploadEntry[] }
 const maxFileBytes = 2 * 1024 * 1024, maxSiteBytes = 32 * 1024 * 1024, maxFiles = 64;
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).length;
 const dirtyEditor = (editor?: Editor) => Boolean(editor && (editor.isNew || editor.draft !== editor.savedContent));
@@ -59,6 +62,13 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<globalThis.File>();
   const [uploadPath, setUploadPath] = useState("");
+  const [multiTarget, setMultiTarget] = useState<MultiUploadTarget>();
+  const [multiOutcomes, setMultiOutcomes] = useState<UploadOutcome[]>();
+  const [multiFinished, setMultiFinished] = useState(false);
+  const [multiStopping, setMultiStopping] = useState(false);
+  const multiDialog = useRef<HTMLDialogElement>(null), multiPicker = useRef<HTMLInputElement>(null), multiReturnFocus = useRef<HTMLElement | null>(null);
+  const multiGeneration = useRef(0), multiStop = useRef(false);
+  const currentFolder = useRef(folder); currentFolder.current = folder;
   const [replaceTarget, setReplaceTarget] = useState<ReplaceTarget>();
   const [replacementFile, setReplacementFile] = useState<globalThis.File>();
   const [renameTarget, setRenameTarget] = useState<ReplaceTarget>();
@@ -81,6 +91,7 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
   const viewedFile = files.find((file) => file.path === viewedPath);
   const downloadContext = useRef({ selected, viewedFile, fresh }); downloadContext.current = { selected, viewedFile, fresh };
   const canDownload = Boolean(active && authenticated && fresh && !busy && selected && viewedFile && selected.state !== "recovery_required");
+  const savedFileHref = active && session?.authenticated && Date.parse(session.expires_at) > Date.now() && fresh && !busy && selected?.state === "active" && viewedFile ? savedFilePreviewURL(selected, viewedFile.path, validPath) : undefined;
   const totalBytes = files.reduce((sum, file) => sum + file.bytes, 0), draftBytes = utf8Bytes(editor?.draft ?? "");
   const currentFile = files.find((file) => file.path === editor?.path);
   const pathCollision = Boolean(editor?.isNew && files.some((file) => file.path.toLowerCase() === editor.path.toLowerCase())) || Boolean(editor && files.some((file) => file.path !== editor.path && (file.path.toLowerCase().startsWith(editor.path.toLowerCase() + "/") || editor.path.toLowerCase().startsWith(file.path.toLowerCase() + "/"))));
@@ -93,6 +104,9 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
   const uploadCollision = files.some((file) => { const a = file.path.toLowerCase(), b = uploadPath.toLowerCase(); return a === b || a.startsWith(b + "/") || b.startsWith(a + "/"); });
   const uploadProblem = !uploadFile ? "Choose one local static file." : !validPath(uploadPath) ? "Use a relative static-file path up to 200 bytes and 8 segments, with a supported static extension." : uploadCollision ? "This destination already exists or conflicts with a file or folder. Choose a new path; upload never overwrites." : uploadFile.size > maxFileBytes ? "The file exceeds the 2 MiB limit." : files.length >= maxFiles ? "This site has reached the 64-file limit." : totalBytes + uploadFile.size > maxSiteBytes ? "Uploading would exceed the 32 MiB site limit." : undefined;
   const canUpload = Boolean(active && authenticated && fresh && !busy && !dirty && selected && selected.state !== "recovery_required");
+  const multiReview = multiTarget ? reviewMultiUpload(multiTarget.entries, files, validPath) : undefined;
+  const matchingMulti = Boolean(multiTarget && selected?.id === multiTarget.site.id && selected.revision === multiTarget.site.revision && folder === multiTarget.folder);
+  const canConfirmMulti = Boolean(canUpload && !conflict && matchingMulti && !multiFinished && !multiReview?.problem);
   const currentReplacement = files.find((file) => file.path === replaceTarget?.path);
   const matchingReplacement = Boolean(replaceTarget && selected?.id === replaceTarget.siteId && selected.revision === replaceTarget.revision && currentReplacement?.sha256 === replaceTarget.sha256);
   const replacementProblem = !replacementFile ? "Choose one local replacement file." : replacementFile.size > maxFileBytes ? "The replacement exceeds the 2 MiB limit." : totalBytes - (currentReplacement?.bytes ?? 0) + replacementFile.size > maxSiteBytes ? "Replacing this file would exceed the 32 MiB site limit." : undefined;
@@ -186,6 +200,13 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
   }, [active, authenticated, replaceTarget, busy]);
   useEffect(() => { setReplaceTarget(undefined); setReplacementFile(undefined); if (replacementPicker.current) replacementPicker.current.value = ""; }, [session?.authenticated ? session.csrf_token : undefined]);
   useEffect(() => {
+    if (!active || !authenticated) { multiDialog.current?.close(); closeMultiUpload(); multiReturnFocus.current = null; return; }
+    if (multiTarget && multiDialog.current && !multiDialog.current.open) multiDialog.current.showModal();
+    else if (!multiTarget && multiDialog.current?.open) multiDialog.current.close();
+    if (!multiTarget && !busy && multiReturnFocus.current) { if (multiReturnFocus.current.isConnected) multiReturnFocus.current.focus(); multiReturnFocus.current = null; }
+  }, [active, authenticated, multiTarget, busy]);
+  useEffect(() => { closeMultiUpload(); }, [session?.authenticated ? session.csrf_token : undefined, selected?.id, folder, revision, handoffRequestId]);
+  useEffect(() => {
     if (!active || !authenticated) { renameDialog.current?.close(); setRenameTarget(undefined); setRenamePath(""); renameReturnFocus.current = null; return; }
     if (renameTarget && renameDialog.current && !renameDialog.current.open) renameDialog.current.showModal();
     else if (!renameTarget && renameDialog.current?.open) renameDialog.current.close();
@@ -277,6 +298,33 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
       }
     });
   }
+  function closeMultiUpload() {
+    ++multiGeneration.current; multiStop.current = true;
+    setMultiTarget(undefined); setMultiOutcomes(undefined); setMultiFinished(false); setMultiStopping(false);
+    if (multiPicker.current) multiPicker.current.value = "";
+  }
+  async function uploadMany(event: React.FormEvent) {
+    event.preventDefault();
+    if (!canConfirmMulti || !multiTarget || !session?.authenticated || !requireClean()) return;
+    const target = multiTarget, token = session.csrf_token, authGeneration = authEpoch.current, generation = multiGeneration.current;
+    multiStop.current = false; setMultiStopping(false);
+    await run("Uploading selected files", async (isLive) => {
+      const contextLive = () => isLive() && generation === multiGeneration.current && selectedId.current === target.site.id && currentFolder.current === target.folder && authGeneration === authEpoch.current && sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now() && !dirtyEditor(latestEditor.current);
+      const uploadLive = () => contextLive() && downloadContext.current.fresh && downloadContext.current.selected?.id === target.site.id && downloadContext.current.selected.revision === target.site.revision;
+      const result = await uploadMultipleFiles({ site: target.site, entries: target.entries, catalog: files, validPath, csrf: token, isLive: uploadLive, shouldStop: () => multiStop.current, onProgress: (outcomes) => { if (uploadLive()) setMultiOutcomes(outcomes); } });
+      if (!uploadLive()) return;
+      setMultiOutcomes(result.outcomes); setMultiFinished(true);
+      const saved = result.outcomes.filter((outcome) => outcome.status === "saved");
+      if (saved.length || result.failure) setFresh(false);
+      if (saved.length) { setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); setViewedPath(saved.at(-1)!.path); }
+      if (result.failure) { fail(result.failure); return; }
+      if (saved.length) {
+        try { await loadInventory(target.site.id, contextLive); }
+        catch (failure) { if (contextLive()) fail(failure); }
+      }
+      if (contextLive()) setNotice(`Saved ${saved.length} of ${result.outcomes.length} selected files. ${result.outcomes.length - saved.length} not attempted. Each saved file is a separate change.`);
+    });
+  }
   async function replaceFile(event: React.FormEvent) {
     event.preventDefault();
     if (!canConfirmReplacement || !replaceTarget || !replacementFile || !session?.authenticated || !requireClean()) return;
@@ -365,14 +413,14 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
       {selected?.state === "recovery_required" && <p className="fm-status" role="alert">This website requires recovery. File changes are disabled until its recovery is resolved.</p>}
       {selected ? <div className="fm-layout">
         <Card className="dashboard-card fm-browser" padding={0} data-testid="file-manager-inventory" data-site-id={selected.id} data-revision={selected.revision} data-fresh={fresh}>
-          <div className="card-heading"><h2>Site files</h2><div className="fm-file-actions"><Button label="Upload file" icon={<Upload />} size="sm" variant="secondary" isDisabled={!canUpload || files.length >= maxFiles} onClick={() => { if (!requireClean()) return; uploadReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setUploadOpen(true); }} /><Button label="New text file" icon={<FilePlus />} size="sm" variant="secondary" isDisabled={Boolean(busy) || !fresh || dirty || selected.state === "recovery_required" || files.length >= maxFiles} onClick={() => { if (!requireClean()) return; const next = { siteId: selected.id, path: prefix, draft: "", savedContent: "", sha256: "", revision: selected.revision, isNew: true }; setEditor(next); latestEditor.current = next; setViewedPath(undefined); setConflict(undefined); setError(undefined); }} /></div></div>
+          <div className="card-heading"><h2>Site files</h2><div className="fm-file-actions"><Button label="Upload file" icon={<Upload />} size="sm" variant="secondary" isDisabled={!canUpload || files.length >= maxFiles} onClick={() => { if (!requireClean()) return; uploadReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setUploadOpen(true); }} /><Button label="Upload multiple files" data-testid="file-manager-multi-upload" icon={<Upload />} size="sm" variant="secondary" isDisabled={!canUpload || Boolean(conflict) || files.length >= maxFiles} onClick={() => { if (!canUpload || conflict || !requireClean()) return; multiReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; ++multiGeneration.current; multiStop.current = false; setMultiOutcomes(undefined); setMultiFinished(false); setMultiStopping(false); setError(undefined); setMultiTarget({ site: selected, folder, entries: [] }); }} /><Button label="New text file" icon={<FilePlus />} size="sm" variant="secondary" isDisabled={Boolean(busy) || !fresh || dirty || selected.state === "recovery_required" || files.length >= maxFiles} onClick={() => { if (!requireClean()) return; const next = { siteId: selected.id, path: prefix, draft: "", savedContent: "", sha256: "", revision: selected.revision, isNew: true }; setEditor(next); latestEditor.current = next; setViewedPath(undefined); setConflict(undefined); setError(undefined); }} /></div></div>
           <label className="compact-search"><Search aria-hidden="true" /><input type="search" aria-label="Search files" placeholder="Search all site paths…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <nav className="fm-breadcrumb" aria-label="Site folders"><Button label="Root folder" variant="ghost" size="sm" onClick={() => { setFolder(""); setQuery(""); }}>Root</Button>{folderParts.map((part, index) => <Button key={index} label={`Open folder ${folderParts.slice(0, index + 1).join("/")}`} variant="ghost" size="sm" onClick={() => { setFolder(folderParts.slice(0, index + 1).join("/")); setQuery(""); }}>{part}</Button>)}</nav>
           <div className="fm-file-list">{folders.map((path) => <button key={path} type="button" data-testid="folder-row" data-folder-path={path} aria-label={`Open folder ${path}`} onClick={() => { setFolder(path); setQuery(""); }}><Folder aria-hidden="true" /><span>{path.slice(prefix.length)}</span><small>Folder</small></button>)}{visibleFiles.sort((a, b) => a.path.localeCompare(b.path)).map((file) => <button key={file.path} type="button" data-testid="file-row" data-file-path={file.path} aria-label={`View file ${file.path}`} aria-pressed={viewedPath === file.path} disabled={Boolean(busy) || dirty} onClick={() => void openFile(file.path)}><File aria-hidden="true" /><span>{term ? file.path : file.path.slice(prefix.length)}</span><small>{bytes(file.bytes)}</small></button>)}</div>
           {!visibleFiles.length && !folders.length && <div className="inventory-empty"><Folder /><h3>{term ? "No matching files" : "No reported files in this folder"}</h3><p>{term ? "Try another path or clear the search." : "Folders are derived from the actual file paths returned by the server."}</p></div>}
           <div className="table-footer"><span>{!fresh ? "Records need refreshing" : `${visibleFiles.length} files shown`}</span><span>{loadedAt ? `Checked ${loadedAt.toLocaleTimeString()}` : "Reading inventory"}</span></div>
         </Card>
-        <Card className="dashboard-card fm-facts" padding={0} data-testid="file-manager-file-details"><div className="card-heading"><h2>File details</h2><div className="fm-file-actions"><Button label="Download file" data-testid="file-manager-download" icon={<Download />} size="sm" variant="secondary" isDisabled={!canDownload} isLoading={busy === "Downloading saved file"} onClick={() => void downloadFile()} /><Button label="Replace file" data-testid="file-manager-replace" icon={<Upload />} size="sm" variant="secondary" isDisabled={!canReplace} onClick={() => { if (!canReplace || !viewedFile || !requireClean()) return; replacementReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setReplacementFile(undefined); if (replacementPicker.current) replacementPicker.current.value = ""; setReplaceTarget({ siteId: selected.id, domain: selected.domain, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision, bytes: viewedFile.bytes }); }} /><Button label="Rename / move file" data-testid="file-manager-rename" icon={<Pencil />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; renameReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setRenamePath(viewedFile.path); setRenameTarget({ siteId: selected.id, domain: selected.domain, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision, bytes: viewedFile.bytes }); }} /><Button label="Delete file" data-testid="file-manager-delete" icon={<Trash2 />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; deleteReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setDeleteTarget({ siteId: selected.id, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision }); }} /></div></div>{viewedFile ? <dl><div><dt>Relative path</dt><dd>{viewedFile.path}</dd></div><div><dt>Saved bytes</dt><dd>{bytes(viewedFile.bytes)}</dd></div><div><dt>Inventory revision</dt><dd>{selected.revision}</dd></div><div><dt>SHA-256</dt><dd><code>{viewedFile.sha256}</code></dd></div></dl> : <p>Select a reported file to inspect its saved size and hash.</p>}</Card>
+        <Card className="dashboard-card fm-facts" padding={0} data-testid="file-manager-file-details"><div className="card-heading"><h2>File details</h2><div className="fm-file-actions"><Button label="Open saved file" data-testid="file-manager-open-saved-file" icon={<ArrowUpRight />} href={savedFileHref} target="_blank" rel="noopener noreferrer" size="sm" variant="secondary" isDisabled={!savedFileHref} onClick={(event) => { const current = downloadContext.current; if (!activeRef.current || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now() || !current.fresh || current.selected?.state !== "active" || !current.viewedFile || savedFilePreviewURL(current.selected, current.viewedFile.path, validPath) !== savedFileHref) event.preventDefault(); }} /><Button label="Download file" data-testid="file-manager-download" icon={<Download />} size="sm" variant="secondary" isDisabled={!canDownload} isLoading={busy === "Downloading saved file"} onClick={() => void downloadFile()} /><Button label="Replace file" data-testid="file-manager-replace" icon={<Upload />} size="sm" variant="secondary" isDisabled={!canReplace} onClick={() => { if (!canReplace || !viewedFile || !requireClean()) return; replacementReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setReplacementFile(undefined); if (replacementPicker.current) replacementPicker.current.value = ""; setReplaceTarget({ siteId: selected.id, domain: selected.domain, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision, bytes: viewedFile.bytes }); }} /><Button label="Rename / move file" data-testid="file-manager-rename" icon={<Pencil />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; renameReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setRenamePath(viewedFile.path); setRenameTarget({ siteId: selected.id, domain: selected.domain, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision, bytes: viewedFile.bytes }); }} /><Button label="Delete file" data-testid="file-manager-delete" icon={<Trash2 />} size="sm" variant="secondary" isDisabled={!canDelete} onClick={() => { if (!canDelete || !viewedFile || !requireClean()) return; deleteReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setError(undefined); setDeleteTarget({ siteId: selected.id, path: viewedFile.path, sha256: viewedFile.sha256, revision: selected.revision }); }} /></div></div>{viewedFile ? <dl><div><dt>Relative path</dt><dd>{viewedFile.path}</dd></div><div><dt>Saved bytes</dt><dd>{bytes(viewedFile.bytes)}</dd></div><div><dt>Inventory revision</dt><dd>{selected.revision}</dd></div><div><dt>SHA-256</dt><dd><code>{viewedFile.sha256}</code></dd></div></dl> : <p>Select a reported file to inspect its saved size and hash.</p>}<p className="website-help">Open saved file uses local HTTP to show saved content. Your unsaved editor draft is kept and is not included in the preview.</p></Card>
       </div> : <Card className="dashboard-card" padding={0}><div className="inventory-empty"><Folder /><h2>{busy ? "Loading website files" : error ? "File records unavailable" : "No websites available"}</h2><p>{busy ? "Reading the actual app-owned site inventory." : error ? "Refresh records to check the current inventory. Retained drafts remain below." : "Create an app-owned static site in Websites to manage its files."}</p></div></Card>}
       {editor && <Card className="dashboard-card fm-editor" padding={0}><form onSubmit={save} data-testid="file-manager-editor" data-file-path={editor.path} data-read-revision={editor.revision} data-read-sha256={editor.sha256}>
         <div className="card-heading"><div><h2>{editor.isNew ? "New UTF-8 text file" : editor.path}</h2><p>Read revision {editor.revision} · {dirty ? "Unsaved draft" : "Saved version"}</p></div><Button label="Save file" type="submit" icon={<Save />} size="sm" variant="primary" isDisabled={!canSave} isLoading={busy === "Saving file"} /></div>
@@ -384,6 +432,29 @@ export default function FileManager({ revision, active, onStatus, siteHandoff, o
         </div>
       </form></Card>}
     </>}
+    {authenticated && <dialog ref={multiDialog} className="fm-delete-dialog fm-upload-dialog fm-multi-upload-dialog" data-testid="file-manager-multi-upload-dialog" aria-labelledby="fm-multi-upload-title" aria-describedby="fm-multi-upload-description" onClose={(event) => { if (event.target === event.currentTarget && !event.currentTarget.open) closeMultiUpload(); }} onCancel={(event) => { if (event.target !== event.currentTarget) return; if (busy) event.preventDefault(); else closeMultiUpload(); }}>
+      <form onSubmit={uploadMany}>
+        <h2 id="fm-multi-upload-title">Upload multiple static files</h2>
+        <p id="fm-multi-upload-description">Review new files for <strong>{multiTarget?.site.domain}</strong>, folder <strong>{multiTarget?.folder || "Root"}</strong>, at revision {multiTarget?.site.revision}. Files are saved one at a time. A refusal stops the batch; files already saved remain saved. Existing files are never overwritten.</p>
+        <label htmlFor="fm-multi-upload-files">Local static files</label><input ref={multiPicker} id="fm-multi-upload-files" type="file" multiple disabled={Boolean(busy) || multiFinished || !matchingMulti || !fresh} onChange={(event) => {
+          const chosen = event.target.files;
+          if (!chosen?.length || !multiTarget || !matchingMulti || !canUpload) return;
+          const destinationPrefix = multiTarget.folder ? `${multiTarget.folder}/` : "";
+          setMultiTarget({ ...multiTarget, entries: Array.from(chosen, (file) => ({ file, path: destinationPrefix + file.name })) }); setMultiOutcomes(undefined); setError(undefined);
+        }} />
+        <p className="website-help">Select filenames for this folder. Use Upload file to customize a single destination. Maximum 2 MiB per file, 64 files and 32 MiB per site. File bytes are validated by the server when each upload is attempted.</p>
+        {!multiOutcomes && multiReview && <div data-testid="file-manager-multi-upload-review"><p>{multiTarget?.entries.length ?? 0} selected · {bytes(multiReview.addedBytes)} to add · site {bytes(totalBytes)} / 32 MiB</p>{multiReview.problem && <p className="website-error" role="status">{multiReview.problem}</p>}
+          {multiReview.entries.length > 0 && <ol className="fm-multi-upload-list">{multiReview.entries.map((entry, index) => <li key={index}><strong>{entry.path}</strong><span>{bytes(entry.file.size)}</span>{entry.problem && <p className="website-error">{entry.problem}</p>}</li>)}</ol>}
+        </div>}
+        {multiOutcomes && <div data-testid="file-manager-multi-upload-results" role="status"><p>{multiFinished ? "Upload attempt finished. Review each result before choosing new files." : "Uploading in selection order. Each saved file is a separate change."}</p><ol className="fm-multi-upload-list">{multiOutcomes.map((outcome, index) => <li key={index} data-upload-status={outcome.status}><strong>{outcome.path}</strong><span>{bytes(outcome.bytes)} · {({ uploading: "Uploading - result pending", saved: "Saved", failed_or_unconfirmed: "Failed or unconfirmed", not_attempted: "Not attempted" })[outcome.status]}{outcome.revision !== undefined && ` · revision ${outcome.revision}`}</span></li>)}</ol><p>A failed or unconfirmed file may have been saved. Refresh file records before selecting files again; this attempt is never retried.</p></div>}
+        {multiStopping && busy && <p role="status">Stopping after the pending file settles. It may still be saved; the remaining files will not be attempted.</p>}
+        {error && <p className="website-error" role="alert">{error}</p>}
+        {(!fresh || !matchingMulti) && <p role="status">Refresh file records, then choose a new selection and review its destinations before confirming.</p>}
+        {!fresh && <Button label="Refresh multiple upload records" icon={<RefreshCw />} size="sm" variant="secondary" isDisabled={Boolean(busy)} onClick={() => setAttempt((value) => value + 1)} />}
+        {multiFinished && <Button label="Choose new files" variant="secondary" size="sm" isDisabled={!canUpload || Boolean(conflict)} onClick={() => { if (!canUpload || !selected || conflict) return; ++multiGeneration.current; multiStop.current = false; setMultiTarget({ site: selected, folder, entries: [] }); setMultiOutcomes(undefined); setMultiFinished(false); setMultiStopping(false); setError(undefined); if (multiPicker.current) multiPicker.current.value = ""; }} />}
+        <div className="fm-upload-actions">{busy === "Uploading selected files" ? <Button label="Stop after current file" variant="secondary" isDisabled={multiStopping} onClick={() => { multiStop.current = true; setMultiStopping(true); }} /> : <Button label={multiFinished ? "Close upload results" : "Cancel multiple upload"} variant="ghost" isDisabled={Boolean(busy)} onClick={closeMultiUpload} />}<Button label="Confirm multiple uploads" data-testid="file-manager-multi-upload-confirm" icon={<Upload />} type="submit" variant="primary" isDisabled={!canConfirmMulti} isLoading={busy === "Uploading selected files"} /></div>
+      </form>
+    </dialog>}
     {authenticated && <dialog ref={uploadDialog} className="fm-delete-dialog fm-upload-dialog" data-testid="file-manager-upload-dialog" aria-labelledby="fm-upload-title" aria-describedby="fm-upload-description" onClose={(event) => { if (event.target === event.currentTarget && !event.currentTarget.open) setUploadOpen(false); }} onCancel={(event) => {
       // File inputs bubble cancel when the chooser is dismissed or the same file
       // is selected again. Only the dialog's own Escape event dismisses it.

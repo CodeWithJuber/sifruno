@@ -4,6 +4,12 @@
 
 ### Added
 
+- Combined native static website lifecycle from reviewed PR62–67: display-name
+  editing, sequential multiple-file upload, saved-file HTTP preview, single-file
+  snapshot restore, snapshot recovery as a separate website and exact-confirmed
+  website removal. Original feature evidence and combined browser evidence are
+  linked in `docs/website-lifecycle-integration.md`.
+
 - Confirmed removal of a selected saved native ZIP, freeing backup capacity while
   preserving the website's served files and remaining snapshots.
 - Preview and explicitly restore a downloaded native Sifruno ZIP into an existing

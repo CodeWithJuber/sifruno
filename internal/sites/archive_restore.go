@@ -53,85 +53,8 @@ func (s *Store) archiveRestoreLocked(id string, input ArchiveRestoreInput) (reco
 	if err != nil {
 		return r, nil, empty, err
 	}
-	// Refuse file/directory transitions and physical case aliases before the
-	// signed change path can create directories or pending checkpoints.
-	rt, err := s.siteRoot(id)
-	if err != nil {
+	if err := s.validateRestoreDestinations(id, after); err != nil {
 		return r, nil, empty, err
-	}
-	defer rt.Close()
-	directories := map[string]bool{}
-	var walk func(string) error
-	walk = func(parent string) error {
-		dir, err := rt.Open("content/" + parent)
-		if err != nil {
-			return ErrUnavailable
-		}
-		entries, err := dir.ReadDir(MaxFiles*9 + 1)
-		dir.Close()
-		if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > MaxFiles*9 {
-			return ErrUnavailable
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if parent != "." {
-				name = parent + "/" + name
-			}
-			directories[name] = true
-			if len(directories) > MaxFiles*9 {
-				return ErrUnavailable
-			}
-			if err := walk(name); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := walk("."); err != nil {
-		return r, nil, empty, err
-	}
-	for _, file := range after {
-		parent := "content"
-		parts := strings.Split(file.Path, "/")
-		for i, part := range parts {
-			dir, err := rt.Open(parent)
-			if err != nil {
-				return r, nil, empty, ErrUnavailable
-			}
-			entries, err := dir.ReadDir(MaxFiles*9 + 1)
-			dir.Close()
-			if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > MaxFiles*9 {
-				return r, nil, empty, ErrUnavailable
-			}
-			found := false
-			for _, entry := range entries {
-				if strings.EqualFold(entry.Name(), part) {
-					if entry.Name() != part || (i == len(parts)-1 && !entry.Type().IsRegular()) || (i < len(parts)-1 && !entry.IsDir()) {
-						return r, nil, empty, ErrConflict
-					}
-					found = true
-				}
-			}
-			if !found {
-				break
-			}
-			parent += "/" + part
-		}
-		for i := 1; i < len(parts); i++ {
-			name := strings.Join(parts[:i], "/")
-			for existing := range directories {
-				if strings.EqualFold(existing, name) && existing != name {
-					return r, nil, empty, ErrInvalid
-				}
-			}
-			directories[name] = true
-		}
-	}
-	if len(directories)+len(after) > MaxFiles*9 {
-		return r, nil, empty, ErrInvalid
 	}
 	return r, data, ArchiveRestorePreview{SiteID: id, CurrentRevision: r.Site.Revision, ArchiveSHA256: sum(input.Archive), BackupID: manifest.BackupID, BackupRevision: manifest.Revision, Files: files, Counts: counts}, nil
 }
@@ -170,4 +93,91 @@ func (s *Store) RestoreArchive(id string, input ArchiveRestoreInput, actor strin
 		return Site{}, err
 	}
 	return next.Site, nil
+}
+
+// validateRestoreDestinations admits the complete resulting catalog before any
+// pending marker, directory creation or checkpoint. Caller holds the store lock
+// and has verified the current physical snapshot.
+func (s *Store) validateRestoreDestinations(id string, after []FileInfo) error {
+	// Refuse file/directory transitions and physical case aliases before the
+	// signed change path can create directories or pending checkpoints.
+	rt, err := s.siteRoot(id)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	directories := map[string]bool{}
+	var walk func(string) error
+	walk = func(parent string) error {
+		dir, err := rt.Open("content/" + parent)
+		if err != nil {
+			return ErrUnavailable
+		}
+		entries, err := dir.ReadDir(MaxFiles*9 + 1)
+		dir.Close()
+		if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > MaxFiles*9 {
+			return ErrUnavailable
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if parent != "." {
+				name = parent + "/" + name
+			}
+			directories[name] = true
+			if len(directories) > MaxFiles*9 {
+				return ErrUnavailable
+			}
+			if err := walk(name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk("."); err != nil {
+		return err
+	}
+	for _, file := range after {
+		parent := "content"
+		parts := strings.Split(file.Path, "/")
+		for i, part := range parts {
+			dir, err := rt.Open(parent)
+			if err != nil {
+				return ErrUnavailable
+			}
+			entries, err := dir.ReadDir(MaxFiles*9 + 1)
+			dir.Close()
+			if (err != nil && !errors.Is(err, io.EOF)) || len(entries) > MaxFiles*9 {
+				return ErrUnavailable
+			}
+			found := false
+			for _, entry := range entries {
+				if strings.EqualFold(entry.Name(), part) {
+					if entry.Name() != part || (i == len(parts)-1 && !entry.Type().IsRegular()) || (i < len(parts)-1 && !entry.IsDir()) {
+						return ErrConflict
+					}
+					found = true
+				}
+			}
+			if !found {
+				break
+			}
+			parent += "/" + part
+		}
+		for i := 1; i < len(parts); i++ {
+			name := strings.Join(parts[:i], "/")
+			for existing := range directories {
+				if strings.EqualFold(existing, name) && existing != name {
+					return ErrInvalid
+				}
+			}
+			directories[name] = true
+		}
+	}
+	if len(directories)+len(after) > MaxFiles*9 {
+		return ErrInvalid
+	}
+	return nil
 }

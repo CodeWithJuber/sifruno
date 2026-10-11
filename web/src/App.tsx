@@ -10,6 +10,7 @@ import { HostingWorkspace, Overview, ServiceInventory } from "@/Dashboard";
 import { useResource, validBudget, validPlatform, validServer, validServices, validStatus, validTrail } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import type { RestoreHandoff } from "@/lib/restoreHandoff";
+import type { BackupCopySelection, ZIPImportRequest } from "@/lib/backupCopy";
 
 const Evidence = lazy(() => import("@/Tools").then((m) => ({ default: m.Evidence })));
 const Trail = lazy(() => import("@/Tools").then((m) => ({ default: m.Trail })));
@@ -70,9 +71,9 @@ export function App() {
   const [filesVisited, setFilesVisited] = useState(false);
   const [filesHandoff, setFilesHandoff] = useState<SiteHandoff>();
   const [backupsHandoff, setBackupsHandoff] = useState<SiteHandoff>();
-  const [importRequest, setImportRequest] = useState<number>();
+  const [importRequest, setImportRequest] = useState<ZIPImportRequest>();
   const handoffSequence = useRef(0);
-  const consumeImportRequest = useCallback((requestId: number) => setImportRequest((current) => current === requestId ? undefined : current), []);
+  const consumeImportRequest = useCallback((requestId: number) => setImportRequest((current) => current?.requestId === requestId ? undefined : current), []);
   const consumeFilesHandoff = useCallback((requestId: number) => setFilesHandoff((current) => current?.requestId === requestId ? undefined : current), []);
   const consumeBackupsHandoff = useCallback((requestId: number) => setBackupsHandoff((current) => current?.requestId === requestId ? undefined : current), []);
   const [websitesResource, setWebsitesResource] = useState<Resource<unknown>>({ loading: false });
@@ -94,14 +95,14 @@ export function App() {
   const connected = Boolean(server.data && !server.error);
   const partial = server.data?.collector.status === "partial";
   const unavailable = server.data?.collector.status === "unavailable";
-  const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "access", "trail", "budget"].includes(next))) return; if (next !== "backups") setBackupsHandoff(current => current?.restore ? undefined : current); if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
+  const navigate = (next: View) => { if ((!publicPreview && next === "panel-preview") || (publicPreview && ["websites", "accounts", "backups", "files", "access", "trail", "budget"].includes(next))) return; if (next !== "websites") setImportRequest(undefined); if (next !== "backups") setBackupsHandoff(current => current?.restore ? undefined : current); if (next === "websites") setWebsitesVisited(true); if (next === "accounts") setAccountsVisited(true); if (next === "backups") setBackupsVisited(true); if (next === "files") setFilesVisited(true); setView(next); setMenuOpen(false); setSearch(""); };
   const openSiteTool = (destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => {
     if (publicPreview) return;
     const request = { requestId: ++handoffSequence.current, siteId, siteName, ...(destination === "backups" && restore ? { restore } : {}) };
     if (destination === "files") setFilesHandoff(request); else setBackupsHandoff(request);
     navigate(destination);
   };
-  const openZIPImport = () => { if (publicPreview) return; setImportRequest(++handoffSequence.current); navigate("websites"); };
+  const openZIPImport = (snapshot?: BackupCopySelection) => { if (publicPreview) return; setImportRequest({ requestId: ++handoffSequence.current, snapshot }); navigate("websites"); };
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
     return q ? {

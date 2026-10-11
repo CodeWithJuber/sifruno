@@ -44,6 +44,7 @@ type Store struct {
 	db                *bolt.DB
 	journal           *trail.Store
 	closed            bool
+	siteRemovalStep   func(string) error // isolated website removal failure injection
 	backupRemovalStep func(string) error // isolated failure injection, never configured by production
 }
 
@@ -101,7 +102,10 @@ func Open(dir string, journal *trail.Store) (*Store, error) {
 		if _, err := tx.CreateBucketIfNotExists(backupScheduleBucket); err != nil {
 			return err
 		}
-		_, err := tx.CreateBucketIfNotExists(backupRemovalBucket)
+		if _, err := tx.CreateBucketIfNotExists(backupRemovalBucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucketIfNotExists(siteRemovalBucket)
 		return err
 	}); err != nil {
 		db.Close()
@@ -116,11 +120,24 @@ func Open(dir string, journal *trail.Store) (*Store, error) {
 		db.Close()
 		return nil, ErrUnavailable
 	}
+	if err = s.validateSiteRemovals(); err != nil {
+		db.Close()
+		return nil, ErrUnavailable
+	}
 	if err = s.validateBackupRemovals(); err != nil {
 		db.Close()
 		return nil, ErrUnavailable
 	}
 	for _, r := range items {
+		removal, removalErr := s.loadSiteRemoval(r.Site.ID)
+		if removalErr != nil {
+			db.Close()
+			return nil, ErrUnavailable
+		}
+		if removal != nil {
+			_ = s.finishSiteRemoval(*removal)
+			continue
+		}
 		if r.Pending == nil {
 			if err = s.verify(r); err != nil {
 				db.Close()
@@ -321,6 +338,9 @@ func (s *Store) siteRoot(id string) (*os.Root, error) {
 	return r, nil
 }
 func (s *Store) verify(r record) error {
+	if removal, err := s.loadSiteRemoval(r.Site.ID); err != nil || removal != nil {
+		return ErrUnavailable
+	}
 	if r.Pending != nil || len(r.ChangeIDs) == 0 || s.journal.Verify() != nil {
 		return ErrUnavailable
 	}
@@ -376,10 +396,17 @@ func (s *Store) List() ([]Site, error) {
 	}
 	result := []Site{}
 	for _, r := range rs {
-		if r.Pending == nil && s.verify(r) != nil {
+		removal, e := s.loadSiteRemoval(r.Site.ID)
+		if e != nil {
+			return nil, e
+		}
+		if removal == nil && r.Pending == nil && s.verify(r) != nil {
 			return nil, ErrUnavailable
 		}
 		v := exposed(r)
+		if removal != nil {
+			v.State = "recovery_required"
+		}
 		if pending, e := s.loadBackupRemoval(r.Site.ID); e != nil {
 			return nil, e
 		} else if pending != nil {
@@ -400,10 +427,17 @@ func (s *Store) Get(id string) (Site, error) {
 	if err != nil {
 		return Site{}, err
 	}
-	if r.Pending == nil && s.verify(r) != nil {
+	removal, e := s.loadSiteRemoval(id)
+	if e != nil {
+		return Site{}, e
+	}
+	if removal == nil && r.Pending == nil && s.verify(r) != nil {
 		return Site{}, ErrUnavailable
 	}
 	v := exposed(r)
+	if removal != nil {
+		v.State = "recovery_required"
+	}
 	if pending, e := s.loadBackupRemoval(id); e != nil {
 		return Site{}, e
 	} else if pending != nil {

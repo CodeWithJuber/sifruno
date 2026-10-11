@@ -9,7 +9,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 - [Current project state](PROJECT-STATE.md) governs the present handoff and remaining acceptance gates. [Machine-readable status](WORKSTREAM-STATUS.json) keeps current publication fields separate from historical observations.
 - [Installation](installation.md) is a source-build/local-panel guide, not a production hosting installer. Commands were reviewed against source; a new clean-machine installation was not run for this update.
 - The delivery plan's `pr-*` IDs identify planned scopes, not GitHub PR numbers. A merge does not certify a scope, a vendor, an operating system or a deployment.
-- `docs/evidence/*.json` and dated guide sections retain original source pins and failed/successful outcomes. Local-only `artifacts/`, `.cache/` and worktree paths are provenance, not downloadable files. Their private contents are excluded from Git.
+- `docs/evidence/*.json` and dated guide sections retain original source pins and failed/successful outcomes. The [server recovery archive](server-recovery.md) now preserves eligible local artifacts and worktree source; its manifests map original paths. Private state, credentials and caches remain excluded.
 - The merged [runtime-input guest archive](../lab/runtime-input-guest/README.md) is **non-runnable WIP**. Its missing parser and unresolved approval remain open. Historical preview URLs have no current availability assurance.
 
 ## Start here and delivery planning
@@ -18,7 +18,16 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | --- | --- |
 | [Install and run from source](installation.md) | `installation.md` |
 | [Sifruno delivery state](PROJECT-STATE.md) | `PROJECT-STATE.md` |
+| [Local source and history publication](local-source-publication.md) | `local-source-publication.md` |
+| [Server recovery archive and restore instructions](server-recovery.md) | `server-recovery.md` |
 | [Sifruno delivery plan](DELIVERY-PLAN.md) | `DELIVERY-PLAN.md` |
+| [Combined native website lifecycle](website-lifecycle-integration.md) | `website-lifecycle-integration.md` |
+| [Single-file snapshot restore](single-file-restore.md) | `single-file-restore.md` |
+| [Snapshot recovery as a separate website](backup-copy.md) | `backup-copy.md` |
+| [Website removal](website-removal.md) | `website-removal.md` |
+| [Website name editing](website-name.md) | `website-name.md` |
+| [Multiple-file upload](multi-file-upload.md) | `multi-file-upload.md` |
+| [Saved-file HTTP preview](saved-file-preview.md) | `saved-file-preview.md` |
 | [Website workflow main integration](website-main-integration.md) | `website-main-integration.md` |
 | [Website backup restore review](website-restore-handoff.md) | `website-restore-handoff.md` |
 | [Parallel development](parallel-development.md) | `parallel-development.md` |
@@ -70,7 +79,6 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | [Working website slice](sites-slice.md) | `sites-slice.md` |
 | [Native static-site transfers](native-transfers.md) | `native-transfers.md` |
 | [Local static-file upload](site-file-upload.md) | `site-file-upload.md` |
-| [Open a saved website file](saved-file-preview.md) | `saved-file-preview.md` |
 | [Confirmed file replacement](site-file-replacement.md) | `site-file-replacement.md` |
 | [Binary assets in Websites](website-assets.md) | `website-assets.md` |
 | [Native Sifruno transfer review](native-transfer-review.md) | `native-transfer-review.md` |

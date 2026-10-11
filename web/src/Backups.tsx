@@ -20,6 +20,9 @@ import { resolveRestoreHandoff } from "@/lib/restoreHandoff";
 import { backupCopySelection } from "@/lib/backupCopy";
 import type { BackupCopySelection } from "@/lib/backupCopy";
 
+import { previewFileRestore, confirmFileRestore, fileRestoreMatches } from "@/lib/fileRestore";
+import type { FileRestorePreview } from "@/lib/fileRestore";
+
 type Restore = { site: Site; backup: SiteBackup };
 const backupError = (error: unknown) => error instanceof SiteApiError && error.status === 409
   ? "The website changed on the server. Refresh backup records and review the current revision before confirming again. Your Websites editor draft is kept."
@@ -47,6 +50,11 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   const clearRemoval = useCallback(() => { ++removalEpoch.current; setRemoval(undefined); setRemovalConfirmed(false); setRemovalError(undefined); }, []);
   const [confirmed, setConfirmed] = useState(false);
   const [preview, setPreview] = useState<RestorePreview>();
+  const [filePath, setFilePath] = useState("");
+  const [filePreview, setFilePreview] = useState<FileRestorePreview>();
+  const [fileConfirmed, setFileConfirmed] = useState(false);
+  const fileEpoch = useRef(0);
+  const clearFileRestore = useCallback(() => { ++fileEpoch.current; setFilePath(""); setFilePreview(undefined); setFileConfirmed(false); }, []);
   const [previewError, setPreviewError] = useState<string>();
   const [uploadFile, setUploadFile] = useState<File>();
   const [uploadTarget, setUploadTarget] = useState<Site>();
@@ -80,9 +88,11 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   const canChange = Boolean(active && authenticated && fresh && selected && selected.state !== "recovery_required" && !busy && !uploadTarget && !removal);
   const canConfirmRemoval = Boolean(active && authenticated && fresh && selected && removal && !busy && !restore && !uploadTarget && !scheduleDirty && !removalError && selected.id === removal.site.id && selected.revision === removal.site.revision && canRemoveBackup(selected, removal.backup) && backups.some(item => item.id === removal.backup.id && item.sha256 === removal.backup.sha256));
   const previewVerified = Boolean(restore && session?.authenticated && session.csrf_token === restoreSessionToken.current && Date.parse(session.expires_at) > Date.now() && selected && selected.id === restore.site.id && selected.revision === restore.site.revision && restorePreviewMatches(preview, selected.id, selected.revision, restore.backup) && backups.some(item => item.id === restore.backup.id && item.sha256 === restore.backup.sha256 && item.revision === restore.backup.revision && item.files === restore.backup.files));
-  const canRestore = Boolean(canChange && !scheduleDirty && previewVerified && selected && restore && canConfirmRestorePreview(preview, selected.id, selected.revision, restore.backup));
+  const canRestore = Boolean(!filePath && canChange && !scheduleDirty && previewVerified && selected && restore && canConfirmRestorePreview(preview, selected.id, selected.revision, restore.backup));
 
-  const clearRestore = useCallback(() => { ++previewEpoch.current; restoreSessionToken.current = undefined; restoreReturnFocus.current = false; setRestore(undefined); setPreview(undefined); setPreviewError(undefined); setConfirmed(false); }, []);
+  const canRestoreFile = Boolean(filePath && canChange && !scheduleDirty && previewVerified && selected && restore && fileRestoreMatches(filePreview, selected, restore.backup, filePath) && selected.revision < Number.MAX_SAFE_INTEGER && !previewError);
+
+  const clearRestore = useCallback(() => { clearFileRestore(); ++previewEpoch.current; restoreSessionToken.current = undefined; restoreReturnFocus.current = false; setRestore(undefined); setPreview(undefined); setPreviewError(undefined); setConfirmed(false); }, [clearFileRestore]);
   const reviewRestore = useCallback(async (target: Restore, token: string, parentLive: () => boolean) => {
     const generation = ++previewEpoch.current;
     const isLive = () => parentLive() && generation === previewEpoch.current && selectedId.current === target.site.id && !scheduleDraft.current && sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now();
@@ -98,7 +108,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   }, []);
   const clearPrivateRecords = useCallback(() => { setSites([]); setSelected(undefined); setBackups([]); setFresh(false); scheduleDraft.current = false; setScheduleDirty(false); clearRestore(); clearUpload(); clearRemoval(); }, [clearRestore, clearUpload, clearRemoval]);
   const fail = useCallback((failure: unknown) => {
-    setError(backupError(failure)); setFresh(false); setConfirmed(false); setPreview(undefined);
+    setError(backupError(failure)); setFresh(false); setConfirmed(false); setPreview(undefined); setFilePreview(undefined); setFileConfirmed(false); ++fileEpoch.current;
     setUploadPreview(undefined); setUploadConfirmed(false);
     setRemovalConfirmed(false);
     if (failure instanceof SiteApiError && failure.status === 401) { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); clearPrivateRecords(); setNotice(undefined); }
@@ -228,7 +238,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
     });
   }
   function closeRestore() {
-    if (busy === "Restoring ZIP backup") return;
+    if (busy === "Restoring ZIP backup" || busy === "Restoring selected file") return;
     clearRestore(); restoreReturnFocus.current = true;
   }
   async function openRestore(backup: SiteBackup, opener: HTMLButtonElement) {
@@ -236,6 +246,32 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
     const target = { site: selected, backup }, token = session.csrf_token;
     restoreOpener.current = opener;
     await run("Verifying restore preview", parentLive => reviewRestore(target, token, parentLive));
+  }
+  async function chooseRestoreFile(path: string) {
+    if (busy || actionPending.current || !previewVerified || !restore || !session?.authenticated || !fresh) return;
+    const target = restore, token = session.csrf_token, generation = ++fileEpoch.current;
+    setFilePath(path); setFilePreview(undefined); setFileConfirmed(false); setConfirmed(false); setPreviewError(undefined);
+    if (!path) return;
+    await run("Verifying selected file", async parentLive => {
+      const isLive = () => parentLive() && generation === fileEpoch.current && selectedId.current === target.site.id && !scheduleDraft.current && sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now();
+      try {
+        const value = await previewFileRestore(target.site, target.backup, path, token);
+        if (isLive()) setFilePreview(value);
+      } catch (failure) { if (isLive()) { setPreviewError(restorePreviewError(failure)); throw failure; } }
+    });
+  }
+  async function restoreSelectedFile() {
+    if (!canRestoreFile || !fileConfirmed || !filePreview || !restore || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()) return;
+    const target = restore, path = filePath, verified = filePreview, token = session.csrf_token, generation = fileEpoch.current;
+    await run("Restoring selected file", async parentLive => {
+      const sessionLive = () => parentLive() && selectedId.current === target.site.id && sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === token && Date.parse(sessionRef.current.expires_at) > Date.now();
+      const isLive = () => sessionLive() && generation === fileEpoch.current && !scheduleDraft.current;
+      const site = await confirmFileRestore({ site: target.site, backup: target.backup, path, preview: verified, confirmed: true, csrf: token, isLive });
+      if (!isLive()) return;
+      clearRestore(); setFresh(false);
+      setNotice(`Restored only ${path} for ${site.name}. All other saved files are preserved. Current revision ${site.revision}. Your Websites editor draft is kept.`);
+      await loadInventory(site.id, sessionLive);
+    });
   }
   async function login(event: React.FormEvent) {
     event.preventDefault();
@@ -392,11 +428,14 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
       <div><Button label="Cancel uploaded ZIP restore" variant="ghost" isDisabled={busy === "Restoring uploaded ZIP"} onClick={closeUploadedRestore} /><Button label="Confirm uploaded ZIP restore" data-testid="uploaded-restore-submit" variant="primary" isDisabled={!uploadPreview || !uploadConfirmed || Boolean(busy) || !fresh || uploadTarget.revision >= Number.MAX_SAFE_INTEGER} isLoading={busy === "Restoring uploaded ZIP"} onClick={() => void restoreUploadedZIP()} /></div>
     </dialog>}
     {restore && active && authenticated && session.csrf_token === restoreSessionToken.current && <dialog ref={dialog} className="website-restore-dialog backup-restore-dialog" data-testid="backup-restore-confirm" data-site-id={restore.site.id} data-backup-id={restore.backup.id} data-backup-sha={restore.backup.sha256} aria-labelledby="backup-restore-title" aria-describedby="backup-restore-description" onCancel={event => { event.preventDefault(); closeRestore(); }}>
-      <h2 id="backup-restore-title">Review ZIP restore</h2>
-      <p id="backup-restore-description">Replace the saved app-owned static files of <strong>{restore.site.name}</strong> with the snapshot from {dateLabel(restore.backup.created_at)}. This does not restore a server, database or mail system.</p>
+      <h2 id="backup-restore-title">{filePath ? "Review single-file restore" : "Review ZIP restore"}</h2>
+      <p id="backup-restore-description">{filePath ? <>Restore only <strong>{filePath}</strong> in <strong>{restore.site.name}</strong>. Every other currently saved file stays unchanged.</> : <>Replace the saved app-owned static files of <strong>{restore.site.name}</strong> with the snapshot from {dateLabel(restore.backup.created_at)}, or choose one file below. This does not restore a server, database or mail system.</>}</p>
       <dl><div><dt>Snapshot</dt><dd>{restore.backup.files} files · {bytes(restore.backup.bytes)} · revision {restore.backup.revision}</dd></div><div><dt>Expected current revision</dt><dd>{restore.site.revision}</dd></div></dl>
       {busy === "Verifying restore preview" && <p className="restore-preview-status" role="status" data-testid="restore-preview-loading">Verifying current saved files and the selected archive. No restore has been sent…</p>}
-      {previewVerified && preview && <section className="restore-preview" data-testid="restore-preview-verified" aria-label="Verified restore preview">
+      {previewVerified && preview && <div className="file-restore-picker"><label htmlFor="backup-restore-file-picker">Restore scope</label><NativeSelect id="backup-restore-file-picker" data-testid="backup-restore-file-picker" value={filePath} disabled={Boolean(busy)} onChange={event => void chooseRestoreFile(event.target.value)}><NativeSelectOption value="">All files from this ZIP</NativeSelectOption>{preview.files.filter(file => file.after).map(file => <NativeSelectOption key={file.path} value={file.path}>Only {file.path}</NativeSelectOption>)}</NativeSelect><p>Select one archived file to preserve all other current saved files.</p></div>}
+      {busy === "Verifying selected file" && <p role="status">Verifying the selected file and merged website limits...</p>}
+      {filePath && filePreview && previewVerified && <section className="restore-preview" data-testid="backup-file-restore-preview" aria-label="Verified single-file restore preview"><p>Only <code>{filePreview.file.path}</code> will be {filePreview.file.kind === "added" ? "added" : filePreview.file.kind === "unchanged" ? "restored with identical bytes" : "replaced"}.</p><p>Current: {filePreview.file.before ? bytes(filePreview.file.before.bytes) : "absent"} / snapshot: {bytes(filePreview.file.after!.bytes)}</p><p>{filePreview.preserved_files} other saved files preserved. Website routing, state, saved ZIPs and schedule stay unchanged.</p></section>}
+      {!filePath && previewVerified && preview && <section className="restore-preview" data-testid="restore-preview-verified" aria-label="Verified restore preview">
         <p className="restore-preview-status" role="status">Verified preview · current revision {preview.current_revision} and selected snapshot revision {preview.backup_revision}</p>
         <dl className="restore-preview-counts">{restoreKinds.map(kind => <div key={kind}><dt>{kind}</dt><dd data-testid={`restore-count-${kind}`}>{preview.counts[kind]}</dd></div>)}</dl>
         {preview.counts.added + preview.counts.modified + preview.counts.removed === 0 && <p className="restore-preview-status" data-testid="restore-preview-no-changes">No file content changes were found. Confirmation still sends a restore request.</p>}
@@ -407,8 +446,9 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
       {previewVerified && restore.site.revision === Number.MAX_SAFE_INTEGER && <p className="restore-preview-status" role="status">The website revision limit was reached. This preview is readable, but a further restore cannot be confirmed.</p>}
       {!previewVerified && !busy && !previewError && <p className="restore-preview-status">A matching verified preview is required. Refresh records and review the restore again.</p>}
       <p>Your unsaved Websites editor draft will be kept. Compare it with the restored files before saving it.</p>
-      <label><input type="checkbox" data-testid="restore-confirm-checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!canRestore} />I reviewed the verified preview and understand that the current saved files will be replaced.</label>
-      <div><Button label="Cancel restore" variant="ghost" isDisabled={busy === "Restoring ZIP backup"} onClick={closeRestore} />{(!fresh || previewError) && <Button label="Refresh backup records" variant="secondary" isDisabled={Boolean(busy)} onClick={refreshRecords} />}<Button label="Confirm restore" variant="primary" isDisabled={!confirmed || !canRestore} isLoading={busy === "Restoring ZIP backup"} onClick={() => void confirmRestore()} data-testid="restore-confirm" /></div>
+      {!filePath && <label><input type="checkbox" data-testid="restore-confirm-checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!canRestore} />I reviewed the verified preview and understand that the current saved files will be replaced.</label>}
+      {filePath && <label><input type="checkbox" data-testid="backup-file-restore-checkbox" checked={fileConfirmed} disabled={!canRestoreFile} onChange={event => setFileConfirmed(event.target.checked)} />I reviewed this preview and confirm restoring only {filePath}. All other saved files will be preserved.</label>}
+      <div><Button label="Cancel restore" variant="ghost" isDisabled={busy === "Restoring ZIP backup" || busy === "Restoring selected file"} onClick={closeRestore} />{(!fresh || previewError) && <Button label="Refresh backup records" variant="secondary" isDisabled={Boolean(busy)} onClick={refreshRecords} />}{filePath ? <Button label="Restore only selected file" data-testid="backup-file-restore-submit" variant="primary" isDisabled={!fileConfirmed || !canRestoreFile} isLoading={busy === "Restoring selected file"} onClick={() => void restoreSelectedFile()} /> : <Button label="Confirm restore" variant="primary" isDisabled={!confirmed || !canRestore} isLoading={busy === "Restoring ZIP backup"} onClick={() => void confirmRestore()} data-testid="restore-confirm" />}</div>
       {error && !previewError && <p role="alert" className="website-error">{error}</p>}
     </dialog>}
   </section>;

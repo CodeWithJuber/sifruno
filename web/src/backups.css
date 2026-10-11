@@ -72,3 +72,8 @@
 .uploaded-restore-card p { overflow-wrap: anywhere; }
 .uploaded-restore-card input[type="file"] { max-width: 100%; }
 .uploaded-restore-card h2 { margin: 0; font-size: 1rem; }
+
+.file-restore-picker { display: grid; gap: 8px; min-width: 0; max-width: 100%; }
+.file-restore-picker select { min-width: 0; max-width: 100%; width: 100%; text-overflow: ellipsis; }
+.file-restore-picker p { margin: 0; font-size: 12px; }
+.backup-restore-dialog p, .backup-restore-dialog label { overflow-wrap: anywhere; min-width: 0; }

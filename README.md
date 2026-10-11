@@ -76,7 +76,9 @@ Its [Upload file workflow](docs/site-file-upload.md) adds local static assets
 limit and explicit revision checks. Existing paths are refused.
 Select a saved file and use [Replace file](docs/site-file-replacement.md) to
 confirm new content against its current hash and revision. A prior native ZIP
-backup can restore the earlier content.
+backup can restore the earlier content. [Single-file recovery](docs/single-file-restore.md)
+lets you preview and restore one archived file while retaining the other saved
+website files.
 Websites shows [saved asset details](docs/website-assets.md) when a selected file
 cannot be read as text, including when an image is the first or only file.
 The [website workflow integration](docs/website-main-integration.md) carries
@@ -88,6 +90,24 @@ public HTTPS privacy checks pass at390/768/1440px in both themes. These private
 tools require the local operator session and are excluded from the approved
 public monitoring preview. See [File Manager](docs/file-manager-ui.md),
 [Backups](docs/backups-ui.md) and [host resources](docs/host-resources.md).
+
+Use [Recover as new website](docs/backup-copy.md) on a saved snapshot to prepare
+its verified ZIP in the import form. Choose a new name/domain and confirm; the
+original website keeps its current files and backups.
+
+[Remove a native website](docs/website-removal.md) explicitly after exporting any
+ZIPs you need to retain. Removal clears its current files and local snapshots,
+keeps the audit history and releases the domain; unrelated websites are preserved.
+
+[Edit a website display name](docs/website-name.md) in Websites without changing
+its domain, files or backup contents. Conflicting changes require explicit review.
+
+[Upload multiple static files](docs/multi-file-upload.md) from File Manager after
+reviewing destinations and limits. Uploads are sequential, never overwrite and
+stop on the first failure with explicit per-file results.
+
+[Open a saved file](docs/saved-file-preview.md) directly from File Manager in
+the local HTTP preview while keeping any unsaved editor draft.
 
 The approved public dashboard now offers **Explore panel** on Overview and
 **Panel preview** in navigation. Its Files, Backups and Websites tour uses

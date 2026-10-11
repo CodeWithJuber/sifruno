@@ -18,6 +18,7 @@ The 2026-10-07 reconciliation inspected main `f4735ccd10c2d9443d9c62eaafceb86f5a
 | --- | --- |
 | [Install and run from source](installation.md) | `installation.md` |
 | [Sifruno delivery state](PROJECT-STATE.md) | `PROJECT-STATE.md` |
+| [Local source and history publication](local-source-publication.md) | `local-source-publication.md` |
 | [Sifruno delivery plan](DELIVERY-PLAN.md) | `DELIVERY-PLAN.md` |
 | [Combined native website lifecycle](website-lifecycle-integration.md) | `website-lifecycle-integration.md` |
 | [Single-file snapshot restore](single-file-restore.md) | `single-file-restore.md` |

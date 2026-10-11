@@ -6,6 +6,11 @@ Start with the [installation guide](docs/installation.md). The
 [historical closeout](docs/CLOSEOUT.md) records the earlier delivered source
 and unfinished work. Current progress is maintained in the project state below.
 
+The [local source publication index](docs/local-source-publication.md) links
+the preserved development history, uncommitted source snapshots and exact
+coverage manifest published on 2026-10-11. Recovery branches retain unfinished
+work and are not installation targets.
+
 Use [the documentation index](docs/README.md) and [current project state](docs/PROJECT-STATE.md)
 for the delivered source and remaining acceptance gates. Evidence below describes
 recorded commits and isolated environments, not a fresh checkout test or current
@@ -23,7 +28,7 @@ versioned database snapshot and admits policy updates using current admin
 permissions. A scoped projection returns only account IDs readable by the
 authenticated actor. Production tenant integration remains open.
 
-## Combined website workflow candidate
+## Combined website workflow
 
 The [native website lifecycle guide](docs/website-lifecycle-integration.md)
 combines the reviewed PR62–67 features in one build: name editing, multiple-file
@@ -31,7 +36,9 @@ upload, saved-file preview, single-file backup restore, recovery as a separate
 website and confirmed removal. The integrated browser flow passed with real
 HTTP bytes and a retained backup download; desktop/mobile screenshots and exact
 checks are linked in the guide. Follow the existing installation steps for this
-branch. This candidate has not been merged or deployed.
+branch. This source was merged through [PR #68](https://github.com/CodeWithJuber/sifruno/pull/68)
+and is present in observed main `7425578`. No deployment was performed by the
+source publication task.
 
 ## Community and Pro
 

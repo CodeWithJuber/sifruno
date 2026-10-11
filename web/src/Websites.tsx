@@ -10,6 +10,8 @@ import { downloadSiteBackup, importSiteArchive, previewURL, sitePreviewPort, Sit
 import type { OperatorSession, Site, SiteBackup, SiteFile, SiteFileContent } from "@/lib/sites-api";
 import { restoreHandoffFor } from "@/lib/restoreHandoff";
 import type { RestoreHandoff } from "@/lib/restoreHandoff";
+import { prepareBackupCopy } from "@/lib/backupCopy";
+import type { PreparedBackupCopy, ZIPImportRequest } from "@/lib/backupCopy";
 
 interface Editor {
   path: string;
@@ -23,7 +25,7 @@ interface FileConflict { revision: number; file?: SiteFileContent }
 const fromFile = (file: SiteFileContent): Editor => ({ path: file.path, draft: file.content, savedContent: file.content, sha256: file.sha256, revision: file.revision, isNew: false });
 const errorText = (error: unknown) => error instanceof SiteApiError ? error.message : "The local operation could not be confirmed. Your editor draft is kept.";
 
-export default function Websites({ revision, active, onStatus, onOpenSiteTool, importRequest, onImportRequestConsumed }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; onOpenSiteTool: (destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => void; importRequest?: number; onImportRequestConsumed: (requestId: number) => void }) {
+export default function Websites({ revision, active, onStatus, onOpenSiteTool, importRequest, onImportRequestConsumed }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; onOpenSiteTool: (destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => void; importRequest?: ZIPImportRequest; onImportRequestConsumed: (requestId: number) => void }) {
   const [session, setSession] = useState<OperatorSession>();
   const [accessKey, setAccessKey] = useState("");
   const [sites, setSites] = useState<Site[]>([]);
@@ -57,18 +59,30 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   const [domainTarget, setDomainTarget] = useState<Site>();
   const [nextDomain, setNextDomain] = useState("");
   const [domainNeedsRefresh, setDomainNeedsRefresh] = useState(false);
+  const [nameTarget, setNameTarget] = useState<Site>();
+  const [nextName, setNextName] = useState("");
+  const [nameNeedsRefresh, setNameNeedsRefresh] = useState(false);
+  const [nameSettling, setNameSettling] = useState(false);
   const [importName, setImportName] = useState("");
   const [importDomain, setImportDomain] = useState("");
   const [importArchive, setImportArchive] = useState<File>();
   const [discardDraftForImport, setDiscardDraftForImport] = useState(false);
+  const [preparedCopy, setPreparedCopy] = useState<PreparedBackupCopy>();
+  const importInput = useRef<HTMLInputElement>(null);
+  const importFormPending = useRef(false);
+  importFormPending.current = Boolean(importArchive || importName || importDomain);
+  const clearImportForm = useCallback(() => { setPreparedCopy(undefined); setImportArchive(undefined); setImportName(""); setImportDomain(""); setDiscardDraftForImport(false); if (importInput.current) importInput.current.value = ""; }, []);
+  const closeImport = () => { ++importGeneration.current; setImportOpen(false); clearImportForm(); };
   const createDialog = useRef<HTMLDialogElement>(null);
   const importDialog = useRef<HTMLDialogElement>(null);
   const domainDialog = useRef<HTMLDialogElement>(null);
   const domainGeneration = useRef(0), domainPending = useRef(false);
+  const nameDialog = useRef<HTMLDialogElement>(null);
+  const nameGeneration = useRef(0), namePending = useRef(false);
   const importGeneration = useRef(0), importPending = useRef(false), authEpoch = useRef(0);
   const requestedImport = useRef(importRequest), handledImport = useRef(0);
   if (importRequest !== undefined) requestedImport.current = importRequest;
-  const importRequestId = requestedImport.current;
+  const importRequestId = requestedImport.current?.requestId;
   const activeRef = useRef(active), sessionRef = useRef(session); activeRef.current = active; sessionRef.current = session;
   const dialogReturnFocus = useRef<HTMLElement | null>(null);
   const latestEditor = useRef(editor);
@@ -88,6 +102,8 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   const nextDomainBytes = new TextEncoder().encode(nextDomain.trim()).length;
   const removeReady = Boolean(active && authenticated && removeTarget && selected?.id === removeTarget.id && selected.revision === removeTarget.revision && selected.state !== "recovery_required" && !dirty && !conflict && !busy && !removeNeedsRefresh && removeDomain === removeTarget.domain);
   const domainReady = Boolean(active && authenticated && domainTarget && selected?.id === domainTarget.id && selected.revision === domainTarget.revision && selected.state !== "recovery_required" && !dirty && !conflict && !busy && !domainNeedsRefresh && nextDomain.trim() && nextDomainBytes <= 253);
+  const nextNameBytes = new TextEncoder().encode(nextName.trim()).length;
+  const nameReady = Boolean(active && authenticated && nameTarget && selected?.id === nameTarget.id && selected.revision === nameTarget.revision && selected.state !== "recovery_required" && !dirty && !conflict && !busy && !nameSettling && !nameNeedsRefresh && nextName.trim() && nextNameBytes <= 80 && !/[\u0000-\u001f\u007f]/.test(nextName.trim()));
 
   const fail = useCallback((failure: unknown) => {
     setError(errorText(failure));
@@ -139,11 +155,13 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   }
 
   useEffect(() => {
-    const request = requestedImport.current !== undefined && requestedImport.current !== handledImport.current ? requestedImport.current : undefined;
-    if (!active) { if (request !== undefined) { handledImport.current = request; onImportRequestConsumed(request); } return; }
+    const request = requestedImport.current !== undefined && requestedImport.current.requestId !== handledImport.current ? requestedImport.current : undefined;
+    if (!active) { if (request !== undefined) { handledImport.current = request.requestId; onImportRequestConsumed(request.requestId); } return; }
+    if (request?.snapshot && importFormPending.current) { handledImport.current = request.requestId; onImportRequestConsumed(request.requestId); setError("An import ZIP or target form is already pending. Open Import native ZIP in Websites and choose Cancel import to discard it, then select the snapshot again in Backups. Your editor draft is kept."); return; }
     let live = true, csrf: string | undefined, inventoryCount = 0;
     const authGeneration = authEpoch.current;
-    if (request !== undefined) { handledImport.current = request; setDiscardDraftForImport(false); setNotice(undefined); setImportOpen(false); }
+    let listForImport: Site[] = [];
+    if (request !== undefined) { handledImport.current = request.requestId; setDiscardDraftForImport(false); setNotice(undefined); setImportOpen(false); }
     const isLive = () => live && activeRef.current && authGeneration === authEpoch.current && (csrf === undefined || (sessionRef.current?.authenticated === true && sessionRef.current.csrf_token === csrf && Date.parse(sessionRef.current.expires_at) > Date.now()));
     setBusy("Loading websites");
     setError(undefined);
@@ -157,7 +175,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
           if (!isLive()) return;
           const list = await siteRequest("/api/v1/sites", validSiteList);
           if (!isLive()) return;
-          inventoryCount = list.items.length; setSites(list.items);
+          inventoryCount = list.items.length; listForImport = list.items; setSites(list.items);
           setInventoryLoaded(true);
           const previous = latestSelected.current;
           const draft = latestEditor.current;
@@ -169,12 +187,18 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
         if (!isLive()) return;
         setLoadedAt(new Date());
         if (request !== undefined && nextSession.authenticated) {
-          if (importPending.current || domainPending.current) throw new SiteApiError(409, "operation_pending", "The previous operation is still settling. Open Import native ZIP again after it completes.");
+          if (importPending.current || domainPending.current || namePending.current) throw new SiteApiError(409, "operation_pending", "The previous operation is still settling. Open Import native ZIP again after it completes.");
           if (inventoryCount >= 100) throw new SiteApiError(422, "capacity", "The website inventory is full. A ZIP import creates a new website.");
-          setCreateOpen(false); setDomainTarget(undefined); setImportOpen(true);
+          if (request.snapshot) {
+            setBusy("Verifying saved snapshot");
+            const prepared = await prepareBackupCopy(request.snapshot, listForImport, isLive);
+            if (!isLive()) return;
+            setPreparedCopy(prepared); setImportArchive(prepared.archive); setImportName(""); setImportDomain("");
+          }
+          setCreateOpen(false); setDomainTarget(undefined); closeName(); setImportOpen(true);
         }
       } catch (failure) { if (isLive()) fail(failure); }
-      finally { if (live && activeRef.current) setBusy(undefined); if (request !== undefined) onImportRequestConsumed(request); }
+      finally { if (live && activeRef.current) setBusy(undefined); if (request !== undefined) onImportRequestConsumed(request.requestId); }
     })();
     return () => { live = false; };
   }, [revision, active, fail, sessionAttempt, importRequestId, onImportRequestConsumed]);
@@ -184,11 +208,11 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   useEffect(() => { if (!active) setAccessKey(""); }, [active]);
   useEffect(() => {
     if (active && authenticated) return;
-    for (const ref of [createDialog, importDialog, domainDialog, removeDialog]) if (ref.current?.open) ref.current.close();
+    for (const ref of [createDialog, importDialog, domainDialog, removeDialog, nameDialog]) if (ref.current?.open) ref.current.close();
     setCreateOpen(false); setImportOpen(false);
-    if (!authenticated) { setImportArchive(undefined); setDiscardDraftForImport(false); }
+    if (!authenticated) { clearImportForm(); }
     dialogReturnFocus.current = null;
-  }, [active, authenticated]);
+  }, [active, authenticated, clearImportForm]);
   useEffect(() => {
     ++removeGeneration.current;
     setRemoveTarget(undefined); setRemoveDomain(""); setRemoveNeedsRefresh(false);
@@ -207,6 +231,15 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
     else if (!domainTarget && domainDialog.current?.open) domainDialog.current.close();
   }, [domainTarget, active, authenticated]);
   useEffect(() => {
+    ++nameGeneration.current;
+    setNameTarget(undefined); setNextName(""); setNameNeedsRefresh(false);
+    setBusy((current) => current === "Saving website name" || current === "Refreshing name revision" ? undefined : current);
+  }, [active, authenticated, selected?.id, session?.authenticated ? session.csrf_token : undefined, revision, importRequestId]);
+  useEffect(() => {
+    if (active && authenticated && nameTarget && nameDialog.current && !nameDialog.current.open) nameDialog.current.showModal();
+    else if (!nameTarget && nameDialog.current?.open) nameDialog.current.close();
+  }, [nameTarget, active, authenticated]);
+  useEffect(() => {
     if (!session?.authenticated) return;
     const timer = setTimeout(() => { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); setNotice(undefined); setError("Your operator session expired. Sign in again; your editor draft is kept."); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
     return () => clearTimeout(timer);
@@ -219,8 +252,9 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   }, [dirty]);
   useEffect(() => {
     ++importGeneration.current; setImportOpen(false); setDiscardDraftForImport(false);
+    if (preparedCopy) clearImportForm();
     setBusy((current) => current === "Importing native ZIP" ? undefined : current);
-  }, [active, authenticated, session?.authenticated ? session.csrf_token : undefined, revision, importRequestId]);
+  }, [active, authenticated, session?.authenticated ? session.csrf_token : undefined, revision, clearImportForm]);
   useEffect(() => {
     if (active && authenticated && importOpen && importDialog.current && !importDialog.current.open) importDialog.current.showModal();
     else if (!importOpen && importDialog.current?.open) importDialog.current.close();
@@ -230,11 +264,11 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
     else if (!createOpen && createDialog.current?.open) createDialog.current.close();
   }, [createOpen, active, authenticated]);
   useEffect(() => {
-    if (active && authenticated && !busy && !createOpen && !importOpen && !domainTarget && !removeTarget && dialogReturnFocus.current) {
+    if (active && authenticated && !busy && !createOpen && !importOpen && !domainTarget && !removeTarget && !nameTarget && dialogReturnFocus.current) {
       if (dialogReturnFocus.current.isConnected) dialogReturnFocus.current.focus();
       dialogReturnFocus.current = null;
     }
-  }, [active, authenticated, busy, createOpen, importOpen, domainTarget, removeTarget]);
+  }, [active, authenticated, busy, createOpen, importOpen, domainTarget, removeTarget, nameTarget]);
   const rememberDialogTrigger = () => { dialogReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; };
 
   async function run(label: string, action: () => Promise<void>) {
@@ -245,7 +279,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   }
   const requireClean = () => {
     if (!dirty) return true;
-    setError("Save or discard your editor draft before switching websites, creating a website, changing its domain or state, restoring or signing out.");
+    setError("Save or discard your editor draft before switching websites, creating a website, changing its name, domain or state, restoring or signing out.");
     return false;
   };
   async function removeWebsite(refresh = false) {
@@ -279,6 +313,36 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
       uncertainRemovals.current.add(target.id);
       if (isLive()) { setRemoveNeedsRefresh(true); fail(failure); }
     } finally { removePending.current = false; if (generation === removeGeneration.current) setBusy(undefined); }
+  }
+  function closeName() {
+    ++nameGeneration.current;
+    setNameTarget(undefined); setNextName(""); setNameNeedsRefresh(false);
+    setBusy((current) => current === "Saving website name" || current === "Refreshing name revision" ? undefined : current);
+  }
+  async function changeName(refresh = false) {
+    if (!nameTarget || !session?.authenticated || busy || namePending.current || !active || !requireClean() || (!refresh && !nameReady)) return;
+    const target = nameTarget, requested = nextName.trim(), csrf = session.csrf_token, generation = nameGeneration.current, authGeneration = authEpoch.current, observedRevision = latestSelected.current?.revision;
+    const contextLive = () => activeRef.current && generation === nameGeneration.current && authGeneration === authEpoch.current && latestSelected.current?.id === target.id && sessionRef.current?.authenticated && sessionRef.current.csrf_token === csrf && Date.parse(sessionRef.current.expires_at) > Date.now();
+    const isLive = () => contextLive() && latestSelected.current?.revision === observedRevision;
+    namePending.current = true; setNameSettling(true); setBusy(refresh ? "Refreshing name revision" : "Saving website name"); setError(undefined); setNotice(undefined);
+    try {
+      const site = refresh ? await siteRequest(siteURL(target.id), validSite) : await siteRequest(siteURL(target.id, "/name"), validSite, { method: "PUT", csrf, body: { name: requested, expected_revision: target.revision } });
+      if (!isLive()) return;
+      const expectedRevision = target.revision + (requested === target.name ? 0 : 1);
+      if (site.id !== target.id || site.revision < target.revision || site.revision < (observedRevision ?? 0) || (refresh && site.revision < 1) || (!refresh && (site.name !== requested || site.revision !== expectedRevision || site.domain !== target.domain || site.preview_host !== target.preview_host || site.state !== target.state || site.created_at !== target.created_at || (site.revision === target.revision && site.updated_at !== target.updated_at)))) throw new SiteApiError(0, "invalid_response", "The name operation did not confirm its website, name and revision. Refresh the name revision before saving again.");
+      updateSite(site); latestSelected.current = site; setLoadedAt(new Date());
+      if (refresh) { setNameTarget(site); setNameNeedsRefresh(false); }
+      else {
+        setEditor((previous) => previous && previous.revision === target.revision ? { ...previous, revision: site.revision } : previous);
+        setNotice(site.revision === target.revision ? `Website name already ${site.name} · revision ${site.revision} unchanged.` : `Website name changed to ${site.name} · revision ${site.revision}.`);
+        closeName();
+      }
+    } catch (failure) {
+      if (isLive()) { setNameNeedsRefresh(true); fail(failure); }
+    } finally {
+      namePending.current = false; setNameSettling(false);
+      if (contextLive()) setBusy(undefined);
+    }
   }
   async function changeDomain(refresh = false) {
     if (!domainTarget || !session?.authenticated || busy || domainPending.current || !active || !requireClean() || (!refresh && !domainReady)) return;
@@ -355,9 +419,10 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
     try {
       const site = await importSiteArchive({ name: importName.trim(), domain: importDomain.trim(), archive: importArchive, csrf });
       if (!isLive()) return;
+      if (sites.some(existing => existing.id === site.id) || (preparedCopy && site.id === preparedCopy.site.id)) throw new SiteApiError(0, "invalid_response", "The import did not acknowledge a new website identity. Your editor draft, selected ZIP and inputs are kept. Refresh records before retrying.");
       if (dirty) { setEditor(undefined); latestEditor.current = undefined; setConflict(undefined); }
       updateSite(site);
-      setImportOpen(false); setImportName(""); setImportDomain(""); setImportArchive(undefined); setDiscardDraftForImport(false);
+      setImportOpen(false); clearImportForm();
       setSection("files"); setNotice(`Imported native Sifruno ZIP as new website ${site.name}.`);
       await loadSite(site.id, false, isLive);
       if (isLive()) setLoadedAt(new Date());
@@ -398,7 +463,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
   const stateCounts = (state: Site["state"]) => sites.filter((site) => site.state === state).length;
 
   return <section data-testid="websites-view" className="websites-view website-workspace">
-    {error && !domainTarget && !importOpen && <div className="website-message website-error" role="alert"><Info /><span>{error}</span></div>}
+    {error && !domainTarget && !nameTarget && !importOpen && <div className="website-message website-error" role="alert"><Info /><span>{error}</span></div>}
     {notice && <div className="website-message" role="status"><Info /><span>{notice}</span></div>}
     {!session ? <Card className="dashboard-card website-auth" padding={0}><p role="status">{busy || (error ? "Operator session could not be checked." : "Checking operator session…")}</p>{error && <Button label="Retry operator session" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)} />}</Card> : !authenticated ? <Card className="dashboard-card website-auth" padding={0}>
       <div className="auth-heading"><LockKeyhole /><div><h2>Local operator sign-in</h2><p>Use the access key created by this server in its private state directory.</p></div></div>
@@ -432,7 +497,7 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
         {selected ? <div className="website-detail-stack">
           <Card className="dashboard-card website-details" padding={0} data-testid="website-details" data-site-id={selected.id} data-revision={selected.revision}><div className="card-heading"><div className="website-selected-identity"><span className="website-selected-label">Selected website</span><h2>{selected.name}</h2><p>{selected.domain}</p></div><span className={`website-state website-state-${selected.state}`}>{selected.state.replaceAll("_", " ")}</span></div>
             <dl><div><dt>Revision</dt><dd>{selected.revision}</dd></div><div><dt>Created</dt><dd>{dateLabel(selected.created_at)}</dd></div><div><dt>Updated</dt><dd>{dateLabel(selected.updated_at)}</dd></div></dl>
-            <div className="website-actions"><Button label="Local HTTP preview" icon={<ArrowUpRight />} href={previewURL(selected)} target="_blank" rel="noopener noreferrer" isDisabled={selected.state !== "active" || !previewPort} variant="secondary" size="sm" /><Button label="Change domain" icon={<Globe />} variant="secondary" size="sm" isDisabled={Boolean(busy) || dirty || Boolean(conflict) || !editable} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setError(undefined); setDomainTarget(selected); setNextDomain(selected.domain); setDomainNeedsRefresh(false); }} /><Button label={selected.state === "suspended" ? "Resume website" : "Suspend website"} variant="secondary" size="sm" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!session.authenticated || !requireClean()) return; void run("Changing website state", async () => { const site = await siteRequest(siteURL(selected.id, "/state"), validSite, { method: "POST", csrf: session.csrf_token, body: { state: selected.state === "suspended" ? "active" : "suspended", expected_revision: selected.revision } }); updateSite(site); await loadSite(site.id); setNotice(`Website is ${site.state}.`); }); }} /></div>
+            <div className="website-actions"><Button label="Local HTTP preview" icon={<ArrowUpRight />} href={previewURL(selected)} target="_blank" rel="noopener noreferrer" isDisabled={selected.state !== "active" || !previewPort} variant="secondary" size="sm" /><Button label="Edit website name" variant="secondary" size="sm" isDisabled={Boolean(busy) || nameSettling || dirty || Boolean(conflict) || !editable || !active} onClick={() => { if (!active || !session.authenticated || namePending.current || !requireClean()) return; rememberDialogTrigger(); ++nameGeneration.current; setError(undefined); setNameTarget(selected); setNextName(selected.name); setNameNeedsRefresh(false); }} /><Button label="Change domain" icon={<Globe />} variant="secondary" size="sm" isDisabled={Boolean(busy) || dirty || Boolean(conflict) || !editable} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setError(undefined); setDomainTarget(selected); setNextDomain(selected.domain); setDomainNeedsRefresh(false); }} /><Button label={selected.state === "suspended" ? "Resume website" : "Suspend website"} variant="secondary" size="sm" isDisabled={Boolean(busy) || dirty || !editable} onClick={() => { if (!session.authenticated || !requireClean()) return; void run("Changing website state", async () => { const site = await siteRequest(siteURL(selected.id, "/state"), validSite, { method: "POST", csrf: session.csrf_token, body: { state: selected.state === "suspended" ? "active" : "suspended", expected_revision: selected.revision } }); updateSite(site); await loadSite(site.id); setNotice(`Website is ${site.state}.`); }); }} /></div>
             <p className="website-help">{previewPort ? <>Preview serves the site's actual files at {selected.preview_host}:{previewPort} using local HTTP.</> : "Preview serving is disabled in this local runtime."}</p>
             <div className="website-actions"><Button label="Remove website" variant="secondary" size="sm" data-testid="website-remove-open" isDisabled={Boolean(busy) || removePending.current || dirty || Boolean(conflict) || !editable} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setError(undefined); setNotice(undefined); setRemoveTarget({ ...selected }); setRemoveDomain(""); setRemoveNeedsRefresh(uncertainRemovals.current.has(selected.id)); }} /></div>
             {dirty && <p className="website-help">Save or discard your editor draft before removing this website.</p>}
@@ -470,6 +535,14 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
         <div className="website-transfer-actions"><Button label="Cancel removal" variant="ghost" isDisabled={Boolean(busy)} onClick={() => { setRemoveTarget(undefined); setRemoveDomain(""); setRemoveNeedsRefresh(false); }} /><Button label="Confirm website removal" type="submit" variant="primary" isDisabled={!removeReady} isLoading={busy === "Removing website"} /></div>
       </form>{error && <p role="alert" className="website-error">{error}</p>}
     </dialog>}
+    {authenticated && <dialog ref={nameDialog} className="website-transfer-dialog website-name-dialog" aria-labelledby="edit-name-title" aria-describedby="edit-name-description" onClose={closeName} onCancel={(event) => { if (busy) event.preventDefault(); else closeName(); }}>
+      <h2 id="edit-name-title">Edit website name</h2><p id="edit-name-description">Choose the display name used in your website inventory.</p><p className="website-domain-current">Current name: <strong>{nameTarget?.name}</strong> · revision {nameTarget?.revision}</p>
+      <form data-testid="website-name-form" onSubmit={(event) => { event.preventDefault(); void changeName(); }}><div><label htmlFor="website-next-name">Website name</label><input id="website-next-name" value={nextName} onChange={(event) => setNextName(event.target.value)} required maxLength={80} disabled={Boolean(busy)} aria-describedby="website-next-name-help" aria-invalid={nextNameBytes > 80} /><span id="website-next-name-help" className="website-help">{nextNameBytes}/80 UTF-8 bytes</span></div>
+        {(nameNeedsRefresh || (nameTarget && selected?.revision !== nameTarget.revision)) && <div className="website-domain-conflict" role="status"><p>The name change could not be confirmed or the website revision changed. Your requested name is kept. Refresh its current name and revision, review them, then save again.</p><Button label="Refresh name revision" variant="secondary" size="sm" isDisabled={Boolean(busy) || nameSettling} onClick={() => void changeName(true)} /></div>}
+        <div className="website-transfer-actions"><Button label="Cancel name change" variant="ghost" isDisabled={Boolean(busy)} onClick={closeName} /><Button label="Save website name" type="submit" variant="primary" isDisabled={!nameReady} isLoading={busy === "Saving website name"} /></div>
+        {error && <p className="website-error" role="alert">{error}</p>}
+      </form>
+    </dialog>}
     {authenticated && <dialog ref={domainDialog} className="website-transfer-dialog website-domain-dialog" aria-labelledby="change-domain-title" aria-describedby="change-domain-description" onClose={() => { setDomainTarget(undefined); setNextDomain(""); setDomainNeedsRefresh(false); }} onCancel={(event) => { if (busy) event.preventDefault(); else { setDomainTarget(undefined); setNextDomain(""); setDomainNeedsRefresh(false); } }}>
       <h2 id="change-domain-title">Change website domain</h2><p id="change-domain-description">Change this static website's local HTTP routing only. DNS and TLS are not changed.</p><p className="website-domain-current">Current domain: <strong>{domainTarget?.domain}</strong> · revision {domainTarget?.revision}</p>
       <form data-testid="website-domain-form" onSubmit={(event) => { event.preventDefault(); void changeDomain(); }}><div><label htmlFor="website-next-domain">New domain</label><input id="website-next-domain" value={nextDomain} onChange={(event) => setNextDomain(event.target.value)} required maxLength={253} autoCapitalize="none" spellCheck={false} disabled={Boolean(busy)} aria-describedby="website-next-domain-help" aria-invalid={nextDomainBytes > 253} /><span id="website-next-domain-help" className="website-help">{nextDomainBytes}/253 UTF-8 bytes · no protocol or path</span></div>
@@ -485,12 +558,12 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
         <div className="website-transfer-actions"><Button label="Cancel creation" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setCreateOpen(false)} /><Button label="Create website" type="submit" variant="primary" isLoading={busy === "Creating website"} isDisabled={Boolean(busy) || dirty || sites.length >= 100 || nameBytes > 80 || domainBytes > 253 || !name.trim() || !domain.trim()} /></div>
       </form>{error && <p role="alert" className="website-error">{error}</p>}
     </dialog>}
-    {authenticated && <dialog ref={importDialog} className="website-transfer-dialog" aria-labelledby="import-title" onClose={() => { setImportOpen(false); setDiscardDraftForImport(false); }} onCancel={(event) => { if (busy) event.preventDefault(); else { setImportOpen(false); setDiscardDraftForImport(false); } }}><h2 id="import-title">Import native Sifruno ZIP</h2><p>Import an app-owned static website archive into a new website. This accepts native Sifruno site ZIPs only; cPanel host backups are not compatible.</p><form onSubmit={submitImportArchive}>
+    {authenticated && <dialog ref={importDialog} className="website-transfer-dialog" aria-labelledby="import-title" onClose={() => { setImportOpen(false); setDiscardDraftForImport(false); }} onCancel={(event) => { if (busy) event.preventDefault(); else closeImport(); }}><h2 id="import-title">Import native Sifruno ZIP</h2><p>Import an app-owned static website archive into a new website. This accepts native Sifruno site ZIPs only; cPanel host backups are not compatible.</p>{preparedCopy && <div className="website-import-snapshot" data-testid="website-import-snapshot" data-source-site-id={preparedCopy.site.id} data-backup-id={preparedCopy.backup.id} data-sha256={preparedCopy.backup.sha256}><strong>Verified saved snapshot | {preparedCopy.site.name}</strong><p>{dateLabel(preparedCopy.backup.created_at)} | revision {preparedCopy.backup.revision} | {preparedCopy.backup.files} files | {bytes(preparedCopy.backup.bytes)}</p><p>Source: {preparedCopy.site.domain}. Choose a new website name and domain below. The source website stays unchanged.</p><details><summary>Verified backup ID and SHA-256</summary><p>{preparedCopy.backup.id}</p><code>{preparedCopy.backup.sha256}</code></details></div>}<form onSubmit={submitImportArchive}>
       <div><label htmlFor="import-website-name">Website name</label><input id="import-website-name" value={importName} onChange={(event) => setImportName(event.target.value)} required maxLength={80} aria-invalid={importNameBytes > 80} disabled={Boolean(busy)} /><span className="website-help">{importNameBytes}/80 UTF-8 bytes</span></div>
       <div><label htmlFor="import-website-domain">Domain</label><input id="import-website-domain" value={importDomain} onChange={(event) => setImportDomain(event.target.value)} required maxLength={253} autoCapitalize="none" spellCheck={false} disabled={Boolean(busy)} /><span className="website-help">{importDomainBytes}/253 UTF-8 bytes</span></div>
-      <div><label htmlFor="import-website-archive">Native site ZIP</label><input id="import-website-archive" type="file" accept=".zip,application/zip,application/octet-stream" required disabled={Boolean(busy)} onChange={(event) => setImportArchive(event.target.files?.[0])} /><span className="website-help">Maximum 34 MiB · ZIP only</span>{importArchive && <span className="website-help">{importArchive.name} · {bytes(importArchive.size)}</span>}</div>
+      <div><label htmlFor="import-website-archive">{preparedCopy ? "Verified native site ZIP" : "Native site ZIP"}</label>{!preparedCopy && <input ref={importInput} id="import-website-archive" type="file" accept=".zip,application/zip,application/octet-stream" required disabled={Boolean(busy)} onChange={(event) => setImportArchive(event.target.files?.[0])} />}<span className="website-help">Maximum 34 MiB · ZIP only</span>{importArchive && <span className="website-help">{importArchive.name} · {bytes(importArchive.size)}</span>}</div>
       {dirty && <label className="website-discard-draft"><input type="checkbox" checked={discardDraftForImport} onChange={(event) => setDiscardDraftForImport(event.target.checked)} disabled={Boolean(busy)} />Discard the unsaved editor draft after the import succeeds.</label>}
-      <div className="website-transfer-actions"><Button label="Cancel import" variant="ghost" isDisabled={Boolean(busy)} onClick={() => { setImportOpen(false); setDiscardDraftForImport(false); }} /><Button label="Import website" type="submit" variant="primary" isLoading={busy === "Importing native ZIP"} isDisabled={Boolean(busy) || importPending.current || !active || !importName.trim() || importNameBytes > 80 || !importDomain.trim() || importDomainLength > 253 || importDomainBytes > 253 || !importArchive || importArchive.size === 0 || importArchive.size > maxTransferArchive || (dirty && !discardDraftForImport)} /></div>
+      <div className="website-transfer-actions"><Button label="Cancel import" variant="ghost" isDisabled={Boolean(busy)} onClick={closeImport} /><Button label="Import website" type="submit" variant="primary" isLoading={busy === "Importing native ZIP"} isDisabled={Boolean(busy) || importPending.current || !active || !importName.trim() || importNameBytes > 80 || !importDomain.trim() || importDomainLength > 253 || importDomainBytes > 253 || !importArchive || importArchive.size === 0 || importArchive.size > maxTransferArchive || (dirty && !discardDraftForImport)} /></div>
     </form>{error && <p role="alert" className="website-error">{error}</p>}</dialog>}
   </section>;
 }

@@ -70,3 +70,8 @@
 
 .fm-replace-dialog dl { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
 .fm-replace-dialog dd { margin-top: 4px; overflow-wrap: anywhere; }
+.fm-multi-upload-list { display: flex; flex-direction: column; gap: 10px; max-height: 280px; overflow-y: auto; padding: 12px 12px 12px 28px; border: 1px solid var(--border); border-radius: 4px; font-size: 12px; }
+.fm-multi-upload-list li { min-width: 0; overflow-wrap: anywhere; }
+.fm-multi-upload-list strong, .fm-multi-upload-list span { display: block; }
+.fm-multi-upload-list span { margin-top: 4px; color: var(--muted-foreground); font-size: 11px; }
+.fm-multi-upload-dialog [data-testid="file-manager-multi-upload-review"], .fm-multi-upload-dialog [data-testid="file-manager-multi-upload-results"] { display: flex; flex-direction: column; gap: 10px; min-width: 0; }

@@ -5,9 +5,43 @@ import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 const source = stripTypeScriptTypes(readFileSync(new URL("./sites-api.ts", import.meta.url), "utf8"), { mode: "transform" });
 const api = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const fileManagerSource = readFileSync(new URL("../FileManager.tsx", import.meta.url), "utf8");
+const previewValidatorSource = fileManagerSource.match(/const utf8Bytes = [^\n]+/)[0] + "\n" + fileManagerSource.slice(fileManagerSource.indexOf("const textExtensions"), fileManagerSource.indexOf("function validUtf16")) + "\nexport { validPath };";
+const previewValidator = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(previewValidatorSource, { mode: "transform" })).toString("base64")}`);
 const id = "a".repeat(32);
 const site = { id, name: "Recovered", domain: "recovered.test", preview_host: `site-${id}.localhost`, state: "active", revision: 1, created_at: "2026-10-07T10:00:00Z", updated_at: "2026-10-07T10:00:00Z" };
 const bytes = Uint8Array.of(0x50, 0x4b, 0x03, 0x04, 0, 0xff, 0x80, 0x0a);
+function withPreviewPort(content, operation) {
+  const original = globalThis.document;
+  globalThis.document = { querySelector(selector) { assert.equal(selector, 'meta[name="sifruno-sites-port"]'); return content === undefined ? null : { content }; } };
+  try { operation(); } finally { if (original === undefined) delete globalThis.document; else globalThis.document = original; }
+}
+test("saved file preview uses the exact injected local HTTP port and validated saved path", () => {
+  for (const [content, port] of [["8127", 8127], [" 8127 ", 8127], ["1", 1], ["65535", 65535], [undefined, 8082]]) {
+    withPreviewPort(content, () => {
+      for (const path of ["index.html", "assets/Saved-image.png", "docs/readme.txt", "downloads/manual.pdf"]) {
+        assert.equal(api.savedFilePreviewURL(site, path, previewValidator.validPath), `http://site-${id}.localhost:${port}/${path}`);
+      }
+    });
+  }
+});
+test("saved file preview inherits disabled port policy and rejects invalid site or preview host", () => {
+  for (const content of ["", "0", "65536", "-1", "8127/path", "http://foreign.invalid", "8082.5", "invalid"]) {
+    withPreviewPort(content, () => assert.equal(api.savedFilePreviewURL(site, "index.html", previewValidator.validPath), undefined));
+  }
+  withPreviewPort("8127", () => {
+    for (const changed of [undefined, { ...site, id: "invalid" }, { ...site, preview_host: "foreign.invalid" }, { ...site, preview_host: `site-${id}.localhost@foreign.invalid` }, { ...site, state: "unknown" }, { ...site, revision: -1 }]) {
+      assert.equal(api.savedFilePreviewURL(changed, "index.html", previewValidator.validPath), undefined);
+    }
+  });
+});
+test("saved file preview refuses unsafe paths with no external or root URL fallback", () => {
+  withPreviewPort("8127", () => {
+    for (const path of ["", "/", "../index.html", "nested/../index.html", "//foreign.invalid/index.html", "https://foreign.invalid/index.html", "javascript:alert(1)", "assets/%2e%2e/index.html", "assets/a.html?host=foreign.invalid", "assets/a.html#fragment", "assets\\a.html", "assets//a.html", "credentials.txt", "script.php", "a/./index.html"]) {
+      assert.equal(api.savedFilePreviewURL(site, path, previewValidator.validPath), undefined);
+    }
+  });
+});
 const renameInput = { siteId: id, path: "assets/old.png", destination: "images/new.png", expectedSHA256: "d".repeat(64), expectedRevision: 1, csrf: "fixture-csrf", isLive: () => true };
 async function mockFetch(mock, operation) {
   const original = globalThis.fetch; globalThis.fetch = mock;

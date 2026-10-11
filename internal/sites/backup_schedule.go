@@ -413,6 +413,11 @@ func (s *Store) RunDueBackups(now time.Time) (bool, error) {
 		return rows[i].Schedule.NextRunAt.Before(rows[j].Schedule.NextRunAt)
 	})
 	for _, row := range rows {
+		if removal, err := s.loadSiteRemoval(row.Schedule.SiteID); err != nil {
+			return false, err
+		} else if removal != nil {
+			continue
+		}
 		if removal, err := s.loadBackupRemoval(row.Schedule.SiteID); err != nil {
 			return false, err
 		} else if removal != nil {

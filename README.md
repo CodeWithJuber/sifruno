@@ -6,7 +6,13 @@ Start with the [installation guide](docs/installation.md). The
 [historical closeout](docs/CLOSEOUT.md) records the earlier delivered source
 and unfinished work. Current progress is maintained in the project state below.
 
-The [local source publication index](docs/local-source-publication.md) links
+Before replacing the Windows server, use the [recovery guide](docs/server-recovery.md)
+and [GitHub source/artifact backup](https://github.com/CodeWithJuber/sifruno/releases/tag/recovery-2026-10-11-v1).
+It contains the Git history bundle, 130 recovery branches, screenshots, reports,
+local artifacts, checksums and restore instructions. Secrets and runtime state
+are excluded by the user's choice.
+
+The [initial local source publication index](docs/local-source-publication.md) links
 the preserved development history, uncommitted source snapshots and exact
 coverage manifest published on 2026-10-11. Recovery branches retain unfinished
 work and are not installation targets.

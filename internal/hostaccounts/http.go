@@ -86,7 +86,7 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				Input CreateInput `json:"input"`
 				Actor string      `json:"actor"`
 			}
-			if decodeBody(w, r, &in, []string{"username", "domain", "reason"}) != nil {
+			if decodeBody(w, r, &in, []string{"username", "domain", "plan", "reason"}) != nil {
 				writeError(w, ErrInvalid)
 				return
 			}
@@ -192,7 +192,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, out any, inputKeys []str
 		keys[key] = true
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
-	if strictObject(d, map[string]bool{"input": true, "actor": true}, keys) != nil {
+	if strictObject(d, map[string]bool{"input": true, "actor": true}, true, keys, false) != nil {
 		return ErrInvalid
 	}
 	if _, err = d.Token(); err != io.EOF {
@@ -205,7 +205,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, out any, inputKeys []str
 	}
 	return nil
 }
-func strictObject(d *json.Decoder, allowed, nested map[string]bool) error {
+func strictObject(d *json.Decoder, allowed map[string]bool, requireAll bool, nested map[string]bool, nestedRequireAll bool) error {
 	token, err := d.Token()
 	if err != nil || token != json.Delim('{') {
 		return ErrInvalid
@@ -219,7 +219,7 @@ func strictObject(d *json.Decoder, allowed, nested map[string]bool) error {
 		}
 		seen[key] = true
 		if key == "input" && nested != nil {
-			if strictObject(d, nested, nil) != nil {
+			if strictObject(d, nested, nestedRequireAll, nil, false) != nil {
 				return ErrInvalid
 			}
 		} else {
@@ -233,7 +233,7 @@ func strictObject(d *json.Decoder, allowed, nested map[string]bool) error {
 	if err != nil || token != json.Delim('}') {
 		return ErrInvalid
 	}
-	if len(seen) != len(allowed) {
+	if requireAll && len(seen) != len(allowed) {
 		return ErrInvalid
 	}
 	return nil

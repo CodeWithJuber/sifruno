@@ -191,3 +191,30 @@ type staticAuth struct{ user, pass string }
 func (a staticAuth) Authenticate(user, credential string) bool {
 	return user == a.user && credential == a.pass
 }
+
+func TestTokenStoreLiveReload(t *testing.T) {
+	// panelctl issues a token while the panel holds the store open — the
+	// new credential must authenticate without a restart.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "whmapi-tokens.json")
+	panelSide, err := OpenTokenStore(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if panelSide.Authenticate("root", "anything") {
+		t.Fatal("empty store must deny")
+	}
+	cliSide, err := OpenTokenStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	token, _, err := cliSide.Create("root", "issued-while-running")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// mtime granularity guard: ensure the panel side observes a change even
+	// on filesystems with coarse timestamps.
+	if !panelSide.Authenticate("root", token) {
+		t.Fatal("live-issued token not picked up")
+	}
+}

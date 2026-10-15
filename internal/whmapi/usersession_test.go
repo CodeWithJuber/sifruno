@@ -24,12 +24,12 @@ func TestUserSessionSuccessShape(t *testing.T) {
 	w := post(t, s, "/json-api/create_user_session?api.version=1&user=example&service=cpaneld&locale=en", token)
 	var body struct {
 		Data struct {
-			URL       string `json:"url"`
-			Session   string `json:"session"`
-			SecToken  string `json:"cp_security_token"`
-			Expires   int64  `json:"expires"`
-			Service   string `json:"service"`
-			Locale    string `json:"locale"`
+			URL      string `json:"url"`
+			Session  string `json:"session"`
+			SecToken string `json:"cp_security_token"`
+			Expires  int64  `json:"expires"`
+			Service  string `json:"service"`
+			Locale   string `json:"locale"`
 		} `json:"data"`
 		Metadata struct {
 			Reason string `json:"reason"`

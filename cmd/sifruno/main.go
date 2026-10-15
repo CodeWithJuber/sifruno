@@ -42,6 +42,9 @@ func run() error {
 	accountsSocket := flag.String("accounts-socket", "", "Absolute Unix socket of the separately installed Linux account broker; empty disables accounts")
 	backupScheduler := flag.Bool("backup-scheduler", false, "Opt in to app-owned static-site ZIP schedules; no archive rotation")
 	whmBaseURL := flag.String("whm-base-url", "https://127.0.0.1", "External HTTPS base URL used in WHM create_user_session login links (per-service port appended)")
+	whmListen := flag.String("whm-listen", "", "Optional TLS WHM API ingress address, e.g. 0.0.0.0:2087; requires --whm-tls-cert/--whm-tls-key and --accounts-socket")
+	whmTLSCert := flag.String("whm-tls-cert", "", "Operator-provided TLS certificate chain for the WHM ingress")
+	whmTLSKey := flag.String("whm-tls-key", "", "Operator-provided TLS private key for the WHM ingress")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -135,6 +138,15 @@ func run() error {
 			Actor:  "whm-api",
 			Server: "127.0.0.1",
 		}, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
+	}
+	if *whmListen != "" {
+		ingressListener, ingressServer, ierr := listenWHMIngress(*whmListen, *whmTLSCert, *whmTLSKey, whmHandler)
+		if ierr != nil {
+			return ierr
+		}
+		defer ingressListener.Close()
+		servers = append(servers, ingressServer)
+		listeners = append(listeners, ingressListener)
 	}
 	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

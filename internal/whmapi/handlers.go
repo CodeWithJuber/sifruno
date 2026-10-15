@@ -3,6 +3,7 @@ package whmapi
 import (
 	"net/http"
 	"sifruno/internal/dbhost"
+	"sifruno/internal/mailhost"
 	"strings"
 
 	"sifruno/internal/hostpkgs"
@@ -82,6 +83,7 @@ type Server struct {
 	pkgs     *hostpkgs.Store
 	sessions *SessionStore
 	db       dbhost.Service
+	mail     mailhost.Service
 	baseURL  string
 	mux      *http.ServeMux
 }

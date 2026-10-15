@@ -21,6 +21,7 @@ import (
 	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/hostpkgs"
+	"sifruno/internal/mailhost"
 	"sifruno/internal/operator"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
@@ -47,6 +48,7 @@ func run() error {
 	whmTLSCert := flag.String("whm-tls-cert", "", "Operator-provided TLS certificate chain for the WHM ingress")
 	whmTLSKey := flag.String("whm-tls-key", "", "Operator-provided TLS private key for the WHM ingress")
 	dbDefaults := flag.String("db-defaults-file", "", "Option file with the panel database admin credentials (0600); empty uses socket auth as the invoking user")
+	mailHomesFlag := flag.String("mail-homes", "/srv/sfn-mail", "Mailbox root for the mail surface (cPanel mail/ + etc/ layout; controller-writable)")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
@@ -142,6 +144,13 @@ func run() error {
 			Actor:  "whm-api",
 			Server: "127.0.0.1",
 		}, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
+		mailHomes := *mailHomesFlag
+		if err := os.MkdirAll(mailHomes, 0o755); err == nil {
+			whmServer.SetMailService(&mailhost.LocalService{
+				Homes: mailHomes,
+				State: dir,
+			})
+		}
 		whmHandler = whmServer
 		dbReg, dberr := dbhost.OpenRegistry(filepath.Join(dir, "dbmap.json"))
 		if dberr != nil {

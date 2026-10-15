@@ -92,12 +92,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// functions implemented in this batch (read-only contract first, per
-// pr-api-contract scope 11: envelopes and exact errors before mutations).
+// functions implemented in this batch. Read-only contract first, plus the
+// three lifecycle mutations that map to the real account service
+// (pr-api-contract scope 11). removeacct answers honestly unsupported until
+// the account service grows a journaled delete.
 var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
-	"version":   (*Server).handleVersion,
-	"listpkgs":  (*Server).handleListPkgs,
-	"listaccts": (*Server).handleListAccts,
+	"version":       (*Server).handleVersion,
+	"listpkgs":      (*Server).handleListPkgs,
+	"listaccts":     (*Server).handleListAccts,
+	"createacct":    (*Server).handleCreateAcct,
+	"suspendacct":   (*Server).handleSuspendAcct,
+	"unsuspendacct": (*Server).handleUnsuspendAcct,
+	"removeacct":    (*Server).handleRemoveAcct,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

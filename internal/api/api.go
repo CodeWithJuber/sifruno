@@ -40,6 +40,9 @@ type Options struct {
 	SitePreviewPort *uint16
 	// Admission capability; the process owner must actually run/cancel the worker.
 	BackupSchedulerEnabled bool
+	// WHM, when non-nil, serves the WHM API 1 compatibility transport under
+	// /json-api/ (internal/whmapi). Nil keeps the fail-closed 501 placeholder.
+	WHM http.Handler
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -116,8 +119,13 @@ func New(o Options) http.Handler {
 		w.WriteHeader(http.StatusNotImplemented)
 		json.NewEncoder(w).Encode(map[string]any{"error": "compatibility_not_implemented", "ready": false, "message": "Original WHM/cPanel behavior has not been implemented or verified."})
 	}
-	for _, path := range []string{"/json-api/", "/execute/", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
+	for _, path := range []string{"/execute/", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
 		mux.HandleFunc(path, unavailable)
+	}
+	if o.WHM != nil {
+		mux.Handle("/json-api/", o.WHM)
+	} else {
+		mux.HandleFunc("/json-api/", unavailable)
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/openapi") {
@@ -210,6 +218,10 @@ func New(o Options) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 		for _, prefix := range []string{"/json-api", "/execute", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
 			if strings.HasPrefix(r.URL.Path, prefix) {
+				if o.WHM != nil && prefix == "/json-api" {
+					mux.ServeHTTP(w, r)
+					return
+				}
 				unavailable(w, r)
 				return
 			}

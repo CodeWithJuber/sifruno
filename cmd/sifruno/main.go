@@ -24,6 +24,7 @@ import (
 	"sifruno/internal/serverinfo"
 	"sifruno/internal/sites"
 	"sifruno/internal/trail"
+	"sifruno/internal/whmapi"
 )
 
 func main() {
@@ -109,7 +110,23 @@ func run() error {
 		servers = append(servers, &http.Server{Addr: *sitesListen, Handler: websiteStore.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10})
 		listeners = append(listeners, websiteListener)
 	}
-	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	var whmHandler http.Handler
+	if *accountsSocket != "" {
+		// WHM API 1 compatibility transport over the real account broker.
+		// Tokens live in a root-only JSON file; an absent store denies all
+		// credentials (fail closed) until token issuance lands with pr-access.
+		tokens, terr := whmapi.OpenTokenStore(filepath.Join(dir, "whmapi-tokens.json"))
+		if terr != nil {
+			return terr
+		}
+		whmHandler = whmapi.New(whmapi.HostAccounts{
+			Svc:    hostaccounts.NewClient(*accountsSocket),
+			Build:  "11.138.0.11",
+			Actor:  "whm-api",
+			Server: "127.0.0.1",
+		}, tokens)
+	}
+	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	if *backupScheduler {
 		workerDone := make(chan struct{})

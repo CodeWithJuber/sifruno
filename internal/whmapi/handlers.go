@@ -76,10 +76,12 @@ type Account struct {
 
 // Server serves the WHM API 1 JSON transport under /json-api/.
 type Server struct {
-	backend Backend
-	auth    Authenticator
-	pkgs    *hostpkgs.Store
-	mux     *http.ServeMux
+	backend  Backend
+	auth     Authenticator
+	pkgs     *hostpkgs.Store
+	sessions *SessionStore
+	baseURL  string
+	mux      *http.ServeMux
 }
 
 // New mounts the compatibility transport. A nil Backend or Authenticator
@@ -100,20 +102,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // (pr-api-contract scope 11). removeacct answers honestly unsupported until
 // the account service grows a journaled delete.
 var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
-	"version":          (*Server).handleVersion,
-	"listpkgs":         (*Server).handleListPkgs,
-	"listaccts":        (*Server).handleListAccts,
-	"createacct":       (*Server).handleCreateAcct,
-	"suspendacct":      (*Server).handleSuspendAcct,
-	"unsuspendacct":    (*Server).handleUnsuspendAcct,
-	"removeacct":       (*Server).handleRemoveAcct,
-	"api_token_create": (*Server).handleTokenCreate,
-	"api_token_list":   (*Server).handleTokenList,
-	"api_token_revoke": (*Server).handleTokenRevoke,
-	"addpkg":           (*Server).handleAddPkg,
-	"killpkg":          (*Server).handleKillPkg,
-	"getpkginfo":       (*Server).handleGetPkgInfo,
-	"changepackage":    (*Server).handleChangePackage,
+	"version":             (*Server).handleVersion,
+	"listpkgs":            (*Server).handleListPkgs,
+	"listaccts":           (*Server).handleListAccts,
+	"createacct":          (*Server).handleCreateAcct,
+	"suspendacct":         (*Server).handleSuspendAcct,
+	"unsuspendacct":       (*Server).handleUnsuspendAcct,
+	"removeacct":          (*Server).handleRemoveAcct,
+	"api_token_create":    (*Server).handleTokenCreate,
+	"api_token_list":      (*Server).handleTokenList,
+	"api_token_revoke":    (*Server).handleTokenRevoke,
+	"addpkg":              (*Server).handleAddPkg,
+	"killpkg":             (*Server).handleKillPkg,
+	"getpkginfo":          (*Server).handleGetPkgInfo,
+	"changepackage":       (*Server).handleChangePackage,
+	"create_user_session": (*Server).handleUserSession,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

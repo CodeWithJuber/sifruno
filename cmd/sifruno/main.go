@@ -41,6 +41,7 @@ func run() error {
 	ui := flag.String("ui", "web/dist", "Built panel directory")
 	accountsSocket := flag.String("accounts-socket", "", "Absolute Unix socket of the separately installed Linux account broker; empty disables accounts")
 	backupScheduler := flag.Bool("backup-scheduler", false, "Opt in to app-owned static-site ZIP schedules; no archive rotation")
+	whmBaseURL := flag.String("whm-base-url", "https://127.0.0.1", "External HTTPS base URL used in WHM create_user_session login links (per-service port appended)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -124,12 +125,16 @@ func run() error {
 		if perr != nil {
 			return perr
 		}
+		sessions, serr := whmapi.OpenSessionStore(filepath.Join(dir, "whmapi-sessions.json"))
+		if serr != nil {
+			return serr
+		}
 		whmHandler = whmapi.New(whmapi.HostAccounts{
 			Svc:    hostaccounts.NewClient(*accountsSocket),
 			Build:  "11.138.0.11",
 			Actor:  "whm-api",
 			Server: "127.0.0.1",
-		}, tokens).WithPackageStore(pkgs)
+		}, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
 	}
 	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -23,6 +23,16 @@ type accountStateInput struct {
 	ID   string `path:"id"`
 	Body AccountStateBody
 }
+type AccountPlanBody hostaccounts.PlanInput
+type AccountDeleteBody hostaccounts.DeleteInput
+type accountPlanInput struct {
+	ID   string `path:"id"`
+	Body AccountPlanBody
+}
+type accountDeleteInput struct {
+	ID   string `path:"id"`
+	Body AccountDeleteBody
+}
 type accountOutput struct{ Body hostaccounts.Account }
 type accountListBody struct {
 	Items []hostaccounts.Account `json:"items"`
@@ -92,6 +102,26 @@ func registerAccounts(a huma.API, o Options) {
 		}
 		return &accountOutput{Body: v}, nil
 	})
+	huma.Register(a, op("set-account-plan", "POST", "/api/v1/accounts/{id}/plan"), func(ctx context.Context, in *accountPlanInput) (*accountOutput, error) {
+		if len(in.ID) > 64 || strings.ContainsAny(in.ID, "/\\?#%") {
+			return nil, accountError(hostaccounts.ErrInvalid)
+		}
+		v, err := service.SetPlan(ctx, in.ID, hostaccounts.PlanInput(in.Body), siteActor(ctx))
+		if err != nil {
+			return nil, accountError(err)
+		}
+		return &accountOutput{Body: v}, nil
+	})
+	huma.Register(a, op("delete-account", "POST", "/api/v1/accounts/{id}/delete"), func(ctx context.Context, in *accountDeleteInput) (*accountOutput, error) {
+		if len(in.ID) > 64 || strings.ContainsAny(in.ID, "/\\?#%") {
+			return nil, accountError(hostaccounts.ErrInvalid)
+		}
+		v, err := service.Delete(ctx, in.ID, hostaccounts.DeleteInput(in.Body), siteActor(ctx))
+		if err != nil {
+			return nil, accountError(err)
+		}
+		return &accountOutput{Body: v}, nil
+	})
 }
 
 func isAccountPath(p string) bool {
@@ -108,7 +138,7 @@ func allowedAccountMutation(r *http.Request) bool {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/"), "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] == "state"
+	return len(parts) == 2 && parts[0] != "" && (parts[1] == "state" || parts[1] == "plan" || parts[1] == "delete")
 }
 
 func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {

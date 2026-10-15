@@ -34,6 +34,7 @@ type Account struct {
 	ID         string    `json:"id"`
 	Username   string    `json:"username"`
 	Domain     string    `json:"domain"`
+	Plan       string    `json:"plan"`
 	Home       string    `json:"home"`
 	PublicHTML string    `json:"public_html"`
 	State      string    `json:"state"`
@@ -46,10 +47,21 @@ type Account struct {
 type CreateInput struct {
 	Username string `json:"username"`
 	Domain   string `json:"domain"`
-	Reason   string `json:"reason"`
+	// Plan is reserved package metadata (WHM package name); empty = "default".
+	Plan   string `json:"plan"`
+	Reason string `json:"reason"`
 }
 type StateInput struct {
 	State            string `json:"state"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+	Reason           string `json:"reason"`
+}
+type PlanInput struct {
+	Plan             string `json:"plan"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+	Reason           string `json:"reason"`
+}
+type DeleteInput struct {
 	ExpectedRevision uint64 `json:"expected_revision"`
 	Reason           string `json:"reason"`
 }
@@ -58,6 +70,11 @@ type Service interface {
 	List(context.Context) ([]Account, error)
 	Create(context.Context, CreateInput, string) (Account, error)
 	SetState(context.Context, string, StateInput, string) (Account, error)
+	// SetPlan updates reserved package metadata only; no native effect.
+	SetPlan(context.Context, string, PlanInput, string) (Account, error)
+	// Delete permanently removes the managed identity after ownership
+	// verification. There is no undo; the operation is journaled.
+	Delete(context.Context, string, DeleteInput, string) (Account, error)
 }
 type BrokerOptions struct {
 	StateDir      string
@@ -95,10 +112,17 @@ func validDomain(s string) bool {
 	return true
 }
 func validCreate(in CreateInput, actor string) bool {
-	return validUsername(in.Username) && validDomain(in.Domain) && validText(in.Reason, 500) && validText(actor, 120)
+	validPlan := in.Plan == "" || validText(in.Plan, 64)
+	return validUsername(in.Username) && validDomain(in.Domain) && validPlan && validText(in.Reason, 500) && validText(actor, 120)
 }
 func validState(in StateInput, actor string) bool {
 	return (in.State == "active" || in.State == "suspended") && in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)
+}
+func validPlan(in PlanInput, actor string) bool {
+	return validText(in.Plan, 64) && in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)
+}
+func validDelete(in DeleteInput, actor string) bool {
+	return in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)
 }
 func unavailable(reason string) Capability {
 	return Capability{Reason: reason, Backend: "unavailable", Restrictions: restrictions()}

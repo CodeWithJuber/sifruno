@@ -19,11 +19,13 @@ import (
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
 	"sifruno/internal/hostaccounts"
+	"sifruno/internal/hostpkgs"
 	"sifruno/internal/operator"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
 	"sifruno/internal/sites"
 	"sifruno/internal/trail"
+	"sifruno/internal/whmapi"
 )
 
 func main() {
@@ -39,6 +41,7 @@ func run() error {
 	ui := flag.String("ui", "web/dist", "Built panel directory")
 	accountsSocket := flag.String("accounts-socket", "", "Absolute Unix socket of the separately installed Linux account broker; empty disables accounts")
 	backupScheduler := flag.Bool("backup-scheduler", false, "Opt in to app-owned static-site ZIP schedules; no archive rotation")
+	whmBaseURL := flag.String("whm-base-url", "https://127.0.0.1", "External HTTPS base URL used in WHM create_user_session login links (per-service port appended)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -109,7 +112,31 @@ func run() error {
 		servers = append(servers, &http.Server{Addr: *sitesListen, Handler: websiteStore.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10})
 		listeners = append(listeners, websiteListener)
 	}
-	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	var whmHandler http.Handler
+	if *accountsSocket != "" {
+		// WHM API 1 compatibility transport over the real account broker.
+		// Tokens live in a root-only JSON file; an absent store denies all
+		// credentials (fail closed) until token issuance lands with pr-access.
+		tokens, terr := whmapi.OpenTokenStore(filepath.Join(dir, "whmapi-tokens.json"))
+		if terr != nil {
+			return terr
+		}
+		pkgs, perr := hostpkgs.Open(filepath.Join(dir, "packages.json"))
+		if perr != nil {
+			return perr
+		}
+		sessions, serr := whmapi.OpenSessionStore(filepath.Join(dir, "whmapi-sessions.json"))
+		if serr != nil {
+			return serr
+		}
+		whmHandler = whmapi.New(whmapi.HostAccounts{
+			Svc:    hostaccounts.NewClient(*accountsSocket),
+			Build:  "11.138.0.11",
+			Actor:  "whm-api",
+			Server: "127.0.0.1",
+		}, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
+	}
+	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	if *backupScheduler {
 		workerDone := make(chan struct{})

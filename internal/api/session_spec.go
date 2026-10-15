@@ -39,7 +39,7 @@ func documentOperator(a huma.API) {
 		"id": managementID, "created_at": {Type: "string", Format: "date-time"}, "expires_at": {Type: "string", Format: "date-time"}, "current": {Type: "boolean"},
 	}}
 	schemas["OperatorSessionInventory"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"items", "capacity", "lifetime_seconds"}, Properties: map[string]*huma.Schema{
-		"items": {Type: "array", MinItems: &inventoryMin, MaxItems: &inventoryMax, Items: &huma.Schema{Ref: "#/components/schemas/OperatorManagedSession"}, Description: "Unexpired in-process sessions, newest creation first, public handle ascending on ties. Exactly one is current."},
+		"items":    {Type: "array", MinItems: &inventoryMin, MaxItems: &inventoryMax, Items: &huma.Schema{Ref: "#/components/schemas/OperatorManagedSession"}, Description: "Unexpired in-process sessions, newest creation first, public handle ascending on ties. Exactly one is current."},
 		"capacity": {Type: "integer", Enum: []any{128}}, "lifetime_seconds": {Type: "integer", Enum: []any{900}},
 	}}
 	schemas["OperatorSessionRevocation"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"revoked_count"}, Properties: map[string]*huma.Schema{

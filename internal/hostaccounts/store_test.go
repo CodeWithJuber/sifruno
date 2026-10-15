@@ -62,6 +62,17 @@ func (f *fakeNative) RecoverCreate(ctx context.Context, r record, persist func(o
 	}
 	return actual.Ownership, nil
 }
+func (f *fakeNative) Delete(_ context.Context, r record) error {
+	actual, ok := f.users[r.Account.Username]
+	if !ok {
+		return nil // already gone: safe retry
+	}
+	if actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.Home != r.Account.Home {
+		return ErrRecovery
+	}
+	delete(f.users, r.Account.Username)
+	return nil
+}
 func (f *fakeNative) Verify(_ context.Context, r record) error {
 	actual, ok := f.users[r.Account.Username]
 	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.State != r.Account.State || r.Ownership != actual.Ownership {
@@ -105,7 +116,7 @@ func TestJournalLifecycleAndReservation(t *testing.T) {
 	if a.State != "active" || a.Revision != 1 || a.UID != 20000 || a.GID != a.UID || a.Home != filepath.Join(opts.HomesDir, a.Username) {
 		t.Fatalf("unexpected account %+v", a)
 	}
-	for _, input := range []CreateInput{{"fixtureacct", "different.test", "Duplicate username"}, {"otheracct", "fixture.test", "Duplicate domain"}} {
+	for _, input := range []CreateInput{{"fixtureacct", "different.test", "", "Duplicate username"}, {"otheracct", "fixture.test", "", "Duplicate domain"}} {
 		if _, e := s.create(context.Background(), input, "test operator"); e != ErrConflict {
 			t.Fatal(e)
 		}
@@ -189,7 +200,7 @@ func TestInterruptedCreateRetainsIdentity(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			s, f, opts := setupStore(t)
 			f.failure = phase
-			if _, e := s.create(context.Background(), CreateInput{"pendingacct", "pending.test", "Interrupted synthetic create"}, "test operator"); e != ErrRecovery {
+			if _, e := s.create(context.Background(), CreateInput{"pendingacct", "pending.test", "", "Interrupted synthetic create"}, "test operator"); e != ErrRecovery {
 				t.Fatal(e)
 			}
 			items, e := s.list(context.Background())
@@ -197,7 +208,7 @@ func TestInterruptedCreateRetainsIdentity(t *testing.T) {
 				t.Fatal(items, e)
 			}
 			original := items[0]
-			if _, e = s.create(context.Background(), CreateInput{"anotheracct", "another.test", "Blocked by recovery"}, "test operator"); e != ErrRecovery {
+			if _, e = s.create(context.Background(), CreateInput{"anotheracct", "another.test", "", "Blocked by recovery"}, "test operator"); e != ErrRecovery {
 				t.Fatal(e)
 			}
 			cap, e := s.capability(context.Background())
@@ -287,7 +298,7 @@ func TestSerialCreateReservation(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, e := s.create(context.Background(), CreateInput{"serialacct", "serial.test", "Concurrent synthetic request"}, "test operator")
+			_, e := s.create(context.Background(), CreateInput{"serialacct", "serial.test", "", "Concurrent synthetic request"}, "test operator")
 			results <- e
 		}()
 	}
@@ -341,12 +352,12 @@ func TestStrictBrokerJSONNeverInvokesMutation(t *testing.T) {
 func TestInputLimitsAndUnavailableService(t *testing.T) {
 	s, f, _ := setupStore(t)
 	for _, name := range []string{"root", "nginx", "ab", "-inject", "MixedCase", strings.Repeat("a", 33), "a/b"} {
-		if _, e := s.create(context.Background(), CreateInput{name, "fixture.test", "Invalid username"}, "test operator"); e != ErrInvalid {
+		if _, e := s.create(context.Background(), CreateInput{name, "fixture.test", "", "Invalid username"}, "test operator"); e != ErrInvalid {
 			t.Fatal(name, e)
 		}
 	}
 	for _, domain := range []string{"localhost", "https://fixture.test", "UPPER.test", "127.0.0.1", "a..test", "-a.test"} {
-		if _, e := s.create(context.Background(), CreateInput{"validacct", domain, "Invalid domain"}, "test operator"); e != ErrInvalid {
+		if _, e := s.create(context.Background(), CreateInput{"validacct", domain, "", "Invalid domain"}, "test operator"); e != ErrInvalid {
 			t.Fatal(domain, e)
 		}
 	}
@@ -362,7 +373,7 @@ func TestInputLimitsAndUnavailableService(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, e = s.create(ctx, CreateInput{"validacct", "valid.test", "Canceled request"}, "test operator"); e != ErrUnavailable {
+	if _, e = s.create(ctx, CreateInput{"validacct", "valid.test", "", "Canceled request"}, "test operator"); e != ErrUnavailable {
 		t.Fatal(e)
 	}
 	if f.calls != 0 {

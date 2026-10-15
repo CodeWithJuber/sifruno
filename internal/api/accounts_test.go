@@ -40,6 +40,16 @@ func (s *accountSpy) SetState(_ context.Context, _ string, in hostaccounts.State
 	s.actor = actor
 	return hostaccounts.Account{}, s.err
 }
+func (s *accountSpy) SetPlan(_ context.Context, _ string, _ hostaccounts.PlanInput, actor string) (hostaccounts.Account, error) {
+	s.calls++
+	s.actor = actor
+	return hostaccounts.Account{}, s.err
+}
+func (s *accountSpy) Delete(_ context.Context, _ string, _ hostaccounts.DeleteInput, actor string) (hostaccounts.Account, error) {
+	s.calls++
+	s.actor = actor
+	return hostaccounts.Account{}, s.err
+}
 
 func TestAccountHTTPAdmission(t *testing.T) {
 	f := websiteFixture(t)

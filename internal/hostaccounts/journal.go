@@ -149,10 +149,10 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 					return ErrRecovery
 				}
 			} else {
-				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" {
+				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" {
 					return ErrRecovery
 				}
-				if e.Action == "state" && e.After.Revision != e.Before.Revision+1 || e.Action == "conflict" && e.After.Revision != e.Before.Revision {
+				if e.Action == "state" && e.After.Revision != e.Before.Revision+1 || e.Action == "plan" && e.After.Revision != e.Before.Revision+1 || e.Action == "conflict" && e.After.Revision != e.Before.Revision || e.Action == "delete" && e.After.Revision != e.Before.Revision {
 					return ErrRecovery
 				}
 			}

@@ -21,7 +21,7 @@ import (
 
 const nologin = "/usr/sbin/nologin"
 
-var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/bin/passwd", "/usr/bin/chage", nologin}
+var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", nologin}
 
 type nativeUser struct {
 	Username         string
@@ -626,6 +626,72 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 	}
 	return nil
 }
+
+// Delete removes the managed identity. Every destructive step is gated on
+// the recorded ownership evidence: the marker must match first (proof we
+// manage this account), the system user must match the recorded UID/GID/home
+// exactly (a foreign or recycled UID is refused), and the home directory is
+// removed only when it is the exact recorded path with the recorded
+// identity. The marker is removed last so a crash mid-delete stays visible
+// and the operation can be safely retried by the store's reconciliation.
+// Known delta vs the reference's removeacct pipeline: managed identities
+// are nologin system users with no processes, mail, databases or web vhosts,
+// so there is nothing further to tear down yet; as those services land,
+// their teardown joins this operation before user removal.
+func (n *linuxSystem) Delete(ctx context.Context, r record) error {
+	marker, e := markerIdentity(n.markerPath(r), r.Tag)
+	if e == nil && marker != r.Ownership.Marker {
+		return ErrRecovery
+	}
+	if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	// A missing marker with a still-present user is not owned deletable
+	// state; a missing marker with everything already gone is a completed
+	// delete (safe retry).
+	users, e := systemUsers()
+	if e != nil {
+		return e
+	}
+	present := false
+	for _, u := range users {
+		if u.Username == r.Account.Username {
+			if u.UID != r.Account.UID || u.GID != r.Account.GID || u.Home != r.Account.Home {
+				return ErrRecovery
+			}
+			present = true
+		} else if u.UID == r.Account.UID {
+			return ErrRecovery
+		}
+	}
+	if present && marker != r.Ownership.Marker {
+		return ErrRecovery
+	}
+	if present {
+		if _, e = n.command(ctx, "/usr/sbin/userdel", "--", r.Account.Username); e != nil {
+			return e
+		}
+	}
+	if info, e := os.Lstat(r.Account.Home); e == nil {
+		if !info.IsDir() || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
+			return ErrRecovery
+		}
+		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750)
+		if e != nil || home != r.Ownership.Home {
+			return ErrRecovery
+		}
+		if e = os.RemoveAll(r.Account.Home); e != nil {
+			return ErrUnavailable
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	if e = os.Remove(n.markerPath(r)); e != nil && !errors.Is(e, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 func (n *linuxSystem) SetState(ctx context.Context, r record, state string) error {
 	current := r
 	current.Pending = nil

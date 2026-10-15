@@ -116,6 +116,46 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(item)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/plan"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/plan")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input PlanInput `json:"input"`
+				Actor string    `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"plan", "expected_revision", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			item, err := s.setPlan(ctx, id, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(item)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/delete"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/delete")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input DeleteInput `json:"input"`
+				Actor string      `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"expected_revision", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			item, err := s.delete(ctx, id, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(item)
 		default:
 			writeError(w, ErrNotFound)
 		}

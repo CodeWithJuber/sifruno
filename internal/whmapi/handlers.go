@@ -90,6 +90,7 @@ type Server struct {
 func New(b Backend, a Authenticator) *Server {
 	s := &Server{backend: b, auth: a, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/json-api/", s.serve)
+	s.mux.HandleFunc("/execute/", s.serveUAPI)
 	return s
 }
 

@@ -1,0 +1,55 @@
+package dbhost
+
+import (
+	"context"
+	"errors"
+)
+
+// ErrUnavailable is returned when the local MariaDB server is absent or not
+// answering — surfaces fail-closed, mirroring the reference's offline state.
+var ErrUnavailable = errors.New("database server unavailable")
+
+// Database is one registry entry: the prefixed database plus the users
+// granted on it.
+type Database struct {
+	Name  string   `json:"name"`
+	Owner string   `json:"owner"` // owning panel account
+	Users []string `json:"users,omitempty"`
+}
+
+// User is one registry entry for a prefixed database user.
+type User struct {
+	Name  string   `json:"name"`
+	Owner string   `json:"owner"`
+	Hosts []string `json:"hosts,omitempty"`
+}
+
+// Runner executes one SQL statement batch and returns tab-separated rows
+// (mysql --batch --skip-column-names semantics). Implementations: CLIRunner
+// (real) and fakes in tests.
+type Runner interface {
+	Run(ctx context.Context, sql string) ([]string, error)
+}
+
+// Prober reports whether the local server is reachable.
+type Prober interface {
+	Probe(ctx context.Context) (version string, err error)
+}
+
+// Service is the account-facing database contract.
+type Service interface {
+	Prober
+	CreateDatabase(ctx context.Context, owner, name string) error
+	DropDatabase(ctx context.Context, owner, name string) error
+	CreateUser(ctx context.Context, owner, name, password string) error
+	DropUser(ctx context.Context, owner, name string) error
+	SetPassword(ctx context.Context, owner, name, password string) error
+	SetPrivileges(ctx context.Context, owner, user, db string, privs []string) error
+	RevokeAccess(ctx context.Context, owner, user, db string) error
+	RenameUser(ctx context.Context, owner, name, newName string) error
+	ListDatabases(ctx context.Context, owner string) ([]Database, error)
+	ListUsers(ctx context.Context, owner string) ([]User, error)
+	// AllDatabases/AllUsers are the root (WHM) views across owners.
+	AllDatabases(ctx context.Context) ([]Database, error)
+	AllUsers(ctx context.Context) ([]User, error)
+}

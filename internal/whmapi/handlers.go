@@ -2,6 +2,7 @@ package whmapi
 
 import (
 	"net/http"
+	"sifruno/internal/dbhost"
 	"strings"
 
 	"sifruno/internal/hostpkgs"
@@ -80,6 +81,7 @@ type Server struct {
 	auth     Authenticator
 	pkgs     *hostpkgs.Store
 	sessions *SessionStore
+	db       dbhost.Service
 	baseURL  string
 	mux      *http.ServeMux
 }
@@ -103,21 +105,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // (pr-api-contract scope 11). removeacct answers honestly unsupported until
 // the account service grows a journaled delete.
 var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
-	"version":             (*Server).handleVersion,
-	"listpkgs":            (*Server).handleListPkgs,
-	"listaccts":           (*Server).handleListAccts,
-	"createacct":          (*Server).handleCreateAcct,
-	"suspendacct":         (*Server).handleSuspendAcct,
-	"unsuspendacct":       (*Server).handleUnsuspendAcct,
-	"removeacct":          (*Server).handleRemoveAcct,
-	"api_token_create":    (*Server).handleTokenCreate,
-	"api_token_list":      (*Server).handleTokenList,
-	"api_token_revoke":    (*Server).handleTokenRevoke,
-	"addpkg":              (*Server).handleAddPkg,
-	"killpkg":             (*Server).handleKillPkg,
-	"getpkginfo":          (*Server).handleGetPkgInfo,
-	"changepackage":       (*Server).handleChangePackage,
-	"create_user_session": (*Server).handleUserSession,
+	"version":                        (*Server).handleVersion,
+	"listpkgs":                       (*Server).handleListPkgs,
+	"listaccts":                      (*Server).handleListAccts,
+	"createacct":                     (*Server).handleCreateAcct,
+	"suspendacct":                    (*Server).handleSuspendAcct,
+	"unsuspendacct":                  (*Server).handleUnsuspendAcct,
+	"removeacct":                     (*Server).handleRemoveAcct,
+	"api_token_create":               (*Server).handleTokenCreate,
+	"api_token_list":                 (*Server).handleTokenList,
+	"api_token_revoke":               (*Server).handleTokenRevoke,
+	"addpkg":                         (*Server).handleAddPkg,
+	"killpkg":                        (*Server).handleKillPkg,
+	"getpkginfo":                     (*Server).handleGetPkgInfo,
+	"changepackage":                  (*Server).handleChangePackage,
+	"create_user_session":            (*Server).handleUserSession,
+	"current_mysql_version":          (*Server).handleCurrentMySQLVersion,
+	"list_mysql_databases_and_users": (*Server).handleListMySQLDatabasesAndUsers,
+	"set_mysql_password":             (*Server).handleSetMySQLPassword,
+	"rename_mysql_user":              (*Server).handleRenameMySQLUser,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

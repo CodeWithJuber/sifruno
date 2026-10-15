@@ -18,6 +18,7 @@ import (
 	"sifruno/internal/api"
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
+	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/hostpkgs"
 	"sifruno/internal/operator"
@@ -45,6 +46,8 @@ func run() error {
 	whmListen := flag.String("whm-listen", "", "Optional TLS WHM API ingress address, e.g. 0.0.0.0:2087; requires --whm-tls-cert/--whm-tls-key and --accounts-socket")
 	whmTLSCert := flag.String("whm-tls-cert", "", "Operator-provided TLS certificate chain for the WHM ingress")
 	whmTLSKey := flag.String("whm-tls-key", "", "Operator-provided TLS private key for the WHM ingress")
+	dbDefaults := flag.String("db-defaults-file", "", "Option file with the panel database admin credentials (0600); empty uses socket auth as the invoking user")
+	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -116,6 +119,7 @@ func run() error {
 		listeners = append(listeners, websiteListener)
 	}
 	var whmHandler http.Handler
+	var whmServer *whmapi.Server
 	if *accountsSocket != "" {
 		// WHM API 1 compatibility transport over the real account broker.
 		// Tokens live in a root-only JSON file; an absent store denies all
@@ -132,12 +136,21 @@ func run() error {
 		if serr != nil {
 			return serr
 		}
-		whmHandler = whmapi.New(whmapi.HostAccounts{
+		whmServer = whmapi.New(whmapi.HostAccounts{
 			Svc:    hostaccounts.NewClient(*accountsSocket),
 			Build:  "11.138.0.11",
 			Actor:  "whm-api",
 			Server: "127.0.0.1",
 		}, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
+		whmHandler = whmServer
+		dbReg, dberr := dbhost.OpenRegistry(filepath.Join(dir, "dbmap.json"))
+		if dberr != nil {
+			return dberr
+		}
+		whmServer.SetDBService(&dbhost.LocalService{
+			Run:      dbhost.CLIRunner{Socket: *dbSocket, DefaultsFile: *dbDefaults},
+			Registry: dbReg,
+		})
 	}
 	if *whmListen != "" {
 		ingressListener, ingressServer, ierr := listenWHMIngress(*whmListen, *whmTLSCert, *whmTLSKey, whmHandler)

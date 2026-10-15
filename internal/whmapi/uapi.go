@@ -52,6 +52,22 @@ var uapiModules = map[string]map[string]uapiHandler{
 		"single_domain_data": (*Server).uapiSingleDomainData,
 		"domains_data":       (*Server).uapiDomainsData,
 	},
+	"Mysql": {
+		"create_database":            (*Server).uapiMysqlCreateDatabase,
+		"delete_database":            (*Server).uapiMysqlDeleteDatabase,
+		"list_databases":             (*Server).uapiMysqlListDatabases,
+		"create_user":                (*Server).uapiMysqlCreateUser,
+		"delete_user":                (*Server).uapiMysqlDeleteUser,
+		"list_users":                 (*Server).uapiMysqlListUsers,
+		"set_password":               (*Server).uapiMysqlSetPassword,
+		"set_privileges_on_database": (*Server).uapiMysqlSetPrivileges,
+		"get_privileges_on_database": (*Server).uapiMysqlGetPrivileges,
+		"revoke_access_to_database":  (*Server).uapiMysqlRevokeAccess,
+		"rename_user":                (*Server).uapiMysqlRenameUser,
+		"setup_db_and_user":          (*Server).uapiMysqlSetupDbAndUser,
+		"get_restrictions":           (*Server).uapiMysqlGetRestrictions,
+		"get_server_information":     (*Server).uapiMysqlGetServerInformation,
+	},
 	"ServerInformation": {
 		"get_information": (*Server).uapiServerInformation,
 	},
@@ -61,10 +77,34 @@ var uapiModules = map[string]map[string]uapiHandler{
 // tokens pass the account explicitly (`?user=`); per-account token scoping
 // lands with pr-access roles.
 var uapiAccountScoped = map[string]bool{
-	"DomainInfo::list_domains":       true,
-	"DomainInfo::primary_domain":     true,
-	"DomainInfo::single_domain_data": true,
-	"DomainInfo::domains_data":       true,
+	"Mysql::create_database":            true,
+	"Mysql::delete_database":            true,
+	"Mysql::list_databases":             true,
+	"Mysql::create_user":                true,
+	"Mysql::delete_user":                true,
+	"Mysql::list_users":                 true,
+	"Mysql::set_password":               true,
+	"Mysql::set_privileges_on_database": true,
+	"Mysql::get_privileges_on_database": true,
+	"Mysql::revoke_access_to_database":  true,
+	"Mysql::rename_user":                true,
+	"Mysql::setup_db_and_user":          true,
+	"Mysql::get_restrictions":           true,
+	"Mysql::get_server_information":     true,
+	"DomainInfo::list_domains":          true,
+	"DomainInfo::primary_domain":        true,
+	"DomainInfo::single_domain_data":    true,
+	"DomainInfo::domains_data":          true,
+}
+
+// uapiOwnUserParam lists account-scoped functions that take their own
+// `user` argument (the database user). For these, only `cpanel.user` may
+// carry the account context.
+var uapiOwnUserParam = map[string]bool{
+	"Mysql::set_password":               true,
+	"Mysql::set_privileges_on_database": true,
+	"Mysql::get_privileges_on_database": true,
+	"Mysql::revoke_access_to_database":  true,
 }
 
 func (s *Server) serveUAPI(w http.ResponseWriter, r *http.Request) {
@@ -94,11 +134,19 @@ func (s *Server) serveUAPI(w http.ResponseWriter, r *http.Request) {
 		writeAccessDenied(w)
 		return
 	}
-	user := r.URL.Query().Get("user")
+	// Account scoping: `cpanel.user` (the reference's WHM passthrough name)
+	// wins; `user` is the fallback for functions that do not declare their
+	// own user argument. This prevents the collision on Mysql functions
+	// whose own parameter is named `user`.
+	q := r.URL.Query()
+	user := q.Get("cpanel.user")
+	if user == "" && !uapiOwnUserParam[module+"::"+fn] {
+		user = q.Get("user")
+	}
 	var account Account
 	if uapiAccountScoped[module+"::"+fn] {
 		if user == "" {
-			writeUAPIError(w, module, fn, []string{"The “user” parameter is required."})
+			writeUAPIError(w, module, fn, []string{"The “cpanel.user” parameter is required for root-token calls."})
 			return
 		}
 		found := false

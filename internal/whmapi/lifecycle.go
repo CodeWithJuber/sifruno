@@ -22,6 +22,12 @@ type LifecycleBackend interface {
 	UnsuspendAccount(ctx context.Context, username string) error
 }
 
+// PlanCreator is an optional LifecycleBackend extension that records the
+// WHM package as account plan metadata.
+type PlanCreator interface {
+	CreateAccountPlan(ctx context.Context, username, domain, plan string) (Account, error)
+}
+
 var (
 	// ErrDuplicateUser maps to the observed "already has an account named"
 	// reason.
@@ -74,6 +80,13 @@ func (s *Server) handleCreateAcct(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	username, domain := q.Get("username"), q.Get("domain")
+	plan := q.Get("plan")
+	if s.pkgs != nil && plan != "" && !s.pkgs.Has(plan) {
+		// Reason wording observed for changepackage; createacct's own
+		// missing-plan wording is unverified (noted in the batch doc).
+		writeError(w, "createacct", "API failure: (XID "+xid()+") Specified package does not exist.")
+		return
+	}
 	if username == "" {
 		// Observed verbatim on the reference.
 		writeError(w, "createacct", `No user name supplied: "username" is a required argument.`)
@@ -87,7 +100,13 @@ func (s *Server) handleCreateAcct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "createacct", `No domain supplied: "domain" is a required argument.`)
 		return
 	}
-	acct, err := lb.CreateAccount(r.Context(), username, domain)
+	var acct Account
+	var err error
+	if pc, ok := lb.(PlanCreator); ok && plan != "" {
+		acct, err = pc.CreateAccountPlan(r.Context(), username, domain, plan)
+	} else {
+		acct, err = lb.CreateAccount(r.Context(), username, domain)
+	}
 	if errors.Is(err, ErrDuplicateUser) {
 		writeError(w, "createacct", reasonDuplicateUser(username))
 		return
@@ -106,8 +125,11 @@ func (s *Server) handleCreateAcct(w http.ResponseWriter, r *http.Request) {
 		"Setting up Userdata......Done\n" +
 		"Setting up Home Directory......Done\n" +
 		"Account Creation Complete!!!...Account Creation Ok...Done\n"
+	if plan == "" {
+		plan = acct.Plan
+	}
 	writeSuccess(w, "createacct", map[string]any{
-		"ip": acct.IP, "package": acct.Plan,
+		"ip": acct.IP, "package": plan,
 		"nameserver": nil, "nameserver2": nil, "nameserver3": "", "nameserver4": "",
 		"nameservera": nil, "nameservera2": nil, "nameservera3": nil, "nameservera4": nil,
 		"nameserverentry": nil, "nameserverentry2": nil, "nameserverentry3": nil, "nameserverentry4": nil,

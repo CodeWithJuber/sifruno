@@ -34,6 +34,7 @@ type Account struct {
 	ID         string    `json:"id"`
 	Username   string    `json:"username"`
 	Domain     string    `json:"domain"`
+	Plan       string    `json:"plan"`
 	Home       string    `json:"home"`
 	PublicHTML string    `json:"public_html"`
 	State      string    `json:"state"`
@@ -46,7 +47,9 @@ type Account struct {
 type CreateInput struct {
 	Username string `json:"username"`
 	Domain   string `json:"domain"`
-	Reason   string `json:"reason"`
+	// Plan is reserved package metadata (WHM package name); empty = "default".
+	Plan   string `json:"plan"`
+	Reason string `json:"reason"`
 }
 type StateInput struct {
 	State            string `json:"state"`
@@ -95,7 +98,8 @@ func validDomain(s string) bool {
 	return true
 }
 func validCreate(in CreateInput, actor string) bool {
-	return validUsername(in.Username) && validDomain(in.Domain) && validText(in.Reason, 500) && validText(actor, 120)
+	validPlan := in.Plan == "" || validText(in.Plan, 64)
+	return validUsername(in.Username) && validDomain(in.Domain) && validPlan && validText(in.Reason, 500) && validText(actor, 120)
 }
 func validState(in StateInput, actor string) bool {
 	return (in.State == "active" || in.State == "suspended") && in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)

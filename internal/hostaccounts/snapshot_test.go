@@ -30,7 +30,7 @@ func TestSnapshotReservesConcurrentCreateAndSetState(t *testing.T) {
 	started := make(chan struct{}, 2)
 	go func() {
 		started <- struct{}{}
-		_, err := s.create(context.Background(), CreateInput{"secondacct", "second.test", "Concurrent create"}, "test operator")
+		_, err := s.create(context.Background(), CreateInput{"secondacct", "second.test", "", "Concurrent create"}, "test operator")
 		createDone <- err
 	}()
 	go func() {
@@ -106,7 +106,7 @@ func TestSnapshotScopedReentryFailsFast(t *testing.T) {
 	err := s.WithSnapshot(context.Background(), func(l SnapshotLease) error {
 		ctx, cancel := context.WithCancel(l.Context())
 		defer cancel()
-		_, createErr := s.create(ctx, CreateInput{"secondacct", "second.test", "Reentry"}, "test operator")
+		_, createErr := s.create(ctx, CreateInput{"secondacct", "second.test", "", "Reentry"}, "test operator")
 		_, stateErr := s.setState(ctx, a.ID, StateInput{"suspended", 1, "Reentry"}, "test operator")
 		_, listErr := s.list(ctx)
 		_, capabilityErr := s.capability(ctx)
@@ -165,7 +165,7 @@ func TestSnapshotPendingCorruptAndUnavailableLockOut(t *testing.T) {
 			switch scenario {
 			case "pending":
 				native.failure = "after"
-				_, err := s.create(context.Background(), CreateInput{"fixtureacct", "fixture.test", "Pending synthetic failure"}, "test operator")
+				_, err := s.create(context.Background(), CreateInput{"fixtureacct", "fixture.test", "", "Pending synthetic failure"}, "test operator")
 				if !errors.Is(err, ErrRecovery) {
 					t.Fatal(err)
 				}

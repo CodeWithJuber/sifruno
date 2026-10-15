@@ -54,7 +54,7 @@ func (h HostAccounts) mapAccount(a hostaccounts.Account) Account {
 		IP:                 h.Server,
 		IPv6:               []string{},
 		Owner:              "root",
-		Plan:               "default",
+		Plan:               planOr(a.Plan),
 		Theme:              "jupiter",
 		Partition:          "home",
 		DiskUsed:           "*unknown*", // unmeasured by hostaccounts; reference's own convention
@@ -98,6 +98,13 @@ func (h HostAccounts) mapAccount(a hostaccounts.Account) Account {
 	return rec
 }
 
+func planOr(plan string) string {
+	if plan == "" {
+		return "default"
+	}
+	return plan
+}
+
 func (h HostAccounts) actor() string {
 	if h.Actor == "" {
 		return "whm-api"
@@ -106,6 +113,11 @@ func (h HostAccounts) actor() string {
 }
 
 func (h HostAccounts) CreateAccount(ctx context.Context, username, domain string) (Account, error) {
+	return h.CreateAccountPlan(ctx, username, domain, "")
+}
+
+// CreateAccountPlan additionally records the WHM package as plan metadata.
+func (h HostAccounts) CreateAccountPlan(ctx context.Context, username, domain, plan string) (Account, error) {
 	if h.Svc == nil {
 		return Account{}, ErrUnsupported
 	}
@@ -115,6 +127,7 @@ func (h HostAccounts) CreateAccount(ctx context.Context, username, domain string
 	created, err := h.Svc.Create(ctx, hostaccounts.CreateInput{
 		Username: username,
 		Domain:   domain,
+		Plan:     plan,
 		Reason:   "whm api createacct",
 	}, h.actor())
 	if errors.Is(err, hostaccounts.ErrConflict) {

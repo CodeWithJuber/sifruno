@@ -35,7 +35,7 @@ func (f *fakeHost) Create(_ context.Context, in hostaccounts.CreateInput, actor 
 	f.nextUID++
 	a := hostaccounts.Account{
 		ID: "0123456789abcdef0123456789abcdef", Username: in.Username,
-		Domain: in.Domain, Home: "/home/" + in.Username, State: "active",
+		Domain: in.Domain, Plan: in.Plan, Home: "/home/" + in.Username, State: "active",
 		UID: 20000 + f.nextUID, Revision: 1,
 		CreatedAt: time.Date(2026, 10, 15, 6, 34, 0, 0, time.UTC),
 	}

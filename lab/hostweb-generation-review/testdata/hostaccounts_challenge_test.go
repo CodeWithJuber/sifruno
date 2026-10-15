@@ -83,7 +83,7 @@ func TestReviewSnapshotScopedReentry(t *testing.T) {
 		if _, err := s.capability(ctx); err == nil {
 			t.Fatal("reentrant capability accepted")
 		}
-		if _, err := s.create(ctx, CreateInput{"nestedacct", "nested.test", "Nested mutation"}, "review"); err == nil {
+		if _, err := s.create(ctx, CreateInput{"nestedacct", "nested.test", "", "Nested mutation"}, "review"); err == nil {
 			t.Fatal("reentrant create accepted")
 		}
 		if _, err := s.setState(ctx, a.ID, StateInput{"suspended", a.Revision, "Nested mutation"}, "review"); err == nil {

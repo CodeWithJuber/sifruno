@@ -3,6 +3,8 @@ package whmapi
 import (
 	"net/http"
 	"strings"
+
+	"sifruno/internal/hostpkgs"
 )
 
 // Backend supplies the data behind the read-only WHM API 1 endpoints.
@@ -76,6 +78,7 @@ type Account struct {
 type Server struct {
 	backend Backend
 	auth    Authenticator
+	pkgs    *hostpkgs.Store
 	mux     *http.ServeMux
 }
 
@@ -107,6 +110,9 @@ var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
 	"api_token_create": (*Server).handleTokenCreate,
 	"api_token_list":   (*Server).handleTokenList,
 	"api_token_revoke": (*Server).handleTokenRevoke,
+	"addpkg":           (*Server).handleAddPkg,
+	"killpkg":          (*Server).handleKillPkg,
+	"getpkginfo":       (*Server).handleGetPkgInfo,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
@@ -129,14 +135,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
 	writeSuccess(w, "version", map[string]string{"version": s.backend.Version()}, "")
-}
-
-func (s *Server) handleListPkgs(w http.ResponseWriter, _ *http.Request) {
-	pkgs := s.backend.ListPackages()
-	if pkgs == nil {
-		pkgs = []Package{}
-	}
-	writeSuccess(w, "listpkgs", map[string]any{"pkg": pkgs}, "")
 }
 
 func (s *Server) handleListAccts(w http.ResponseWriter, r *http.Request) {

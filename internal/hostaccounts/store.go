@@ -334,6 +334,13 @@ func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 	}
 	return items, nil
 }
+func planOrDefault(plan string) string {
+	if plan == "" {
+		return "default"
+	}
+	return plan
+}
+
 func (s *store) create(ctx context.Context, in CreateInput, actor string) (Account, error) {
 	if snapshotReentry(ctx, s) {
 		return Account{}, ErrConflict
@@ -375,7 +382,7 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	key := hex.EncodeToString(id[:])
 	now := time.Now().UTC()
 	home := filepath.Join(s.opts.HomesDir, in.Username)
-	r := record{Version: 1, Tag: "sifruno-managed-" + key, Account: Account{ID: key, Username: in.Username, Domain: in.Domain, Home: home, PublicHTML: filepath.Join(home, "public_html"), State: "recovery_required", UID: uid, GID: gid, Revision: 1, CreatedAt: now, UpdatedAt: now}, Pending: &pending{Action: "create", Target: "active", Actor: actor, Reason: in.Reason}}
+	r := record{Version: 1, Tag: "sifruno-managed-" + key, Account: Account{ID: key, Username: in.Username, Domain: in.Domain, Plan: planOrDefault(in.Plan), Home: home, PublicHTML: filepath.Join(home, "public_html"), State: "recovery_required", UID: uid, GID: gid, Revision: 1, CreatedAt: now, UpdatedAt: now}, Pending: &pending{Action: "create", Target: "active", Actor: actor, Reason: in.Reason}}
 	r, err = s.beginOperation(r, nil)
 	if err != nil {
 		return Account{}, ErrRecovery

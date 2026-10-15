@@ -19,6 +19,7 @@ import (
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
 	"sifruno/internal/hostaccounts"
+	"sifruno/internal/hostpkgs"
 	"sifruno/internal/operator"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
@@ -119,12 +120,16 @@ func run() error {
 		if terr != nil {
 			return terr
 		}
+		pkgs, perr := hostpkgs.Open(filepath.Join(dir, "packages.json"))
+		if perr != nil {
+			return perr
+		}
 		whmHandler = whmapi.New(whmapi.HostAccounts{
 			Svc:    hostaccounts.NewClient(*accountsSocket),
 			Build:  "11.138.0.11",
 			Actor:  "whm-api",
 			Server: "127.0.0.1",
-		}, tokens)
+		}, tokens).WithPackageStore(pkgs)
 	}
 	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -22,6 +22,7 @@ func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 	f.SetOutput(io.Discard)
 	username := f.String("username", "", "Native Linux username")
 	domain := f.String("domain", "", "Reserved domain metadata")
+	plan := f.String("plan", "", "Reserved package/plan metadata")
 	reason := f.String("reason", "", "Operator reason")
 	id := f.String("id", "", "Managed account ID")
 	wanted := f.String("state", "", "active or suspended")
@@ -39,12 +40,12 @@ func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 	case "web-preview":
 		endpoint += "/web-preview"
 	case "create":
-		allowed = map[string]bool{"username": true, "domain": true, "reason": true}
+		allowed = map[string]bool{"username": true, "domain": true, "plan": true, "reason": true}
 		if *username == "" || *domain == "" || strings.TrimSpace(*reason) == "" || len(*username) > 32 || len(*domain) > 253 || len(*reason) > 500 {
 			return errors.New("create requires bounded --username, --domain and --reason")
 		}
 		method = http.MethodPost
-		body = hostaccounts.CreateInput{Username: *username, Domain: *domain, Reason: *reason}
+		body = hostaccounts.CreateInput{Username: *username, Domain: *domain, Plan: *plan, Reason: *reason}
 	case "state":
 		allowed = map[string]bool{"id": true, "state": true, "revision": true, "reason": true}
 		if len(*id) < 1 || len(*id) > 64 || strings.ContainsAny(*id, "/\\?#%") || (*wanted != "active" && *wanted != "suspended") || *revision == 0 || strings.TrimSpace(*reason) == "" || len(*reason) > 500 {

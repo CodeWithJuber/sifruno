@@ -125,7 +125,10 @@ func (s *LocalService) writeAuth(account, domain string) error {
 	if err := os.WriteFile(filepath.Join(dir, "passwd"), []byte(strings.Join(lines, "\n")+"\n"), 0o660); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "shadow"), []byte(strings.Join(shadow, "\n")+"\n"), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "shadow"), []byte(strings.Join(shadow, "\n")+"\n"), 0o600); err != nil {
+		return err
+	}
+	return s.writeDovecotAggregate()
 }
 
 // shadow store: separate map so hashes never land in the query registry JSON.

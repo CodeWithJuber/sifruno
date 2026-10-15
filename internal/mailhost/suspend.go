@@ -62,6 +62,9 @@ func (s *LocalService) SetSuspend(ctx context.Context, account, email string, fl
 	if err != nil {
 		return err
 	}
+	if err := s.writeDovecotAggregate(); err != nil {
+		return err
+	}
 	fp := s.flagPath(m, flag)
 	if on {
 		if err := os.MkdirAll(filepath.Dir(fp), 0o700); err != nil {

@@ -29,5 +29,9 @@ func (s *LocalService) PurgeAccount(ctx context.Context, account string, domains
 	if err := os.RemoveAll(filepath.Join(s.Homes, account)); err != nil {
 		errs = append(errs, "mail root: "+err.Error())
 	}
+	// autoresponders of the terminated account (batch 3)
+	if err := os.Remove(s.arPath(account)); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, "autorespond: "+err.Error())
+	}
 	return purged, errs
 }

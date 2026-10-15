@@ -53,3 +53,17 @@ type Service interface {
 	AllDatabases(ctx context.Context) ([]Database, error)
 	AllUsers(ctx context.Context) ([]User, error)
 }
+
+// RenameService is the batch-2 database rename capability
+// (Mysql::rename_database). LocalService implements it.
+type RenameService interface {
+	RenameDatabase(ctx context.Context, owner, oldName, newSuffix string) (string, error)
+}
+
+// AccessHostService is the batch-2 remote access host capability
+// (Mysql::add_host/delete_host/list_hosts). LocalService implements it.
+type AccessHostService interface {
+	AddAccessHost(ctx context.Context, owner, host string) error
+	DeleteAccessHost(ctx context.Context, owner, host string) error
+	ListAccessHosts(ctx context.Context, owner string) []string
+}

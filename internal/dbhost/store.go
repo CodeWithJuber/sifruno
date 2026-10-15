@@ -21,6 +21,8 @@ type Registry struct {
 type registryData struct {
 	Databases map[string]Database `json:"databases"`
 	Users     map[string]User     `json:"users"`
+	// Hosts lists per-account remote MySQL access hosts (batch 2).
+	Hosts map[string][]string `json:"hosts,omitempty"`
 }
 
 func OpenRegistry(path string) (*Registry, error) {
@@ -42,6 +44,9 @@ func OpenRegistry(path string) (*Registry, error) {
 	}
 	if r.data.Users == nil {
 		r.data.Users = map[string]User{}
+	}
+	if r.data.Hosts == nil {
+		r.data.Hosts = map[string][]string{}
 	}
 	return r, nil
 }
@@ -112,6 +117,48 @@ func (r *Registry) users(owner string) []User {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func (r *Registry) putHost(owner, host string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.data.Hosts == nil {
+		r.data.Hosts = map[string][]string{}
+	}
+	for _, h := range r.data.Hosts[owner] {
+		if h == host {
+			return nil
+		}
+	}
+	r.data.Hosts[owner] = append(r.data.Hosts[owner], host)
+	sort.Strings(r.data.Hosts[owner])
+	return r.flush()
+}
+
+func (r *Registry) dropHost(owner, host string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	list := r.data.Hosts[owner]
+	out := list[:0]
+	for _, h := range list {
+		if h != host {
+			out = append(out, h)
+		}
+	}
+	if len(out) == 0 {
+		delete(r.data.Hosts, owner)
+	} else {
+		r.data.Hosts[owner] = out
+	}
+	return r.flush()
+}
+
+func (r *Registry) hosts(owner string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := append([]string{}, r.data.Hosts[owner]...)
+	sort.Strings(out)
 	return out
 }
 

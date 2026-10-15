@@ -46,6 +46,12 @@ func writeUAPIError(w http.ResponseWriter, module, fn string, errors []string) {
 type uapiHandler func(s *Server, w http.ResponseWriter, r *http.Request, account Account, user string)
 
 var uapiModules = map[string]map[string]uapiHandler{
+	"SSL": {
+		"install_ssl":     (*Server).uapiSSLInstall,
+		"list_certs":      (*Server).uapiSSLListCerts,
+		"fetch_cert_info": (*Server).uapiSSLFetchCertInfo,
+		"delete_ssl":      (*Server).uapiSSLDelete,
+	},
 	"DomainInfo": {
 		"list_domains":       (*Server).uapiListDomains,
 		"primary_domain":     (*Server).uapiPrimaryDomain,
@@ -173,6 +179,10 @@ var uapiAccountScoped = map[string]bool{
 	"Email::add_mx":                     true,
 	"Email::delete_mx":                  true,
 	"Email::change_mx":                  true,
+	"SSL::install_ssl":                  true,
+	"SSL::list_certs":                   true,
+	"SSL::fetch_cert_info":              true,
+	"SSL::delete_ssl":                   true,
 	"DomainInfo::list_domains":          true,
 	"DomainInfo::primary_domain":        true,
 	"DomainInfo::single_domain_data":    true,

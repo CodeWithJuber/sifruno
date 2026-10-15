@@ -299,6 +299,15 @@ func (s *Server) handleRemoveAcct(w http.ResponseWriter, r *http.Request) {
 			purgeNotes += fmt.Sprintf("Removing mailboxes...%d removed%s...Done\n", n, joinErrs(perrs))
 		}
 	}
+	if s.tlsStore != nil {
+		tlsRemoved := 0
+		for _, d := range acctDomains {
+			if err := s.tlsStore.Delete(r.Context(), d); err == nil {
+				tlsRemoved++
+			}
+		}
+		purgeNotes += fmt.Sprintf("Removing SSL certificates...%d removed...Done\n", tlsRemoved)
+	}
 	raw := fmt.Sprintf("Locking account and setting shell to nologin......Done\nRemoving User & Group.......Success...Done\nRemoving HTTP virtual hosts...%s...Done\n%s%s account removed\n", username, purgeNotes, username)
 	// Observed success reason: "<user> account removed" (not "OK").
 	writeSuccessReason(w, "removeacct", username+" account removed", map[string]any{}, raw)

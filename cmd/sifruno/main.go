@@ -27,6 +27,7 @@ import (
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
 	"sifruno/internal/sites"
+	"sifruno/internal/tlshost"
 	"sifruno/internal/trail"
 	"sifruno/internal/whmapi"
 )
@@ -55,6 +56,7 @@ func run() error {
 	dnsNS1 := flag.String("dns-ns1", "ns1.hostlelo.com", "Default first nameserver for account zones")
 	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
 	dnsIP := flag.String("dns-ip", "127.0.0.1", "Default A-record address for account zones (set to the public web IP in production)")
+	tlsRoot := flag.String("tls-root", "", "TLS certificate store root (installssl/listcrts); empty disables the TLS surface")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
@@ -159,6 +161,9 @@ func run() error {
 		}
 		whmServer.SetDNSStore(&dnshost.Store{Root: *dnsRoot, Reload: dnshost.ExecReloader{Command: *dnsReload}})
 		whmServer.SetDNSDefaults(*dnsNS1, *dnsNS2, *dnsIP)
+		if *tlsRoot != "" {
+			whmServer.SetTLSStore(&tlshost.Store{Root: *tlsRoot})
+		}
 		whmHandler = whmServer
 		dbReg, dberr := dbhost.OpenRegistry(filepath.Join(dir, "dbmap.json"))
 		if dberr != nil {

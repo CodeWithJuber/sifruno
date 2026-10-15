@@ -5,6 +5,7 @@ import (
 	"sifruno/internal/dbhost"
 	"sifruno/internal/dnshost"
 	"sifruno/internal/mailhost"
+	"sifruno/internal/tlshost"
 	"strings"
 
 	"sifruno/internal/hostpkgs"
@@ -86,6 +87,7 @@ type Server struct {
 	db       dbhost.Service
 	mail     mailhost.Service
 	dns      *dnshost.Store
+	tlsStore *tlshost.Store
 	dnsNS1   string
 	dnsNS2   string
 	dnsIP    string
@@ -144,6 +146,9 @@ var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
 	"listips":                        (*Server).handleListIPs,
 	"servicestatus":                  (*Server).handleServiceStatus,
 	"showbw":                         (*Server).handleShowBW,
+	"installssl":                     (*Server).handleInstallSSL,
+	"listcrts":                       (*Server).handleListCrts,
+	"fetchsslinfo":                   (*Server).handleFetchSSLInfo,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

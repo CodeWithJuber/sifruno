@@ -16,6 +16,7 @@ import (
 
 	"sifruno/config"
 	"sifruno/internal/api"
+	"sifruno/internal/backuphost"
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
 	"sifruno/internal/dbhost"
@@ -57,6 +58,7 @@ func run() error {
 	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
 	dnsIP := flag.String("dns-ip", "127.0.0.1", "Default A-record address for account zones (set to the public web IP in production)")
 	tlsRoot := flag.String("tls-root", "", "TLS certificate store root (installssl/listcrts); empty disables the TLS surface")
+	backupRoot := flag.String("backup-root", "", "Backup archive root; empty disables the backup surface")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
@@ -146,12 +148,13 @@ func run() error {
 		if serr != nil {
 			return serr
 		}
-		whmServer = whmapi.New(whmapi.HostAccounts{
+		whmBackend := whmapi.HostAccounts{
 			Svc:    hostaccounts.NewClient(*accountsSocket),
 			Build:  "11.138.0.11",
 			Actor:  "whm-api",
 			Server: "127.0.0.1",
-		}, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
+		}
+		whmServer = whmapi.New(whmBackend, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
 		mailHomes := *mailHomesFlag
 		if err := os.MkdirAll(mailHomes, 0o755); err == nil {
 			whmServer.SetMailService(&mailhost.LocalService{
@@ -169,10 +172,44 @@ func run() error {
 		if dberr != nil {
 			return dberr
 		}
-		whmServer.SetDBService(&dbhost.LocalService{
+		dbSvc := &dbhost.LocalService{
 			Run:      dbhost.CLIRunner{Socket: *dbSocket, DefaultsFile: *dbDefaults},
 			Registry: dbReg,
-		})
+		}
+		whmServer.SetDBService(dbSvc)
+		if *backupRoot != "" {
+			dumpOpts := []string{"--protocol=socket", "--socket=" + *dbSocket}
+			if *dbDefaults != "" {
+				dumpOpts = append([]string{"--defaults-extra-file=" + *dbDefaults}, dumpOpts...)
+			}
+			bs := &backuphost.Store{
+				Root:         *backupRoot,
+				MailHomes:    *mailHomesFlag,
+				DNSRoot:      *dnsRoot,
+				DumpOpts:     dumpOpts,
+				PanelVersion: whmBackend.Build,
+			}
+			bs.Databases = func(ctx context.Context, account string) ([]string, error) {
+				dbs, err := dbSvc.ListDatabases(ctx, account)
+				if err != nil {
+					return nil, err
+				}
+				names := make([]string, 0, len(dbs))
+				for _, d := range dbs {
+					names = append(names, d.Name)
+				}
+				return names, nil
+			}
+			bs.AccountDomains = func(account string) []string {
+				for _, a := range whmBackend.ListAccounts() {
+					if a.User == account && a.Domain != "" {
+						return []string{a.Domain}
+					}
+				}
+				return nil
+			}
+			whmServer.SetBackupStore(bs)
+		}
 	}
 	if *whmListen != "" {
 		ingressListener, ingressServer, ierr := listenWHMIngress(*whmListen, *whmTLSCert, *whmTLSKey, whmHandler)

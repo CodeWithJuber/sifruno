@@ -308,6 +308,10 @@ func (s *Server) handleRemoveAcct(w http.ResponseWriter, r *http.Request) {
 		}
 		purgeNotes += fmt.Sprintf("Removing SSL certificates...%d removed...Done\n", tlsRemoved)
 	}
+	if s.backups != nil {
+		n, _ := s.backups.Purge(r.Context(), username)
+		purgeNotes += fmt.Sprintf("Removing backup archives...%d removed...Done\n", n)
+	}
 	raw := fmt.Sprintf("Locking account and setting shell to nologin......Done\nRemoving User & Group.......Success...Done\nRemoving HTTP virtual hosts...%s...Done\n%s%s account removed\n", username, purgeNotes, username)
 	// Observed success reason: "<user> account removed" (not "OK").
 	writeSuccessReason(w, "removeacct", username+" account removed", map[string]any{}, raw)

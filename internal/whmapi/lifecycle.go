@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 )
 
 // LifecycleBackend extends Backend with the observed account lifecycle
@@ -205,6 +206,21 @@ func (s *Server) handleUnsuspendAcct(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, "unsuspendacct", nil, fmt.Sprintf("Unsuspending websites...\n%s's account is now active\n%s's account has been unsuspended\n", username, username))
 }
 
+type dbPurger interface {
+	PurgeOwner(ctx context.Context, owner string) (purged []string, errs []string)
+}
+
+type mailPurger interface {
+	PurgeAccount(ctx context.Context, account string, domains []string) (purged int, errs []string)
+}
+
+func joinErrs(errs []string) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(errs, "; ") + ")"
+}
+
 func (s *Server) handleRemoveAcct(w http.ResponseWriter, r *http.Request) {
 	username := r.URL.Query().Get("user")
 	if username == "" {
@@ -215,6 +231,16 @@ func (s *Server) handleRemoveAcct(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeError(w, "removeacct", "API failure: (XID "+xid()+") Account removal is not implemented on this backend; no state was changed.")
 		return
+	}
+	// Capture the account's domains before removal for the post-purge.
+	acctDomains := []string{}
+	for _, a := range s.backend.ListAccounts() {
+		if a.User == username {
+			if a.Domain != "" {
+				acctDomains = append(acctDomains, a.Domain)
+			}
+			break
+		}
 	}
 	err := rm.RemoveAccount(r.Context(), username)
 	if errors.Is(err, ErrNoSuchUser) {
@@ -229,7 +255,23 @@ func (s *Server) handleRemoveAcct(w http.ResponseWriter, r *http.Request) {
 	}
 	// Truthful step log: only what this backend actually did (the full
 	// observed ~40-step pipeline includes services sifruno does not run yet).
-	raw := fmt.Sprintf("Locking account and setting shell to nologin......Done\nRemoving User & Group.......Success...Done\nRemoving HTTP virtual hosts...%s...Done\n%s account removed\n", username, username)
+	// Post-removal purge of account-owned resources (the reference's
+	// removeacct does the same). Failures are logged into the step
+	// output, never hidden — the account itself is already gone.
+	purgeNotes := ""
+	if s.db != nil {
+		if purger, ok := s.db.(dbPurger); ok {
+			purged, perrs := purger.PurgeOwner(r.Context(), username)
+			purgeNotes += fmt.Sprintf("Removing MySQL databases and users...%d removed%s...Done\n", len(purged), joinErrs(perrs))
+		}
+	}
+	if s.mail != nil {
+		if purger, ok := s.mail.(mailPurger); ok {
+			n, perrs := purger.PurgeAccount(r.Context(), username, acctDomains)
+			purgeNotes += fmt.Sprintf("Removing mailboxes...%d removed%s...Done\n", n, joinErrs(perrs))
+		}
+	}
+	raw := fmt.Sprintf("Locking account and setting shell to nologin......Done\nRemoving User & Group.......Success...Done\nRemoving HTTP virtual hosts...%s...Done\n%s%s account removed\n", username, purgeNotes, username)
 	// Observed success reason: "<user> account removed" (not "OK").
 	writeSuccessReason(w, "removeacct", username+" account removed", map[string]any{}, raw)
 }

@@ -44,4 +44,18 @@ type Service interface {
 	ListMailboxes(ctx context.Context, account string) ([]Mailbox, error)
 	CountMailboxes(ctx context.Context, account string) (int, error)
 	VerifyPassword(ctx context.Context, account, email, password string) (bool, error)
+
+	// Forwarders (valiases store)
+	AddForwarder(ctx context.Context, account, domain, localpart, dest string) error
+	DeleteForwarder(ctx context.Context, account, domain, localpart, dest string) error
+	ListForwarders(ctx context.Context, account, domain string) ([]Forwarder, error)
+	CountForwarders(ctx context.Context, account, domain string) (int, error)
+	AddDomainForwarder(ctx context.Context, account, srcDomain, destDomain string) error
+	DeleteDomainForwarder(ctx context.Context, account, domain string) error
+	ListDomainForwarders(ctx context.Context, account string) (map[string]string, error)
+	SetDefaultAddress(ctx context.Context, account, domain, dest string) error
+	ListDefaultAddress(ctx context.Context, account, domain string) (string, error)
+
+	// PurgeAccount removes a terminated account's mailboxes and mail root.
+	PurgeAccount(ctx context.Context, account string, domains []string) (purged int, errs []string)
 }

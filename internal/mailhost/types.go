@@ -19,6 +19,10 @@ type Mailbox struct {
 	Domain    string `json:"domain"`  // mailbox domain
 	Localpart string `json:"localpart"`
 	QuotaMiB  int    `json:"quota_mib"` // 0 = account default
+	// Suspend flags (batch 3); also mirrored as on-disk flag files.
+	SuspendedIncoming bool `json:"suspended_incoming,omitempty"`
+	SuspendedOutgoing bool `json:"suspended_outgoing,omitempty"`
+	SuspendedLogin    bool `json:"suspended_login,omitempty"`
 }
 
 // Localpart policy: cPanel permits dot/underscore/dash/plus; reject the rest.

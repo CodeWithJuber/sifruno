@@ -47,6 +47,9 @@ type nativeSystem interface {
 	Create(context.Context, record, func(ownership) error) (ownership, error)
 	RecoverCreate(context.Context, record, func(ownership) error) (ownership, error)
 	Verify(context.Context, record) error
+	// Delete removes the managed system identity and owned home after
+	// ownership verification; it must be safe to retry after a crash.
+	Delete(context.Context, record) error
 	SetState(context.Context, record, string) error
 	GuardState(string) error
 	GuardHomes([]record) error
@@ -164,8 +167,20 @@ func (s *store) records() ([]record, error) {
 			if json.Unmarshal(value, &r) != nil || r.Version != 1 || !idPattern.MatchString(r.Account.ID) || string(key) != r.Account.ID || !validUsername(r.Account.Username) || !validDomain(r.Account.Domain) || r.Account.UID < 20000 || r.Account.UID > 60000 || r.Account.GID != r.Account.UID || r.Account.Revision == 0 || r.Tag != "sifruno-managed-"+r.Account.ID || r.Account.Home != filepath.Join(s.opts.HomesDir, r.Account.Username) || r.Account.PublicHTML != filepath.Join(r.Account.Home, "public_html") || r.Account.CreatedAt.IsZero() || r.Account.UpdatedAt.IsZero() || (r.Account.State != "active" && r.Account.State != "suspended" && r.Account.State != "recovery_required") {
 				return ErrRecovery
 			}
-			if r.Pending != nil && (!idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || (r.Pending.Action != "create" && r.Pending.Action != "state" && r.Pending.Action != "conflict") || (r.Pending.Target != "active" && r.Pending.Target != "suspended")) {
-				return ErrRecovery
+			if r.Pending != nil {
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete"
+				validTarget := false
+				switch r.Pending.Action {
+				case "create", "state", "conflict":
+					validTarget = r.Pending.Target == "active" || r.Pending.Target == "suspended"
+				case "plan":
+					validTarget = validText(r.Pending.Target, 64)
+				case "delete":
+					validTarget = r.Pending.Target == ""
+				}
+				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
+					return ErrRecovery
+				}
 			}
 			if verifyHistory(tx, r) != nil {
 				return ErrRecovery
@@ -221,6 +236,34 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			} else if s.native.Verify(ctx, targetRecord(r, r.Pending.Target)) != nil {
 				continue
 			}
+			if r.Pending.Action == "plan" {
+				// Metadata-only operation: finish the interrupted write.
+				operation := *r.Pending
+				r.Account.Plan = r.Pending.Target
+				r.Account.Revision++
+				r.Account.UpdatedAt = time.Now().UTC()
+				r.Actor, r.Reason = r.Pending.Actor, r.Pending.Reason
+				r.Pending = nil
+				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+					return ErrRecovery
+				}
+				continue
+			}
+			if r.Pending.Action == "delete" {
+				operation := *r.Pending
+				if e := s.native.Delete(ctx, r); e != nil {
+					// Keep the record and retry on the next refresh; an
+					// uncertain destructive effect is never force-closed.
+					continue
+				}
+				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+					return ErrRecovery
+				}
+				if e := s.purge(r.Account.ID); e != nil {
+					return ErrRecovery
+				}
+				continue
+			}
 			operation := *r.Pending
 			r.Account.State = r.Pending.Target
 			r.Account.UpdatedAt = time.Now().UTC()
@@ -252,6 +295,146 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 	return nil
 }
 func targetRecord(r record, state string) record { r.Account.State = state; return r }
+
+// purge removes the account record key after a completed delete. Operation
+// history rows are retained under the history bucket for audit; the account
+// inventory no longer lists the identity.
+func (s *store) purge(id string) error {
+	if !idPattern.MatchString(id) {
+		return ErrRecovery
+	}
+	if s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(accountBucket)
+		if b == nil {
+			return ErrRecovery
+		}
+		return b.Delete([]byte(id))
+	}) != nil {
+		return ErrRecovery
+	}
+	return nil
+}
+
+func (s *store) setPlan(ctx context.Context, id string, in PlanInput, actor string) (Account, error) {
+	if snapshotReentry(ctx, s) {
+		return Account{}, ErrConflict
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !idPattern.MatchString(id) || !validPlan(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	items, err := s.mutationReady(ctx)
+	if err != nil {
+		return Account{}, err
+	}
+	var r record
+	found := false
+	for _, item := range items {
+		if item.Account.ID == id {
+			r = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Account{}, ErrNotFound
+	}
+	if r.Account.Revision != in.ExpectedRevision {
+		return Account{}, ErrConflict
+	}
+	if r.Account.Plan == in.Plan {
+		return r.Account, nil
+	}
+	if r.Account.Revision == ^uint64(0) {
+		return Account{}, ErrRecovery
+	}
+	// Metadata-only operation: no native call, but the same intent/result
+	// journal discipline as native mutations (crash between intent and
+	// result is reconciled by refresh).
+	r.Pending = &pending{Action: "plan", Target: in.Plan, Actor: actor, Reason: in.Reason}
+	before := r.Account
+	operationID, e := randomID()
+	if e != nil {
+		return Account{}, e
+	}
+	r.Pending.OperationID = operationID
+	after := r.Account
+	after.Plan = in.Plan
+	after.Revision++
+	intent := operationEvent{OperationID: operationID, Action: "plan", Status: "intended", Actor: actor, Reason: in.Reason, Before: &before, After: after}
+	r, err = s.appendEvent(r, intent)
+	if err != nil {
+		return Account{}, ErrRecovery
+	}
+	r.Account.Plan = in.Plan
+	r.Account.Revision++
+	r.Account.UpdatedAt = time.Now().UTC()
+	r.Actor, r.Reason = actor, in.Reason
+	operation := *r.Pending
+	r.Pending = nil
+	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {
+		return Account{}, ErrRecovery
+	}
+	return r.Account, nil
+}
+
+func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor string) (Account, error) {
+	if snapshotReentry(ctx, s) {
+		return Account{}, ErrConflict
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !idPattern.MatchString(id) || !validDelete(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	items, err := s.mutationReady(ctx)
+	if err != nil {
+		return Account{}, err
+	}
+	var r record
+	found := false
+	for _, item := range items {
+		if item.Account.ID == id {
+			r = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Account{}, ErrNotFound
+	}
+	if r.Account.Revision != in.ExpectedRevision {
+		return Account{}, ErrConflict
+	}
+	r.Pending = &pending{Action: "delete", Target: "", Actor: actor, Reason: in.Reason}
+	operationID, e := randomID()
+	if e != nil {
+		return Account{}, e
+	}
+	r.Pending.OperationID = operationID
+	before := r.Account
+	intent := operationEvent{OperationID: operationID, Action: "delete", Status: "intended", Actor: actor, Reason: in.Reason, Before: &before, After: r.Account}
+	r, err = s.appendEvent(r, intent)
+	if err != nil {
+		return Account{}, ErrRecovery
+	}
+	if e := s.native.Delete(ctx, r); e != nil {
+		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		return Account{}, ErrRecovery
+	}
+	operation := *r.Pending
+	r.Pending = nil
+	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {
+		return Account{}, ErrRecovery
+	}
+	if e := s.purge(r.Account.ID); e != nil {
+		return Account{}, ErrRecovery
+	}
+	return before, nil
+}
 func (s *store) capability(ctx context.Context) (Capability, error) {
 	if snapshotReentry(ctx, s) {
 		return Capability{}, ErrConflict

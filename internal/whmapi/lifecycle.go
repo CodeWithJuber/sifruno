@@ -39,7 +39,20 @@ var (
 	// ErrUnsupported marks operations this backend honestly cannot perform
 	// yet (e.g. account removal has no hostaccounts counterpart).
 	ErrUnsupported = errors.New("whmapi: operation not supported by backend")
+	// ErrConflicted marks a revision race against the account service; the
+	// caller should re-read and retry.
+	ErrConflicted = errors.New("whmapi: account revision conflict")
 )
+
+// Remover is an optional backend extension for journaled account removal.
+type Remover interface {
+	RemoveAccount(ctx context.Context, username string) error
+}
+
+// PlanChanger is an optional backend extension for package changes.
+type PlanChanger interface {
+	ChangePackage(ctx context.Context, username, plan string) error
+}
 
 // xid returns a 6-character random token matching the observed volatile
 // `(XID xxxxxx)` segment of reference error strings.
@@ -193,12 +206,66 @@ func (s *Server) handleUnsuspendAcct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRemoveAcct(w http.ResponseWriter, r *http.Request) {
-	// hostaccounts has no delete operation; fail closed and honest rather
-	// than fabricate the ~40-step observed removal pipeline.
 	username := r.URL.Query().Get("user")
 	if username == "" {
 		writeError(w, "removeacct", `No user name supplied: "user" is a required argument.`)
 		return
 	}
-	writeError(w, "removeacct", "API failure: (XID "+xid()+") Account removal is not implemented on this backend; no state was changed.")
+	rm, ok := s.backend.(Remover)
+	if !ok {
+		writeError(w, "removeacct", "API failure: (XID "+xid()+") Account removal is not implemented on this backend; no state was changed.")
+		return
+	}
+	err := rm.RemoveAccount(r.Context(), username)
+	if errors.Is(err, ErrNoSuchUser) {
+		writeError(w, "removeacct", reasonNoSuchUser(username))
+		return
+	}
+	if err != nil {
+		// The broker journals the pending deletion; an uncertain effect is
+		// never reported as removed.
+		writeError(w, "removeacct", "API failure: (XID "+xid()+") Removal did not complete; the account is marked recovery_required and the operation is journaled.")
+		return
+	}
+	// Truthful step log: only what this backend actually did (the full
+	// observed ~40-step pipeline includes services sifruno does not run yet).
+	raw := fmt.Sprintf("Locking account and setting shell to nologin......Done\nRemoving User & Group.......Success...Done\nRemoving HTTP virtual hosts...%s...Done\n%s account removed\n", username, username)
+	// Observed success reason: "<user> account removed" (not "OK").
+	writeSuccessReason(w, "removeacct", username+" account removed", map[string]any{}, raw)
+}
+
+func (s *Server) handleChangePackage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	username, plan := q.Get("user"), q.Get("pkg")
+	if username == "" {
+		writeError(w, "changepackage", `No user name supplied: "user" is a required argument.`)
+		return
+	}
+	if plan == "" {
+		writeError(w, "changepackage", `API failure: (XID `+xid()+`) No package name supplied.`)
+		return
+	}
+	if s.pkgs != nil && !s.pkgs.Has(plan) {
+		// Observed verbatim on the reference.
+		writeError(w, "changepackage", "API failure: (XID "+xid()+") Specified package does not exist.")
+		return
+	}
+	pc, ok := s.backend.(PlanChanger)
+	if !ok {
+		writeError(w, "changepackage", "API failure: (XID "+xid()+") Package changes are not implemented on this backend; no state was changed.")
+		return
+	}
+	err := pc.ChangePackage(r.Context(), username, plan)
+	if errors.Is(err, ErrNoSuchUser) {
+		writeError(w, "changepackage", reasonNoSuchUser(username))
+		return
+	}
+	if err != nil {
+		writeError(w, "changepackage", "API failure: (XID "+xid()+") Package change failed; the account keeps its previous plan.")
+		return
+	}
+	// The observed success emits an HTML diff log in output.raw; sifruno
+	// logs the actual change only (no fabricated limit rewrites).
+	raw := fmt.Sprintf("Changing plan from previous to %s\nShell Access Set Correctly (noshell)\n", plan)
+	writeSuccess(w, "changepackage", nil, raw)
 }

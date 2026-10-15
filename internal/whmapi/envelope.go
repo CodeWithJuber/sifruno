@@ -81,6 +81,16 @@ func writeSuccess(w http.ResponseWriter, command string, data any, rawLog string
 	writeJSON(w, http.StatusOK, env)
 }
 
+// writeSuccessReason is writeSuccess with a custom reason — the reference's
+// removeacct success carries reason "<user> account removed" instead of "OK".
+func writeSuccessReason(w http.ResponseWriter, command, reason string, data any, rawLog string) {
+	env := envelope{Data: data, Metadata: metadata{Version: 1, Result: 1, Command: command, Reason: reason}}
+	if rawLog != "" {
+		env.Metadata.Output = &outputBlock{Raw: rawLog}
+	}
+	writeJSON(w, http.StatusOK, env)
+}
+
 // writeError emits `result:0` with output.raw explicitly null (observed).
 func writeError(w http.ResponseWriter, command, reason string) {
 	writeJSON(w, http.StatusOK, envelope{

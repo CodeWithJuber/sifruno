@@ -113,6 +113,7 @@ var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
 	"addpkg":           (*Server).handleAddPkg,
 	"killpkg":          (*Server).handleKillPkg,
 	"getpkginfo":       (*Server).handleGetPkgInfo,
+	"changepackage":    (*Server).handleChangePackage,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

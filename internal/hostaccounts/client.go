@@ -79,6 +79,28 @@ func (c *client) SetState(ctx context.Context, id string, in StateInput, actor s
 	}{in, actor}, &out)
 	return out, err
 }
+func (c *client) SetPlan(ctx context.Context, id string, in PlanInput, actor string) (Account, error) {
+	if !idPattern.MatchString(id) || !validPlan(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	var out Account
+	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/plan", struct {
+		Input PlanInput `json:"input"`
+		Actor string    `json:"actor"`
+	}{in, actor}, &out)
+	return out, err
+}
+func (c *client) Delete(ctx context.Context, id string, in DeleteInput, actor string) (Account, error) {
+	if !idPattern.MatchString(id) || !validDelete(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	var out Account
+	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/delete", struct {
+		Input DeleteInput `json:"input"`
+		Actor string      `json:"actor"`
+	}{in, actor}, &out)
+	return out, err
+}
 func (c *client) request(ctx context.Context, method, path string, input, output any) error {
 	if ctx == nil {
 		return ErrInvalid

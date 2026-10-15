@@ -62,6 +62,17 @@ func (f *fakeNative) RecoverCreate(ctx context.Context, r record, persist func(o
 	}
 	return actual.Ownership, nil
 }
+func (f *fakeNative) Delete(_ context.Context, r record) error {
+	actual, ok := f.users[r.Account.Username]
+	if !ok {
+		return nil // already gone: safe retry
+	}
+	if actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.Home != r.Account.Home {
+		return ErrRecovery
+	}
+	delete(f.users, r.Account.Username)
+	return nil
+}
 func (f *fakeNative) Verify(_ context.Context, r record) error {
 	actual, ok := f.users[r.Account.Username]
 	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.State != r.Account.State || r.Ownership != actual.Ownership {

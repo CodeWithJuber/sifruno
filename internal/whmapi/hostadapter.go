@@ -116,6 +116,57 @@ func (h HostAccounts) CreateAccount(ctx context.Context, username, domain string
 	return h.CreateAccountPlan(ctx, username, domain, "")
 }
 
+// RemoveAccount permanently deletes the managed identity through the
+// broker's journaled delete (ownership-verified). There is no undo.
+func (h HostAccounts) RemoveAccount(ctx context.Context, username string) error {
+	if h.Svc == nil {
+		return ErrUnsupported
+	}
+	acct, err := h.find(ctx, username)
+	if err != nil {
+		return err
+	}
+	_, err = h.Svc.Delete(ctx, acct.ID, hostaccounts.DeleteInput{
+		ExpectedRevision: acct.Revision,
+		Reason:           "whm api removeacct",
+	}, h.actor())
+	if errors.Is(err, hostaccounts.ErrNotFound) {
+		return ErrNoSuchUser
+	}
+	if errors.Is(err, hostaccounts.ErrConflict) {
+		return ErrConflicted
+	}
+	return err
+}
+
+// ChangePackage updates the account's plan metadata after validating the
+// package exists in the store. The reference changepackage also re-applies
+// limits and theme; those enforcement effects land with pr-resellers.
+func (h HostAccounts) ChangePackage(ctx context.Context, username, plan string) error {
+	if h.Svc == nil {
+		return ErrUnsupported
+	}
+	acct, err := h.find(ctx, username)
+	if err != nil {
+		return err
+	}
+	if acct.Plan == plan {
+		return nil
+	}
+	_, err = h.Svc.SetPlan(ctx, acct.ID, hostaccounts.PlanInput{
+		Plan:             plan,
+		ExpectedRevision: acct.Revision,
+		Reason:           "whm api changepackage",
+	}, h.actor())
+	if errors.Is(err, hostaccounts.ErrNotFound) {
+		return ErrNoSuchUser
+	}
+	if errors.Is(err, hostaccounts.ErrConflict) {
+		return ErrConflicted
+	}
+	return err
+}
+
 // CreateAccountPlan additionally records the WHM package as plan metadata.
 func (h HostAccounts) CreateAccountPlan(ctx context.Context, username, domain, plan string) (Account, error) {
 	if h.Svc == nil {

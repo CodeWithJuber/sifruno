@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"sifruno/internal/hostaccounts"
+	"sifruno/internal/hostpkgs"
 )
 
 // fakeHost is a minimal in-memory hostaccounts.Service for adapter tests.
@@ -205,20 +207,81 @@ func TestSuspendNoSuchUser(t *testing.T) {
 	}
 }
 
-func TestRemoveAcctHonestUnsupported(t *testing.T) {
+func TestRemoveAcctRemovesAccount(t *testing.T) {
 	h := &fakeHost{}
 	s, token := newLifecycleServer(t, h)
 	post(t, s, "/json-api/createacct?api.version=1&username=keepme&domain=keep.example.com", token)
 	w := post(t, s, "/json-api/removeacct?api.version=1&user=keepme", token)
-	md := metadataOf(t, decodeEnvelope(t, w))
-	if md["result"].(float64) != 0 {
-		t.Fatalf("removeacct must fail closed: %v", md)
+	body := decodeEnvelope(t, w)
+	md := metadataOf(t, body)
+	// Observed success reason: "<user> account removed" (not "OK").
+	if md["result"].(float64) != 1 || md["reason"] != "keepme account removed" {
+		t.Fatalf("metadata = %v", md)
 	}
-	if !regexp.MustCompile(`not implemented on this backend`).MatchString(md["reason"].(string)) {
+	raw := md["output"].(map[string]any)["raw"].(string)
+	if !strings.Contains(raw, "Removing User & Group") {
+		t.Fatalf("raw = %q", raw)
+	}
+	if len(h.accounts) != 0 {
+		t.Fatalf("account not removed: %+v", h.accounts)
+	}
+	// Repeat removal: observed exact error.
+	w = post(t, s, "/json-api/removeacct?api.version=1&user=keepme", token)
+	md = metadataOf(t, decodeEnvelope(t, w))
+	if !regexp.MustCompile(`^API failure: \(XID [a-z0-9]{6}\) You do not have a user named “keepme”\.$`).MatchString(md["reason"].(string)) {
 		t.Fatalf("reason = %q", md["reason"])
 	}
-	if len(h.accounts) != 1 {
-		t.Fatalf("removeacct changed state: %+v", h.accounts)
+}
+
+func TestRemoveAcctFailClosedWithoutRemover(t *testing.T) {
+	// Backend without the Remover extension keeps the honest failure.
+	ts, token := issueToken(t)
+	s := New(testBackend{}, ts)
+	w := post(t, s, "/json-api/removeacct?api.version=1&user=anyone", token)
+	md := metadataOf(t, decodeEnvelope(t, w))
+	if md["result"].(float64) != 0 || !regexp.MustCompile(`not implemented on this backend`).MatchString(md["reason"].(string)) {
+		t.Fatalf("metadata = %v", md)
+	}
+}
+
+func TestChangePackageLifecycle(t *testing.T) {
+	h := &fakeHost{}
+	ts, token := issueToken(t)
+	st := hostpkgs.NewMemory()
+	s := New(HostAccounts{Svc: h, Build: "11.138.0.11", Server: "203.0.113.10"}, ts).WithPackageStore(st)
+	post(t, s, "/json-api/createacct?api.version=1&username=cpuser&domain=cp.example.com", token)
+	pkgCall(t, s, token, "/json-api/addpkg?api.version=1&pkgname=gold")
+
+	// Unknown package: observed verbatim error.
+	w := post(t, s, "/json-api/changepackage?api.version=1&user=cpuser&pkg=ghost", token)
+	md := metadataOf(t, decodeEnvelope(t, w))
+	if !regexp.MustCompile(`^API failure: \(XID [a-z0-9]{6}\) Specified package does not exist\.$`).MatchString(md["reason"].(string)) {
+		t.Fatalf("reason = %q", md["reason"])
+	}
+	if h.accounts[0].Plan != "" {
+		t.Fatalf("plan changed on failure: %+v", h.accounts[0])
+	}
+
+	// Known package flows into the account record.
+	w = post(t, s, "/json-api/changepackage?api.version=1&user=cpuser&pkg=gold", token)
+	if metadataOf(t, decodeEnvelope(t, w))["result"].(float64) != 1 {
+		t.Fatalf("changepackage failed: %s", w.Body.String())
+	}
+	if h.accounts[0].Plan != "gold" {
+		t.Fatalf("plan = %q", h.accounts[0].Plan)
+	}
+}
+
+func TestChangePackageNoSuchUser(t *testing.T) {
+	h := &fakeHost{}
+	ts, token := issueToken(t)
+	st := hostpkgs.NewMemory()
+	s := New(HostAccounts{Svc: h, Build: "11.138.0.11"}, ts).WithPackageStore(st)
+	pkgCall(t, s, token, "/json-api/addpkg?api.version=1&pkgname=gold")
+	w := post(t, s, "/json-api/changepackage?api.version=1&user=ghost&pkg=gold", token)
+	md := metadataOf(t, decodeEnvelope(t, w))
+	if md["result"].(float64) != 0 || !strings.Contains(md["reason"].(string), "You do not have a user named") {
+		t.Fatalf("metadata = %v", md)
 	}
 }
 
@@ -257,6 +320,34 @@ func TestMutationsDeniedWithoutAuth(t *testing.T) {
 			t.Fatalf("%s without auth: status = %d", path, w.Code)
 		}
 	}
+}
+
+func (f *fakeHost) SetPlan(_ context.Context, id string, in hostaccounts.PlanInput, actor string) (hostaccounts.Account, error) {
+	for i, a := range f.accounts {
+		if a.ID == id {
+			if a.Revision != in.ExpectedRevision {
+				return hostaccounts.Account{}, hostaccounts.ErrConflict
+			}
+			f.accounts[i].Plan = in.Plan
+			f.accounts[i].Revision++
+			return f.accounts[i], nil
+		}
+	}
+	return hostaccounts.Account{}, hostaccounts.ErrNotFound
+}
+
+func (f *fakeHost) Delete(_ context.Context, id string, in hostaccounts.DeleteInput, actor string) (hostaccounts.Account, error) {
+	for i, a := range f.accounts {
+		if a.ID == id {
+			if a.Revision != in.ExpectedRevision {
+				return hostaccounts.Account{}, hostaccounts.ErrConflict
+			}
+			gone := f.accounts[i]
+			f.accounts = append(f.accounts[:i], f.accounts[i+1:]...)
+			return gone, nil
+		}
+	}
+	return hostaccounts.Account{}, hostaccounts.ErrNotFound
 }
 
 var _ hostaccounts.Service = (*fakeHost)(nil)

@@ -16,14 +16,14 @@ import (
 // They never run an OS utility or open privileged broker state directly.
 func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("accounts requires capability, list, web-preview, create or state")
+		return errors.New("accounts requires capability, list, web-preview, create, state, plan or delete")
 	}
 	f := flag.NewFlagSet("accounts "+args[0], flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	username := f.String("username", "", "Native Linux username")
 	domain := f.String("domain", "", "Reserved domain metadata")
-	plan := f.String("plan", "", "Reserved package/plan metadata")
 	reason := f.String("reason", "", "Operator reason")
+	plan := f.String("plan", "", "Reserved package/plan metadata")
 	id := f.String("id", "", "Managed account ID")
 	wanted := f.String("state", "", "active or suspended")
 	revision := f.Uint64("revision", 0, "Expected account revision")
@@ -40,7 +40,7 @@ func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 	case "web-preview":
 		endpoint += "/web-preview"
 	case "create":
-		allowed = map[string]bool{"username": true, "domain": true, "plan": true, "reason": true}
+		allowed = map[string]bool{"username": true, "domain": true, "reason": true}
 		if *username == "" || *domain == "" || strings.TrimSpace(*reason) == "" || len(*username) > 32 || len(*domain) > 253 || len(*reason) > 500 {
 			return errors.New("create requires bounded --username, --domain and --reason")
 		}
@@ -54,6 +54,22 @@ func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 		endpoint += "/" + *id + "/state"
 		method = http.MethodPost
 		body = hostaccounts.StateInput{State: *wanted, ExpectedRevision: *revision, Reason: *reason}
+	case "plan":
+		allowed = map[string]bool{"id": true, "plan": true, "revision": true, "reason": true}
+		if len(*id) < 1 || len(*id) > 64 || strings.ContainsAny(*id, "/\\?#%") || strings.TrimSpace(*plan) == "" || len(*plan) > 64 || *revision == 0 || strings.TrimSpace(*reason) == "" || len(*reason) > 500 {
+			return errors.New("plan requires --id, bounded --plan, --revision and bounded --reason")
+		}
+		endpoint += "/" + *id + "/plan"
+		method = http.MethodPost
+		body = hostaccounts.PlanInput{Plan: *plan, ExpectedRevision: *revision, Reason: *reason}
+	case "delete":
+		allowed = map[string]bool{"id": true, "revision": true, "reason": true}
+		if len(*id) < 1 || len(*id) > 64 || strings.ContainsAny(*id, "/\\?#%") || *revision == 0 || strings.TrimSpace(*reason) == "" || len(*reason) > 500 {
+			return errors.New("delete requires --id, --revision and bounded --reason")
+		}
+		endpoint += "/" + *id + "/delete"
+		method = http.MethodPost
+		body = hostaccounts.DeleteInput{ExpectedRevision: *revision, Reason: *reason}
 	default:
 		return errors.New("unknown accounts subcommand; run panelctl help")
 	}

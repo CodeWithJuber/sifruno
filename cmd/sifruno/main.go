@@ -19,6 +19,7 @@ import (
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
 	"sifruno/internal/dbhost"
+	"sifruno/internal/dnshost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/hostpkgs"
 	"sifruno/internal/mailhost"
@@ -49,6 +50,10 @@ func run() error {
 	whmTLSKey := flag.String("whm-tls-key", "", "Operator-provided TLS private key for the WHM ingress")
 	dbDefaults := flag.String("db-defaults-file", "", "Option file with the panel database admin credentials (0600); empty uses socket auth as the invoking user")
 	mailHomesFlag := flag.String("mail-homes", "/srv/sfn-mail", "Mailbox root for the mail surface (cPanel mail/ + etc/ layout; controller-writable)")
+	dnsRoot := flag.String("dns-root", "/srv/sfn-dns", "DNS zone store root (BIND master files; maps to the reference's /var/named)")
+	dnsReload := flag.String("dns-reload-cmd", "", "Command run after zone changes to notify the authoritative server (e.g. named reload)")
+	dnsNS1 := flag.String("dns-ns1", "ns1.hostlelo.com", "Default first nameserver for account zones")
+	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
@@ -151,6 +156,8 @@ func run() error {
 				State: dir,
 			})
 		}
+		whmServer.SetDNSStore(&dnshost.Store{Root: *dnsRoot, Reload: dnshost.ExecReloader{Command: *dnsReload}})
+		whmServer.SetDNSDefaults(*dnsNS1, *dnsNS2, "127.0.0.1")
 		whmHandler = whmServer
 		dbReg, dberr := dbhost.OpenRegistry(filepath.Join(dir, "dbmap.json"))
 		if dberr != nil {

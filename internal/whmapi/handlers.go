@@ -3,6 +3,7 @@ package whmapi
 import (
 	"net/http"
 	"sifruno/internal/dbhost"
+	"sifruno/internal/dnshost"
 	"sifruno/internal/mailhost"
 	"strings"
 
@@ -84,6 +85,10 @@ type Server struct {
 	sessions *SessionStore
 	db       dbhost.Service
 	mail     mailhost.Service
+	dns      *dnshost.Store
+	dnsNS1   string
+	dnsNS2   string
+	dnsIP    string
 	baseURL  string
 	mux      *http.ServeMux
 }
@@ -126,6 +131,14 @@ var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
 	"list_mysql_databases_and_users": (*Server).handleListMySQLDatabasesAndUsers,
 	"set_mysql_password":             (*Server).handleSetMySQLPassword,
 	"rename_mysql_user":              (*Server).handleRenameMySQLUser,
+	"listzones":                      (*Server).handleListZones,
+	"adddns":                         (*Server).handleAddDNS,
+	"killdns":                        (*Server).handleKillDNS,
+	"dumpzone":                       (*Server).handleDumpZone,
+	"addzonerecord":                  (*Server).handleAddZoneRecord,
+	"removezonerecord":               (*Server).handleRemoveZoneRecord,
+	"getzonerecord":                  (*Server).handleGetZoneRecord,
+	"resetzone":                      (*Server).handleResetZone,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

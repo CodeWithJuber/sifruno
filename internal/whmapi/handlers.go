@@ -139,6 +139,11 @@ var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
 	"removezonerecord":               (*Server).handleRemoveZoneRecord,
 	"getzonerecord":                  (*Server).handleGetZoneRecord,
 	"resetzone":                      (*Server).handleResetZone,
+	"gethostname":                    (*Server).handleGetHostname,
+	"loadavg":                        (*Server).handleLoadAvg,
+	"listips":                        (*Server).handleListIPs,
+	"servicestatus":                  (*Server).handleServiceStatus,
+	"showbw":                         (*Server).handleShowBW,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

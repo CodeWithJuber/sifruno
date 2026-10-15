@@ -88,6 +88,15 @@ func writeError(w http.ResponseWriter, command, reason string) {
 	})
 }
 
+// writeErrorData emits an error with an explicit empty data object —
+// observed on api_token_* failures (`"data":{}` alongside result:0).
+func writeErrorData(w http.ResponseWriter, command, reason string) {
+	writeJSON(w, http.StatusOK, envelope{
+		Data:     map[string]any{},
+		Metadata: metadata{Version: 1, Result: 0, Command: command, Reason: reason},
+	})
+}
+
 // writeUnknownApp emits the exact observed unknown-function error. The
 // reference wraps the function name in U+201C/U+201D quotes and serializes
 // metadata.version as the string "1" only here.

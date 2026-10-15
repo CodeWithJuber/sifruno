@@ -57,14 +57,16 @@ func (f *fakeHost) SetState(_ context.Context, id string, in hostaccounts.StateI
 	return hostaccounts.Account{}, hostaccounts.ErrNotFound
 }
 
-func newLifecycleServer(h *fakeHost) *Server {
-	return New(HostAccounts{Svc: h, Build: "11.138.0.11", Server: "203.0.113.10"}, TokenStore{"root": "test-token"})
+func newLifecycleServer(t *testing.T, h *fakeHost) (*Server, string) {
+	t.Helper()
+	ts, token := issueToken(t)
+	return New(HostAccounts{Svc: h, Build: "11.138.0.11", Server: "203.0.113.10"}, ts), token
 }
 
-func post(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
+func post(t *testing.T, s *Server, path, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, path, nil) // WHM API 1 accepts GET with query params
-	r.Header.Set("Authorization", "whm root:test-token")
+	r.Header.Set("Authorization", "whm root:"+token)
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	return w
@@ -90,8 +92,8 @@ func metadataOf(t *testing.T, body map[string]any) map[string]any {
 
 func TestCreateAcctSuccess(t *testing.T) {
 	h := &fakeHost{}
-	s := newLifecycleServer(h)
-	w := post(t, s, "/json-api/createacct?api.version=1&username=newuser&domain=newuser.example.com")
+	s, token := newLifecycleServer(t, h)
+	w := post(t, s, "/json-api/createacct?api.version=1&username=newuser&domain=newuser.example.com", token)
 	body := decodeEnvelope(t, w)
 	md := metadataOf(t, body)
 	if md["result"].(float64) != 1 || md["reason"] != "OK" {
@@ -114,7 +116,8 @@ func TestCreateAcctSuccess(t *testing.T) {
 }
 
 func TestCreateAcctMissingUsername(t *testing.T) {
-	w := post(t, newLifecycleServer(&fakeHost{}), "/json-api/createacct?api.version=1&domain=x.example.com")
+	s, token := newLifecycleServer(t, &fakeHost{})
+	w := post(t, s, "/json-api/createacct?api.version=1&domain=x.example.com", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
 	// Observed verbatim on the reference.
 	if md["reason"] != `No user name supplied: "username" is a required argument.` {
@@ -126,7 +129,8 @@ func TestCreateAcctMissingUsername(t *testing.T) {
 }
 
 func TestCreateAcctInvalidUsername(t *testing.T) {
-	w := post(t, newLifecycleServer(&fakeHost{}), "/json-api/createacct?api.version=1&username=bad%20user!!&domain=x.example.com")
+	s, token := newLifecycleServer(t, &fakeHost{})
+	w := post(t, s, "/json-api/createacct?api.version=1&username=bad%20user!!&domain=x.example.com", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
 	reason := md["reason"].(string)
 	// Volatile XID asserted by pattern; stable text by containment (observed).
@@ -140,9 +144,9 @@ func TestCreateAcctInvalidUsername(t *testing.T) {
 
 func TestCreateAcctDuplicate(t *testing.T) {
 	h := &fakeHost{}
-	s := newLifecycleServer(h)
-	post(t, s, "/json-api/createacct?api.version=1&username=dupuser&domain=a.example.com")
-	w := post(t, s, "/json-api/createacct?api.version=1&username=dupuser&domain=b.example.com")
+	s, token := newLifecycleServer(t, h)
+	post(t, s, "/json-api/createacct?api.version=1&username=dupuser&domain=a.example.com", token)
+	w := post(t, s, "/json-api/createacct?api.version=1&username=dupuser&domain=b.example.com", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
 	reason := md["reason"].(string)
 	if !regexp.MustCompile(`^\(XID [a-z0-9]{6}\) This system already has an account named “dupuser”\.`).MatchString(reason) {
@@ -158,10 +162,10 @@ func TestCreateAcctDuplicate(t *testing.T) {
 
 func TestSuspendUnsuspendLifecycle(t *testing.T) {
 	h := &fakeHost{}
-	s := newLifecycleServer(h)
-	post(t, s, "/json-api/createacct?api.version=1&username=lifeuser&domain=life.example.com")
+	s, token := newLifecycleServer(t, h)
+	post(t, s, "/json-api/createacct?api.version=1&username=lifeuser&domain=life.example.com", token)
 
-	w := post(t, s, "/json-api/suspendacct?api.version=1&user=lifeuser&reason=reference+capture")
+	w := post(t, s, "/json-api/suspendacct?api.version=1&user=lifeuser&reason=reference+capture", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
 	if md["result"].(float64) != 1 {
 		t.Fatalf("suspend result = %v", md)
@@ -171,7 +175,7 @@ func TestSuspendUnsuspendLifecycle(t *testing.T) {
 	}
 
 	// Repeat suspend: observed success-with-notice, not an error.
-	w = post(t, s, "/json-api/suspendacct?api.version=1&user=lifeuser")
+	w = post(t, s, "/json-api/suspendacct?api.version=1&user=lifeuser", token)
 	body := decodeEnvelope(t, w)
 	md = metadataOf(t, body)
 	if md["result"].(float64) != 1 || md["reason"] != "OK" {
@@ -182,7 +186,7 @@ func TestSuspendUnsuspendLifecycle(t *testing.T) {
 		t.Fatalf("repeat suspend raw = %q", raw)
 	}
 
-	w = post(t, s, "/json-api/unsuspendacct?api.version=1&user=lifeuser")
+	w = post(t, s, "/json-api/unsuspendacct?api.version=1&user=lifeuser", token)
 	md = metadataOf(t, decodeEnvelope(t, w))
 	if md["result"].(float64) != 1 || h.accounts[0].State != "active" {
 		t.Fatalf("unsuspend failed: %v / %+v", md, h.accounts[0])
@@ -190,7 +194,8 @@ func TestSuspendUnsuspendLifecycle(t *testing.T) {
 }
 
 func TestSuspendNoSuchUser(t *testing.T) {
-	w := post(t, newLifecycleServer(&fakeHost{}), "/json-api/suspendacct?api.version=1&user=ghost")
+	s, token := newLifecycleServer(t, &fakeHost{})
+	w := post(t, s, "/json-api/suspendacct?api.version=1&user=ghost", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
 	if !regexp.MustCompile(`^API failure: \(XID [a-z0-9]{6}\) You do not have a user named “ghost”\.`).MatchString(md["reason"].(string)) {
 		t.Fatalf("reason = %q", md["reason"])
@@ -202,9 +207,9 @@ func TestSuspendNoSuchUser(t *testing.T) {
 
 func TestRemoveAcctHonestUnsupported(t *testing.T) {
 	h := &fakeHost{}
-	s := newLifecycleServer(h)
-	post(t, s, "/json-api/createacct?api.version=1&username=keepme&domain=keep.example.com")
-	w := post(t, s, "/json-api/removeacct?api.version=1&user=keepme")
+	s, token := newLifecycleServer(t, h)
+	post(t, s, "/json-api/createacct?api.version=1&username=keepme&domain=keep.example.com", token)
+	w := post(t, s, "/json-api/removeacct?api.version=1&user=keepme", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
 	if md["result"].(float64) != 0 {
 		t.Fatalf("removeacct must fail closed: %v", md)
@@ -219,10 +224,10 @@ func TestRemoveAcctHonestUnsupported(t *testing.T) {
 
 func TestAdapterMappingFidelity(t *testing.T) {
 	h := &fakeHost{}
-	s := newLifecycleServer(h)
-	post(t, s, "/json-api/createacct?api.version=1&username=mapuser&domain=map.example.com")
-	post(t, s, "/json-api/suspendacct?api.version=1&user=mapuser&reason=x")
-	w := post(t, s, "/json-api/listaccts?api.version=1&search=mapuser&searchtype=user")
+	s, token := newLifecycleServer(t, h)
+	post(t, s, "/json-api/createacct?api.version=1&username=mapuser&domain=map.example.com", token)
+	post(t, s, "/json-api/suspendacct?api.version=1&user=mapuser&reason=x", token)
+	w := post(t, s, "/json-api/listaccts?api.version=1&search=mapuser&searchtype=user", token)
 	body := decodeEnvelope(t, w)
 	acct := body["data"].(map[string]any)["acct"].([]any)[0].(map[string]any)
 	if acct["user"] != "mapuser" || acct["suspended"].(float64) != 1 || acct["shell"] != "/bin/false" {
@@ -240,7 +245,7 @@ func TestAdapterMappingFidelity(t *testing.T) {
 }
 
 func TestMutationsDeniedWithoutAuth(t *testing.T) {
-	s := newLifecycleServer(&fakeHost{})
+	s, _ := newLifecycleServer(t, &fakeHost{})
 	for _, path := range []string{
 		"/json-api/createacct?api.version=1&username=nope&domain=n.example.com",
 		"/json-api/suspendacct?api.version=1&user=nope",

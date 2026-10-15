@@ -97,13 +97,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // (pr-api-contract scope 11). removeacct answers honestly unsupported until
 // the account service grows a journaled delete.
 var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
-	"version":       (*Server).handleVersion,
-	"listpkgs":      (*Server).handleListPkgs,
-	"listaccts":     (*Server).handleListAccts,
-	"createacct":    (*Server).handleCreateAcct,
-	"suspendacct":   (*Server).handleSuspendAcct,
-	"unsuspendacct": (*Server).handleUnsuspendAcct,
-	"removeacct":    (*Server).handleRemoveAcct,
+	"version":          (*Server).handleVersion,
+	"listpkgs":         (*Server).handleListPkgs,
+	"listaccts":        (*Server).handleListAccts,
+	"createacct":       (*Server).handleCreateAcct,
+	"suspendacct":      (*Server).handleSuspendAcct,
+	"unsuspendacct":    (*Server).handleUnsuspendAcct,
+	"removeacct":       (*Server).handleRemoveAcct,
+	"api_token_create": (*Server).handleTokenCreate,
+	"api_token_list":   (*Server).handleTokenList,
+	"api_token_revoke": (*Server).handleTokenRevoke,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

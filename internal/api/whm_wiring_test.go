@@ -10,14 +10,21 @@ import (
 )
 
 // whmStub serves a minimal WHM API 1 response for wiring tests.
-func whmStub() http.Handler {
-	return whmapi.New(whmapi.HostAccounts{Build: "11.138.0.11"}, whmapi.TokenStore{"root": "tok"})
+func whmStub(t *testing.T) (http.Handler, string) {
+	t.Helper()
+	ts := whmapi.NewMemoryTokenStore()
+	token, _, err := ts.Create("root", "wiring")
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	return whmapi.New(whmapi.HostAccounts{Build: "11.138.0.11"}, ts), token
 }
 
 func TestWHMRoutedWhenConfigured(t *testing.T) {
-	h := New(Options{WHM: whmStub(), AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	stub, token := whmStub(t)
+	h := New(Options{WHM: stub, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/json-api/version?api.version=1", nil)
-	r.Header.Set("Authorization", "whm root:tok")
+	r.Header.Set("Authorization", "whm root:"+token)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -48,7 +55,8 @@ func TestWHM501WhenNotConfigured(t *testing.T) {
 }
 
 func TestWHMUnauthenticatedDeniedThroughPanel(t *testing.T) {
-	h := New(Options{WHM: whmStub(), AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	stub, _ := whmStub(t)
+	h := New(Options{WHM: stub, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/json-api/version?api.version=1", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

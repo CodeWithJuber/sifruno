@@ -44,6 +44,7 @@ const usage = `panelctl [--state .state/sifruno] [--panel-url http://127.0.0.1:8
  sites import --name NAME --domain DOMAIN --from NATIVE.zip
  backup inspect --from FILE --out NEW.jsonl
  accounts capability | list | web-preview
+ whm-token create --user USER --name NAME | list | revoke --name NAME
  accounts create --username USER --domain DOMAIN --reason TEXT
  accounts state --id ID --state active|suspended --revision N --reason TEXT
 Local operator commands; sites require the running panel and its private access.key.
@@ -86,6 +87,8 @@ func run(args []string, out, errs io.Writer) error {
 		return runSites(args[1:], *state, *panelURL, out, errs)
 	case "accounts":
 		return runAccounts(args[1:], *state, *panelURL, out, errs)
+	case "whm-token":
+		return runWHMToken(args[1:], *state, out, errs)
 	case "status":
 		f := flag.NewFlagSet("status", flag.ContinueOnError)
 		f.SetOutput(errs)

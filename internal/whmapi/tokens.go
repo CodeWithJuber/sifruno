@@ -47,9 +47,42 @@ var tokenNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,50}$`)
 // as SHA-256 digests; the plaintext is returned exactly once at creation.
 // An absent backing file denies every credential (fail closed).
 type TokenStore struct {
-	mu     sync.RWMutex
-	path   string // empty = in-memory (tests)
-	tokens map[string]tokenRecord
+	mu      sync.RWMutex
+	path    string // empty = in-memory (tests)
+	tokens  map[string]tokenRecord
+	lastMod time.Time // last loaded file mtime; zero = never loaded from disk
+}
+
+// reloadIfChanged picks up tokens issued by panelctl while the panel runs —
+// the operator issuance flow must not require a panel restart. Callers hold
+// the write lock.
+func (s *TokenStore) reloadIfChanged() {
+	if s.path == "" {
+		return
+	}
+	info, err := os.Stat(s.path)
+	if errors.Is(err, os.ErrNotExist) || err != nil {
+		return
+	}
+	if !info.ModTime().After(s.lastMod) {
+		return
+	}
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return
+	}
+	var f tokenFile
+	if json.Unmarshal(raw, &f) != nil {
+		return // keep the last good state on a torn/invalid write
+	}
+	fresh := map[string]tokenRecord{}
+	for name, rec := range f.Tokens {
+		if tokenNamePattern.MatchString(name) && rec.User != "" && len(rec.SHA256) == 64 {
+			fresh[name] = rec
+		}
+	}
+	s.tokens = fresh
+	s.lastMod = info.ModTime()
 }
 
 // OpenTokenStore loads the root-only token file at path. A missing file is
@@ -95,6 +128,9 @@ func (s *TokenStore) Authenticate(user, credential string) bool {
 		return false
 	}
 	digest := hashToken(credential)
+	s.mu.Lock()
+	s.reloadIfChanged()
+	s.mu.Unlock()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, rec := range s.tokens {

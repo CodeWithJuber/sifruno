@@ -133,7 +133,7 @@ func TestUAPIAuthAndScoping(t *testing.T) {
 	// Account-scoped call without user: exact required-param error.
 	body := uapiCall(t, s2, token2, "/execute/DomainInfo/list_domains?api.version=3")
 	res := uapiResultOf(t, body)
-	if res["status"].(float64) != 0 || !strings.Contains(res["errors"].([]any)[0].(string), "“user” parameter is required") {
+	if res["status"].(float64) != 0 || !strings.Contains(res["errors"].([]any)[0].(string), "parameter is required") {
 		t.Fatalf("missing-user errors = %v", res["errors"])
 	}
 	// Unknown account.

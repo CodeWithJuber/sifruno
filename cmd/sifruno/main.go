@@ -18,8 +18,11 @@ import (
 	"sifruno/internal/api"
 	"sifruno/internal/budget"
 	"sifruno/internal/compat"
+	"sifruno/internal/dbhost"
+	"sifruno/internal/dnshost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/hostpkgs"
+	"sifruno/internal/mailhost"
 	"sifruno/internal/operator"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
@@ -45,6 +48,14 @@ func run() error {
 	whmListen := flag.String("whm-listen", "", "Optional TLS WHM API ingress address, e.g. 0.0.0.0:2087; requires --whm-tls-cert/--whm-tls-key and --accounts-socket")
 	whmTLSCert := flag.String("whm-tls-cert", "", "Operator-provided TLS certificate chain for the WHM ingress")
 	whmTLSKey := flag.String("whm-tls-key", "", "Operator-provided TLS private key for the WHM ingress")
+	dbDefaults := flag.String("db-defaults-file", "", "Option file with the panel database admin credentials (0600); empty uses socket auth as the invoking user")
+	mailHomesFlag := flag.String("mail-homes", "/srv/sfn-mail", "Mailbox root for the mail surface (cPanel mail/ + etc/ layout; controller-writable)")
+	dnsRoot := flag.String("dns-root", "/srv/sfn-dns", "DNS zone store root (BIND master files; maps to the reference's /var/named)")
+	dnsReload := flag.String("dns-reload-cmd", "", "Command run after zone changes to notify the authoritative server (e.g. named reload)")
+	dnsNS1 := flag.String("dns-ns1", "ns1.hostlelo.com", "Default first nameserver for account zones")
+	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
+	dnsIP := flag.String("dns-ip", "127.0.0.1", "Default A-record address for account zones (set to the public web IP in production)")
+	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
@@ -116,6 +127,7 @@ func run() error {
 		listeners = append(listeners, websiteListener)
 	}
 	var whmHandler http.Handler
+	var whmServer *whmapi.Server
 	if *accountsSocket != "" {
 		// WHM API 1 compatibility transport over the real account broker.
 		// Tokens live in a root-only JSON file; an absent store denies all
@@ -132,12 +144,30 @@ func run() error {
 		if serr != nil {
 			return serr
 		}
-		whmHandler = whmapi.New(whmapi.HostAccounts{
+		whmServer = whmapi.New(whmapi.HostAccounts{
 			Svc:    hostaccounts.NewClient(*accountsSocket),
 			Build:  "11.138.0.11",
 			Actor:  "whm-api",
 			Server: "127.0.0.1",
 		}, tokens).WithPackageStore(pkgs).WithSessionStore(sessions, *whmBaseURL)
+		mailHomes := *mailHomesFlag
+		if err := os.MkdirAll(mailHomes, 0o755); err == nil {
+			whmServer.SetMailService(&mailhost.LocalService{
+				Homes: mailHomes,
+				State: dir,
+			})
+		}
+		whmServer.SetDNSStore(&dnshost.Store{Root: *dnsRoot, Reload: dnshost.ExecReloader{Command: *dnsReload}})
+		whmServer.SetDNSDefaults(*dnsNS1, *dnsNS2, *dnsIP)
+		whmHandler = whmServer
+		dbReg, dberr := dbhost.OpenRegistry(filepath.Join(dir, "dbmap.json"))
+		if dberr != nil {
+			return dberr
+		}
+		whmServer.SetDBService(&dbhost.LocalService{
+			Run:      dbhost.CLIRunner{Socket: *dbSocket, DefaultsFile: *dbDefaults},
+			Registry: dbReg,
+		})
 	}
 	if *whmListen != "" {
 		ingressListener, ingressServer, ierr := listenWHMIngress(*whmListen, *whmTLSCert, *whmTLSKey, whmHandler)

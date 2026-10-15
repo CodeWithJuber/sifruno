@@ -2,6 +2,7 @@ package whmapi
 
 import (
 	"net/http"
+	"sifruno/internal/backuphost"
 	"sifruno/internal/dbhost"
 	"sifruno/internal/dnshost"
 	"sifruno/internal/mailhost"
@@ -88,6 +89,7 @@ type Server struct {
 	mail     mailhost.Service
 	dns      *dnshost.Store
 	tlsStore *tlshost.Store
+	backups  *backuphost.Store
 	dnsNS1   string
 	dnsNS2   string
 	dnsIP    string
@@ -149,6 +151,7 @@ var handlers = map[string]func(*Server, http.ResponseWriter, *http.Request){
 	"installssl":                     (*Server).handleInstallSSL,
 	"listcrts":                       (*Server).handleListCrts,
 	"fetchsslinfo":                   (*Server).handleFetchSSLInfo,
+	"backup_user_list":               (*Server).handleBackupUserList,
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {

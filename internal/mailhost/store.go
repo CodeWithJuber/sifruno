@@ -19,9 +19,10 @@ import (
 // (openssl -6 fallback). The registry (mailmap.json) is the query source;
 // passwd files are the auth truth Dovecot reads.
 type LocalService struct {
-	Homes   string // /srv/sfn-homes
-	State   string // panel state dir (mailmap.json)
-	Doveadm string // doveadm path; default "doveadm"
+	Homes    string // /srv/sfn-homes
+	State    string // panel state dir (mailmap.json)
+	Doveadm  string // doveadm path; default "doveadm"
+	EximRoot string // exim routing export root; default <Homes>/../sfn-exim
 
 	mu        sync.Mutex
 	mailboxes map[string]Mailbox
@@ -128,7 +129,10 @@ func (s *LocalService) writeAuth(account, domain string) error {
 	if err := os.WriteFile(filepath.Join(dir, "shadow"), []byte(strings.Join(shadow, "\n")+"\n"), 0o600); err != nil {
 		return err
 	}
-	return s.writeDovecotAggregate()
+	if err := s.writeDovecotAggregate(); err != nil {
+		return err
+	}
+	return s.writeEximData()
 }
 
 // shadow store: separate map so hashes never land in the query registry JSON.

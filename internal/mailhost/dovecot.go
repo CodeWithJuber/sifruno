@@ -41,6 +41,9 @@ func itoa(n int) string {
 // writeDovecotAggregate rewrites the aggregate auth file from the
 // registry + shadow store. Called on every auth-affecting mutation.
 func (s *LocalService) writeDovecotAggregate() error {
+	if err := s.load(); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.Homes, "dovecot")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

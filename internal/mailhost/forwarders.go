@@ -57,7 +57,10 @@ func (s *LocalService) writeValiases(domain string, lines []string) error {
 	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.valiasesPath(domain))
+	if err := os.Rename(tmp, s.valiasesPath(domain)); err != nil {
+		return err
+	}
+	return s.writeEximData()
 }
 
 // parseFwd splits "localpart: dest"; destinations may contain colons only

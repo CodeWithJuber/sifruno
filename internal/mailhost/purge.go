@@ -33,5 +33,9 @@ func (s *LocalService) PurgeAccount(ctx context.Context, account string, domains
 	if err := os.Remove(s.arPath(account)); err != nil && !os.IsNotExist(err) {
 		errs = append(errs, "autorespond: "+err.Error())
 	}
+	// final routing-export regen so terminated domains leave the exim root
+	if err := s.writeEximData(); err != nil {
+		errs = append(errs, "exim export: "+err.Error())
+	}
 	return purged, errs
 }

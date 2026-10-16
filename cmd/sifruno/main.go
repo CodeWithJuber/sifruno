@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -58,6 +59,10 @@ func run() error {
 	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
 	dnsIP := flag.String("dns-ip", "127.0.0.1", "Default A-record address for account zones (set to the public web IP in production)")
 	tlsRoot := flag.String("tls-root", "", "TLS certificate store root (installssl/listcrts); empty disables the TLS surface")
+	acmeDirectory := flag.String("acme-directory", "", "ACME v2 directory URL for AutoSSL issuance (e.g. Let's Encrypt staging/production); empty disables AutoSSL")
+	acmeEmail := flag.String("acme-email", "", "Contact email for the ACME account")
+	acmeInsecure := flag.Bool("acme-insecure-skip-verify", false, "Skip ACME directory TLS verification (test rigs with a private CA only; never in production)")
+	acmeResolver := flag.String("acme-dns-resolver", "127.0.0.1:53", "Resolver used to confirm _acme-challenge TXT propagation before ACME validation")
 	backupRoot := flag.String("backup-root", "", "Backup archive root; empty disables the backup surface")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
@@ -162,10 +167,23 @@ func run() error {
 				State: dir,
 			})
 		}
-		whmServer.SetDNSStore(&dnshost.Store{Root: *dnsRoot, Reload: dnshost.ExecReloader{Command: *dnsReload}})
+		dnsStore := &dnshost.Store{Root: *dnsRoot, Reload: dnshost.ExecReloader{Command: *dnsReload}}
+		whmServer.SetDNSStore(dnsStore)
 		whmServer.SetDNSDefaults(*dnsNS1, *dnsNS2, *dnsIP)
 		if *tlsRoot != "" {
-			whmServer.SetTLSStore(&tlshost.Store{Root: *tlsRoot})
+			tlsStore := &tlshost.Store{Root: *tlsRoot}
+			whmServer.SetTLSStore(tlsStore)
+			if *acmeDirectory != "" {
+				acme := tlshost.NewACMEClient(*acmeDirectory, *acmeEmail, filepath.Join(*tlsRoot, "_acme"))
+				if *acmeInsecure {
+					acme.HTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} // test rigs only
+				}
+				whmServer.SetAutoSSL(&tlshost.Runner{
+					Store:     tlsStore,
+					ACME:      acme,
+					Publisher: whmapi.DNSChallengePublisher{DNS: dnsStore, ResolverAddr: *acmeResolver},
+				})
+			}
 		}
 		whmHandler = whmServer
 		dbReg, dberr := dbhost.OpenRegistry(filepath.Join(dir, "dbmap.json"))

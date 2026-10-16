@@ -307,6 +307,9 @@ func (s *Server) handleRemoveAcct(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_ = s.tlsStore.PurgeAccount(username)
+		if s.autossl != nil {
+			_ = s.autossl.PurgeAccount(username)
+		}
 		purgeNotes += fmt.Sprintf("Removing SSL certificates...%d removed...Done\n", tlsRemoved)
 	}
 	if s.backups != nil {

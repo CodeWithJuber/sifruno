@@ -132,7 +132,16 @@ class RuntimeReportChallenge(unittest.TestCase):
         path.write_bytes(b"Error: old prefix must not be read\n" + b"x" * 8192 +
                          b"\n\x1b[31mAH00072: could not bind\x1b[0m\x00\nError: password=never-print\n" +
                          b"Error: startup failed\n" * 10 + b"AH01084: pass request body failed\n")
-        lines = fixture.owned_log_diagnostics(path)
+        # Model the production log owner while using a real temporary file and
+        # its actual link count, type and size on unprivileged CI runners.
+        info = path.stat()
+        owned = SimpleNamespace(st_mode=info.st_mode, st_nlink=info.st_nlink,
+                                st_size=info.st_size, st_uid=0)
+        with patch.object(fixture.os, "fstat", return_value=owned):
+            lines = fixture.owned_log_diagnostics(path)
+        with patch.object(fixture.os, "fstat", return_value=SimpleNamespace(
+                st_mode=info.st_mode, st_nlink=info.st_nlink, st_size=info.st_size, st_uid=1001)):
+            self.assertEqual(fixture.owned_log_diagnostics(path), [])
         self.assertIn("AH01084: pass request body failed", lines)
         self.assertEqual(len(lines), 4)
         self.assertTrue(all(len(line) <= 256 and all(c.isprintable() for c in line) for line in lines))

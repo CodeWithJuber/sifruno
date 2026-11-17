@@ -40,7 +40,6 @@ jobs:
         run: |
           # The process test rebuilds with -trimpath under a short startup deadline.
           # Prime this runner's local compiler cache from a cold checkout.
-          umask 077
           go build -mod=readonly -trimpath -o "$RUNNER_TEMP/sifruno-ci" ./cmd/sifruno
           go test ./... -count=1
       - name: Go vet

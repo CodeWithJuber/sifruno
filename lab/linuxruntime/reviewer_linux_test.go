@@ -64,7 +64,9 @@ func TestReviewerExclusiveRunAndReport(t *testing.T) {
  if run(context.Background(),o)==nil {t.Fatal("existing run directory reused")};after,e:=os.ReadFile(rp);if e!=nil || !bytes.Equal(b,after){t.Fatal("prior report changed")}
 }
 func TestReviewerPrivateModesAndLinks(t *testing.T) {
- p:=scratch(t);f:=filepath.Join(p,"data");put(t,f,[]byte("synthetic nonsecret"));if checkPrivatePermissions(p)!=nil {t.Fatal("valid private mode fixture refused")}
+ p:=filepath.Join(scratch(t),"private")
+ if err:=os.Mkdir(p,0700);err!=nil {t.Fatal("private directory fixture creation failed")}
+ f:=filepath.Join(p,"data");put(t,f,[]byte("synthetic nonsecret"));if checkPrivatePermissions(p)!=nil {t.Fatal("valid private mode fixture refused")}
  if os.Chmod(f,0644)!=nil || checkPrivatePermissions(p)==nil {t.Fatal("public file permissions admitted")};os.Chmod(f,0600)
  hard:=filepath.Join(p,"linked");if os.Link(f,hard)!=nil || checkPrivatePermissions(p)==nil {t.Fatal("actual Linux hardlink admitted")};os.Remove(hard)
  if os.Symlink(f,filepath.Join(p,"symlink"))!=nil || checkPrivatePermissions(p)==nil {t.Fatal("actual Linux symlink admitted")}

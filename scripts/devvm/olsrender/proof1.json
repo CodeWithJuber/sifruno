@@ -1,0 +1,17 @@
+{
+  "listeners": [
+    {"name": "http", "address": "*", "port": 80}
+  ],
+  "sites": [
+    {
+      "name": "wpproof",
+      "username": "wpproof",
+      "group": "wpproof",
+      "domains": ["wpproof.proof.test"],
+      "doc_root": "/home/wpproof/public_html",
+      "php_version": "8.3",
+      "limits": {"php_children": 4},
+      "isolation": {"namespace": true}
+    }
+  ]
+}

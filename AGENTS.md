@@ -1,13 +1,39 @@
 # Sifruno development
 
-Use Forgekit's substrate/preflight check before a non-trivial edit. Apply the minimum useful Hikmah and Wisdom Lens skills; verify with ship-guard before reporting completion. Impact analysis is advisory; unknown impact needs inspection.
+The plan is [docs/PRODUCT-PLAN.md](docs/PRODUCT-PLAN.md). Its roadmap and gates decide what is in scope: work on the current phase, and write a new idea into the plan's "Abhi nahi banega" list instead of building it.
 
-Use assigned Git worktrees and disjoint file ownership. Never edit another worker's branch or source directory. Root integrates reviewed commits sequentially. The tool session has four concurrent agent slots including root; use batches, never bypass this limit with subprocess agents. The workstream list in docs/parallel-development.md is a backlog, not a claim that agents are running.
+## Slices
 
-Preserve the approved Sifruno V3 brand and actual Astryx components. Native Sifruno static-site archives are not cPanel backups. Original vendor compatibility remains unverified until reference observations and differential tests pass.
+Take one thin slice: a single flow a user can see, such as "wizard creates a WordPress site", in its own Git worktree with disjoint file ownership. Root integrates reviewed commits one at a time. Four agent slots exist including root; work in batches inside that limit.
 
-Keep secrets, operator keys, cookies and tokens out of Git, output and shipped assets. Do not read global credentials. Tests must use isolated temporary state; never mutate the running .state or restart live processes. Do not publish or change firewall rules during feature work.
+A slice is done when it runs on the AlmaLinux 9 dev VM (`scripts/devvm/README.md`), with a screenshot, recording or saved report of the running thing as proof. Compiling and passing tests are steps on the way. Record evidence separately from inference and name what was not run.
 
-Shared dependencies under the primary workspace's node_modules, web/node_modules, .tools and .cache/go-mod are reusable inputs. Do not mutate them from worktrees. Use the primary Go wrapper with the worktree as working directory; UI output must stay in the worktree until root verifies it. No unapproved dependency additions.
+## Code a person reads
 
-Record evidence separately from inference. Completion requires the actual requested behavior, passing relevant checks, a reviewed diff and a recovery path. Never claim whole-panel, all-OS or cPanel parity based on compilation or a native static-site slice.
+The root broker, login, permissions, credentials and migration cutover are read line by line by a person before merge. Keep a change to any of them in its own commit and say "needs human review" in the commit message and the report.
+
+Every root action is one of the broker's fixed, typed operations: validated arguments and a direct exec with an absolute path. The panel API, AI and plugins reach the host only through that list.
+
+## Frozen and replaced code
+
+- `internal/whmapi` is frozen: bug and security fixes only. Zero-edit cPanel compatibility is out of scope. Learn cPanel behaviour from its public API docs; analysing its binaries is excluded by its licence.
+- `internal/mailhost`, `dnshost`, `tlshost` and `backuphost` are being replaced by Stalwart, PowerDNS, lego and restic: bug fixes only.
+- `internal/hostweb*` (Apache + PHP-FPM) is the Compat tier. OpenLiteSpeed is the default web server.
+
+## UI
+
+One design system: shadcn/ui on Base UI with Tailwind 4, themed from `assets/design-tokens.json`. Build new screens with it and replace Astryx screens instead of extending them. Keep the approved V3 brand: the logo, teal and ink, Inter.
+
+Menus name the job ("Websites", "Email"). An error says what happened, why, and what to do next; hashes and revisions sit under "Technical details". Use logical CSS properties (start and end) so right-to-left languages work.
+
+## Safety
+
+Work on the dev VM and on isolated temporary test state. Production servers, customer data, firewall rules, the running `.state` and live processes belong to the owner. Keep secrets, operator keys, cookies and tokens out of Git, output and shipped assets, and leave global credentials unread.
+
+## Toolchain
+
+Linux, with the Go and Node versions pinned in `.github/workflows/source-checks.yml`; that workflow is the list of checks to run. Run Go tests under `umask 022`, because one `hostaccounts` fixture fails under `077`. The repo's `.gitignore` hides `cmd/sifruno` from ripgrep, so search it with `rg --no-ignore` or `grep`.
+
+The stack table in the plan is the approved dependency list. Anything outside it needs the owner's approval first.
+
+Use Forgekit's substrate check before a non-trivial edit, the minimum useful Hikmah and Wisdom Lens skills, and ship-guard before reporting completion. Impact analysis is advisory; unknown impact needs inspection.

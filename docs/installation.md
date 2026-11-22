@@ -2,7 +2,7 @@
 
 Sifruno currently provides a local engineering panel, not a production hosting installer. These steps build source and run a private loopback panel. They do not install services, provision hosting identities, configure DNS/TLS/mail, or certify vendor compatibility.
 
-See [the documentation index](README.md) and [current project state](PROJECT-STATE.md)
+See [the documentation index](archive/README.md) and [current project state](archive/PROJECT-STATE.md)
 for delivered source and acceptance limits. This guide is in main; its commands
 were source-reviewed, not replayed as a fresh clean-machine installation. The
 merged WIP runtime-input guest archive is not runnable and is not an installation
@@ -47,7 +47,7 @@ step. Historical guest/browser results do not certify a current deployment.
 
 6. Open the generated operator key privately on this machine using a local editor, then enter it into the panel's private sign-in form. The file is `operator/access.key` inside the chosen state directory. Do not print it to the terminal, paste it into chat, commit it, include it in screenshots, or serve the state directory. Session cookies and CSRF protect the private workflows; this is not remote multi-tenant authentication.
 
-7. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](site-file-upload.md) for the exact scope and limits.
+7. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](archive/site-file-upload.md) for the exact scope and limits.
 
 8. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
 
@@ -100,7 +100,7 @@ Open the same loopback URL, privately read the generated operator key locally, a
 
 ## Optional native hosting prerequisites
 
-Accounts and web metadata preview require a separately admitted Linux broker and trusted controller layout. They are unavailable by default without that setup. Read [hosting accounts](hosting-accounts.md), [controller layout CLI](controller-layout-cli.md), [native web preview](native-web-preview.md), and [runtime input diagnostic](web-runtime-input-check.md) before attempting that separate scope. The input diagnostic checks installation inputs only; it does not apply configuration or establish serving health. There is no zero-configuration installer or automatic service installation in this guide.
+Accounts and web metadata preview require a separately admitted Linux broker and trusted controller layout. They are unavailable by default without that setup. Read [hosting accounts](archive/hosting-accounts.md), [controller layout CLI](archive/controller-layout-cli.md), [native web preview](archive/native-web-preview.md), and [runtime input diagnostic](archive/web-runtime-input-check.md) before attempting that separate scope. The input diagnostic checks installation inputs only; it does not apply configuration or establish serving health. There is no zero-configuration installer or automatic service installation in this guide.
 
 ## Troubleshooting
 

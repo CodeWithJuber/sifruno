@@ -1,0 +1,64 @@
+# Proof 1: WordPress on OpenLiteSpeed from config, own user, namespace, quota
+# 2026-11-22T23:20:38Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 
+# site user wp89637, domain wp89637.proof.test
+
+## WP-CLI 2.12.0, checksum-verified
+PASS  WP-CLI is installed and its checksum matched
+
+## 1. The broker creates the account
+PASS  the account exists as a regular Linux user
+
+## 2. Web server access and quota (stand-ins for broker operations still to build)
+PASS  the broker still sees the account as unchanged after the ACL
+PASS  a 200 MiB hard quota is set on the account
+
+## 3. Database
+PASS  the site's database user can sign in over TCP
+PASS  the site's database user cannot see the mysql schema
+
+## 4. OpenLiteSpeed config from a typed spec
+  wrote conf/sifruno.conf
+  wrote conf/vhosts/sifruno-wp89637/vhconf.conf
+PASS  OpenLiteSpeed accepts the rendered config (openlitespeed -t, no error)
+PASS  openlitespeed -t logged nothing about the Sifruno vhost
+  2026-11-22 23:22:09.686429 [WARN] [14944] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+  2026-11-22 23:22:09.695847 [WARN] [14944] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+
+## 5. WordPress, installed by WP-CLI as the site user
+PASS  WordPress downloaded into public_html
+PASS  WordPress is installed
+PASS  WordPress files belong to the site user
+
+## 6. Graceful restart and the live site
+home page statuses until the first good answer: 200
+first good answer 21 s after the restart
+PASS  the WordPress home page answers on port 80 for wp89637.proof.test
+time from account creation to live site: 259 s (software-emulated VM; see the README)
+PASS  wp-login.php answers 200
+  user=wp89637
+  home_entries=wp89637
+  passwd_lines=1
+  other_home_readable=no
+PASS  PHP runs as the site user
+PASS  PHP sees only its own home under /home (namespace)
+PASS  PHP sees a short /etc/passwd (namespace)
+PASS  PHP cannot read other homes or /etc/shadow
+PASS  lsphp for this site runs as the site user
+PASS  /.htaccess is denied (403)
+PASS  /wp-config.php.bak is denied (403)
+PASS  /.env is denied (403)
+PASS  /.git/config is denied (403)
+PASS  another Host name is not served this site
+
+## 7. The quota holds
+  dd: error writing '/home/wp89637/fill.bin': Disk quota exceeded
+PASS  writing past 200 MiB fails with a quota error
+  usage at the limit: 203924 KiB
+PASS  usage never passes the hard limit
+PASS  the site still answers after the quota was hit
+
+## SELinux
+AVC denials in the last 10 minutes: 0
+
+Account 40ab2256f0a882a0a759be0b9eee99c7, work files in /root/sifruno-proof1-89637
+# Result: 0 failed

@@ -1,0 +1,70 @@
+# Proof 3 rehearsal: verify catches a protected folder that opens on the new server
+# 2026-11-22T23:26:37Z  httpd-2.4.62-13.el9_8.9.x86_64 openlitespeed-1.9.4-3.el9.x86_64 
+
+## The old site (Apache, as on cPanel)
+Port tcp/8081 already defined, modifying instead
+Port tcp/8082 already defined, modifying instead
+PASS  old site answers 200 on /
+PASS  old site closes /private/ with 401
+PASS  old site closes wp-config.php.bak with 403
+
+## Pre-flight: scan the old site's .htaccess files
+.htaccess scan, layout single (read-only)
+sites: 1 (native 0, convertible 0, compat 1)
+sites without .htaccess: 0
+.htaccess files: 2 (native 0, convertible 0, compat 2, not readable 0)
+directives: 6
+  rewrite: 0
+  access_control: 6
+  php_settings: 0
+  headers: 0
+  caching: 0
+  mime_handlers: 0
+  redirect_alias: 0
+site verdict: compat
+PASS  the scan sends this site to the Compat tier
+probes: [{"path": "/private/", "kind": "auth"}]
+PASS  probes cover the password folder
+PASS  the scan reports the <Files> deny rule for wp-config.php.bak
+PASS  probes cover the denied file
+
+## Native tier: the same files on OpenLiteSpeed
+PASS  OpenLiteSpeed serves the copy on 8088
+OpenLiteSpeed answers /private/ with 200 and wp-config.php.bak with 200
+CRITICAL closed URL /private/ (auth) new_open: closed on the old site (401) but open on the new site (200)
+CRITICAL closed URL /wp-config.php.bak (deny) new_open: closed on the old site (403) but open on the new site (200)
+CUTOVER LOCKED: 2 failed check(s)
+PASS page /
+PASS page /about.html
+PASS page /blog/
+PASS page /contact.html
+PASS page /blog/first.html
+Old site: http://127.0.0.1:8081
+New site: http://127.0.0.1:8088
+Pages: 5 compared (limit 50): 5 pass, 0 warn, 0 fail
+Closed URLs: 2 checked: 0 pass, 2 fail
+Scope: Pages discovered on the old site (status, redirect target, content type, HTML title, body size) and listed closed URLs (401/403). Screenshots, WordPress admin, database rows, mail, DNS and SSL are not compared.
+Started 2026-11-22T23:28:22Z, finished 2026-11-22T23:28:23Z
+PASS  verify exits 3: the gate is closed against the Native copy
+PASS  the report names the opened password folder
+PASS  the JSON report says cutover_allowed false
+
+## Compat tier: the same files on Apache
+CUTOVER ALLOWED: every compared page and closed URL matches the old site
+PASS closed URL /private/ (auth): both sites answer 401
+PASS closed URL /wp-config.php.bak (deny): both sites answer 403
+PASS page /
+PASS page /about.html
+PASS page /blog/
+PASS page /contact.html
+PASS page /blog/first.html
+PASS  verify exits 0: the gate opens against the Compat copy
+PASS  every probe passed
+PASS  pages were compared
+
+## A broken copy is caught too
+FAIL page /blog/first.html: status 200 → 404
+PASS  a page missing on the copy closes the gate
+
+Reports: /srv/proof3-1795389997/work
+# Result: 0 failed

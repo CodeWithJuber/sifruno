@@ -176,8 +176,8 @@ rc=0
 "$BIN/panelctl" migrate verify --old http://127.0.0.1:8081 --new http://127.0.0.1:8082 --probes-file "$WORK/probes.json" --out "$WORK/compat-report.json" > "$WORK/compat-report.txt" 2>&1 || rc=$?
 sed -n '1,8p' "$WORK/compat-report.txt"
 check "verify exits 0: the gate opens against the Compat copy" test "$rc" -eq 0
-check "every probe passed" python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["counts"]["probes"]; sys.exit(0 if c.get("fail",0)==0 and c.get("pass",0)>=2 else 1)' "$WORK/compat-report.json"
-check "pages were compared" python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["counts"]["pages"]; sys.exit(0 if c.get("pass",0)>=5 else 1)' "$WORK/compat-report.json"
+check "every probe passed" python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["counts"]; sys.exit(0 if c["probes_fail"]==0 and c["probes_pass"]>=2 else 1)' "$WORK/compat-report.json"
+check "pages were compared" python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["counts"]; sys.exit(0 if c["pages_pass"]>=5 and c["pages_fail"]==0 else 1)' "$WORK/compat-report.json"
 
 echo
 echo "## A broken copy is caught too"

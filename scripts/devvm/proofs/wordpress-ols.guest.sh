@@ -171,10 +171,19 @@ echo
 echo "## 6. Graceful restart and the live site"
 systemctl restart lsws
 live=""
-for _ in $(seq 1 60); do
-  if get "http://127.0.0.1/" | grep -q 'Sifruno proof site'; then live=$(date +%s); break; fi
-  sleep 2
+# The first request starts lsphp and loads WordPress cold. Under software
+# emulation that took over two minutes in one run (the server answered with
+# errors meanwhile), so wait up to ten and record the statuses seen.
+restarted=$(date +%s)
+statuses=""
+while [ $(( $(date +%s) - restarted )) -lt 600 ]; do
+  status="$(curl -s -o "$WORK/home.html" -w '%{http_code}' --max-time 120 -H "Host: $DOMAIN" http://127.0.0.1/)"
+  statuses="$statuses $status"
+  if [ "$status" = 200 ] && grep -q 'Sifruno proof site' "$WORK/home.html"; then live=$(date +%s); break; fi
+  sleep 5
 done
+echo "home page statuses until the first good answer:$statuses"
+[ -n "$live" ] && echo "first good answer $((live - restarted)) s after the restart"
 if [ -n "$live" ]; then
   pass "the WordPress home page answers on port 80 for $DOMAIN"
   echo "time from account creation to live site: $((live - started)) s (software-emulated VM; see the README)"

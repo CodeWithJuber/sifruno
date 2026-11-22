@@ -1,5 +1,5 @@
 # Proof 1: WordPress on OpenLiteSpeed from config, own user, namespace, quota
-# 2026-11-22T23:20:38Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 
+# 2026-11-22T23:20:38Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
 # site user wp89637, domain wp89637.proof.test
 
 ## WP-CLI 2.12.0, checksum-verified

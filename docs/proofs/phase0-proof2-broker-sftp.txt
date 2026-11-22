@@ -1,6 +1,6 @@
 # Proof 2: broker creates a real Linux user that can sign in over SFTP
 # 2026-11-22T22:14:37Z  AlmaLinux release 9.9 (Chartreuse Bobcat)  kernel 5.14.0-741.22.1.el9_9.x86_64  SELinux Enforcing
-# openssh-server-9.9p1-16.el9_9.alma.1.x86_64 shadow-utils-4.9-17.el9.x86_64 
+# openssh-server-9.9p1-16.el9_9.alma.1.x86_64 shadow-utils-4.9-17.el9.x86_64
 
 ## Host policy and broker start
 PASS  broker host policy report says supported

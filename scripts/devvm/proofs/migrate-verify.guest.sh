@@ -34,7 +34,7 @@ check() {
 status_of() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
 
 echo "# Proof 3 rehearsal: verify catches a protected folder that opens on the new server"
-echo "# $(date -u +%FT%TZ)  $(rpm -q httpd openlitespeed | tr '\n' ' ')"
+echo "# $(date -u +%FT%TZ)  $(rpm -q httpd openlitespeed | paste -sd ' ')"
 
 echo
 echo "## The old site (Apache, as on cPanel)"

@@ -45,7 +45,7 @@ get() { curl -s -H "Host: $DOMAIN" "$@"; }
 code() { curl -s -o /dev/null -w '%{http_code}' -H "Host: $DOMAIN" "$1"; }
 
 echo "# Proof 1: WordPress on OpenLiteSpeed from config, own user, namespace, quota"
-echo "# $(date -u +%FT%TZ)  $(rpm -q openlitespeed lsphp83 mariadb-server | tr '\n' ' ')"
+echo "# $(date -u +%FT%TZ)  $(rpm -q openlitespeed lsphp83 mariadb-server | paste -sd ' ')"
 echo "# site user $SITE_USER, domain $DOMAIN"
 mkdir -p "$WORK"
 chmod 700 "$WORK"

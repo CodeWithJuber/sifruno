@@ -1,5 +1,5 @@
 # Proof 3 rehearsal: verify catches a protected folder that opens on the new server
-# 2026-11-22T23:26:37Z  httpd-2.4.62-13.el9_8.9.x86_64 openlitespeed-1.9.4-3.el9.x86_64 
+# 2026-11-22T23:26:37Z  httpd-2.4.62-13.el9_8.9.x86_64 openlitespeed-1.9.4-3.el9.x86_64
 
 ## The old site (Apache, as on cPanel)
 Port tcp/8081 already defined, modifying instead

@@ -33,7 +33,7 @@ sftp_as() { # sftp_as user keyfile batchfile
 
 echo "# Proof 2: broker creates a real Linux user that can sign in over SFTP"
 echo "# $(date -u +%FT%TZ)  $(cat /etc/redhat-release)  kernel $(uname -r)  SELinux $(getenforce)"
-echo "# $(rpm -q openssh-server shadow-utils | tr '\n' ' ')"
+echo "# $(rpm -q openssh-server shadow-utils | paste -sd ' ')"
 
 mkdir -p "$WORK"
 chmod 700 "$WORK"

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,12 +42,25 @@ type record struct {
 	Actor           string    `json:"actor"`
 	Reason          string    `json:"reason"`
 	HistorySequence uint64    `json:"history_sequence"`
+	// SSHKeys is the installed canonical key set, one key per line. SSHKeysNext
+	// is the set an unfinished ssh_keys operation is installing; it is durable
+	// before the key file is touched so a restart can finish the same write.
+	// Both are strings so a record stays comparable for snapshot leases.
+	SSHKeys     string `json:"ssh_keys,omitempty"`
+	SSHKeysNext string `json:"ssh_keys_next,omitempty"`
 }
 type nativeSystem interface {
 	Plan(context.Context, string) (int, int, error)
 	Create(context.Context, record, func(ownership) error) (ownership, error)
 	RecoverCreate(context.Context, record, func(ownership) error) (ownership, error)
+	// VerifyIdentity is the part of Verify that starts no process.
+	VerifyIdentity(record) error
 	Verify(context.Context, record) error
+	// SetSSHKeys installs exactly this canonical key set; empty removes it.
+	SetSSHKeys(context.Context, record, []string) error
+	// VerifySSHKeys reports whether the installed key file holds exactly this
+	// set (for the empty set: that no file exists).
+	VerifySSHKeys(record, []string) error
 	// Delete removes the managed system identity and owned home after
 	// ownership verification; it must be safe to retry after a crash.
 	Delete(context.Context, record) error
@@ -60,7 +74,19 @@ type store struct {
 	opts   BrokerOptions
 	native nativeSystem
 	closed bool
+	// auditAfter is the ID of the last account the rotating full check
+	// reached. Keying the rotation on an ID, not a position, keeps it fair
+	// while accounts are created and deleted between requests.
+	auditAfter string
 }
+
+// auditBatch is how many accounts each refresh verifies in full (identity
+// plus the password-lock and expiry observation, two processes per account).
+// Every account still gets the file-only identity check on every refresh.
+// Full verification of all accounts on every request is what limited the
+// broker to about a hundred accounts; a rotating batch keeps drift detection
+// while the cost per request stays fixed.
+const auditBatch = 16
 
 var accountBucket = []byte("hostaccounts-v1")
 var configBucket = []byte("hostbroker-config-v1")
@@ -168,7 +194,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -177,10 +203,15 @@ func (s *store) records() ([]record, error) {
 					validTarget = validText(r.Pending.Target, 64)
 				case "delete":
 					validTarget = r.Pending.Target == ""
+				case "ssh_keys":
+					validTarget = sshDigestPattern.MatchString(r.Pending.Target) && canonicalSSHKeys(r.SSHKeysNext) && r.Pending.Target == sshKeysDigest(splitSSHKeys(r.SSHKeysNext))
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
 				}
+			}
+			if !canonicalSSHKeys(r.SSHKeys) || (r.SSHKeysNext != "" && (r.Pending == nil || r.Pending.Action != "ssh_keys")) {
+				return ErrRecovery
 			}
 			if verifyHistory(tx, r) != nil {
 				return ErrRecovery
@@ -213,7 +244,8 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 		return ErrRecovery
 	}
 	seenNames, seenDomains, seenUID := map[string]bool{}, map[string]bool{}, map[int]bool{}
-	for _, r := range items {
+	audited, last := s.nextAudit(items)
+	for i, r := range items {
 		if seenNames[r.Account.Username] || seenDomains[r.Account.Domain] || seenUID[r.Account.UID] {
 			return ErrRecovery
 		}
@@ -233,6 +265,24 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					continue
 				}
 				r.Ownership = owned
+			} else if r.Pending.Action == "ssh_keys" {
+				// Finish the interrupted key write: the target set was durable
+				// before the file was touched, and installing it is idempotent.
+				current := r
+				current.Pending = nil
+				if s.native.Verify(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, splitSSHKeys(r.SSHKeysNext)) != nil {
+					continue
+				}
+				operation := *r.Pending
+				r.SSHKeys, r.SSHKeysNext = r.SSHKeysNext, ""
+				r.Account.Revision++
+				r.Account.UpdatedAt = time.Now().UTC()
+				r.Actor, r.Reason = r.Pending.Actor, r.Pending.Reason
+				r.Pending = nil
+				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+					return ErrRecovery
+				}
+				continue
 			} else if s.native.Verify(ctx, targetRecord(r, r.Pending.Target)) != nil {
 				continue
 			}
@@ -277,7 +327,13 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			}
 			continue
 		}
-		if e := s.native.Verify(ctx, r); e != nil {
+		var e error
+		if audited(i) {
+			e = s.native.Verify(ctx, r)
+		} else {
+			e = s.native.VerifyIdentity(r)
+		}
+		if e != nil {
 			if errors.Is(e, ErrUnavailable) {
 				return ErrUnavailable
 			}
@@ -292,9 +348,158 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			}
 		}
 	}
+	s.auditAfter = last
 	return nil
 }
 func targetRecord(r record, state string) record { r.Account.State = state; return r }
+
+// nextAudit picks this refresh's full-verification batch: the auditBatch
+// accounts after the last one audited, in ID order, wrapping around. It
+// returns the ID to resume after; refresh stores it only once the whole
+// pass has run, so an aborted pass is repeated rather than skipped. With
+// auditBatch accounts or fewer every account is in the batch, which is the
+// behaviour the broker had before the account bound was raised.
+func (s *store) nextAudit(items []record) (func(int) bool, string) {
+	n := len(items)
+	if n <= auditBatch {
+		return func(int) bool { return true }, ""
+	}
+	start := sort.Search(n, func(i int) bool { return items[i].Account.ID > s.auditAfter })
+	if start == n {
+		start = 0
+	}
+	last := items[(start+auditBatch-1)%n].Account.ID
+	return func(i int) bool { return (i-start+n)%n < auditBatch }, last
+}
+
+// A stored key set is the canonical lines joined by newlines; the empty
+// string is the empty set.
+func joinSSHKeys(canonical []string) string { return strings.Join(canonical, "\n") }
+func splitSSHKeys(stored string) []string {
+	if stored == "" {
+		return nil
+	}
+	return strings.Split(stored, "\n")
+}
+
+// canonicalSSHKeys reports whether a stored set is exactly what
+// normalizeSSHKeys would produce, so a record never carries a line the
+// admission rules would refuse.
+func canonicalSSHKeys(stored string) bool {
+	canonical, _, ok := normalizeSSHKeys(splitSSHKeys(stored))
+	return ok && joinSSHKeys(canonical) == stored
+}
+
+func (s *store) sshKeys(ctx context.Context, id string) (SSHKeysResult, error) {
+	if snapshotReentry(ctx, s) {
+		return SSHKeysResult{}, ErrConflict
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ctx == nil || !idPattern.MatchString(id) {
+		return SSHKeysResult{}, ErrInvalid
+	}
+	if s.healthy() != nil {
+		return SSHKeysResult{}, ErrUnavailable
+	}
+	if s.refresh(ctx, false) != nil {
+		return SSHKeysResult{}, ErrRecovery
+	}
+	items, err := s.records()
+	if err != nil {
+		return SSHKeysResult{}, err
+	}
+	for _, r := range items {
+		if r.Account.ID != id {
+			continue
+		}
+		_, keys, ok := normalizeSSHKeys(splitSSHKeys(r.SSHKeys))
+		if !ok {
+			return SSHKeysResult{}, ErrRecovery
+		}
+		a := r.Account
+		if r.Pending != nil {
+			a.State = "recovery_required"
+		}
+		return SSHKeysResult{Account: a, Keys: keys}, nil
+	}
+	return SSHKeysResult{}, ErrNotFound
+}
+
+// setSSHKeys replaces the account's SFTP key set. The intent and the target
+// set are journaled before the key file changes, the touched account is
+// verified in full first, and an interrupted write is finished by refresh.
+func (s *store) setSSHKeys(ctx context.Context, id string, in SSHKeysInput, actor string) (SSHKeysResult, error) {
+	if snapshotReentry(ctx, s) {
+		return SSHKeysResult{}, ErrConflict
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	canonical, keys, ok := normalizeSSHKeys(in.Keys)
+	if !idPattern.MatchString(id) || !ok || in.ExpectedRevision == 0 || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return SSHKeysResult{}, ErrInvalid
+	}
+	items, err := s.mutationReady(ctx)
+	if err != nil {
+		return SSHKeysResult{}, err
+	}
+	var r record
+	found := false
+	for _, item := range items {
+		if item.Account.ID == id {
+			r = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		return SSHKeysResult{}, ErrNotFound
+	}
+	if r.Account.Revision != in.ExpectedRevision {
+		return SSHKeysResult{}, ErrConflict
+	}
+	// An unchanged set is a no-op only while the installed file still holds
+	// it. A file edited or removed outside the broker is rewritten through
+	// the ordinary journaled path, which also moves the revision on.
+	if r.SSHKeys == joinSSHKeys(canonical) && s.native.VerifySSHKeys(r, canonical) == nil {
+		return SSHKeysResult{Account: r.Account, Keys: keys}, nil
+	}
+	if r.Account.Revision == ^uint64(0) {
+		return SSHKeysResult{}, ErrRecovery
+	}
+	current := r
+	r.Pending = &pending{Action: "ssh_keys", Target: sshKeysDigest(canonical), Actor: actor, Reason: in.Reason}
+	r.SSHKeysNext = joinSSHKeys(canonical)
+	before := r.Account
+	operationID, e := randomID()
+	if e != nil {
+		return SSHKeysResult{}, e
+	}
+	r.Pending.OperationID = operationID
+	after := r.Account
+	after.Revision++
+	intent := operationEvent{OperationID: operationID, Action: "ssh_keys", Status: "intended", Actor: actor, Reason: in.Reason, Before: &before, After: after}
+	r, err = s.appendEvent(r, intent)
+	if err != nil {
+		return SSHKeysResult{}, ErrRecovery
+	}
+	if s.native.Verify(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, canonical) != nil {
+		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		return SSHKeysResult{}, ErrRecovery
+	}
+	r.SSHKeys, r.SSHKeysNext = joinSSHKeys(canonical), ""
+	r.Account.Revision++
+	r.Account.UpdatedAt = time.Now().UTC()
+	r.Actor, r.Reason = actor, in.Reason
+	operation := *r.Pending
+	r.Pending = nil
+	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {
+		return SSHKeysResult{}, ErrRecovery
+	}
+	return SSHKeysResult{Account: r.Account, Keys: keys}, nil
+}
 
 // purge removes the account record key after a completed delete. Operation
 // history rows are retained under the history bucket for audit; the account

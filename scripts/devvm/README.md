@@ -74,4 +74,4 @@ panelctl htaccess scan --root /home/USER/public_html --layout single --json --de
 panelctl migrate verify --old https://example.com --new https://example.com --new-connect NEW_SERVER_IP:443 --insecure-new-tls --probes-file probes.json --out report.json
 ```
 
-`probes.json` is a JSON list of `{"path": "/private/", "kind": "auth"}` and `{"path": "/wp-config.php.bak", "kind": "deny"}` entries; `proofs/migrate-verify.guest.sh` shows how to build it from `scan.json`. Exit status 0 means the gate is open, 3 that it is closed.
+`--insecure-new-tls` is needed only until the copied certificate is installed on the new server; it is a warning, and warnings keep the gate closed, so after reviewing the report rerun with `--accept-warnings` as well. `probes.json` is a JSON list of `{"path": "/private/", "kind": "auth"}` and `{"path": "/wp-config.php.bak", "kind": "deny"}` entries; `proofs/migrate-verify.guest.sh` shows how to build it from `scan.json`. Exit status 0 means the gate is open, 3 that it is closed.

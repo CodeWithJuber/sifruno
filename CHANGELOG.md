@@ -2,7 +2,32 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The product plan (`docs/PRODUCT-PLAN.md`) replaces the zero-edit cPanel
+  compatibility target. Earlier delivery notes moved to `docs/archive/`, the
+  README is one page, and `internal/whmapi` is frozen.
+- The account broker creates regular Linux users with subordinate ID ranges
+  instead of system users, and the 100-account bound is now 2000.
+- `--dns-reload-cmd` runs without a shell: give an absolute program and plain
+  arguments, for example `/usr/sbin/rndc reload`. Shell syntax is refused at
+  startup.
+
+### Removed
+
+- The Ghidra and REA analysis tooling and the `rea-agents` dev dependency.
+
 ### Added
+
+- Broker-managed SFTP keys: `SetSSHKeys` writes a root-owned key file per
+  account, each key restricted to `internal-sftp`.
+- `panelctl htaccess scan`: classifies every `.htaccess` directive and sorts
+  sites into Native, Convertible or Compat for OpenLiteSpeed.
+- `panelctl migrate verify`: compares an old site with its new copy, pages
+  and closed (401/403) URLs, and keeps the cutover gate closed on any failure
+  or unaccepted warning.
+- `internal/olsweb`: renders OpenLiteSpeed config for a site from a typed spec.
+- `scripts/devvm`: a disposable AlmaLinux 9 dev VM and the Phase 0 proofs.
 
 - Recovery archive v1 (`recovery-2026-10-11-v1`) for the Windows-server handoff:
   all 270 original dirty source paths, 130 recovery branches, an offline Git

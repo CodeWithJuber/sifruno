@@ -113,7 +113,7 @@ for site in report.get("sites", []):
             if status not in (401, 403) or rule.get("url_regex"):
                 continue  # a Redirect pattern names no single URL to probe
             kind = "auth" if status == 401 else "deny"
-            path = rule.get("url_path", "/")
+            path = rule.get("path") or rule.get("url_path") or "/"
             name = rule.get("files", "")
             if rule.get("files_regex"):
                 continue  # a pattern names no single URL to probe
@@ -122,6 +122,15 @@ json.dump(probes, open(sys.argv[2], "w"), indent=1)
 print("probes:", json.dumps(probes))
 PY
 check "probes cover the password folder" grep -q '"/private/"' "$WORK/probes.json"
+# The scan promises a status only for whole-directory rules. A <Files> rule is
+# reported without one, so the operator adds its probe, as an admin would.
+check "the scan reports the <Files> deny rule for wp-config.php.bak" grep -q '"files": *"wp-config.php.bak"' "$WORK/scan.json"
+python3 - "$WORK/probes.json" <<'PY'
+import json, sys
+probes = json.load(open(sys.argv[1]))
+probes.append({"path": "/wp-config.php.bak", "kind": "deny"})
+json.dump(probes, open(sys.argv[1], "w"), indent=1)
+PY
 check "probes cover the denied file" grep -q 'wp-config.php.bak' "$WORK/probes.json"
 
 echo

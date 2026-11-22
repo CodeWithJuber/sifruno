@@ -1,0 +1,77 @@
+# Dev VM
+
+A disposable AlmaLinux 9 guest for the proofs in the [product plan](../../docs/PRODUCT-PLAN.md). A slice is done when it runs here, not when it compiles.
+
+The VM runs under QEMU as an ordinary user and is reachable only through loopback port forwards. Root signs in with a key made for this VM alone. It uses KVM when `/dev/kvm` is usable and software emulation otherwise; emulation works on any machine but is several times slower (the first boot takes a few minutes and the package install about half an hour).
+
+## What you need on the host
+
+`qemu-system-x86_64`, `qemu-img`, `cloud-localds`, `ssh`, `curl`, `python3`, and the Go version CI pins. On Ubuntu:
+
+```bash
+sudo apt-get install qemu-system-x86 qemu-utils cloud-image-utils
+```
+
+About 4 GB of disk for the image and the VM's disks.
+
+## Create, provision, prove
+
+```bash
+scripts/devvm/vm.sh create
+```
+
+```bash
+scripts/devvm/vm.sh start
+```
+
+```bash
+scripts/devvm/vm.sh put scripts/devvm/provision.sh /root/provision.sh
+```
+
+```bash
+scripts/devvm/vm.sh ssh 'bash /root/provision.sh'
+```
+
+```bash
+scripts/devvm/proof.sh broker-sftp 105
+```
+
+`proof.sh` prints PASS or FAIL for each check, saves the transcript under `artifacts/devvm/` and exits non-zero if anything failed. When you are finished:
+
+```bash
+scripts/devvm/vm.sh destroy
+```
+
+`vm.sh` keeps its files in `~/.cache/sifruno-devvm`; set `SIFRUNO_DEVVM_DIR` to put them elsewhere.
+
+## What provisioning sets up
+
+`provision.sh` is the dev VM's stand-in for the one-command installer that Phase 1 owes. It shows what that installer has to do on a stock AlmaLinux 9:
+
+- **Repositories.** LiteSpeed, EPEL, CRB and Remi. Remi is required: LiteSpeed's `lsphp` extension packages link against library builds EL9 only gets from there.
+- **Packages.** OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman, and Apache for the Compat tier (moved off port 80 to loopback 8080, not started at boot).
+- **`/home`.** A separate XFS filesystem mounted with user and group quota. XFS only enables quota at mount time. Root is the only login, so `/home` holds nothing but accounts, which the broker requires of its homes directory.
+- **Broker host policy.** `passwd`, `group` and `shadow` in `nsswitch.conf` are set to `files` (stock AlmaLinux lists `sss` and `systemd` too, and the broker refuses that). The controller user `sifpanel` and the root-owned key directory `/etc/sifruno/ssh/authorized_keys` (mode 0711) are created.
+- **sshd policy.** Deny by default: every login is SFTP-only and reads its keys from the broker's directory, with forwarding and TTYs off, unless it is root or in `wheel`. The file is validated with `sshd -t` before a reload.
+
+## Proofs
+
+Saved transcripts of these runs are in [docs/proofs](../../docs/proofs/README.md).
+
+| Plan item | Command | What it shows |
+| --- | --- | --- |
+| Phase 0, item 8 (Proof 2) | `proof.sh broker-sftp [extra-accounts]` | The root broker creates a regular Linux user with subordinate ID ranges; the user signs in over SFTP with a broker-managed key; it gets no shell and no port forwarding; a key it adds itself is ignored; a second account cannot read the first; suspend, resume, key removal and delete behave; more than 100 accounts work. |
+| Phase 0, item 7 (Proof 1) | `proof.sh wordpress-ols` | The broker creates the account; `olsweb` renders the OpenLiteSpeed config from a typed spec; WP-CLI installs WordPress as that user against its own database; PHP runs as the user inside OpenLiteSpeed's namespace container and sees only its own home; sensitive paths are denied at the vhost; a 200 MiB XFS quota holds. Web-server access (an ACL) and the quota are set by the proof script, standing in for broker operations still to build. Run `broker-sftp` first. |
+| Phase 0, item 9 (Proof 3), rehearsal | `proof.sh migrate-verify` | On a stand-in site, not a real cPanel one: the `.htaccess` scan sends a site with a password folder to the Compat tier; its access rules become probes; `migrate verify` keeps the cutover gate closed against an OpenLiteSpeed copy, where the folder opens, and opens it against an Apache copy. The real Proof 3 needs a HostLelo cPanel site and root SSH to it. |
+
+The real Proof 3 against one of HostLelo's cPanel sites takes two commands. The scan runs as root on the cPanel server and only reads; verify runs from any machine that can reach both servers:
+
+```bash
+panelctl htaccess scan --root /home/USER/public_html --layout single --json --details > scan.json
+```
+
+```bash
+panelctl migrate verify --old https://example.com --new https://example.com --new-connect NEW_SERVER_IP:443 --insecure-new-tls --probes-file probes.json --out report.json
+```
+
+`probes.json` is a JSON list of `{"path": "/private/", "kind": "auth"}` and `{"path": "/wp-config.php.bak", "kind": "deny"}` entries; `proofs/migrate-verify.guest.sh` shows how to build it from `scan.json`. Exit status 0 means the gate is open, 3 that it is closed.

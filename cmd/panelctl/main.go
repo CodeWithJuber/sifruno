@@ -43,6 +43,7 @@ const usage = `panelctl [--state .state/sifruno] [--panel-url http://127.0.0.1:8
  sites export --id ID --backup ID --out NEW.zip
  sites import --name NAME --domain DOMAIN --from NATIVE.zip
  backup inspect --from FILE --out NEW.jsonl
+ htaccess scan --root DIR [--layout cpanel|dir|single] [--json] [--details]
  accounts capability | list | web-preview
  whm-token create --user USER --name NAME | list | revoke --name NAME
  accounts create --username USER --domain DOMAIN --reason TEXT
@@ -58,6 +59,7 @@ ZIP transfer supports native Sifruno v1 static-site archives only, not cPanel ho
 Backup inspect catalogs an original TAR/TAR.GZ without extracting files or contacting a panel.
 Migrate verify sends credential-free GETs only; it compares pages and closed URLs, not
 screenshots, databases, mail, DNS or SSL.
+Htaccess scan only reads files; it prints counts, and paths or account names only with --details.
 `
 
 func main() {
@@ -96,6 +98,8 @@ func run(args []string, out, errs io.Writer) error {
 		return runWHMToken(args[1:], *state, out, errs)
 	case "migrate":
 		return runMigrate(args[1:], out, errs)
+	case "htaccess":
+		return runHtaccess(args[1:], out)
 	case "status":
 		f := flag.NewFlagSet("status", flag.ContinueOnError)
 		f.SetOutput(errs)

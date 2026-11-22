@@ -42,13 +42,15 @@ type target struct {
 }
 
 // crawl holds the ordered discovery queue. Only the first limit entries are
-// ever requested, so nothing is queued beyond it.
+// ever requested, so nothing is queued beyond it; full records that a page
+// was found and left out because of the limit.
 type crawl struct {
 	origin   *url.URL
 	limit    int
 	queue    []target
 	seen     map[string]bool
 	variants map[string]int
+	full     bool
 }
 
 func newCrawl(origin *url.URL, limit int) *crawl {
@@ -69,7 +71,7 @@ func (c *crawl) seed(t, source string) {
 }
 
 func (c *crawl) addURL(u *url.URL, source string) {
-	if len(c.queue) >= c.limit || u == nil || u.User != nil {
+	if u == nil || u.User != nil {
 		return
 	}
 	if ok, _ := siteMatch(u, c.origin); !ok || assetExtensions[strings.ToLower(path.Ext(u.Path))] {
@@ -79,10 +81,17 @@ func (c *crawl) addURL(u *url.URL, source string) {
 	if c.seen[t] {
 		return
 	}
-	if p, _, ok := strings.Cut(t, "?"); ok {
-		if c.variants[p] >= maxQueryVariants {
-			return
-		}
+	p, _, hasQuery := strings.Cut(t, "?")
+	if hasQuery && c.variants[p] >= maxQueryVariants {
+		return
+	}
+	// Checked after the filters, so only a page that would have been
+	// compared marks the crawl as cut short.
+	if len(c.queue) >= c.limit {
+		c.full = true
+		return
+	}
+	if hasQuery {
 		c.variants[p]++
 	}
 	c.seen[t] = true
@@ -93,7 +102,7 @@ func (c *crawl) addURL(u *url.URL, source string) {
 // source can use up the page budget alone.
 func (c *crawl) addInterleaved(links, sitemap []*url.URL) {
 	for i := 0; i < len(links) || i < len(sitemap); i++ {
-		if len(c.queue) >= c.limit {
+		if c.full {
 			return
 		}
 		if i < len(links) {

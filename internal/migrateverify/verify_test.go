@@ -422,6 +422,24 @@ func TestPageLimitIsRespected(t *testing.T) {
 	if pageHits != 5 || len(newRec.list()) != 5 {
 		t.Fatalf("requests beyond the limit: old %d new %d", pageHits, len(newRec.list()))
 	}
+	// Identical copies, but most of the 61-page site went uncompared: a warning, so
+	// the gate stays closed until a person accepts it.
+	if r.CutoverAllowed || !hasWarning(r, "page limit (5) was reached") {
+		t.Fatalf("a crawl cut short by the limit left the gate open: %v %q", r.CutoverAllowed, r.Warnings)
+	}
+	small := verify(t, Options{Old: serve(t, old, &recorder{}).URL, New: serve(t, old.clone(), &recorder{}).URL, PageLimit: MaxPageLimit})
+	if hasWarning(small, "page limit") || !small.CutoverAllowed {
+		t.Fatalf("a crawl that ran out of pages before the limit was warned about: %q", small.Warnings)
+	}
+}
+
+func hasWarning(r Report, fragment string) bool {
+	for _, w := range r.Warnings {
+		if strings.Contains(w, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDiscoveryOrderAndFilters(t *testing.T) {

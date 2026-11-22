@@ -65,7 +65,13 @@ func run(ctx context.Context, opts Options, tune tuning) (Report, error) {
 	if err = ctx.Err(); err != nil {
 		return Report{}, fmt.Errorf("migration verify stopped: %w", err)
 	}
-	r.Pages = v.comparePages(ctx, sitemap)
+	var cutShort bool
+	r.Pages, cutShort = v.comparePages(ctx, sitemap)
+	if cutShort {
+		// Pages past the limit were never compared, so a green result would
+		// speak for part of the site only.
+		r.Warnings = append(r.Warnings, fmt.Sprintf("the page limit (%d) was reached before the crawl ran out of pages; pages past it were not compared", cfg.pageLimit))
+	}
 	if err = ctx.Err(); err != nil {
 		return Report{}, fmt.Errorf("migration verify stopped: %w", err)
 	}
@@ -285,7 +291,9 @@ type pageOutcome struct {
 // comparePages walks the discovery queue with a fixed number of workers.
 // Results are committed in queue order, so the discovered page set does not
 // depend on which response arrived first.
-func (v *verifier) comparePages(ctx context.Context, sitemap []*url.URL) []PageResult {
+// comparePages crawls and compares up to the page limit. The second result
+// reports whether pages were found and left out because of the limit.
+func (v *verifier) comparePages(ctx context.Context, sitemap []*url.URL) ([]PageResult, bool) {
 	c := newCrawl(v.cfg.old, v.cfg.pageLimit)
 	c.seed("/", "root")
 	for _, p := range v.cfg.paths {
@@ -302,7 +310,7 @@ func (v *verifier) comparePages(ctx context.Context, sitemap []*url.URL) []PageR
 			inFlight++
 		}
 		if inFlight == 0 {
-			return results
+			return results, c.full
 		}
 		o := <-done
 		inFlight--

@@ -1,6 +1,9 @@
 package dnshost
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -91,5 +94,53 @@ func TestStoreRoundTrip(t *testing.T) {
 	list, _ = s.List()
 	if len(list) != 0 {
 		t.Fatal("delete residue")
+	}
+}
+
+// The reload setting used to run through sh -c. It is now an argv, and a
+// value that needs a shell must fail loudly instead of running differently.
+func TestParseReloadCommandRefusesShellSyntax(t *testing.T) {
+	argv, err := ParseReloadCommand("  /usr/sbin/rndc   reload example.com ")
+	if err != nil || len(argv) != 3 || argv[0] != "/usr/sbin/rndc" || argv[1] != "reload" || argv[2] != "example.com" {
+		t.Fatalf("plain command: %v %v", argv, err)
+	}
+	if argv, err := ParseReloadCommand(" "); err != nil || argv != nil {
+		t.Fatalf("empty setting must disable reload: %v %v", argv, err)
+	}
+	for _, value := range []string{
+		"rndc reload",                     // relative program
+		"/usr/sbin/../sbin/rndc reload",   // unclean path
+		"kill -HUP $(cat /run/named.pid)", // substitution
+		"/bin/kill -HUP `cat /run/named.pid`",
+		"/usr/sbin/rndc reload; id",
+		"/usr/sbin/rndc reload && id",
+		"/usr/sbin/rndc reload | tee /tmp/x",
+		"/usr/sbin/rndc reload > /tmp/x",
+		"/usr/sbin/rndc 'reload'",
+		"/usr/sbin/rndc reload\nid",
+	} {
+		if argv, err := ParseReloadCommand(value); err == nil {
+			t.Fatalf("accepted %q as %v", value, argv)
+		}
+	}
+}
+
+func TestExecReloaderRunsArgvWithoutShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh only as a plain program")
+	}
+	marker := filepath.Join(t.TempDir(), "ran")
+	// The second argument would create the marker if a shell interpreted it.
+	if err := (ExecReloader{Argv: []string{"/bin/echo", "ok", "; touch " + marker}}).Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("argument reached a shell")
+	}
+	if err := (ExecReloader{Argv: []string{"echo", "ok"}}).Reload(); err == nil {
+		t.Fatal("relative program accepted")
+	}
+	if err := (ExecReloader{}).Reload(); err != nil {
+		t.Fatalf("empty reloader must be a no-op: %v", err)
 	}
 }

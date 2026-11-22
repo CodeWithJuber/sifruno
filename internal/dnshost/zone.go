@@ -302,15 +302,38 @@ type Reloader interface {
 	Reload() error
 }
 
-// ExecReloader runs one shell command (e.g. HUP the named pid file).
-type ExecReloader struct{ Command string }
+// ExecReloader runs one fixed program with fixed arguments (for example
+// rndc reload). It never goes through a shell, so nothing in a zone or a
+// request can become part of a command line.
+type ExecReloader struct{ Argv []string }
+
+// ParseReloadCommand turns the operator's reload setting into an argv. The
+// value is split on whitespace only. Anything that would need a shell to mean
+// what it says (quotes, pipes, substitution, redirection) is refused, so a
+// setting written for the old sh -c behaviour fails at startup instead of
+// running as something else.
+func ParseReloadCommand(value string) ([]string, error) {
+	argv := strings.Fields(value)
+	if len(argv) == 0 {
+		return nil, nil
+	}
+	if strings.ContainsAny(value, "\"'`$|&;<>(){}[]*?~!#\\\x00\r\n") {
+		return nil, fmt.Errorf("dns reload: shell syntax is not supported; give a program and plain arguments")
+	}
+	if !filepath.IsAbs(argv[0]) || filepath.Clean(argv[0]) != argv[0] {
+		return nil, fmt.Errorf("dns reload: program must be a clean absolute path")
+	}
+	return argv, nil
+}
 
 func (r ExecReloader) Reload() error {
-	if r.Command == "" {
+	if len(r.Argv) == 0 {
 		return nil
 	}
-	cmd := exec.Command("sh", "-c", r.Command)
-	out, err := cmd.CombinedOutput()
+	if !filepath.IsAbs(r.Argv[0]) {
+		return fmt.Errorf("dns reload: program must be an absolute path")
+	}
+	out, err := exec.Command(r.Argv[0], r.Argv[1:]...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("dns reload: %v (%s)", err, strings.TrimSpace(string(out)))
 	}

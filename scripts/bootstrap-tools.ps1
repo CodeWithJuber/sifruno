@@ -1,4 +1,3 @@
-param([switch]$Analysis)
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskTools = Join-Path $taskRoot '.tools'
@@ -19,10 +18,3 @@ if (-not (Test-Path -LiteralPath $taskGo)) {
 if ($LASTEXITCODE -ne 0) { throw 'Go toolchain validation failed.' }
 $env:GOCACHE = Join-Path $taskRoot '.cache\go-build'
 $env:GOMODCACHE = Join-Path $taskRoot '.cache\go-mod'
-if ($Analysis) {
-    Push-Location $taskRoot
-    try {
-        npm ci --ignore-scripts --no-audit --no-fund
-        if ($LASTEXITCODE -ne 0) { throw 'Pinned analysis dependencies failed to install.' }
-    } finally { Pop-Location }
-}

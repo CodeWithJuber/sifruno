@@ -1,0 +1,25 @@
+{
+  "listeners": [
+    {"name": "http", "address": "*", "port": 80},
+    {"name": "https", "address": "*", "port": 443, "secure": true,
+     "cert_file": "/etc/sifruno/tls/listener-fullchain.pem",
+     "key_file": "/etc/sifruno/tls/listener-privkey.pem"}
+  ],
+  "sites": [
+    {
+      "name": "paused",
+      "username": "pauseduser",
+      "group": "pauseduser",
+      "domains": ["paused.example.org", "www.paused.example.org"],
+      "doc_root": "/home/pauseduser/public_html",
+      "php_version": "8.2",
+      "suspended": true,
+      "limits": {"php_children": 4},
+      "isolation": {"namespace": true},
+      "tls": {
+        "cert_file": "/etc/sifruno/tls/paused/fullchain.pem",
+        "key_file": "/etc/sifruno/tls/paused/privkey.pem"
+      }
+    }
+  ]
+}

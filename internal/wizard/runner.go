@@ -50,7 +50,9 @@ type Databases interface {
 }
 
 const (
-	maxRunning     = 2                // jobs running at once
+	// One job at a time: a web change can hold the broker for minutes, and
+	// a second job would wait behind it and time out.
+	maxRunning     = 1
 	usernameTries  = 5                // broker creates tried per job
 	jobLimit       = 15 * time.Minute // all four steps together
 	webWait        = 6 * time.Minute  // the least SetWeb gets: the broker's web apply alone may take 4
@@ -176,7 +178,7 @@ func (r *Runner) reserve(domain string) error {
 		return refuse(ErrConflict, "A website for %s is being created right now. Wait for that job to finish.", domain)
 	}
 	if len(r.running) >= maxRunning {
-		return refuse(ErrConflict, "%d websites are being created right now. Wait for one to finish, then try again.", maxRunning)
+		return refuse(ErrConflict, "Another website is being created right now. Wait for it to finish, then try again.")
 	}
 	r.running[domain] = ""
 	return nil
@@ -240,13 +242,19 @@ func (j *run) execute(ctx context.Context) {
 		cancel()
 		if failure != nil {
 			if expired {
-				failure.why = "It took longer than 15 minutes, so the panel stopped waiting."
+				failure.why = "It took longer than the panel waits for this step, so it stopped waiting."
 				failure.next = "Try again. If it is slow again, check the server's load and its connection to wordpress.org."
+				if j.job.Steps[i].Name == StepDatabase && j.job.Username != "" {
+					// MariaDB may have made the database or user after the
+					// panel stopped waiting; the job cannot tell, so undo
+					// leaves them.
+					failure.next = "The database or user " + j.job.Username + dbSuffix + " may have been left on the server. Remove it if it is there, then create the website again."
+				}
 				if j.job.Steps[i].Name == StepAccount {
 					// The broker may have made the account after the panel
 					// stopped waiting; the job never learnt its ID, so undo
 					// cannot remove it.
-					failure.why = "It took longer than 15 minutes, so the panel stopped waiting and cannot tell whether the account was made."
+					failure.why = "It took longer than the panel waits for this step, so it stopped waiting and cannot tell whether the account was made."
 					failure.next = checkAccounts(j.in.Domain)
 				}
 			}

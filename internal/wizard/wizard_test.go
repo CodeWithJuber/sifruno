@@ -590,7 +590,7 @@ func TestTimeLimitStopsTheJobAndStillUndoes(t *testing.T) {
 	f.runner.waits = nil // the install's own minimum is tested below
 	f.acc.installF = func(ctx context.Context) error { <-ctx.Done(); return hostaccounts.ErrUnavailable }
 	done := f.runJob(t, input("example.com"))
-	if done.State != StateFailed || done.Error.Step != StepWordPress || !strings.Contains(done.Error.Why, "15 minutes") {
+	if done.State != StateFailed || done.Error.Step != StepWordPress || !strings.Contains(done.Error.Why, "longer than the panel waits") {
 		t.Fatalf("job %+v", done.Error)
 	}
 	if got := stepStates(done); got != "account=undone web=undone database=undone wordpress=failed" {
@@ -611,7 +611,7 @@ func TestTimeLimitAtTheAccountStepSaysToCheckAccounts(t *testing.T) {
 		f.acc.createFn = func(ctx context.Context) error { <-ctx.Done(); return answer }
 		done := f.runJob(t, input("example.com"))
 		e := done.Error
-		if e == nil || e.Step != StepAccount || !strings.Contains(e.Why, "15 minutes") || !strings.Contains(e.Why, "cannot tell whether the account was made") {
+		if e == nil || e.Step != StepAccount || !strings.Contains(e.Why, "longer than the panel waits") || !strings.Contains(e.Why, "cannot tell whether the account was made") {
 			t.Fatalf("%v: %+v", answer, e)
 		}
 		if e.Next != "Open Accounts. If an account for example.com is listed, remove it, then create the website again." {
@@ -1009,7 +1009,7 @@ func TestRestartTurnsRunningJobsIntoFailed(t *testing.T) {
 	}
 }
 
-func TestOneRunningJobPerDomainAndTwoAtMost(t *testing.T) {
+func TestOneRunningJobAtATime(t *testing.T) {
 	f := newFixture(t)
 	release := make(chan struct{})
 	f.acc.installF = func(context.Context) error { <-release; return nil }
@@ -1022,12 +1022,9 @@ func TestOneRunningJobPerDomainAndTwoAtMost(t *testing.T) {
 	if !errors.As(err, &refusal) || !errors.Is(err, ErrConflict) || !strings.Contains(refusal.Detail, "example.com is being created") {
 		t.Fatalf("same domain: %v", err)
 	}
-	if _, err = f.runner.Start(context.Background(), input("other.example"), "local-operator"); err != nil {
-		t.Fatalf("second domain: %v", err)
-	}
-	_, err = f.runner.Start(context.Background(), input("third.example"), "local-operator")
-	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "2 websites are being created") {
-		t.Fatalf("third job: %v", err)
+	_, err = f.runner.Start(context.Background(), input("other.example"), "local-operator")
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "Another website is being created") {
+		t.Fatalf("second job while one runs: %v", err)
 	}
 	close(release)
 	f.runner.Wait()
@@ -1039,7 +1036,7 @@ func TestOneRunningJobPerDomainAndTwoAtMost(t *testing.T) {
 	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "already belongs to the hosting account example") {
 		t.Fatalf("taken domain: %v", err)
 	}
-	if got := len(f.runner.List()); got != 2 {
+	if got := len(f.runner.List()); got != 1 {
 		t.Fatalf("refused starts were recorded: %d jobs", got)
 	}
 }

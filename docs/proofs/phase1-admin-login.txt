@@ -1,0 +1,45 @@
+# Phase 1 admin sign-in: first-run setup, 2FA and the panel shell, in the dev VM
+# 2026-11-23T13:05:29Z  scripts/devvm/proof.sh panel-shell, headless Chrome 158 on the host acting as the authenticator app
+
+guest: AlmaLinux release 9.9 (Chartreuse Bobcat), kernel 5.14.0-741.22.1.el9_9.x86_64, SELinux Enforcing
+PASS  sidebar has 7 top-level items
+PASS  no Compatibility or Platforms in menu
+PASS  home has no horizontal overflow at 1440
+PASS  Websites menu item opens /websites
+PASS  a fresh panel asks for first-run setup on a private page
+PASS  mismatched passwords are caught before sending
+PASS  setup shows a 32-character authenticator key
+PASS  setup offers an authenticator-app link for this admin
+PASS  a wrong code does not create the admin
+PASS  setup signs the new admin in
+PASS  the server no longer asks for setup
+PASS  sign out returns a private page to the sign-in form
+PASS  a wrong code is refused with a plain message
+PASS  the code used for setup cannot sign in again
+PASS  the admin signs in with password and a fresh code
+PASS  Open File Manager goes to /websites/files
+PASS  Files opens the same website
+PASS  exactly one menu link is the current page
+PASS  breadcrumb shows Websites › Files
+PASS  back button returns to /websites with the site still open
+PASS  deep link /websites/backups loads after reload
+PASS  session survives reload
+PASS  Ctrl+K, type, Enter opens Server › Network
+PASS  Network tab is marked current
+PASS  Server stays highlighted in the sidebar
+PASS  Ctrl+B does not hide the sidebar
+PASS  no sidebar_state cookie
+PASS  unknown URL shows the not-found message
+PASS  Activity and Settings pages load
+PASS  dark theme applies
+PASS  no horizontal overflow at 390
+PASS  tapping the current page closes the phone menu
+PASS  phone menu navigates and closes
+PASS  home has no horizontal overflow at 390
+PASS  preview hides private menu items
+PASS  preview shows the panel tour
+PASS  preview redirects private URLs to Home
+PASS  preview makes no private API calls
+PASS  the admin's own name is rate limited after repeated failures
+PASS  no page errors
+40 passed, 0 failed

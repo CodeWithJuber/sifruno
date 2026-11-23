@@ -3,6 +3,7 @@
 - Official Meta Astryx React components and precompiled neutral theme 0.6.5: https://astryx.atmeta.com and https://github.com/facebook/astryx (MIT). The dashboard uses its Button, Card, SideNav, SegmentedControl, ProgressBar and Theme implementations. StyleX 0.19.1: https://github.com/facebook/stylex (MIT).
 - Official shadcn UI component source, added with shadcn CLI 4.21.1 and the `base-nova` registry style: https://ui.shadcn.com and https://github.com/shadcn-ui/ui (MIT).
 - Base UI React primitives: https://base-ui.com/react and https://github.com/mui/base-ui (MIT).
+- TanStack Router 1.170.46 for page URLs: https://tanstack.com/router and https://github.com/TanStack/router (MIT). Its runtime dependency isbot is Unlicense.
 - React: https://github.com/facebook/react (MIT).
 - Tailwind CSS: https://github.com/tailwindlabs/tailwindcss (MIT).
 - Lucide React interface icons: https://github.com/lucide-icons/lucide (ISC).

@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/sessions v1.4.0
 	github.com/shirou/gopsutil/v4 v4.26.9
 	go.etcd.io/bbolt v1.5.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.16.0

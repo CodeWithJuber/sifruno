@@ -121,6 +121,13 @@ func RunBroker(ctx context.Context, opts BrokerOptions) error {
 }
 
 func RunBrokerWithWebPreview(ctx context.Context, opts BrokerOptions, factory WebPreviewFactory) error {
+	return RunBrokerWithWeb(ctx, opts, factory, nil)
+}
+
+// RunBrokerWithWeb also enables the web operation when web is non-nil. Web
+// is not part of the pinned BrokerOptions: it can be turned on for a broker
+// whose state already exists.
+func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPreviewFactory, web *WebOptions) error {
 	if ctx == nil || !validBrokerPaths(opts) {
 		return ErrInvalid
 	}
@@ -143,7 +150,7 @@ func RunBrokerWithWebPreview(ctx context.Context, opts BrokerOptions, factory We
 	if controllerCount != 1 {
 		return ErrInvalid
 	}
-	system, e := newLinuxSystem(opts)
+	system, e := newLinuxSystem(opts, web)
 	if e != nil {
 		return e
 	}
@@ -171,6 +178,7 @@ func RunBrokerWithWebPreview(ctx context.Context, opts BrokerOptions, factory We
 		return e
 	}
 	defer s.close()
+	s.web = web
 	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: opts.SocketPath, Net: "unix"})
 	if e != nil {
 		return ErrUnavailable

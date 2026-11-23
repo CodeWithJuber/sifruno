@@ -130,6 +130,24 @@ else
   rm -f /etc/ssh/sshd_config.d/40-sifruno.conf.new
 fi
 
+log "OpenLiteSpeed: Sifruno config fragment and namespace isolation"
+# The broker writes conf/sifruno.conf and the vhosts but never edits the
+# server-wide file; the installer adds the include once. A vhost's namespace
+# setting applies only when the server-level one is not 0.
+conf=/usr/local/lsws/conf/httpd_config.conf
+if ! grep -q '^include /usr/local/lsws/conf/sifruno.conf$' "$conf"; then
+  cp -a "$conf" "$conf.bak-$(date +%Y%m%d-%H%M)"
+  if grep -qE '^namespace[[:space:]]' "$conf"; then
+    sed -i -E 's/^namespace[[:space:]].*/namespace                 1/' "$conf"
+  else
+    printf '%s\n' 'namespace                 1' >> "$conf"
+  fi
+  touch /usr/local/lsws/conf/sifruno.conf
+  chown --reference="$conf" /usr/local/lsws/conf/sifruno.conf
+  chmod 0600 /usr/local/lsws/conf/sifruno.conf
+  printf '%s\n' 'include /usr/local/lsws/conf/sifruno.conf' >> "$conf"
+fi
+
 log "services"
 systemctl enable --now mariadb
 systemctl enable --now lsws

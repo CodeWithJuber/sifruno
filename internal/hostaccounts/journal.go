@@ -149,16 +149,16 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 					return ErrRecovery
 				}
 			} else {
-				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" && e.Action != "ssh_keys" {
+				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" && e.Action != "ssh_keys" && e.Action != "web" {
 					return ErrRecovery
 				}
-				if e.Action == "state" && e.After.Revision != e.Before.Revision+1 || e.Action == "plan" && e.After.Revision != e.Before.Revision+1 || e.Action == "ssh_keys" && e.After.Revision != e.Before.Revision+1 || e.Action == "conflict" && e.After.Revision != e.Before.Revision || e.Action == "delete" && e.After.Revision != e.Before.Revision {
+				if e.Action == "state" && e.After.Revision != e.Before.Revision+1 || e.Action == "plan" && e.After.Revision != e.Before.Revision+1 || e.Action == "ssh_keys" && e.After.Revision != e.Before.Revision+1 || e.Action == "web" && e.After.Revision != e.Before.Revision+1 || e.Action == "conflict" && e.After.Revision != e.Before.Revision || e.Action == "delete" && e.After.Revision != e.Before.Revision {
 					return ErrRecovery
 				}
 			}
 			intent = e
 			status = e.Status
-		case "succeeded", "reconciled", "recovery_required":
+		case "succeeded", "reconciled", "recovery_required", "rejected":
 			if e.OperationID != intent.OperationID || e.Action != intent.Action || e.Actor != intent.Actor || e.Reason != intent.Reason || status != "intended" && status != "recovery_required" {
 				return ErrRecovery
 			}
@@ -171,6 +171,14 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 				if status == "recovery_required" || e.After.State != "recovery_required" {
 					return ErrRecovery
 				}
+			} else if e.Status == "rejected" {
+				// Only an operation that rewrites the web config can end
+				// rejected: the config test failed and the old files went back,
+				// so the account is unchanged.
+				if e.Action != "web" && e.Action != "delete" || e.Before == nil || !sameAccount(e.After, *e.Before) {
+					return ErrRecovery
+				}
+				lastSuccess = e
 			} else {
 				if e.After.State != intent.After.State || e.After.Revision != intent.After.Revision {
 					return ErrRecovery
@@ -186,7 +194,7 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 		return ErrRecovery
 	}
 	if r.Pending == nil {
-		if status != "succeeded" && status != "reconciled" || !sameAccount(lastSuccess.After, r.Account) {
+		if status != "succeeded" && status != "reconciled" && status != "rejected" || !sameAccount(lastSuccess.After, r.Account) {
 			return ErrRecovery
 		}
 	} else {

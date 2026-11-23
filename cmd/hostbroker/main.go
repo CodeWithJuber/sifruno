@@ -24,13 +24,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runWithPreviewServices(args, stdout, stderr, hostaccounts.CheckHostPolicy, hostaccounts.CheckBrokerAdmission, serveBroker)
 }
 
-func serveBroker(ctx context.Context, opts hostaccounts.BrokerOptions, enabled bool) error {
-	if !enabled {
-		return hostaccounts.RunBroker(ctx, opts)
+// features are the opt-ins that are not part of the pinned broker options.
+type features struct {
+	webPreview bool
+	// web enables the web operation (--web-user names OpenLiteSpeed's user).
+	web *hostaccounts.WebOptions
+}
+
+func serveBroker(ctx context.Context, opts hostaccounts.BrokerOptions, on features) error {
+	var factory hostaccounts.WebPreviewFactory
+	if on.webPreview {
+		factory = func(provider hostaccounts.SnapshotProvider) hostaccounts.WebPreviewService {
+			return hostwebpreview.New(hostwebpreview.BrokerProfile(opts), provider)
+		}
 	}
-	return hostaccounts.RunBrokerWithWebPreview(ctx, opts, func(provider hostaccounts.SnapshotProvider) hostaccounts.WebPreviewService {
-		return hostwebpreview.New(hostwebpreview.BrokerProfile(opts), provider)
-	})
+	return hostaccounts.RunBrokerWithWeb(ctx, opts, factory, on.web)
 }
 
 func runWithServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, serve func(context.Context, hostaccounts.BrokerOptions) error) int {
@@ -38,10 +46,10 @@ func runWithServices(args []string, stdout, stderr io.Writer, probe func(context
 }
 
 func runWithAllServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, admission func(context.Context, hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport, serve func(context.Context, hostaccounts.BrokerOptions) error) int {
-	return runWithPreviewServices(args, stdout, stderr, probe, admission, func(ctx context.Context, opts hostaccounts.BrokerOptions, _ bool) error { return serve(ctx, opts) })
+	return runWithPreviewServices(args, stdout, stderr, probe, admission, func(ctx context.Context, opts hostaccounts.BrokerOptions, _ features) error { return serve(ctx, opts) })
 }
 
-func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, admission func(context.Context, hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport, serve func(context.Context, hostaccounts.BrokerOptions, bool) error) int {
+func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(context.Context) hostaccounts.HostPolicyReport, admission func(context.Context, hostaccounts.BrokerOptions) hostaccounts.BrokerAdmissionReport, serve func(context.Context, hostaccounts.BrokerOptions, features) error) int {
 	if len(args) > 0 && args[0] == "--check-startup" {
 		opts, ok := startupOptions(args[1:])
 		if !ok {
@@ -88,7 +96,9 @@ func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(
 	f.SetOutput(io.Discard)
 	opts := hostaccounts.BrokerOptions{}
 	var webPreview bool
+	var webUser string
 	f.BoolVar(&webPreview, "web-preview", false, "Opt in to named native web configuration preview; no activation")
+	f.StringVar(&webUser, "web-user", "", "Enable the web operation; the OpenLiteSpeed user that reads public_html (the `user` in httpd_config.conf)")
 	f.StringVar(&opts.StateDir, "state", "", "New dedicated root-only broker state")
 	f.StringVar(&opts.SocketPath, "socket", "", "Exclusive absolute Unix socket")
 	f.StringVar(&opts.HomesDir, "homes", "", "Dedicated managed home parent")
@@ -98,9 +108,13 @@ func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(
 		return 2
 	}
 	opts.ControllerUID = uint32(*uid)
+	on := features{webPreview: webPreview}
+	if webUser != "" {
+		on.web = &hostaccounts.WebOptions{ServerUser: webUser}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if serve(ctx, opts, webPreview) != nil {
+	if serve(ctx, opts, on) != nil {
 		fmt.Fprintln(stderr, "Native broker unavailable or recovery required")
 		return 1
 	}

@@ -4,3 +4,5 @@ assets/brand/** -text
 # Preserve exact pinned upstream notice bytes on every checkout.
 web/licenses/astryx/LICENSE -text
 web/licenses/stylex/LICENSE -text
+# PCM ledger logs are hash-deduped append-only sets - union merge is conflict-free (forge)
+.forge/ledger/*/*.log merge=union

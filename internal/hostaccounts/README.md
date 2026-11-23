@@ -113,6 +113,69 @@ must point at the directory above, and accounts must be held to
 shows that policy. SFTP is not chrooted; accounts are kept apart by home
 ownership and mode.
 
+## Websites
+
+`SetWeb` puts an account's site live on OpenLiteSpeed with a PHP version
+(8.1 to 8.4) and a disk quota (64 MiB to 1 TiB). It is off unless hostbroker
+runs with `--web-user` (OpenLiteSpeed's `user` from `httpd_config.conf`); only
+then does the broker admit its tools (`xfs_quota`, `openlitespeed`
+and `systemctl`). The web settings are not part of
+the pinned broker options, so the operation can be turned on for an existing
+broker.
+
+- Web server access: the broker writes a POSIX ACL (`u:<web uid>:--x` on the
+  home, `r-x` on public_html) with `fsetxattr` on directory handles opened
+  without following links and matched to the identities recorded at create.
+  A tenant who swaps public_html for a symlink gets a refusal, not a grant on
+  the target; `setfacl` is not used because it follows a symlink argument.
+  The mode stays 0750.
+- Quota: `xfs_quota` sets a hard limit and a soft limit 10% lower by numeric
+  UID on the homes filesystem, which must have user quota enforced.
+- Config: olsweb renders every live site from the broker's own records (no
+  config text comes from the caller) into `conf/sifruno.conf` and
+  `conf/vhosts/sifruno-u<id>/vhconf.conf`, written atomically, owned like the
+  OpenLiteSpeed config directory and 0600, through directory handles. The
+  broker refuses a config directory that the web user owns or that others
+  may write, and sets the owner and mode only of directories it creates.
+  `openlitespeed -t` is judged per vhost: a vhost whose config this change
+  rewrote fails on an error or a warning, anything outside broker vhosts on
+  an error, and a broker vhost the change did not touch is skipped, because
+  what it reports comes from its own tenant's files. If the test fails, the
+  old files go back with their owner and mode. Then `systemctl reload
+  lsws` restarts OpenLiteSpeed gracefully (its unit reloads with
+  `lswsctrl restart`). The broker never edits `httpd_config.conf`: the
+  installer adds `include /usr/local/lsws/conf/sifruno.conf` and
+  server-level `namespace 1` once. New files take their SELinux label from
+  the directory they are written in.
+
+The step that depends on the tenant's own files, the access grant, runs
+first and is idempotent: if the tenant swapped or changed those directories
+the request is refused (409) before anything is journaled, so a tenant cannot
+leave an unfinished operation that blocks every account. Then the intent is
+journaled and the apply runs under its own two-minute limit, not the
+caller's. If quota is not enforced or the new config fails its test, the
+old files and the recorded quota go back (none for a first enable: the
+broker owns its accounts' quotas, so one set by hand is removed), the
+operation is journaled as `rejected` with the account unchanged, and the
+request answers 422 `web_rejected`. Any other failure leaves the operation
+pending; it is finished, or ends rejected, on the next start. A web
+operation needs two history rows and is refused (409) when they are not
+free. Delete takes the site out of the config before the user and home go;
+if that config fails its test, the delete ends `rejected` with the account
+unchanged (422), and after any other failure the user is kept.
+
+Limits for now:
+
+- Delete of an account with a live site needs the web operation on: a broker
+  started without `--web-user` cannot rewrite the config, so it refuses.
+- Delete of an account with a live site is rejected while OpenLiteSpeed's
+  config is broken outside the tenants' sites, or the `include` line is
+  missing: the site cannot be taken out, so the user stays.
+- Delete removes the vhost's `vhconf.conf` but leaves its empty directory and
+  the site's logs under `/usr/local/lsws/logs/sifruno`.
+- A suspended account's site keeps serving; suspension still blocks new
+  logins only.
+
 ## Verification cost
 
 Every request checks every account's files: its passwd and group identity (from

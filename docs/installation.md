@@ -45,11 +45,18 @@ step. Historical guest/browser results do not certify a current deployment.
 
    Keep this terminal open. Visit **http://127.0.0.1:8080**. The second listener is for app-owned static-site previews; it is not Apache/PHP hosting. Do not expose either listener publicly.
 
-6. Open the generated operator key privately on this machine using a local editor, then enter it into the panel's private sign-in form. The file is `operator/access.key` inside the chosen state directory. Do not print it to the terminal, paste it into chat, commit it, include it in screenshots, or serve the state directory. Session cookies and CSRF protect the private workflows; this is not remote multi-tenant authentication.
+6. Create the admin account. Open **Websites**: a new panel asks for first-run setup.
+   - Open the generated operator key privately on this machine using a local editor and enter it. The file is `operator/access.key` inside the chosen state directory. Do not print it to the terminal, paste it into chat, commit it, include it in screenshots, or serve the state directory.
+   - Choose a username and a password of at least 12 characters.
+   - Add the key the panel shows to an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password and others), then enter the 6-digit code it shows.
 
-7. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](archive/site-file-upload.md) for the exact scope and limits.
+   From then on, sign in with username, password and a fresh code. The access key still signs in on this machine, for example when the phone with the authenticator app is lost. Sessions last 15 minutes.
 
-8. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
+7. Optional: reach the panel from another machine. Add `--https-listen 0.0.0.0:2083 --panel-host panel.example.com` (your server's name or IP; several names are comma-separated). Without `--tls-cert` and `--tls-key` the panel makes a self-signed certificate and prints its SHA-256 fingerprint; your browser warns until you use a real certificate, so compare the fingerprint before you continue. Over HTTPS only the admin sign-in works: the access key and first-run setup stay on the server. Open the port in your firewall yourself; this guide does not change firewall rules.
+
+8. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](archive/site-file-upload.md) for the exact scope and limits.
+
+9. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
 
 ### Pinned Windows Go toolchain (alternative to installed Go)
 
@@ -96,7 +103,7 @@ panel_state="$HOME/.local/share/sifruno/local-panel"
 ./bin/sifruno --listen 127.0.0.1:8080 --sites-listen 127.0.0.1:8082 --state "$panel_state" --ui web/dist
 ```
 
-Open the same loopback URL, privately read the generated operator key locally, and sign in. Stop with Ctrl+C and retain state. Windows execution has been observed. Linux qualification covers specific isolated slices described in the evidence guides, not every distribution or a full hosting installation. macOS native execution remains unverified; successful compilation does not establish runtime qualification.
+Open the same loopback URL and complete first-run setup as in step 6. Stop with Ctrl+C and retain state. Windows execution has been observed. Linux qualification covers specific isolated slices described in the evidence guides, not every distribution or a full hosting installation. macOS native execution remains unverified; successful compilation does not establish runtime qualification.
 
 ## Optional native hosting prerequisites
 
@@ -107,5 +114,7 @@ Accounts and web metadata preview require a separately admitted Linux broker and
 - **UI or modules missing:** run both `npm ci` commands, then `npm run panel:build`. `--ui web/dist` is relative to the process working directory; start from the repository root.
 - **Port already in use:** stop your own earlier panel, or choose unused loopback ports with `--listen` and `--sites-listen`. Use the same panel URL for CLI requests. Do not change firewall rules to make this guide work.
 - **State appears empty or sign-in differs:** confirm the panel and CLI use the same absolute state directory. Do not replace an existing operator key or delete state as a quick fix.
+- **Lost the admin password or authenticator app:** sign in with the access key from this machine to keep working. To set up the admin again, stop the panel, move `operator/admins.json` out of the state directory, and start the panel; it asks for first-run setup. Keep the moved file until the new admin works.
+- **"Too many sign-in attempts":** each account allows five tries, then one more per minute. Wait a minute; the access key is not affected.
 - **Accounts unavailable:** the optional native broker is not installed/admitted by the local-panel steps. An unavailable feature is not a serving-health result.
 - **Build fails:** verify tool versions and run from the repository root. Source builds and runtime qualification are separate; no prebuilt release asset is promised here.

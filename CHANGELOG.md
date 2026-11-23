@@ -15,10 +15,38 @@
 
 ### Removed
 
+- The Compatibility and Platforms screens and the "hosting engine in
+  development" notice. Their API routes remain.
 - The Ghidra and REA analysis tooling and the `rea-agents` dev dependency.
 
 ### Added
 
+- Broker web operation (needs human review): `SetWeb` (`hostbroker
+  --web-user`) gives OpenLiteSpeed read access to an account's site through
+  an ACL written on no-follow directory handles, sets an XFS quota, renders
+  the account's vhost with olsweb, tests it with `openlitespeed -t` and
+  reloads gracefully. A config that fails its test is restored and
+  journaled as rejected, leaving the account unchanged; delete takes the
+  site out before removing the user. `proof.sh broker-web` proves it on the
+  dev VM.
+- The panel over HTTPS beyond loopback (needs human review):
+  `--https-listen` with `--panel-host`, and `--tls-cert`/`--tls-key` or a
+  self-signed certificate kept in the state directory (fingerprint printed
+  at start). Over that listener only admin sign-in works, every API route
+  needs an admin session, and the access key and first-run setup are
+  refused. Loopback behaviour is unchanged.
+- Admin sign-in with a password and a 6-digit authenticator code (needs
+  human review). A new panel asks for first-run setup on its first private
+  page: the server's access key, then a username and password, then an
+  authenticator app. Passwords are Argon2id hashes in the private state
+  directory; each code works once; each account allows five tries, then one a
+  minute. The access key still signs in locally. New dependency:
+  golang.org/x/crypto v0.57.0, approved by the owner.
+- Phase 1 panel shell: a shadcn/ui sidebar and top bar, Ctrl+K search over
+  pages and actions, and a URL for every page (TanStack Router). The menu
+  names the job: Home, Websites (Files, Backups), Activity, and under
+  Administration: Customers, Server, Security, Settings. Panel colours come
+  from the brand tokens.
 - Broker-managed SFTP keys: `SetSSHKeys` writes a root-owned key file per
   account, each key restricted to `internal-sftp`.
 - `panelctl htaccess scan`: classifies every `.htaccess` directive and sorts
@@ -27,7 +55,8 @@
   and closed (401/403) URLs, and keeps the cutover gate closed on any failure
   or unaccepted warning.
 - `internal/olsweb`: renders OpenLiteSpeed config for a site from a typed spec.
-- `scripts/devvm`: a disposable AlmaLinux 9 dev VM and the Phase 0 proofs.
+- `scripts/devvm`: a disposable AlmaLinux 9 dev VM, the Phase 0 proofs and
+  the Phase 1 panel shell proof (`proof.sh panel-shell`).
 
 - Recovery archive v1 (`recovery-2026-10-11-v1`) for the Windows-server handoff:
   all 270 original dirty source paths, 130 recovery branches, an offline Git

@@ -1,5 +1,7 @@
-// Package operator authenticates a single local operator. This is a loopback
-// deployment boundary, not remote production authentication or a role system.
+// Package operator signs people in to the panel: with the server's local
+// access key, or as an admin with a password and an authenticator code. It is
+// loopback-only until the panel is served over HTTPS, and has no roles yet.
+// See README.md.
 package operator
 
 import (
@@ -40,6 +42,9 @@ type Session struct {
 	Authenticated bool      `json:"authenticated"`
 	CSRFToken     string    `json:"csrf_token,omitempty"`
 	ExpiresAt     time.Time `json:"expires_at,omitempty"`
+	// Username is set for an admin's password-and-code session and empty for
+	// a session opened with the local access key.
+	Username string `json:"username,omitempty"`
 }
 
 type activeSession struct {
@@ -47,6 +52,7 @@ type activeSession struct {
 	csrf         [32]byte
 	managementID string
 	created      time.Time
+	username     string
 }
 
 type Manager struct {
@@ -57,6 +63,23 @@ type Manager struct {
 	now     func() time.Time
 	mu      sync.Mutex
 	active  map[string]activeSession
+
+	// Admin accounts. adminMu guards the file, its cached copy, the login
+	// buckets and pending 2FA setups. Lock order is adminMu, then mu, and mu
+	// is never held while taking adminMu or touching the disk, so a slow disk
+	// cannot stall ordinary session checks.
+	dir       string
+	adminMu   sync.Mutex
+	admins    adminFile
+	bucketKey [32]byte
+	buckets   [loginBuckets]*rate.Limiter
+	// Network sign-ins have their own limits, so traffic from outside can
+	// never use up the server's own (the access key is the way back in).
+	remoteLimiter *rate.Limiter
+	remoteBuckets [remoteLoginBuckets]*rate.Limiter
+	pending       map[string]pendingSetup
+	dummy         passwordHash
+	hashSlots     chan struct{}
 }
 
 // Open creates project-owned private state without rotating existing secrets.
@@ -113,11 +136,33 @@ func Open(dir string) (*Manager, error) {
 	if err != nil {
 		return nil, errors.New("operator session keys unavailable")
 	}
+	admins, err := loadAdmins(dir)
+	if err != nil {
+		return nil, errors.New("operator admin accounts unavailable")
+	}
+	// Unknown usernames are checked against this hash so a wrong username
+	// costs the same time as a wrong password.
+	dummy, err := hashPassword("unknown-user-timing-equalizer")
+	if err != nil {
+		return nil, errors.New("operator admin accounts unavailable")
+	}
 	cookies := sessions.NewCookieStore(keys[:32], keys[32:])
 	cookies.MaxAge(int(sessionLifetime.Seconds()))
 	cookies.Options = &sessions.Options{Path: "/api/v1", MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, SameSite: http.SameSiteStrictMode}
-	return &Manager{keyPath: accessPath, keyHash: sha256.Sum256(access[:43]), cookies: cookies,
-		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession)}, nil
+	m := &Manager{keyPath: accessPath, keyHash: sha256.Sum256(access[:43]), cookies: cookies,
+		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession),
+		dir: dir, admins: admins, pending: map[string]pendingSetup{}, dummy: dummy, hashSlots: make(chan struct{}, 2)}
+	if _, err := rand.Read(m.bucketKey[:]); err != nil {
+		return nil, errors.New("operator admin accounts unavailable")
+	}
+	for i := range m.buckets {
+		m.buckets[i] = newAccountLimiter()
+	}
+	m.remoteLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
+	for i := range m.remoteBuckets {
+		m.remoteBuckets[i] = newAccountLimiter()
+	}
+	return m, nil
 }
 
 func privateBytes(path string, size int64, generate func() ([]byte, error)) ([]byte, error) {
@@ -272,13 +317,19 @@ func (m *Manager) pruneLocked() {
 // Authorize protects every website read. Mutations additionally require an
 // exact request Origin and the active session's independent CSRF token.
 func (m *Manager) Authorize(w http.ResponseWriter, r *http.Request, mutation bool) (string, bool) {
-	if !localRequest(r) {
+	if !admitted(r) {
 		WriteError(w, 403, "local_access_required", "Local operator access required")
 		return "", false
 	}
 	s, _, a, ok := m.session(r)
 	if !ok {
 		WriteError(w, 401, "unauthorized", "Operator session required")
+		return "", false
+	}
+	// A session opened with the access key on the server is not accepted over
+	// the network, even if its cookie travels there.
+	if IsRemote(r) && a.username == "" {
+		WriteError(w, 403, "admin_sign_in_required", "Sign in with your admin account. The access key works only on the server itself.")
 		return "", false
 	}
 	if mutation {
@@ -375,10 +426,13 @@ func (m *Manager) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/session/sessions", m.getSessions)
 	mux.HandleFunc("POST /api/v1/session/sessions/{id}/revoke", m.revokeSession)
 	mux.HandleFunc("POST /api/v1/session/revoke-others", m.revokeOthers)
+	mux.HandleFunc("GET /api/v1/session/setup", m.getSetup)
+	mux.HandleFunc("POST /api/v1/session/setup/totp", m.beginSetup)
+	mux.HandleFunc("POST /api/v1/session/setup/admin", m.finishSetup)
 }
 
 func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
-	if !localRequest(r) {
+	if !admitted(r) {
 		WriteError(w, 403, "local_access_required", "Local operator access required")
 		return
 	}
@@ -386,23 +440,53 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 403, "origin_not_allowed", "Exact local Origin required")
 		return
 	}
-	if !m.limiter.Allow() {
+	limiter := m.limiter
+	if IsRemote(r) {
+		limiter = m.remoteLimiter
+	}
+	if !limiter.Allow() {
 		w.Header().Set("Retry-After", "3")
 		WriteError(w, 429, "rate_limited", "Login attempt limit reached")
 		return
 	}
 	var input struct {
 		AccessKey string `json:"access_key"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+		TOTPCode  string `json:"totp_code"`
 	}
 	if !decodeJSON(w, r, &input, false) {
 		return
 	}
-	supplied := sha256.Sum256([]byte(input.AccessKey))
-	valid := subtle.ConstantTimeCompare(m.keyHash[:], supplied[:]) == 1 && validToken(input.AccessKey)
-	if !valid {
-		WriteError(w, 401, "unauthorized", "Invalid operator credential")
+	username := ""
+	adminFields := input.Username != "" || input.Password != "" || input.TOTPCode != ""
+	switch {
+	case !adminFields:
+		if IsRemote(r) {
+			WriteError(w, 403, "local_access_required", "The access key works only on the server itself. Sign in with your admin account.")
+			return
+		}
+		supplied := sha256.Sum256([]byte(input.AccessKey))
+		valid := subtle.ConstantTimeCompare(m.keyHash[:], supplied[:]) == 1 && validToken(input.AccessKey)
+		if !valid {
+			WriteError(w, 401, "unauthorized", "Invalid operator credential")
+			return
+		}
+	case input.AccessKey == "" && input.Username != "" && input.Password != "" && input.TOTPCode != "":
+		if !m.adminLogin(w, r, input.Username, input.Password, input.TOTPCode) {
+			return
+		}
+		username = input.Username
+	default:
+		WriteError(w, 400, "invalid_request", "Send either the local access key, or a username, password and 6-digit code")
 		return
 	}
+	m.startSession(w, r, username)
+}
+
+// startSession replaces any session the request carried with a new one, so a
+// session ID is never reused across a sign-in.
+func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username string) {
 	_, oldID, _, _ := m.session(r)
 	id, err := randomToken()
 	if err != nil {
@@ -432,7 +516,7 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 	}
 	created := m.now().UTC().Truncate(time.Second)
 	expires := created.Add(sessionLifetime)
-	m.active[id] = activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf)), managementID: managementID, created: created}
+	m.active[id] = activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf)), managementID: managementID, created: created, username: username}
 	m.mu.Unlock()
 	s := sessions.NewSession(m.cookies, cookieName)
 	s.Values = map[any]any{"id": id, "csrf": csrf, "expires": expires.Unix()}
@@ -446,7 +530,7 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 503, "operator_unavailable", "Operator session unavailable")
 		return
 	}
-	writeJSON(w, Session{Authenticated: true, CSRFToken: csrf, ExpiresAt: expires})
+	writeJSON(w, Session{Authenticated: true, CSRFToken: csrf, ExpiresAt: expires, Username: username})
 }
 
 func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
@@ -458,7 +542,7 @@ func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 401, "unauthorized", "Operator session required")
 		return
 	}
-	writeJSON(w, Session{Authenticated: true, CSRFToken: s.Values["csrf"].(string), ExpiresAt: a.expires})
+	writeJSON(w, Session{Authenticated: true, CSRFToken: s.Values["csrf"].(string), ExpiresAt: a.expires, Username: a.username})
 }
 
 func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {

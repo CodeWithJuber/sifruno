@@ -12,7 +12,8 @@ func allowedSessionMutation(r *http.Request) bool {
 		return false
 	}
 	switch r.URL.Path {
-	case "/api/v1/session/login", "/api/v1/session/logout", "/api/v1/session/revoke-others":
+	case "/api/v1/session/login", "/api/v1/session/logout", "/api/v1/session/revoke-others",
+		"/api/v1/session/setup/totp", "/api/v1/session/setup/admin":
 		return true
 	}
 	const prefix = "/api/v1/session/sessions/"

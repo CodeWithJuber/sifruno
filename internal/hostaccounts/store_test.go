@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sifruno/internal/olsweb"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,47 @@ type fakeNative struct {
 	full, cheap map[string]int
 	keys        map[string][]string
 	keyWrites   int
+	// sites is the last installed site list; web holds the per-user settings.
+	sites     []olsweb.Site
+	web       map[string]WebState
+	webApply  int
+	webGrants int
+}
+
+func (f *fakeNative) GrantWebAccess(_ context.Context, r record) error {
+	f.webGrants++
+	if f.failure == "grant" {
+		return ErrRecovery
+	}
+	return nil
+}
+func (f *fakeNative) ApplyWeb(_ context.Context, r record, previous, next WebState, sites []olsweb.Site) error {
+	f.webApply++
+	switch f.failure {
+	case "web-before":
+		return ErrUnavailable
+	case "web-reject":
+		return ErrWebRejected
+	}
+	if f.web == nil {
+		f.web = map[string]WebState{}
+	}
+	f.web[r.Account.Username] = next
+	f.sites = append([]olsweb.Site(nil), sites...)
+	if f.failure == "web-after" {
+		return ErrUnavailable
+	}
+	return nil
+}
+func (f *fakeNative) ApplySites(_ context.Context, sites []olsweb.Site) error {
+	switch f.failure {
+	case "sites":
+		return ErrUnavailable
+	case "sites-reject":
+		return ErrWebRejected
+	}
+	f.sites = append([]olsweb.Site(nil), sites...)
+	return nil
 }
 
 func (f *fakeNative) GuardState(string) error   { return nil }
@@ -98,13 +140,15 @@ func (f *fakeNative) VerifyIdentity(r record) error {
 }
 
 // Verify adds the state observation, standing in for the lock and expiry
-// check that the native system makes with passwd and chage.
+// check that the native system makes with passwd and chage. Like that check,
+// it compares only an active or suspended state, so a delete's empty target
+// state passes.
 func (f *fakeNative) Verify(_ context.Context, r record) error {
 	if f.full != nil {
 		f.full[r.Account.Username]++
 	}
 	actual, ok := f.users[r.Account.Username]
-	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.State != r.Account.State || r.Ownership != actual.Ownership {
+	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || (r.Account.State != "" && actual.Account.State != r.Account.State) || r.Ownership != actual.Ownership {
 		return ErrRecovery
 	}
 	return nil

@@ -50,6 +50,7 @@ func TestOpenAPIDiscoversNativeSessionAndWebsiteAdmission(t *testing.T) {
 		mutation              bool
 	}{
 		{"/api/v1/session/login", "post", "OperatorSession", true}, {"/api/v1/session", "get", "OperatorSession", false}, {"/api/v1/session/logout", "post", "OperatorSignedOut", true},
+		{"/api/v1/session/setup/totp", "post", "OperatorSetupSecret", true}, {"/api/v1/session/setup/admin", "post", "OperatorSession", true},
 	} {
 		op, ok := spec.Paths[route.path][route.method]
 		if !ok {
@@ -81,6 +82,14 @@ func TestOpenAPIDiscoversNativeSessionAndWebsiteAdmission(t *testing.T) {
 	login := spec.Paths["/api/v1/session/login"]["post"]
 	if !login.RequestBody.Required || login.RequestBody.Content["application/json"].Schema["$ref"] != "#/components/schemas/OperatorLogin" {
 		t.Fatal("typed login body missing")
+	}
+	for _, field := range []string{"password", "totp_code"} {
+		if f := spec.Components.Schemas["OperatorLogin"].Properties[field]; f["writeOnly"] != true {
+			t.Fatalf("login %s must be write-only", field)
+		}
+	}
+	if status, ok := spec.Paths["/api/v1/session/setup"]["get"]; !ok || status.Responses["200"].Content["application/json"].Schema["$ref"] != "#/components/schemas/OperatorSetupStatus" {
+		t.Fatal("setup status route missing from OpenAPI")
 	}
 	key := spec.Components.Schemas["OperatorLogin"].Properties["access_key"]
 	if key["writeOnly"] != true || key["format"] != "password" || key["maxLength"] != float64(43) || key["minLength"] != float64(43) || key["examples"] != nil || key["default"] != nil {

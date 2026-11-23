@@ -14,6 +14,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	"sifruno/internal/olsweb"
 	"sifruno/internal/securestate"
 )
 
@@ -48,6 +49,10 @@ type record struct {
 	// Both are strings so a record stays comparable for snapshot leases.
 	SSHKeys     string `json:"ssh_keys,omitempty"`
 	SSHKeysNext string `json:"ssh_keys_next,omitempty"`
+	// Web is the live site's settings (empty: no site). WebNext is what an
+	// unfinished web operation applies, durable before anything changes.
+	Web     WebState `json:"web"`
+	WebNext WebState `json:"web_next"`
 }
 type nativeSystem interface {
 	Plan(context.Context, string) (int, int, error)
@@ -61,6 +66,17 @@ type nativeSystem interface {
 	// VerifySSHKeys reports whether the installed key file holds exactly this
 	// set (for the empty set: that no file exists).
 	VerifySSHKeys(record, []string) error
+	// GrantWebAccess lets the web server read the account's site, on the
+	// home and public_html recorded at create; it is idempotent and touches
+	// nothing else.
+	GrantWebAccess(context.Context, record) error
+	// ApplyWeb sets the account's quota and installs the full site list:
+	// written, tested, reloaded. A failed test restores the old files and
+	// the previous quota and returns ErrWebRejected. It must be safe to
+	// repeat, and it does not depend on the tenant's files.
+	ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site) error
+	// ApplySites installs the full site list only, tested and reloaded.
+	ApplySites(context.Context, []olsweb.Site) error
 	// Delete removes the managed system identity and owned home after
 	// ownership verification; it must be safe to retry after a crash.
 	Delete(context.Context, record) error
@@ -72,6 +88,7 @@ type store struct {
 	mu     sync.Mutex
 	db     *bolt.DB
 	opts   BrokerOptions
+	web    *WebOptions // nil: the web operation is off
 	native nativeSystem
 	closed bool
 	// auditAfter is the ID of the last account the rotating full check
@@ -194,7 +211,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -205,12 +222,17 @@ func (s *store) records() ([]record, error) {
 					validTarget = r.Pending.Target == ""
 				case "ssh_keys":
 					validTarget = sshDigestPattern.MatchString(r.Pending.Target) && canonicalSSHKeys(r.SSHKeysNext) && r.Pending.Target == sshKeysDigest(splitSSHKeys(r.SSHKeysNext))
+				case "web":
+					validTarget = webDigestPattern.MatchString(r.Pending.Target) && validWebState(r.WebNext) && r.Pending.Target == webDigest(r.WebNext)
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
 				}
 			}
 			if !canonicalSSHKeys(r.SSHKeys) || (r.SSHKeysNext != "" && (r.Pending == nil || r.Pending.Action != "ssh_keys")) {
+				return ErrRecovery
+			}
+			if (r.Web.enabled() && !validWebState(r.Web)) || (!r.Web.enabled() && r.Web != WebState{}) || (r.WebNext != WebState{} && (r.Pending == nil || r.Pending.Action != "web")) {
 				return ErrRecovery
 			}
 			if verifyHistory(tx, r) != nil {
@@ -265,6 +287,34 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					continue
 				}
 				r.Ownership = owned
+			} else if r.Pending.Action == "web" {
+				// Finish the interrupted web write: the settings were durable
+				// before anything changed, and applying them is idempotent. A
+				// config that now fails its test ends as rejected, unchanged;
+				// any other failure stays pending for the next start.
+				operation := *r.Pending
+				applyCtx, cancel := webContext(ctx)
+				e := s.native.ApplyWeb(applyCtx, r, r.Web, r.WebNext, webSites(items, ""))
+				cancel()
+				switch {
+				case errors.Is(e, ErrWebRejected):
+					r.Pending, r.WebNext = nil, WebState{}
+					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+						return ErrRecovery
+					}
+					continue
+				case e != nil:
+					continue
+				}
+				r.Web, r.WebNext = r.WebNext, WebState{}
+				r.Account.Revision++
+				r.Account.UpdatedAt = time.Now().UTC()
+				r.Actor, r.Reason = r.Pending.Actor, r.Pending.Reason
+				r.Pending = nil
+				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+					return ErrRecovery
+				}
+				continue
 			} else if r.Pending.Action == "ssh_keys" {
 				// Finish the interrupted key write: the target set was durable
 				// before the file was touched, and installing it is idempotent.
@@ -301,6 +351,18 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			}
 			if r.Pending.Action == "delete" {
 				operation := *r.Pending
+				if r.Web.enabled() {
+					switch e := s.applySitesWithout(ctx, items, r.Account.ID); {
+					case errors.Is(e, ErrWebRejected):
+						r.Pending = nil
+						if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+							return ErrRecovery
+						}
+						continue
+					case e != nil:
+						continue
+					}
+				}
 				if e := s.native.Delete(ctx, r); e != nil {
 					// Keep the record and retry on the next refresh; an
 					// uncertain destructive effect is never force-closed.
@@ -625,6 +687,24 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	r, err = s.appendEvent(r, intent)
 	if err != nil {
 		return Account{}, ErrRecovery
+	}
+	// A live site leaves OpenLiteSpeed's config before its user and home go,
+	// so the server never points at a missing user. If the config without it
+	// fails its test, the old files went back and nothing changed: the delete
+	// ends rejected and blocks nothing.
+	if r.Web.enabled() {
+		switch e := s.applySitesWithout(ctx, items, r.Account.ID); {
+		case errors.Is(e, ErrWebRejected):
+			operation := *r.Pending
+			r.Pending = nil
+			if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+				return Account{}, ErrRecovery
+			}
+			return Account{}, ErrWebRejected
+		case e != nil:
+			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+			return Account{}, ErrRecovery
+		}
 	}
 	if e := s.native.Delete(ctx, r); e != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")

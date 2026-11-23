@@ -118,8 +118,8 @@ ownership and mode.
 `SetWeb` puts an account's site live on OpenLiteSpeed with a PHP version
 (8.1 to 8.4) and a disk quota (64 MiB to 1 TiB). It is off unless hostbroker
 runs with `--web-user` (OpenLiteSpeed's `user` from `httpd_config.conf`); only
-then does the broker admit its tools (`xfs_quota`, `openlitespeed`,
-and `lswsctrl`). The web settings are not part of
+then does the broker admit its tools (`xfs_quota`, `openlitespeed`
+and `systemctl`). The web settings are not part of
 the pinned broker options, so the operation can be turned on for an existing
 broker.
 
@@ -141,8 +141,9 @@ broker.
   rewrote fails on an error or a warning, anything outside broker vhosts on
   an error, and a broker vhost the change did not touch is skipped, because
   what it reports comes from its own tenant's files. If the test fails, the
-  old files go back with their owner and mode. Then `lswsctrl reload`
-  restarts gracefully. The broker never edits `httpd_config.conf`: the
+  old files go back with their owner and mode. Then `systemctl reload
+  lsws` restarts OpenLiteSpeed gracefully (its unit reloads with
+  `lswsctrl restart`). The broker never edits `httpd_config.conf`: the
   installer adds `include /usr/local/lsws/conf/sifruno.conf` and
   server-level `namespace 1` once. New files take their SELinux label from
   the directory they are written in.

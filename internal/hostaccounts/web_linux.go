@@ -29,13 +29,16 @@ import (
 //     files are created with O_EXCL|O_NOFOLLOW and renamed into place, so an
 //     account that owns one of those directories cannot redirect a root
 //     write with a symlink. The config is tested with `openlitespeed -t`,
-//     restored on failure, and applied with `lswsctrl reload` (SIGUSR1, a
-//     graceful restart). New files take their SELinux label from the
-//     directory they are created in, so no relabelling is needed.
+//     restored on failure, and applied with `systemctl reload lsws`, whose
+//     reload is OpenLiteSpeed's graceful restart (`lswsctrl restart`; the
+//     broker does not run lswsctrl itself, which packages install as a
+//     symlink). New files take their SELinux label from the directory they
+//     are created in, so no relabelling is needed.
 
 const (
 	olsBinary  = olsweb.ServerRoot + "/bin/openlitespeed"
-	olsControl = olsweb.ServerRoot + "/bin/lswsctrl"
+	systemctl  = "/usr/bin/systemctl"
+	olsService = "lsws.service"
 	xfsQuota   = "/usr/sbin/xfs_quota"
 	// The installer adds this line to httpd_config.conf; the broker only
 	// checks for it and never edits the server-wide file.
@@ -43,7 +46,7 @@ const (
 	maxOLSFile = 1 << 20
 )
 
-var webUtilities = []string{xfsQuota, olsBinary, olsControl}
+var webUtilities = []string{xfsQuota, olsBinary, systemctl}
 
 // POSIX ACL extended attribute format (include/uapi/linux/posix_acl_xattr.h).
 const (
@@ -580,7 +583,7 @@ func (n *linuxSystem) installSites(ctx context.Context, sites []olsweb.Site) err
 		}
 		return e
 	}
-	if _, e = n.command(ctx, olsControl, "reload"); e != nil {
+	if _, e = n.command(ctx, systemctl, "reload", olsService); e != nil {
 		return ErrUnavailable
 	}
 	return nil

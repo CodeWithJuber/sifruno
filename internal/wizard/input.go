@@ -12,8 +12,9 @@ import (
 	"unicode/utf8"
 )
 
-// Input is what the person typed. AdminPassword stays in memory only, for
-// the life of the run.
+// Input is what the person typed. AdminPassword is held in memory only and
+// never stored; the run drops its references when it ends, after the install
+// step or after undoing a failed job.
 type Input struct {
 	Domain        string
 	Title         string

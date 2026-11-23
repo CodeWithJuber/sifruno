@@ -42,12 +42,24 @@ type fakeAccounts struct {
 	conflict map[string]bool // usernames Create refuses
 	createFn func(context.Context) error
 	webErr   error
+	webBumps bool // SetWeb changes the account even when it answers webErr, as a timed-out call can
+	webFn    func(context.Context) error
 	install  hostaccounts.WordPressInput
 	installF func(context.Context) error
 	listErr  error
 	delErr   error
 	delCtx   error
 	next     int
+
+	webLeft, installLeft time.Duration // time to its deadline each call was given
+}
+
+func timeLeft(ctx context.Context) time.Duration {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return -1
+	}
+	return time.Until(d)
 }
 
 func (f *fakeAccounts) record(call string) {
@@ -90,22 +102,49 @@ func (f *fakeAccounts) Delete(ctx context.Context, id string, in hostaccounts.De
 	if f.delErr != nil {
 		return hostaccounts.Account{}, f.delErr
 	}
-	f.accounts = slices.DeleteFunc(f.accounts, func(a hostaccounts.Account) bool { return a.ID == id })
+	// The broker's rules: a known account, at its current revision.
+	i := slices.IndexFunc(f.accounts, func(a hostaccounts.Account) bool { return a.ID == id })
+	if i < 0 {
+		return hostaccounts.Account{}, hostaccounts.ErrNotFound
+	}
+	if f.accounts[i].Revision != in.ExpectedRevision {
+		return hostaccounts.Account{}, hostaccounts.ErrConflict
+	}
+	f.accounts = slices.Delete(f.accounts, i, i+1)
 	return hostaccounts.Account{ID: id}, nil
 }
 
-func (f *fakeAccounts) SetWeb(_ context.Context, id string, in hostaccounts.WebInput, _ string) (hostaccounts.WebResult, error) {
+func (f *fakeAccounts) SetWeb(ctx context.Context, id string, in hostaccounts.WebInput, _ string) (hostaccounts.WebResult, error) {
 	f.record(fmt.Sprintf("web %s php=%s quota=%d rev=%d reason=%s", id[28:], in.PHPVersion, in.QuotaMiB, in.ExpectedRevision, in.Reason))
+	f.mu.Lock()
+	f.webLeft = timeLeft(ctx)
+	f.mu.Unlock()
+	if f.webFn != nil {
+		if err := f.webFn(ctx); err != nil {
+			return hostaccounts.WebResult{}, err
+		}
+	}
+	if f.webErr != nil && !f.webBumps {
+		return hostaccounts.WebResult{}, f.webErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.accounts, func(a hostaccounts.Account) bool { return a.ID == id })
+	if i < 0 || f.accounts[i].Revision != in.ExpectedRevision {
+		return hostaccounts.WebResult{}, hostaccounts.ErrConflict
+	}
+	f.accounts[i].Revision++
 	if f.webErr != nil {
 		return hostaccounts.WebResult{}, f.webErr
 	}
-	return hostaccounts.WebResult{Account: hostaccounts.Account{ID: id, Revision: in.ExpectedRevision + 1}, Web: hostaccounts.WebState{PHPVersion: in.PHPVersion, QuotaMiB: in.QuotaMiB}}, nil
+	return hostaccounts.WebResult{Account: f.accounts[i], Web: hostaccounts.WebState{PHPVersion: in.PHPVersion, QuotaMiB: in.QuotaMiB}}, nil
 }
 
 func (f *fakeAccounts) InstallWordPress(ctx context.Context, id string, in hostaccounts.WordPressInput, _ string) (hostaccounts.WordPressResult, error) {
 	f.record(fmt.Sprintf("install %s rev=%d", id[28:], in.ExpectedRevision))
 	f.mu.Lock()
 	f.install = in
+	f.installLeft = timeLeft(ctx)
 	f.mu.Unlock()
 	if f.installF != nil {
 		if err := f.installF(ctx); err != nil {
@@ -548,6 +587,7 @@ func TestUndoFailureIsRecorded(t *testing.T) {
 func TestTimeLimitStopsTheJobAndStillUndoes(t *testing.T) {
 	f := newFixture(t)
 	f.runner.limit = 50 * time.Millisecond
+	f.runner.waits = nil // the install's own minimum is tested below
 	f.acc.installF = func(ctx context.Context) error { <-ctx.Done(); return hostaccounts.ErrUnavailable }
 	done := f.runJob(t, input("example.com"))
 	if done.State != StateFailed || done.Error.Step != StepWordPress || !strings.Contains(done.Error.Why, "15 minutes") {
@@ -558,6 +598,254 @@ func TestTimeLimitStopsTheJobAndStillUndoes(t *testing.T) {
 	}
 	if f.acc.delCtx != nil {
 		t.Fatal("undo ran on the expired job context")
+	}
+}
+
+// Out of time at the account step: the broker may have made the account
+// after the panel stopped waiting, and undo cannot remove what the job never
+// learnt about, so the advice to check Accounts stays.
+func TestTimeLimitAtTheAccountStepSaysToCheckAccounts(t *testing.T) {
+	for _, answer := range []error{hostaccounts.ErrUnavailable, context.DeadlineExceeded} {
+		f := newFixture(t)
+		f.runner.limit = 50 * time.Millisecond
+		f.acc.createFn = func(ctx context.Context) error { <-ctx.Done(); return answer }
+		done := f.runJob(t, input("example.com"))
+		e := done.Error
+		if e == nil || e.Step != StepAccount || !strings.Contains(e.Why, "15 minutes") || !strings.Contains(e.Why, "cannot tell whether the account was made") {
+			t.Fatalf("%v: %+v", answer, e)
+		}
+		if e.Next != "Open Accounts. If an account for example.com is listed, remove it, then create the website again." {
+			t.Fatalf("%v: next %q", answer, e.Next)
+		}
+	}
+}
+
+// A slow web change or install is given its own minimum, even past the job's
+// limit, and is not counted as failed before then.
+func TestSlowBrokerStepsGetTheirMinimumWait(t *testing.T) {
+	f := newFixture(t)
+	f.runner.limit = time.Minute
+	done := f.runJob(t, input("example.com"))
+	if done.State != StateSucceeded {
+		t.Fatalf("job %+v", done.Error)
+	}
+	if f.acc.webLeft < webWait-5*time.Second || f.acc.installLeft < installWait-5*time.Second {
+		t.Fatalf("SetWeb got %v and InstallWordPress %v; want at least %v and %v", f.acc.webLeft, f.acc.installLeft, webWait, installWait)
+	}
+	// A job deadline further away than the minimum stays.
+	f = newFixture(t)
+	f.runJob(t, input("example.com"))
+	if f.acc.webLeft < jobLimit-time.Minute {
+		t.Fatalf("SetWeb got %v of a %v job", f.acc.webLeft, jobLimit)
+	}
+
+	// SetWeb answers after the job's limit but within its wait: done.
+	f = newFixture(t)
+	f.runner.limit = 20 * time.Millisecond
+	f.runner.waits = map[string]time.Duration{StepWeb: 10 * time.Second}
+	f.acc.webFn = func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return hostaccounts.ErrUnavailable
+		case <-time.After(200 * time.Millisecond):
+			return nil
+		}
+	}
+	done = f.runJob(t, input("example.com"))
+	if done.Steps[1].State != StepDone || (done.Error != nil && done.Error.Step == StepWeb) {
+		t.Fatalf("slow SetWeb counted as failed: %s %+v", stepStates(done), done.Error)
+	}
+}
+
+// Undo deletes the account at the revision it has now, which a timed-out
+// step may have moved on, and an account already gone counts as removed.
+func TestUndoUsesTheAccountsCurrentRevision(t *testing.T) {
+	deletes := func(f fixture) []string {
+		var out []string
+		for _, c := range f.acc.calls {
+			if strings.HasPrefix(c, "delete") {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	// SetWeb timed out after the broker applied it: revision 2, unseen.
+	f := newFixture(t)
+	f.acc.webErr = hostaccounts.ErrUnavailable
+	f.acc.webBumps = true
+	done := f.runJob(t, input("example.com"))
+	if got := stepStates(done); got != "account=undone web=failed database=skipped wordpress=skipped" {
+		t.Fatal(got)
+	}
+	if got := deletes(f); !slices.Equal(got, []string{"delete 0001 rev=2"}) || len(f.acc.accounts) != 0 || strings.Contains(done.Error.Next, "could not be removed") {
+		t.Fatalf("undo %q, accounts left %d, next %q", got, len(f.acc.accounts), done.Error.Next)
+	}
+
+	// Removed by someone else before undo came: nothing to delete, nothing
+	// reported as left on the server.
+	f = newFixture(t)
+	f.acc.installF = func(context.Context) error {
+		f.acc.mu.Lock()
+		f.acc.accounts = nil
+		f.acc.mu.Unlock()
+		return &hostaccounts.InstallError{Step: "install", Detail: "failed"}
+	}
+	done = f.runJob(t, input("example.com"))
+	if got := stepStates(done); got != "account=undone web=undone database=undone wordpress=failed" {
+		t.Fatal(got)
+	}
+	if got := deletes(f); len(got) != 0 {
+		t.Fatalf("deleted a missing account: %q", got)
+	}
+	if done.Steps[0].Message != "Was already gone when the job came to remove it." || !strings.Contains(done.Error.Technical, "undo account: already removed") || strings.Contains(done.Error.Next, "could not be removed") {
+		t.Fatalf("%q %+v", done.Steps[0].Message, done.Error)
+	}
+
+	// Gone between the list and the delete: the same.
+	f = newFixture(t)
+	f.acc.webErr = hostaccounts.ErrWebRejected
+	f.acc.delErr = hostaccounts.ErrNotFound
+	done = f.runJob(t, input("example.com"))
+	if got := stepStates(done); got != "account=undone web=failed database=skipped wordpress=skipped" || done.Steps[0].Message != "Was already gone when the job came to remove it." {
+		t.Fatalf("%s %q", got, done.Steps[0].Message)
+	}
+}
+
+// Error text from the broker or the database server can echo a password. No
+// path may carry one into the job record: not the technical details, not a
+// step message, not an undo note.
+func TestEchoedPasswordsNeverReachTheJobRecord(t *testing.T) {
+	// Quotes and a backslash, so %q would change it before a late redaction.
+	const admin = `quote"and\back-slash`
+	echo := func(f fixture, kind error) error {
+		f.dbs.mu.Lock()
+		db := f.dbs.password
+		f.dbs.mu.Unlock()
+		return fmt.Errorf("%w: admin=%s db=%s", kind, admin, db)
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(f fixture)
+	}{
+		{"account", func(f fixture) {
+			f.acc.createFn = func(context.Context) error { return echo(f, hostaccounts.ErrRecovery) }
+		}},
+		{"web", func(f fixture) { f.acc.webErr = echo(f, hostaccounts.ErrUnavailable) }},
+		{"web rejected", func(f fixture) { f.acc.webErr = echo(f, hostaccounts.ErrWebRejected) }},
+		{"install broker error", func(f fixture) {
+			f.acc.installF = func(context.Context) error { return echo(f, hostaccounts.ErrConflict) }
+		}},
+		{"install step name", func(f fixture) {
+			f.acc.installF = func(context.Context) error {
+				return &hostaccounts.InstallError{Step: "core install " + admin, Detail: echo(f, hostaccounts.ErrInstallFailed).Error()}
+			}
+		}},
+		{"undo account", func(f fixture) {
+			f.acc.installF = func(context.Context) error {
+				err := echo(f, hostaccounts.ErrConflict)
+				f.acc.mu.Lock()
+				f.acc.delErr = err
+				f.acc.mu.Unlock()
+				return &hostaccounts.InstallError{Step: "install", Detail: "failed"}
+			}
+		}},
+		{"undo database", func(f fixture) {
+			f.dbs.dropErr = fmt.Errorf("ERROR 1044 (42000): denied for %s", admin)
+			f.acc.installF = func(context.Context) error {
+				return &hostaccounts.InstallError{Step: "install", Detail: "failed"}
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			tc.setup(f)
+			in := input("example.com")
+			in.AdminPassword = admin
+			done := f.runJob(t, in)
+			if done.State != StateFailed {
+				t.Fatalf("job %s", done.State)
+			}
+			raw, err := os.ReadFile(filepath.Join(f.dir, storeFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			shown, _ := json.Marshal(done)
+			for _, text := range []string{string(raw), string(shown)} {
+				if strings.Contains(text, "quote") || (f.dbs.password != "" && strings.Contains(text, f.dbs.password)) {
+					t.Fatalf("a password reached the job record: %s", shown)
+				}
+			}
+			// The echo was recorded, scrubbed, not dropped.
+			if !strings.Contains(string(shown), "[secret]") {
+				t.Fatalf("no scrubbed echo in %s", shown)
+			}
+		})
+	}
+}
+
+// A job file the panel cannot use is kept aside for a person, and the panel
+// starts with an empty store instead of refusing to start.
+func TestUnusableJobFileIsSetAside(t *testing.T) {
+	var log strings.Builder
+	saved := logOutput
+	logOutput = &log
+	t.Cleanup(func() { logOutput = saved })
+	asideName := regexp.MustCompile(`/jobs\.json\.corrupt-\d{8}T\d{6}Z$`)
+	for _, tc := range []struct {
+		name, content string
+		dir           bool // jobs.json is a directory: it cannot be read
+	}{
+		{name: "damaged", content: `{"version":1,"jobs":[`},
+		{name: "other version", content: `{"version":2,"jobs":[]}`},
+		{name: "invalid job", content: `{"version":1,"jobs":[{"id":"x"}]}`},
+		{name: "unreadable", dir: true},
+	} {
+		dir := filepath.Join(t.TempDir(), "wizard")
+		path := filepath.Join(dir, storeFile)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		if tc.dir {
+			err = os.Mkdir(path, 0o755)
+		} else {
+			err = os.WriteFile(path, []byte(tc.content), 0o644)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		log.Reset()
+		store, err := OpenStore(dir)
+		if err != nil || len(store.List(maxListed)) != 0 {
+			t.Fatalf("%s: open %v", tc.name, err)
+		}
+		aside, _ := filepath.Glob(path + ".corrupt-*")
+		if len(aside) != 1 || !asideName.MatchString(aside[0]) {
+			t.Fatalf("%s: set aside as %q", tc.name, aside)
+		}
+		info, err := os.Lstat(aside[0])
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s: aside mode %v %v", tc.name, info.Mode(), err)
+		}
+		if !tc.dir {
+			if kept, _ := os.ReadFile(aside[0]); string(kept) != tc.content {
+				t.Fatalf("%s: content changed: %q", tc.name, kept)
+			}
+		}
+		if _, err = os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s: jobs.json still there: %v", tc.name, err)
+		}
+		if line := log.String(); strings.Count(line, "\n") != 1 || !strings.Contains(line, aside[0]) {
+			t.Fatalf("%s: log %q", tc.name, line)
+		}
+		// The new store works, and the next start reads it quietly.
+		if err = store.put(newJob(strings.Repeat("a", 32), "example.com", "local-operator", time.Now())); err != nil {
+			t.Fatal(err)
+		}
+		log.Reset()
+		if store, err = OpenStore(dir); err != nil || len(store.List(maxListed)) != 1 || log.Len() != 0 {
+			t.Fatalf("%s: reopen %v %q", tc.name, err, log.String())
+		}
 	}
 }
 

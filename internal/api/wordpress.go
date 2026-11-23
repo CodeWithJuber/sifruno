@@ -24,7 +24,7 @@ type WordPressCreateBody struct {
 	Title         string `json:"title" maxLength:"200" doc:"Site title, 1 to 200 bytes."`
 	AdminUser     string `json:"admin_user" pattern:"^[A-Za-z0-9_.@][A-Za-z0-9_.@-]{0,59}$" doc:"WordPress admin username."`
 	AdminEmail    string `json:"admin_email" maxLength:"100" doc:"WordPress admin email, a plain address."`
-	AdminPassword string `json:"admin_password" minLength:"12" maxLength:"128" format:"password" writeOnly:"true" doc:"WordPress admin password. Kept in memory until the install ends; never stored or returned."`
+	AdminPassword string `json:"admin_password" minLength:"12" maxLength:"128" format:"password" writeOnly:"true" doc:"WordPress admin password. Held only in memory, never stored or returned; the job drops its reference when it ends, after the install step or after undoing a failed job."`
 	PHPVersion    string `json:"php_version" enum:"8.1,8.2,8.3,8.4" doc:"PHP version for the site."`
 }
 
@@ -67,8 +67,10 @@ func registerWizard(a huma.API, o Options) {
 		return huma.Operation{OperationID: id, Method: method, Path: path, DefaultStatus: status, MaxBodyBytes: 4096, BodyReadTimeout: 5 * time.Second, SkipValidateBody: true, SkipValidateParams: true}
 	}
 	huma.Register(a, op("create-wordpress-website", http.MethodPost, "/api/v1/websites/wordpress", http.StatusAccepted), func(ctx context.Context, in *wordpressCreateInput) (*websiteJobOutput, error) {
-		// The handler's copy of the password goes when it returns; the job
-		// keeps its own until the install ends.
+		// The handler drops its references to the password when it returns,
+		// and the job drops its own when it ends, after the install step or
+		// after undoing a failed job. Go strings cannot be zeroed, so this
+		// lets the memory be reused; it does not erase it.
 		defer func() { in.Body.AdminPassword = "" }()
 		if runner == nil {
 			return nil, huma.Error503ServiceUnavailable(wizardUnavailable)

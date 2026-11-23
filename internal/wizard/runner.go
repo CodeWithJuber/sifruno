@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -54,6 +53,8 @@ const (
 	maxRunning     = 2                // jobs running at once
 	usernameTries  = 5                // broker creates tried per job
 	jobLimit       = 15 * time.Minute // all four steps together
+	webWait        = 6 * time.Minute  // the least SetWeb gets: the broker's web apply alone may take 4
+	installWait    = 12 * time.Minute // the least InstallWordPress gets: the broker allows the install 10
 	undoLimit      = 3 * time.Minute  // removing what a failed job created
 	quotaMiB       = 1024
 	brokerReason   = "WordPress wizard"
@@ -75,11 +76,25 @@ type Runner struct {
 
 	digits func() string // two digits for a username retry
 	limit  time.Duration
+	// waits is the least time a slow broker step gets, by step name, even
+	// past limit: giving up while the broker is still changing the account
+	// would fail a step that may yet succeed and leave undo racing it.
+	waits map[string]time.Duration
 }
 
 // New returns a runner over the broker, the database service and a store.
 func New(accounts Accounts, databases Databases, store *Store) *Runner {
-	return &Runner{accounts: accounts, databases: databases, store: store, running: map[string]string{}, digits: randomDigits, limit: jobLimit}
+	return &Runner{accounts: accounts, databases: databases, store: store, running: map[string]string{}, digits: randomDigits, limit: jobLimit, waits: map[string]time.Duration{StepWeb: webWait, StepWordPress: installWait}}
+}
+
+// stepContext is the job's context with its deadline moved, if need be, to
+// at least wait from now.
+func stepContext(ctx context.Context, wait time.Duration) (context.Context, context.CancelFunc) {
+	least := time.Now().Add(wait)
+	if d, ok := ctx.Deadline(); !ok || wait <= 0 || !d.Before(least) {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(context.WithoutCancel(ctx), least)
 }
 
 // Get returns one job.
@@ -136,9 +151,11 @@ func (r *Runner) Start(ctx context.Context, in Input, actor string) (Job, error)
 	r.mu.Unlock()
 	reserved = false
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.limit)
-	// The run holds the only copy of the password from here on; the
-	// goroutine captures the domain, not the input.
-	j := &run{runner: r, job: job.clone(), in: in, actor: actor}
+	// The run keeps the password; the goroutine captures the domain, not
+	// the input, and Start drops its own reference. Go strings cannot be
+	// zeroed: dropping a reference lets the memory be reused, it does not
+	// erase it.
+	j := &run{runner: r, job: job.clone(), in: in, actor: actor, secrets: []string{in.AdminPassword}}
 	domain := in.Domain
 	in.AdminPassword = ""
 	r.wg.Add(1)
@@ -176,11 +193,11 @@ func (r *Runner) release(domain string) {
 // panel's other start-up messages go.
 func (r *Runner) save(j Job) {
 	if err := r.store.put(j); err != nil {
-		fmt.Fprintf(os.Stderr, "website job %s: saving the job record failed: %v\n", j.ID, err)
+		fmt.Fprintf(logOutput, "website job %s: saving the job record failed: %v\n", j.ID, err)
 	}
 }
 
-// run is one job in progress. It alone holds the passwords.
+// run is one job in progress, and holds the passwords while it needs them.
 type run struct {
 	runner *Runner
 	job    Job
@@ -189,6 +206,10 @@ type run struct {
 
 	dbPassword string
 	wpVersion  string
+	// secrets is every password the run has held, kept only to scrub them
+	// out of what the job records: error text from the broker or the
+	// database server can echo them, even after the install step.
+	secrets []string
 
 	// What this job created, for undo.
 	accountID   string
@@ -205,18 +226,29 @@ type stepError struct {
 
 func (j *run) execute(ctx context.Context) {
 	defer func() {
-		// Drop the passwords as soon as the run ends, whatever happened.
-		j.in.AdminPassword = ""
-		j.dbPassword = ""
+		// Drop the run's last references to the passwords when it ends,
+		// whatever happened: right after the install step, or after a failed
+		// job's undo. This does not erase the bytes; Go cannot zero a string.
+		j.in.AdminPassword, j.dbPassword, j.secrets = "", "", nil
 	}()
 	steps := []func(context.Context) (string, *stepError){j.account, j.web, j.database, j.wordpress}
 	for i, step := range steps {
 		j.begin(i)
-		message, failure := step(ctx)
+		stepCtx, cancel := stepContext(ctx, j.runner.waits[j.job.Steps[i].Name])
+		message, failure := step(stepCtx)
+		expired := stepCtx.Err() != nil
+		cancel()
 		if failure != nil {
-			if ctx.Err() != nil {
+			if expired {
 				failure.why = "It took longer than 15 minutes, so the panel stopped waiting."
 				failure.next = "Try again. If it is slow again, check the server's load and its connection to wordpress.org."
+				if j.job.Steps[i].Name == StepAccount {
+					// The broker may have made the account after the panel
+					// stopped waiting; the job never learnt its ID, so undo
+					// cannot remove it.
+					failure.why = "It took longer than 15 minutes, so the panel stopped waiting and cannot tell whether the account was made."
+					failure.next = checkAccounts(j.in.Domain)
+				}
 			}
 			j.fail(i, failure)
 			return
@@ -241,7 +273,7 @@ func (j *run) begin(i int) {
 
 func (j *run) finish(i int, message string) {
 	j.job.Steps[i].State = StepDone
-	j.job.Steps[i].Message = message
+	j.job.Steps[i].Message = redact(message, j.secrets...)
 	j.job.Steps[i].FinishedAt = timestamp(time.Now())
 	j.touch()
 }
@@ -273,19 +305,25 @@ func (j *run) account(ctx context.Context) (string, *stepError) {
 		}
 		// A conflict is either the name or the domain; only a new name helps.
 		if owner, taken := j.domainOwner(ctx); taken {
-			return "", &stepError{why: j.in.Domain + " was added to the hosting account " + owner + " while this job was starting.", next: "Use another domain, or remove that account first.", technical: technical(err)}
+			return "", &stepError{why: j.in.Domain + " was added to the hosting account " + owner + " while this job was starting.", next: "Use another domain, or remove that account first.", technical: j.technical(err)}
 		}
 	}
 	switch {
 	case errors.Is(last, hostaccounts.ErrConflict) || errors.Is(last, errNameInUse):
-		return "", &stepError{why: fmt.Sprintf("The %d account names tried (starting with %s) are already in use on this server.", usernameTries, base), next: "Try again; the panel picks new names each time.", technical: technical(last)}
+		return "", &stepError{why: fmt.Sprintf("The %d account names tried (starting with %s) are already in use on this server.", usernameTries, base), next: "Try again; the panel picks new names each time.", technical: j.technical(last)}
 	case errors.Is(last, hostaccounts.ErrRecovery):
-		return "", &stepError{why: "The account service stopped part-way and needs a check before anything else changes.", next: "Open Accounts and review the account for " + j.in.Domain + " before you try again.", technical: technical(last)}
+		return "", &stepError{why: "The account service stopped part-way and needs a check before anything else changes.", next: "Open Accounts and review the account for " + j.in.Domain + " before you try again.", technical: j.technical(last)}
 	case errors.Is(last, hostaccounts.ErrUnavailable):
-		return "", &stepError{why: "The account service did not answer, so the panel cannot tell whether the account was made.", next: "Open Accounts. If an account for " + j.in.Domain + " is listed, remove it, then create the website again.", technical: technical(last)}
+		return "", &stepError{why: "The account service did not answer, so the panel cannot tell whether the account was made.", next: checkAccounts(j.in.Domain), technical: j.technical(last)}
 	default:
-		return "", brokerFailure(last)
+		return "", j.brokerFailure(last)
 	}
+}
+
+// checkAccounts is the advice when the broker may have made an account the
+// job does not know about, so undo cannot remove it.
+func checkAccounts(domain string) string {
+	return "Open Accounts. If an account for " + domain + " is listed, remove it, then create the website again."
 }
 
 var errNameInUse = errors.New("account name or its database name already in use")
@@ -330,9 +368,9 @@ func (j *run) web(ctx context.Context) (string, *stepError) {
 	res, err := j.runner.accounts.SetWeb(ctx, j.accountID, hostaccounts.WebInput{PHPVersion: j.in.PHPVersion, QuotaMiB: quotaMiB, ExpectedRevision: j.revision, Reason: brokerReason}, j.actor)
 	if err != nil {
 		if errors.Is(err, hostaccounts.ErrWebRejected) {
-			return "", &stepError{why: "The web server's configuration test failed with the new site, so the server kept its old configuration.", next: "Ask whoever runs this server to check the web server, then create the website again.", technical: technical(err)}
+			return "", &stepError{why: "The web server's configuration test failed with the new site, so the server kept its old configuration.", next: "Ask whoever runs this server to check the web server, then create the website again.", technical: j.technical(err)}
 		}
-		return "", brokerFailure(err)
+		return "", j.brokerFailure(err)
 	}
 	j.revision = res.Account.Revision
 	return "The site is live with PHP " + j.in.PHPVersion + ".", nil
@@ -346,7 +384,7 @@ func (j *run) database(ctx context.Context) (string, *stepError) {
 	// The account step skipped names in use; this catches one made since.
 	taken, err := j.nameTaken(ctx, name)
 	if err != nil {
-		return "", databaseFailure(err, j.secrets())
+		return "", j.databaseFailure(err)
 	}
 	if taken {
 		return "", nameExists(name, "registry or server already has "+name)
@@ -358,19 +396,20 @@ func (j *run) database(ctx context.Context) (string, *stepError) {
 	err = j.runner.databases.CreateDatabaseStrict(ctx, owner, name)
 	j.dbCreated = err == nil || errors.Is(err, dbhost.ErrNotRegistered)
 	if err != nil {
-		return "", createFailure(name, err, j.secrets())
+		return "", j.createFailure(name, err)
 	}
 	j.dbPassword, err = newDBPassword()
 	if err != nil {
-		return "", &stepError{why: "The panel could not make a password for the database.", next: "Try again.", technical: technical(err)}
+		return "", &stepError{why: "The panel could not make a password for the database.", next: "Try again.", technical: j.technical(err)}
 	}
+	j.secrets = append(j.secrets, j.dbPassword)
 	err = j.runner.databases.CreateUserStrict(ctx, owner, name, j.dbPassword)
 	j.userCreated = err == nil || errors.Is(err, dbhost.ErrNotRegistered)
 	if err != nil {
-		return "", createFailure(name, err, j.secrets())
+		return "", j.createFailure(name, err)
 	}
 	if err = j.runner.databases.SetPrivileges(ctx, owner, name, name, []string{"ALL PRIVILEGES"}); err != nil {
-		return "", databaseFailure(err, j.secrets())
+		return "", j.databaseFailure(err)
 	}
 	return "Created the database " + name + " and its user.", nil
 }
@@ -389,36 +428,36 @@ func (j *run) wordpress(ctx context.Context) (string, *stepError) {
 		DBPassword:       j.dbPassword,
 	}
 	res, err := j.runner.accounts.InstallWordPress(ctx, j.accountID, in, j.actor)
-	secrets := j.secrets()
-	// The install is the last use of either password.
+	// The install is the last use of either password, so the run drops its
+	// references to them here. j.secrets stays, only to scrub error text,
+	// until the run ends.
 	in.AdminPassword, in.DBPassword = "", ""
 	j.in.AdminPassword, j.dbPassword = "", ""
 	if err != nil {
 		var install *hostaccounts.InstallError
 		if errors.As(err, &install) {
-			return "", &stepError{why: fmt.Sprintf("The WordPress installer stopped at its %q step.", install.Step), next: "Open Technical details to see where it stopped, fix the cause, then create the website again.", technical: scrub(install.Step+": "+install.Detail, secrets...)}
+			// Redact before quoting: %q escapes characters a password may hold.
+			return "", &stepError{why: fmt.Sprintf("The WordPress installer stopped at its %q step.", redact(install.Step, j.secrets...)), next: "Open Technical details to see where it stopped, fix the cause, then create the website again.", technical: scrub(install.Step+": "+install.Detail, j.secrets...)}
 		}
-		return "", brokerFailure(err)
+		return "", j.brokerFailure(err)
 	}
 	j.wpVersion = res.Version
 	return "Installed WordPress " + res.Version + ".", nil
 }
 
-func (j *run) secrets() []string { return []string{j.in.AdminPassword, j.dbPassword} }
-
 // brokerFailure explains the broker's typed errors.
-func brokerFailure(err error) *stepError {
+func (j *run) brokerFailure(err error) *stepError {
 	switch {
 	case errors.Is(err, hostaccounts.ErrConflict):
-		return &stepError{why: "The hosting account changed or was busy while this step ran.", next: "Wait a minute, then create the website again.", technical: technical(err)}
+		return &stepError{why: "The hosting account changed or was busy while this step ran.", next: "Wait a minute, then create the website again.", technical: j.technical(err)}
 	case errors.Is(err, hostaccounts.ErrNotFound):
-		return &stepError{why: "The hosting account was removed while the website was being set up.", next: "Create the website again.", technical: technical(err)}
+		return &stepError{why: "The hosting account was removed while the website was being set up.", next: "Create the website again.", technical: j.technical(err)}
 	case errors.Is(err, hostaccounts.ErrInvalid):
-		return &stepError{why: "The account service refused the request as invalid.", next: "Check the details you entered, then create the website again.", technical: technical(err)}
+		return &stepError{why: "The account service refused the request as invalid.", next: "Check the details you entered, then create the website again.", technical: j.technical(err)}
 	case errors.Is(err, hostaccounts.ErrRecovery):
-		return &stepError{why: "The account service stopped part-way and needs a check before anything else changes.", next: "Open Accounts and review the account before you try again.", technical: technical(err)}
+		return &stepError{why: "The account service stopped part-way and needs a check before anything else changes.", next: "Open Accounts and review the account before you try again.", technical: j.technical(err)}
 	default:
-		return &stepError{why: "The account service did not answer.", next: "Check that the account service is running, then create the website again.", technical: technical(err)}
+		return &stepError{why: "The account service did not answer.", next: "Check that the account service is running, then create the website again.", technical: j.technical(err)}
 	}
 }
 
@@ -428,22 +467,22 @@ func nameExists(name, detail string) *stepError {
 }
 
 // createFailure explains a strict create that failed.
-func createFailure(name string, err error, secrets []string) *stepError {
+func (j *run) createFailure(name string, err error) *stepError {
 	switch {
 	case errors.Is(err, dbhost.ErrExists):
-		return nameExists(name, scrub(err.Error(), secrets...))
+		return nameExists(name, j.technical(err))
 	case errors.Is(err, dbhost.ErrNotRegistered):
-		return &stepError{why: "The database server made " + name + ", but the panel could not record it in its list of databases.", next: "Check that the panel's state directory can be written, then create the website again.", technical: scrub(err.Error(), secrets...)}
+		return &stepError{why: "The database server made " + name + ", but the panel could not record it in its list of databases.", next: "Check that the panel's state directory can be written, then create the website again.", technical: j.technical(err)}
 	default:
-		return databaseFailure(err, secrets)
+		return j.databaseFailure(err)
 	}
 }
 
-func databaseFailure(err error, secrets []string) *stepError {
+func (j *run) databaseFailure(err error) *stepError {
 	if errors.Is(err, dbhost.ErrUnavailable) {
-		return &stepError{why: "The database server is not answering.", next: "Check that the database server is running, then create the website again.", technical: scrub(err.Error(), secrets...)}
+		return &stepError{why: "The database server is not answering.", next: "Check that the database server is running, then create the website again.", technical: j.technical(err)}
 	}
-	return &stepError{why: "The database server refused the request.", next: "Open Technical details to see why, fix the cause, then create the website again.", technical: scrub(err.Error(), secrets...)}
+	return &stepError{why: "The database server refused the request.", next: "Open Technical details to see why, fix the cause, then create the website again.", technical: j.technical(err)}
 }
 
 var stepWhat = map[string]string{
@@ -457,14 +496,16 @@ var stepWhat = map[string]string{
 // created, newest first.
 func (j *run) fail(i int, f *stepError) {
 	now := timestamp(time.Now())
+	// Every text the job records passes the scrub, whichever path built it.
+	why, next := redact(f.why, j.secrets...), redact(f.next, j.secrets...)
 	step := &j.job.Steps[i]
 	step.State = StepFailed
-	step.Message = f.why
+	step.Message = why
 	step.FinishedAt = now
 	for k := i + 1; k < len(j.job.Steps); k++ {
 		j.job.Steps[k].State = StepSkipped
 	}
-	j.job.Error = &Failure{Step: step.Name, What: stepWhat[step.Name], Why: f.why, Next: f.next, Technical: f.technical}
+	j.job.Error = &Failure{Step: step.Name, What: stepWhat[step.Name], Why: why, Next: next, Technical: scrub(f.technical, j.secrets...)}
 	j.touch()
 	left, notes := j.undo()
 	if len(left) > 0 {
@@ -491,7 +532,7 @@ func (j *run) undo() (left, notes []string) {
 		if err := j.runner.databases.DropUser(ctx, owner, j.dbName); err != nil {
 			dbLeft = true
 			left = append(left, "the database user "+j.dbName)
-			notes = append(notes, "undo database user: "+scrub(err.Error()))
+			notes = append(notes, "undo database user: "+j.technical(err))
 		} else {
 			j.userCreated = false
 		}
@@ -500,7 +541,7 @@ func (j *run) undo() (left, notes []string) {
 		if err := j.runner.databases.DropDatabase(ctx, owner, j.dbName); err != nil {
 			dbLeft = true
 			left = append(left, "the database "+j.dbName)
-			notes = append(notes, "undo database: "+scrub(err.Error()))
+			notes = append(notes, "undo database: "+j.technical(err))
 		} else {
 			j.dbCreated = false
 		}
@@ -522,23 +563,50 @@ func (j *run) undo() (left, notes []string) {
 	if j.accountID == "" {
 		return left, notes
 	}
-	_, err := j.runner.accounts.Delete(ctx, j.accountID, hostaccounts.DeleteInput{ExpectedRevision: j.revision, Reason: undoReason}, j.actor)
+	// Delete at the account's current revision: a step that timed out may
+	// have changed the account after the job last saw it. If the list cannot
+	// be read, the newest revision the job saw is the best guess.
+	revision, gone := j.revision, false
+	if items, err := j.runner.accounts.List(ctx); err == nil {
+		gone = true
+		for _, a := range items {
+			if a.ID == j.accountID {
+				revision, gone = a.Revision, false
+				break
+			}
+		}
+	}
+	var err error
+	if !gone {
+		_, err = j.runner.accounts.Delete(ctx, j.accountID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: undoReason}, j.actor)
+		if errors.Is(err, hostaccounts.ErrNotFound) {
+			gone, err = true, nil
+		}
+	}
 	for _, name := range []string{StepWeb, StepAccount} {
 		step := &j.job.Steps[j.index(name)]
 		if step.State != StepDone {
 			continue
 		}
-		if err != nil {
+		switch {
+		case err != nil:
 			step.Message = "Could not be removed after a later step failed."
-		} else {
+		case gone:
+			step.State = StepUndone
+			step.Message = "Was already gone when the job came to remove it."
+		default:
 			step.State = StepUndone
 			step.Message = "Removed after a later step failed."
 		}
 	}
-	if err != nil {
+	switch {
+	case err != nil:
 		left = append(left, "the hosting account "+owner)
-		notes = append(notes, "undo account: "+technical(err))
-	} else {
+		notes = append(notes, "undo account: "+j.technical(err))
+	case gone:
+		notes = append(notes, "undo account: already removed")
+		j.accountID = ""
+	default:
 		j.accountID = ""
 	}
 	j.touch()
@@ -563,17 +631,25 @@ func newDBPassword() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func technical(err error) string { return scrub(err.Error()) }
+// technical is an error's text for the job record, scrubbed of every
+// password the run has held.
+func (j *run) technical(err error) string { return scrub(err.Error(), j.secrets...) }
 
-// scrub makes error text safe for the job record: the passwords removed,
-// MariaDB's statement echo ("near '...'") cut off because it can quote the
-// password, printable ASCII only, at most 512 bytes.
-func scrub(text string, secrets ...string) string {
+// redact replaces each password in text with "[secret]".
+func redact(text string, secrets ...string) string {
 	for _, s := range secrets {
 		if s != "" {
 			text = strings.ReplaceAll(text, s, "[secret]")
 		}
 	}
+	return text
+}
+
+// scrub makes error text safe for the job record: the passwords removed,
+// MariaDB's statement echo ("near '...'") cut off because it can quote the
+// password, printable ASCII only, at most 512 bytes.
+func scrub(text string, secrets ...string) string {
+	text = redact(text, secrets...)
 	if i := strings.Index(text, " near '"); i >= 0 {
 		text = text[:i] + " near [statement removed]"
 	}

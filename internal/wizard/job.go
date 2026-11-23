@@ -169,9 +169,17 @@ type storeData struct {
 	Jobs    []Job `json:"jobs"`
 }
 
+// logOutput takes the store's and the runner's one-line reports. It is
+// stderr, where the panel's other start-up messages go.
+var logOutput io.Writer = os.Stderr
+
 // OpenStore opens or creates the job store in dir (made 0700). A job still
 // "running" in the file belonged to a panel that stopped mid-run: it becomes
 // "failed" with the restart message, and nothing is undone automatically.
+// A job file that cannot be read or used (damaged, too large, another
+// version, an invalid job) does not stop the panel: it is renamed to
+// jobs.json.corrupt-<UTC time>, one line on stderr names it, and the store
+// starts empty.
 func OpenStore(dir string) (*Store, error) {
 	dir, err := filepath.Abs(dir)
 	if err != nil {
@@ -198,10 +206,45 @@ func OpenStore(dir string) (*Store, error) {
 	if err = securestate.CheckPath(path); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
+	jobs, err := readStore(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
+	if err != nil {
+		// The job log is for people; a damaged one is kept for them to read,
+		// not allowed to keep the panel from starting.
+		aside, aerr := setAside(path)
+		if aerr != nil {
+			return nil, fmt.Errorf("%v, and moving it aside failed: %w", err, aerr)
+		}
+		fmt.Fprintf(logOutput, "website jobs: %s could not be used (%v); moved it to %s and started with no jobs\n", path, err, aside)
+		return s, nil
+	}
+	s.jobs = jobs
+	changed := false
+	now := timestamp(time.Now())
+	for i := range s.jobs {
+		if s.jobs[i].State == StateRunning {
+			s.jobs[i] = interrupted(s.jobs[i], now)
+			changed = true
+		}
+	}
+	if len(s.jobs) > maxJobs {
+		s.jobs = s.jobs[len(s.jobs)-maxJobs:]
+		changed = true
+	}
+	if changed {
+		if err = s.writeLocked(); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// readStore reads and checks the job file. A missing file is os.ErrNotExist;
+// any other error means the file cannot be used as it is.
+func readStore(path string) ([]Job, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -227,25 +270,28 @@ func OpenStore(dir string) (*Store, error) {
 			return nil, errors.New("website job store holds an invalid job")
 		}
 	}
-	s.jobs = data.Jobs
-	changed := false
-	now := timestamp(time.Now())
-	for i := range s.jobs {
-		if s.jobs[i].State == StateRunning {
-			s.jobs[i] = interrupted(s.jobs[i], now)
-			changed = true
-		}
+	return data.Jobs, nil
+}
+
+// setAside renames a job file that cannot be used to
+// jobs.json.corrupt-<UTC time> in the same directory, private, and never over
+// an earlier one. It returns the new path.
+func setAside(path string) (string, error) {
+	aside := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
+	if _, err := os.Lstat(aside); err == nil {
+		return "", fmt.Errorf("%s already exists", aside)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
 	}
-	if len(s.jobs) > maxJobs {
-		s.jobs = s.jobs[len(s.jobs)-maxJobs:]
-		changed = true
+	// CheckPath refused a symlink, so this changes the file itself.
+	if err := os.Chmod(path, storeFileMode); err != nil {
+		return "", err
 	}
-	if changed {
-		if err = s.writeLocked(); err != nil {
-			return nil, err
-		}
+	if err := os.Rename(path, aside); err != nil {
+		return "", err
 	}
-	return s, nil
+	syncDir(filepath.Dir(path))
+	return aside, nil
 }
 
 // interrupted marks a job the panel stopped in the middle of.

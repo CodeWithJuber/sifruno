@@ -1,7 +1,9 @@
-// Browser checks for the Phase 1 panel shell, run by `proof.sh panel-shell`
-// against a panel with throwaway state. It reads that state's operator key to
-// sign in and never prints it.
+// Browser checks for the Phase 1 panel shell and admin sign-in, run by
+// `proof.sh panel-shell` against a panel with throwaway state. It reads that
+// state's operator key for first-run setup and never prints it; the admin's
+// password and authenticator key exist only in this process.
 //   node panel-shell.qa.mjs <origin> <state-dir> <out-dir> [chrome-executable]
+import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
@@ -16,6 +18,26 @@ const errors = [];
 const check = (name, ok, detail = "") => { checks.push({ name, ok: Boolean(ok), detail }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${!ok && detail ? ` (${detail})` : ""}`); };
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
 const path = (page) => new URL(page.url()).pathname;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const password = `qa ${randomBytes(12).toString("hex")}`;
+
+// RFC 6238 with the panel's parameters, to act as the admin's authenticator app.
+function base32(s) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const c of s) bits += alphabet.indexOf(c).toString(2).padStart(5, "0");
+  const out = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(out);
+}
+function totp(secret, step) {
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(BigInt(step));
+  const h = createHmac("sha1", base32(secret)).update(msg).digest();
+  const o = h[h.length - 1] & 15;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1000000).padStart(6, "0");
+}
+const stepNow = () => Math.floor(Date.now() / 30000);
 
 const browser = await chromium.launch({ headless: true, ...(chrome ? { executablePath: chrome } : {}) });
 async function context(viewport, preview = false) {
@@ -29,7 +51,8 @@ async function context(viewport, preview = false) {
   }
   const page = await ctx.newPage();
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
-  page.on("console", (m) => { if (m.type() === "error" && !/401|Unauthorized/.test(m.text())) errors.push(`console: ${m.text()}`); });
+  // Refused sign-ins (401, 422, 429) are expected here; the browser logs each one.
+  page.on("console", (m) => { if (m.type() === "error" && !/\b(401|422|429)\b|Unauthorized/.test(m.text())) errors.push(`console: ${m.text()}`); });
   return { ctx, page };
 }
 
@@ -46,10 +69,57 @@ try {
 
   await page.getByTestId("nav-websites").click();
   check("Websites menu item opens /websites", path(page) === "/websites", path(page));
-  await page.getByLabel("Operator access key", { exact: true }).fill(key);
-  await page.getByRole("button", { name: "Sign in locally", exact: true }).click();
-  await page.getByRole("button", { name: "Sign out locally", exact: true }).waitFor();
-  check("sign-in works inside the new shell", true);
+  // First-run setup: access key, then username and password, then 2FA.
+  await page.getByTestId("setup-key").waitFor();
+  check("a fresh panel asks for first-run setup on a private page", true);
+  await page.getByLabel("Access key", { exact: true }).fill(key);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByTestId("setup-account").waitFor();
+  await page.getByLabel("Username", { exact: true }).fill("admin");
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByLabel("Password again", { exact: true }).fill(password + "x");
+  check("mismatched passwords are caught before sending", await page.getByText("The two passwords are different.").isVisible() && await page.getByRole("button", { name: "Continue", exact: true }).isDisabled());
+  await page.getByLabel("Password again", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByTestId("setup-code").waitFor();
+  const secret = (await page.getByTestId("setup-secret").innerText()).replace(/\s+/g, "");
+  check("setup shows a 32-character authenticator key", /^[A-Z2-7]{32}$/.test(secret));
+  const link = await page.getByRole("link", { name: "Open in authenticator app" }).getAttribute("href");
+  check("setup offers an authenticator-app link for this admin", link.startsWith("otpauth://totp/Sifruno:admin?") && link.includes(`secret=${secret}`));
+  await page.screenshot({ path: join(outDir, "1440-light-setup-code.png"), mask: [page.getByTestId("setup-secret")] });
+  await page.getByLabel("6-digit code from the app", { exact: true }).fill(totp(secret, stepNow() + 5));
+  await page.getByRole("button", { name: "Create admin account", exact: true }).click();
+  await page.getByText("That code did not match").waitFor();
+  check("a wrong code does not create the admin", true);
+  const used = stepNow();
+  await page.getByLabel("6-digit code from the app", { exact: true }).fill(totp(secret, used));
+  await page.getByRole("button", { name: "Create admin account", exact: true }).click();
+  await page.getByTestId("signed-in-as").waitFor();
+  check("setup signs the new admin in", (await page.getByTestId("signed-in-as").innerText()).includes("Signed in as admin"));
+  const status = await page.evaluate(async () => (await fetch("/api/v1/session/setup")).json());
+  check("the server no longer asks for setup", status.admin_required === false);
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByTestId("admin-sign-in").waitFor();
+  check("sign out returns a private page to the sign-in form", true);
+  const signIn = async (username, pass, code) => {
+    await page.getByLabel("Username", { exact: true }).fill(username);
+    await page.getByLabel("Password", { exact: true }).fill(pass);
+    await page.getByLabel("6-digit code", { exact: true }).fill(code);
+    const answer = page.waitForResponse((r) => r.url().endsWith("/api/v1/session/login") && r.request().method() === "POST");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    return (await answer).status();
+  };
+  let answered = await signIn("admin", password, totp(secret, stepNow() + 5));
+  await page.getByText("The username, password or code is wrong").waitFor();
+  check("a wrong code is refused with a plain message", answered === 401, `HTTP ${answered}`);
+  await page.screenshot({ path: join(outDir, "1440-light-sign-in.png") });
+  answered = await signIn("admin", password, totp(secret, used));
+  check("the code used for setup cannot sign in again", answered === 401, `HTTP ${answered}`);
+  while (stepNow() <= used) await sleep(1000);
+  answered = await signIn("admin", password, totp(secret, stepNow()));
+  await page.getByTestId("signed-in-as").waitFor();
+  check("the admin signs in with password and a fresh code", answered === 200 && path(page) === "/websites", `HTTP ${answered}`);
 
   // Create a website so the Files handoff has something to carry.
   await page.getByRole("button", { name: "Create website", exact: true }).first().click();
@@ -148,6 +218,26 @@ try {
   check("preview redirects private URLs to Home", path(pub.page) === "/");
   check("preview makes no private API calls", privateCalls.length === 0, privateCalls.join(","));
   await pub.ctx.close();
+
+  // Last, because it locks the admin's name for a minute: the per-name limit
+  // also guards a real account.
+  const late = await context({ width: 1440, height: 900 });
+  await late.page.goto(origin + "/websites");
+  await late.page.getByTestId("admin-sign-in").waitFor();
+  const lockout = [];
+  for (let i = 0; i < 6; i++) {
+    await late.page.getByLabel("Username", { exact: true }).fill("admin");
+    await late.page.getByLabel("Password", { exact: true }).fill("not the password");
+    await late.page.getByLabel("6-digit code", { exact: true }).fill("123456");
+    const answer = late.page.waitForResponse((r) => r.url().endsWith("/api/v1/session/login") && r.request().method() === "POST");
+    await late.page.getByRole("button", { name: "Sign in", exact: true }).click();
+    lockout.push((await answer).status());
+  }
+  // Earlier sign-ins in this run used some of the name's five tries, so check
+  // the shape: plain refusals, then 429 from the first limited try onward.
+  const first429 = lockout.indexOf(429);
+  check("the admin's own name is rate limited after repeated failures", first429 >= 1 && lockout.slice(0, first429).every((c) => c === 401) && lockout.slice(first429).every((c) => c === 429), lockout.join(","));
+  await late.ctx.close();
 } catch (error) {
   check("run completed", false, String(error && error.message || error).slice(0, 400));
 } finally {

@@ -27,3 +27,15 @@ Run on 2026-11-23 with `scripts/devvm/proof.sh panel-shell` on a fresh dev VM (A
 Screenshots from that run are in [phase1-panel-shell/](phase1-panel-shell/): Home, Websites (light and dark), the search box, and the phone menu.
 
 What this run does not show: the screens inside the shell are still the old Astryx ones, and only English exists, so right-to-left layout was not checked.
+
+## Phase 1: admin sign-in
+
+Run on 2026-11-23 with the same `proof.sh panel-shell`, extended for sign-in, on a fresh dev VM (AlmaLinux 9.9, SELinux enforcing). The browser on the host acted as the authenticator app, computing RFC 6238 codes from the key the panel showed; the guest checked them against its own clock.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Admin sign-in: first-run setup (access key, username and password, authenticator), wrong and replayed codes refused, sign-out, sign-in with a fresh code, per-name rate limit, plus every panel shell check above | [phase1-admin-login.txt](phase1-admin-login.txt) | 40 passed, 0 failed |
+
+Screenshots are in [phase1-admin-login/](phase1-admin-login/): the authenticator step (the key is masked) and the sign-in form after a wrong code.
+
+What this run does not show: the panel off loopback (HTTPS is the next slice), more than one admin, and an outside review of the sign-in code, which the plan requires before paying customers.

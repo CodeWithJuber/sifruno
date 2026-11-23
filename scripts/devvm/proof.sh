@@ -24,10 +24,11 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 with a password folder to the Compat tier, and migrate verify
                 keeps the cutover gate closed against an OpenLiteSpeed copy
                 (where the folder opens) and opens it against an Apache copy.
-  panel-shell   Phase 1 panel shell: the panel runs in the VM with throwaway
-                state and a browser on this host drives it (menu, page URLs,
-                Ctrl+K, sign-in, Websites to Files, phone width, public
-                preview). Needs Node, the repo's npm packages and Playwright's
+  panel-shell   Phase 1 panel shell and admin sign-in: the panel runs in the VM
+                with throwaway state and a browser on this host drives it
+                (first-run admin setup with 2FA, sign-in, code replay and rate
+                limits, menu, page URLs, Ctrl+K, Websites to Files, phone
+                width, public preview). Needs Node, the repo's npm packages and Playwright's
                 Chromium, or a Chrome binary in SIFRUNO_PROOF_CHROME.
 USAGE
 }

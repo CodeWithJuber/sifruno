@@ -159,7 +159,7 @@ try {
   await page.getByTestId("create-website").click();
   await page.getByTestId("new-website-problem").waitFor({ timeout: 30000 });
   const problem = (await page.getByTestId("new-website-problem").innerText()).replace(/\s+/g, " ");
-  console.log(`  shown: ${problem.slice(0, 200)}`);
+  console.log(`  shown: ${problem.slice(0, 200).trimEnd()}`);
   check("a second site for the same domain is refused with a reason", problem.length > 10 && new URL(page.url()).pathname === "/websites/new");
 
   console.log("## The password is held nowhere");

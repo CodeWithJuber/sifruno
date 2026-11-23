@@ -81,6 +81,7 @@ case "${1:-}" in
       if [ "$answer" = "301 https://$domain/" ] || curl -s -H "Host: $domain" http://127.0.0.1/ | grep -q 'Sifruno wizard proof'; then ok=yes; break; fi
       sleep 2
     done
+    answer="${answer% }"
     echo "  over http: ${answer:-no answer}"
     check "over http the site serves WordPress, or sends the visitor to its https address" test "$ok" = yes
     check "wp-admin redirects to the login page" bash -c "curl -s -o /dev/null -w '%{http_code}' -H 'Host: $domain' http://127.0.0.1/wp-admin/ | grep -qx 302"

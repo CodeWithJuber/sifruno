@@ -79,21 +79,21 @@ Run on 2026-11-23 with `scripts/devvm/proof.sh broker-wordpress` on the dev VM, 
 
 The install took 230 s under software emulation, past the broker's 45 s request limit, so this run also shows that the long-running response arrives. Later commits refused a suspend or web change during an install, refused passwords with an edge space (WP-CLI's prompt trims them), and gave OpenLiteSpeed's test and restart their own time limits; those are covered by unit tests and by the wizard proof below, which ran the same install through the panel. A re-run on `d99cdd0` failed at its first step because the proof's own driver stopped waiting for the web change after 60 s while the broker finished it; the driver now waits six minutes (`0b9bd2c`).
 
-## Phase 1: the New website wizard
+## Phase 1: the New website wizard, with SSL
 
-Run on 2026-11-23 with `scripts/devvm/proof.sh wordpress-wizard` on the dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3, MariaDB 10.11, QEMU software emulation), built from `f3affc7`. The panel ran in the VM as `sifpanel` with the real broker (`--web-user`) and the MariaDB admin option file that provisioning makes; headless Chrome on the host reached it through `vm.sh forward` and drove the wizard as an admin would.
+Run on 2026-11-24 with `scripts/devvm/proof.sh wordpress-wizard` on the dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3, MariaDB 10.11, QEMU software emulation), built from `70efa12`. The panel ran in the VM as `sifpanel` with the real broker (`--web-user`), the MariaDB admin option file, and ACME pointed at Pebble 2.10.1, Let's Encrypt's test CA, installed by provisioning (its DNS answers 127.0.0.1 for every name, so it validates HTTP-01 against this VM's OpenLiteSpeed). Headless Chrome on the host reached the panel through `vm.sh forward` and drove the wizard as an admin would.
 
 | Slice | Transcript | Result |
 | --- | --- | --- |
-| New website: first-run admin sign-in, the wizard form (autocomplete, feedback only after leaving a field), Create starts a panel job that creates the account, puts the site live, creates the database and installs WordPress, the job page to the last screen (Open site, Open WordPress admin, Set up DNS; after a reload; at phone width), the same domain refused, the WordPress admin password in neither the jobs API, the browser's storage nor the job file; on the VM the job file is private, the files and `wp-config.php` (0600) are the site user's, the site serves the title typed in the wizard and `wp-admin` redirects to the login | [phase1-wordpress-wizard.txt](phase1-wordpress-wizard.txt) | 30 passed, 0 failed |
+| New website: first-run admin sign-in, the wizard form (autocomplete, feedback only after leaving a field), a panel job that creates the account, puts the site live, gets a certificate (lego in the panel, HTTP-01 through the broker's challenge path, installed by the broker's `SetCertificate`), creates the database and installs WordPress with https; the job page and the last screen (https links, DNS help, reload, phone width), the same domain refused, the WordPress admin password in neither the jobs API, the browser's storage nor the job file; on the VM the site serves over https with a certificate chained to Pebble's root that names exactly the domain and is the broker's `cert.pem` (root 0600), and WordPress's home and siteurl are https | [phase1-wordpress-wizard.txt](phase1-wordpress-wizard.txt) | 43 passed, 0 failed |
 
-Screenshots are in [phase1-wordpress-wizard/](phase1-wordpress-wizard/): the form (the password masked), the job while it runs, and the last screen at desktop and phone width. The job took 318 s under software emulation.
+Screenshots are in [phase1-wordpress-wizard/](phase1-wordpress-wizard/): the form (the password masked), the job while it runs, and the last screen at desktop and phone width.
 
-The first run of this proof found a broker bug: `systemctl reload lsws` took 18 s on the busy VM, past the broker's 15 s command limit, so the web step was left pending and the wizard could not undo the account it had made. OpenLiteSpeed's config test and restart now have their own limits (`b8d3b97`), and delete removes the user on the operation's own limit (`f3affc7`).
+Earlier runs found and fixed: a broker command limit too short for OpenLiteSpeed's restart on a busy VM (`b8d3b97`), a delete cut off by the request's own limit (`f3affc7`), and proof checks that looked for the step list on the last screen (`caf5b99`). One run on `caf5b99` passed every https check but its first plain-http request found no page within ten minutes, while the same page served at once later in the run and in the next run; the cause is not known.
 
 What this run does not show:
 
-- **SSL.** The site is http; certificates with lego are the next slice.
-- **Real DNS.** The proof domain resolves nowhere; the site was reached with a Host header.
-- **The failure paths on the VM.** Undo after a failed step, a pre-existing database name, a slow step and a panel restart during a job are covered by unit tests (`internal/wizard`), not by this run.
+- **Real DNS and a public CA.** Pebble stands in for Let's Encrypt and its DNS points every name at the VM.
+- **Renewal.** The renewal loop and its one-week wait after a refused install are unit tests (`internal/acme`); no certificate came near expiry here.
+- **The failure paths on the VM.** Undo after a failed step, a pre-existing database name, a slow step, a panel restart during a job and a skipped SSL step are unit tests (`internal/wizard`).
 - **More than one job.** Jobs run one at a time; the refusal of a second is a unit test.

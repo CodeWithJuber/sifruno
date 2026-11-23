@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,11 +31,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|delete [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|wordpress|delete [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// A WordPress install downloads WordPress and takes minutes.
+	timeout := 60 * time.Second
+	if global.Arg(0) == "wordpress" {
+		timeout = 12 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	command := flag.NewFlagSet(global.Arg(0), flag.ContinueOnError)
@@ -47,6 +53,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	state := command.String("state", "", "active or suspended (state)")
 	php := command.String("php", "8.3", "PHP version for the site (web)")
 	quota := command.Int("quota-mib", 0, "Disk quota in MiB (web)")
+	title := command.String("title", "", "Site title (wordpress)")
+	adminUser := command.String("admin-user", "", "WordPress admin username (wordpress)")
+	adminEmail := command.String("admin-email", "", "WordPress admin email (wordpress)")
+	https := command.Bool("https", false, "Site address uses https (wordpress)")
+	dbName := command.String("db-name", "", "Database name (wordpress)")
+	dbUser := command.String("db-user", "", "Database user (wordpress)")
+	// Passwords come from files, so they are not in this process's arguments.
+	adminPasswordFile := command.String("admin-password-file", "", "File holding the WordPress admin password (wordpress)")
+	dbPasswordFile := command.String("db-password-file", "", "File holding the database password (wordpress)")
 	var keyFiles multiFlag
 	command.Var(&keyFiles, "key-file", "Public key file to install (ssh-keys); repeat for several, omit all to remove access")
 	if command.Parse(global.Args()[1:]) != nil || command.NArg() != 0 {
@@ -96,6 +111,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		result, err = web.SetWeb(ctx, *id, hostaccounts.WebInput{PHPVersion: *php, QuotaMiB: *quota, ExpectedRevision: *revision, Reason: *reason}, *actor)
+	case "wordpress":
+		wp, ok := service.(hostaccounts.WordPressService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no WordPress surface")
+			return 1
+		}
+		adminPassword, readErr := readSecret(*adminPasswordFile)
+		if readErr != nil {
+			fmt.Fprintln(stderr, "read the admin password file:", readErr)
+			return 2
+		}
+		dbPassword, readErr := readSecret(*dbPasswordFile)
+		if readErr != nil {
+			fmt.Fprintln(stderr, "read the database password file:", readErr)
+			return 2
+		}
+		var installed hostaccounts.WordPressResult
+		installed, err = wp.InstallWordPress(ctx, *id, hostaccounts.WordPressInput{ExpectedRevision: *revision, HTTPS: *https, Title: *title, AdminUser: *adminUser, AdminEmail: *adminEmail, AdminPassword: adminPassword, DBName: *dbName, DBUser: *dbUser, DBPassword: dbPassword}, *actor)
+		var failed *hostaccounts.InstallError
+		if errors.As(err, &failed) {
+			fmt.Fprintf(stderr, "broker refused: WordPress %s step failed: %s\n", failed.Step, failed.Detail)
+			return 1
+		}
+		result = installed
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", global.Arg(0))
 		return 2
@@ -116,3 +155,15 @@ type multiFlag []string
 
 func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// readSecret reads a one-line secret file, without its line ending.
+func readSecret(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("no file given")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(raw), "\r\n"), nil
+}

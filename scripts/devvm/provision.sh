@@ -148,6 +148,24 @@ if ! grep -q '^include /usr/local/lsws/conf/sifruno.conf$' "$conf"; then
   printf '%s\n' 'include /usr/local/lsws/conf/sifruno.conf' >> "$conf"
 fi
 
+log "WP-CLI for the broker's WordPress install"
+# The broker runs this file only while its bytes match the sha512 pinned in
+# internal/hostaccounts/wordpress_linux.go (WP-CLI 2.12.0's published one).
+wpcli_version=2.12.0
+wpcli_sha512=be928f6b8ca1e8dfb9d2f4b75a13aa4aee0896f8a9a0a1c45cd5d2c98605e6172e6d014dda2e27f88c98befc16c040cbb2bd1bfa121510ea5cdf5f6a30fe8832
+install -d -o root -g root -m 0755 /usr/local/lib/sifruno
+if [ "$(sha512sum /usr/local/lib/sifruno/wp-cli.phar 2>/dev/null | cut -d' ' -f1)" != "$wpcli_sha512" ]; then
+  wpcli_tmp="$(mktemp)"
+  curl -fsSL -o "$wpcli_tmp" "https://github.com/wp-cli/wp-cli/releases/download/v${wpcli_version}/wp-cli-${wpcli_version}.phar"
+  if [ "$(sha512sum "$wpcli_tmp" | cut -d' ' -f1)" != "$wpcli_sha512" ]; then
+    rm -f "$wpcli_tmp"
+    echo "provision.sh: WP-CLI download does not match its pinned sha512" >&2
+    exit 1
+  fi
+  install -o root -g root -m 0644 "$wpcli_tmp" /usr/local/lib/sifruno/wp-cli.phar
+  rm -f "$wpcli_tmp"
+fi
+
 log "services"
 systemctl enable --now mariadb
 systemctl enable --now lsws

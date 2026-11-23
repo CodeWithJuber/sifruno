@@ -20,6 +20,8 @@ const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ def
 const PanelPreview = lazy(() => import("@/PanelPreview"));
 const NewWebsite = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.NewWebsite })));
 const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.WebsiteJob })));
+const WebsitesList = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsitesList })));
+const WebsiteOverview = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsiteOverview })));
 
 export function LoadingState({ label }: { label: string }) {
   return <div className="flex flex-col gap-4" role="status" aria-label={label}><Skeleton className="h-28 w-full" /><Skeleton className="h-64 w-full" /><span className="sr-only">{label}</span></div>;
@@ -122,7 +124,16 @@ export function WebsiteJobView({ jobId }: { jobId: string }) {
   return <WebsiteJob key={jobId} jobId={jobId} />;
 }
 
-// Kept-alive screens (Websites, Files, Backups, Customers) are rendered by the
+export function WebsitesView() {
+  return <WebsitesList />;
+}
+
+// Keyed by the id, so moving from one website to another starts fresh.
+export function WebsiteView({ accountId }: { accountId: string }) {
+  return <WebsiteOverview key={accountId} accountId={accountId} />;
+}
+
+// Kept-alive screens (Static sites, Files, Backups, Customers) are rendered by the
 // shell itself so their unsaved state survives navigation; their routes only
 // claim the URL.
 export function ShellRendered() {

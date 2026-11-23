@@ -146,6 +146,36 @@ try {
     check("the result fits a phone screen", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: join(outDir, "390-light-job-done.png"), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 900 });
+
+    console.log("## Browser: the new site in Websites");
+    await page.getByTestId("go-to-websites").click();
+    await page.getByTestId("websites-table").waitFor({ timeout: 30000 });
+    check("Go to Websites on the last screen opens /websites", new URL(page.url()).pathname === "/websites");
+    const row = page.locator(`[data-testid="website-row"][data-domain="${domain}"]`);
+    check("Websites lists the new domain", (await row.count()) === 1);
+    check("its status badge says Live", (await row.getByTestId("website-status").innerText()).trim() === "Live");
+    const httpsBadge = row.getByTestId("website-https");
+    check("it has an https badge with the certificate's expiry", (await httpsBadge.getAttribute("data-https")) === "on" && (await row.getByTestId("website-https-until").innerText()).startsWith("until "),
+      `${await httpsBadge.getAttribute("data-https")}: ${(await row.innerText()).replace(/\s+/g, " ")}`);
+    check("the list shows the site's WordPress version", (await row.getByTestId("website-wordpress").innerText()).trim() === version);
+    check("Open site in the list is https", (await row.getByTestId("open-site").getAttribute("href")) === `https://${domain}/`);
+    await page.screenshot({ path: join(outDir, "1440-light-websites.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    check("the list fits a phone screen", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await page.screenshot({ path: join(outDir, "390-light-websites.png"), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await row.getByTestId("website-details-link").click();
+    await page.getByTestId("website-overview").waitFor({ timeout: 30000 });
+    check("Details opens /websites/sites/<account id>", new URL(page.url()).pathname === `/websites/sites/${job.result.account_id}`, new URL(page.url()).pathname);
+    check("the site page shows the WordPress version", (await page.getByTestId("website-wordpress").innerText()).trim() === version);
+    check("the site page shows the hosting account", (await page.getByTestId("website-username").innerText()).trim() === user);
+    check("the site page's Open site is https", (await page.getByTestId("open-site").getAttribute("href")) === `https://${domain}/`);
+    await page.screenshot({ path: join(outDir, "1440-light-website-overview.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    check("the site page fits a phone screen", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await page.screenshot({ path: join(outDir, "390-light-website-overview.png"), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
   }
 
   console.log("## Browser: the same domain again is refused");
@@ -165,6 +195,8 @@ try {
   console.log("## The password is held nowhere");
   const listed = await page.evaluate(async () => (await fetch("/api/v1/websites/jobs")).text());
   check("the jobs API never returns the WordPress admin password", listed.includes(jobId) && !listed.includes(wpPassword));
+  const sites = await page.evaluate(async () => (await fetch("/api/v1/websites/sites")).text());
+  check("the websites API never returns it either", sites.includes(domain) && !sites.includes(wpPassword));
   const stored = await page.evaluate(() => JSON.stringify({ ...sessionStorage }) + JSON.stringify({ ...localStorage }));
   check("the browser's storage holds no password", !stored.includes(wpPassword) && !stored.includes(panelPassword));
   const local = join(outDir, "jobs.json");

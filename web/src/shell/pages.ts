@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 // Change trail and AI budget screens live under Customers, Security,
 // Activity and Settings. testId keeps the ids the browser QA scripts click.
 
-export type PageId = "home" | "websites" | "new-website" | "website-job" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "security" | "settings" | "tour";
+export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "security" | "settings" | "tour";
 
 export interface Page {
   id: PageId;
@@ -30,9 +30,11 @@ export interface Page {
 export const pages: readonly Page[] = [
   { id: "home", path: "/", label: "Home", title: "Home", subtitle: "Your websites and this server at a glance.", icon: Home, testId: "nav-overview", audience: "both", group: "main" },
   { id: "tour", path: "/tour", label: "Panel tour", title: "Panel tour", subtitle: "Explore Websites, Files and Backups with sample content.", icon: Layers, testId: "nav-panel-preview", audience: "preview", group: "main" },
-  { id: "websites", path: "/websites", label: "Websites", title: "Websites", subtitle: "Your websites.", icon: Globe, testId: "nav-websites", audience: "private", group: "main" },
+  { id: "websites", path: "/websites", label: "Websites", title: "Websites", subtitle: "The WordPress websites on this server.", icon: Globe, testId: "nav-websites", audience: "private", group: "main" },
   { id: "new-website", path: "/websites/new", label: "New website", title: "New website", subtitle: "Create a WordPress website on this server.", icon: Plus, testId: "nav-new-website", audience: "private", group: "main", parent: "websites" },
   { id: "website-job", path: "/websites/jobs/$jobId", label: "Website setup", title: "Website setup", subtitle: "Follow each step while the panel creates the website.", icon: ListChecks, testId: "nav-website-job", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/jobs\/[^/]+$/ },
+  { id: "website", path: "/websites/sites/$accountId", label: "Overview", title: "Website overview", subtitle: "One website: its status, versions and links.", icon: Globe, testId: "nav-website", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+$/ },
+  { id: "static-sites", path: "/websites/static", label: "Static sites (old)", title: "Static sites (old)", subtitle: "Websites made with the old static-file model.", icon: Globe, testId: "nav-static-sites", audience: "private", group: "main", parent: "websites" },
   { id: "files", path: "/websites/files", label: "Files", title: "Files", subtitle: "View and edit your website's files.", icon: Folder, testId: "nav-files", audience: "private", group: "main", parent: "websites" },
   { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },
   { id: "activity", path: "/activity", label: "Activity", title: "Activity", subtitle: "Recent changes to website files, and how to recover them.", icon: History, testId: "nav-trail", audience: "private", group: "main" },

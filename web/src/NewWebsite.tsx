@@ -2,8 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { FormEvent, ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
-import { ArrowLeft, Circle, CircleAlert, CircleCheck, CircleMinus, CircleX, ExternalLink, Eye, EyeOff, Info, RefreshCw, Undo2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Circle, CircleAlert, CircleCheck, CircleMinus, CircleX, ExternalLink, Eye, EyeOff, Info, RefreshCw, Undo2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { DnsHelp } from "@/components/dns-help";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
@@ -504,19 +505,11 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
         </a>
         <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
       </div>
-      <div id="dns-help" hidden={!dnsOpen} className="rounded-md border border-border bg-muted p-4" data-testid="dns-help">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
-            <h3>Point {job.domain} at this server</h3>
-            <p className="text-sm">Where you manage the domain's DNS, add this record:</p>
-          </div>
-          <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-1 text-sm">
-            <dt className="text-muted-foreground">Type</dt><dd className="font-medium text-foreground">A</dd>
-            <dt className="text-muted-foreground">Name</dt><dd className="break-words text-foreground">{job.domain}</dd>
-            <dt className="text-muted-foreground">Points to</dt><dd className="text-foreground">This server's public IP address</dd>
-          </dl>
-          <p className="text-sm">Open site works once the record is live. DNS changes can take a few hours to reach everyone.</p>
-        </div>
+      <DnsHelp id="dns-help" domain={job.domain} hidden={!dnsOpen} />
+      <Separator />
+      <div className="flex flex-wrap items-center gap-3">
+        <Link to="/websites" className={linkButton("outline")} data-testid="go-to-websites">Go to Websites<ArrowRight className="rtl:rotate-180" aria-hidden="true" /></Link>
+        <p className="text-sm">The new site is listed there with your other websites.</p>
       </div>
     </section>;
   }

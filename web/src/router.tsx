@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { AppShell, isPublicPreview } from "@/shell/AppShell";
-import { ActivityView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView } from "@/shell/views";
+import { ActivityView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
 
 // Every page has its own URL, so back, reload and shared links work. The Go
 // server already answers unknown extension-less paths with index.html.
@@ -22,12 +22,21 @@ function WebsiteJobRoute() {
   return <WebsiteJobView jobId={jobId} />;
 }
 
+// One website's Overview, by its hosting account's id.
+const websiteRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId", component: WebsiteRoute, beforeLoad: privateOnly });
+function WebsiteRoute() {
+  const { accountId } = websiteRoute.useParams();
+  return <WebsiteView accountId={accountId} />;
+}
+
 const routeTree = rootRoute.addChildren([
   route("/", HomeView),
   route("/tour", TourView, previewOnly),
-  route("/websites", ShellRendered, privateOnly),
+  route("/websites", WebsitesView, privateOnly),
   route("/websites/new", NewWebsiteView, privateOnly),
   websiteJobRoute,
+  websiteRoute,
+  route("/websites/static", ShellRendered, privateOnly),
   route("/websites/files", ShellRendered, privateOnly),
   route("/websites/backups", ShellRendered, privateOnly),
   route("/activity", ActivityView, privateOnly),

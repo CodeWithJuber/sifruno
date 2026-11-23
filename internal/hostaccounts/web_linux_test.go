@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -61,6 +62,10 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 	tenant := func(level, vhost string) string {
 		return "2026-11-23 16:00:00.000001 [" + level + "] [1] [config:server:vhosts:vhost:" + vhost + "] path /home/x/public_html/ does not exist\n"
 	}
+	docrootGone := func(vhost string) string {
+		return "2026-11-23 00:00:00.000000 [WARN] [1] [config:server:vhosts:vhost:" + vhost + "] configuration failed!\n" +
+			"2026-11-23 00:00:00.000000 [WARN] [1] Path for document root is not accessible: /home/brk55596/public_html/\n"
+	}
 	changed := map[string]bool{mine: true, other: false}
 	cases := []struct {
 		name string
@@ -78,6 +83,11 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 		{"error without context", "2026-11-23 16:00:00.000001 [ERROR] [1] bad config\n", 2, false},
 		{"exit 2 with no error line", stock, 2, false},
 		{"unknown exit", "", 3, false},
+		// The messages OpenLiteSpeed 1.9.4 printed on the dev VM after a
+		// tenant moved public_html away (time and process ID are
+		// placeholders): two warnings, one without a context.
+		{"another tenant's missing docroot", stock + docrootGone(other), 1, true},
+		{"this change's missing docroot", stock + docrootGone(mine), 1, false},
 	}
 	for _, c := range cases {
 		if got := olsTestPasses([]byte(c.out), c.code, changed); got != c.ok {
@@ -173,5 +183,31 @@ func TestRootOnlyWebAccessFollowsNoLink(t *testing.T) {
 	}
 	if acl(public) != nil {
 		t.Fatal("the replacement directory gained an ACL")
+	}
+}
+
+// TestOLSOutputOnThisHost judges a saved `openlitespeed -t` run with the
+// broker's own rule. The dev VM proof runs it on real output; elsewhere it
+// skips.
+func TestOLSOutputOnThisHost(t *testing.T) {
+	path := os.Getenv("SIFRUNO_OLS_TEST_OUTPUT")
+	if path == "" {
+		t.Skip("set SIFRUNO_OLS_TEST_OUTPUT, _CODE, _CHANGED and _WANT to judge a saved openlitespeed -t run")
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := strconv.Atoi(os.Getenv("SIFRUNO_OLS_TEST_CODE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := map[string]bool{}
+	if vhost := os.Getenv("SIFRUNO_OLS_TEST_CHANGED"); vhost != "" {
+		changed[vhost] = true
+	}
+	want := os.Getenv("SIFRUNO_OLS_TEST_WANT") == "pass"
+	if got := olsTestPasses(out, code, changed); got != want {
+		t.Fatalf("exit %d, rewritten vhosts %v: passes %v, want %v", code, changed, got, want)
 	}
 }

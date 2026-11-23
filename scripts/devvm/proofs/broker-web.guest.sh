@@ -113,20 +113,20 @@ if [ -z "$bid" ] || [ ! -f "$LSWS/conf/vhosts/$bvhost/vhconf.conf" ]; then
   fail "the third site is live, so its broken docroot can be observed"
 else
 norm() { sed -E 's/^[0-9-]+ [0-9:.]+ //; s/\[[0-9]+\] //' | grep -E '^\[(ERROR|WARN)\]' | sort -u; }
+raw=/root/broker-web-ols-test.txt
 baseline="$("$LSWS/bin/openlitespeed" -t 2>&1 | norm)"
 runuser -u "$BROKEN_USER" -- sh -c "cd /home/$BROKEN_USER && mv public_html public_gone"
-after_break="$("$LSWS/bin/openlitespeed" -t 2>&1 | norm)"
+ols_code=0
+"$LSWS/bin/openlitespeed" -t >"$raw" 2>&1 || ols_code=$?
 runuser -u "$BROKEN_USER" -- sh -c "cd /home/$BROKEN_USER && mv public_gone public_html"
-new_lines="$(comm -13 <(printf '%s\n' "$baseline") <(printf '%s\n' "$after_break") | grep -v '^$')"
-if [ -z "$new_lines" ]; then
-  pass "openlitespeed -t reports nothing new for the broken site, so it cannot fail another account's change"
-else
-  echo "  new lines from openlitespeed -t after the tenant moved public_html:"
-  printf '%s\n' "$new_lines" | sed 's/^/    /'
-  # shellcheck disable=SC2016 # $1 and $2 expand in the inner shell
-  check "every new line carries the broken site's vhost context, which other accounts' changes skip" \
-    bash -c '! printf "%s\n" "$1" | grep -vE "^\[(ERROR|WARN)\] \[[^]]*:vhost:$2[]:]" | grep -q .' _ "$new_lines" "$bvhost"
-fi
+echo "  openlitespeed -t exited $ols_code; new lines after the tenant moved public_html:"
+comm -13 <(printf '%s\n' "$baseline") <(norm <"$raw") | grep -v '^$' | sed 's/^/    /'
+# The broker's own rule (olsTestPasses) on that saved output.
+# shellcheck disable=SC2317 # called through check
+judge() { SIFRUNO_OLS_TEST_OUTPUT="$raw" SIFRUNO_OLS_TEST_CODE="$ols_code" SIFRUNO_OLS_TEST_CHANGED="$1" SIFRUNO_OLS_TEST_WANT="$2" \
+  "$BIN/hostaccounts.test" -test.run '^TestOLSOutputOnThisHost$' -test.v 2>&1 | grep -q -- '--- PASS: TestOLSOutputOnThisHost'; }
+check "the broker's config test passes this output for another account's change" judge "" pass
+check "it fails the same output for a change to the broken site itself" judge "$bvhost" fail
 fi
 
 echo

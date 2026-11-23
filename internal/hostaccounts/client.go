@@ -143,10 +143,11 @@ func (c *client) SetWeb(ctx context.Context, id string, in WebInput, actor strin
 		return WebResult{}, ErrInvalid
 	}
 	var out WebResult
-	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/web", struct {
+	// The apply can take minutes on a busy host (the broker allows four).
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/web", struct {
 		Input WebInput `json:"input"`
 		Actor string   `json:"actor"`
-	}{in, actor}, &out)
+	}{in, actor}, &out, maxResponseBytes)
 	return out, err
 }
 

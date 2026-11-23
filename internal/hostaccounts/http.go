@@ -182,6 +182,12 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				writeError(w, ErrInvalid)
 				return
 			}
+			// The apply can take minutes on a busy host, longer than the
+			// server's default write deadline; it runs on its own limit.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
 			result, err := s.setWeb(ctx, id, in.Input, in.Actor)
 			if err != nil {
 				writeError(w, err)

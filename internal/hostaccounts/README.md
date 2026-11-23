@@ -152,8 +152,10 @@ The step that depends on the tenant's own files, the access grant, runs
 first and is idempotent: if the tenant swapped or changed those directories
 the request is refused (409) before anything is journaled, so a tenant cannot
 leave an unfinished operation that blocks every account. Then the intent is
-journaled and the apply runs under its own two-minute limit, not the
-caller's. If quota is not enforced or the new config fails its test, the
+journaled and the apply runs under its own four-minute limit, not the
+caller's; within it the config test gets 60 seconds and the graceful restart
+120, because on a busy host a restart has taken longer than the 15 seconds
+every other command gets. If quota is not enforced or the new config fails its test, the
 old files and the recorded quota go back (none for a first enable: the
 broker owns its accounts' quotas, so one set by hand is removed), the
 operation is journaled as `rejected` with the account unchanged, and the

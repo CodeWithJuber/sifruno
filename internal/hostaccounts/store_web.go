@@ -14,7 +14,9 @@ var ErrWebRejected = errors.New("web configuration rejected")
 // webApplyTimeout bounds the native work after the intent is journaled. It
 // does not follow the caller's context, so a client that gives up does not
 // leave a half-finished apply behind.
-const webApplyTimeout = 2 * time.Minute
+// Its four minutes cover the quota commands, the config test and the
+// graceful restart, each with its own limit.
+const webApplyTimeout = 4 * time.Minute
 
 func webContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), webApplyTimeout)

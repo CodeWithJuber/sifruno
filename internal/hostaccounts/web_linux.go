@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"sifruno/internal/olsweb"
@@ -39,7 +40,12 @@ const (
 	olsBinary  = olsweb.ServerRoot + "/bin/openlitespeed"
 	systemctl  = "/usr/bin/systemctl"
 	olsService = "lsws.service"
-	xfsQuota   = "/usr/sbin/xfs_quota"
+	// OpenLiteSpeed's config test and graceful restart are slow on a busy
+	// host: one restart took 18 s on the dev VM, past the 15 s every other
+	// command gets. Both fit inside webApplyTimeout with the quota commands.
+	olsTestTimeout   = 60 * time.Second
+	olsReloadTimeout = 120 * time.Second
+	xfsQuota         = "/usr/sbin/xfs_quota"
 	// The installer adds this line to httpd_config.conf; the broker only
 	// checks for it and never edits the server-wide file.
 	olsInclude = "include " + olsweb.ServerRoot + "/" + olsweb.ServerConfigPath
@@ -498,7 +504,7 @@ func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, map[string]bo
 
 // configTest runs `openlitespeed -t` and judges it with olsTestPasses.
 func (n *linuxSystem) configTest(ctx context.Context, changed map[string]bool) error {
-	out, code, e := n.commandStatus(ctx, olsBinary, "-t")
+	out, code, e := n.commandStatus(ctx, olsTestTimeout, olsBinary, "-t")
 	if e != nil || !olsTestPasses(out, code, changed) {
 		return ErrWebRejected
 	}
@@ -583,7 +589,7 @@ func (n *linuxSystem) installSites(ctx context.Context, sites []olsweb.Site) err
 		}
 		return e
 	}
-	if _, e = n.command(ctx, systemctl, "reload", olsService); e != nil {
+	if _, e = n.commandWithin(ctx, olsReloadTimeout, systemctl, "reload", olsService); e != nil {
 		return ErrUnavailable
 	}
 	return nil

@@ -214,8 +214,19 @@ func (b *commandBuffer) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
+
+// commandTimeout bounds one fixed command; a slower one gets its own limit
+// through commandWithin.
+const commandTimeout = 15 * time.Second
+
 func (n *linuxSystem) command(ctx context.Context, path string, args ...string) ([]byte, error) {
-	out, code, e := n.run(ctx, path, false, args...)
+	return n.commandWithin(ctx, commandTimeout, path, args...)
+}
+
+// commandWithin is command with its own time limit, for a program that is
+// known to be slow on a busy host (OpenLiteSpeed's graceful restart).
+func (n *linuxSystem) commandWithin(ctx context.Context, limit time.Duration, path string, args ...string) ([]byte, error) {
+	out, code, e := n.run(ctx, limit, path, false, args...)
 	if e != nil || code != 0 {
 		return nil, ErrUnavailable
 	}
@@ -224,11 +235,11 @@ func (n *linuxSystem) command(ctx context.Context, path string, args ...string) 
 
 // commandStatus is command for a program whose non-zero exit is an answer,
 // not a failure (openlitespeed -t); its output is stdout and stderr together.
-func (n *linuxSystem) commandStatus(ctx context.Context, path string, args ...string) ([]byte, int, error) {
-	return n.run(ctx, path, true, args...)
+func (n *linuxSystem) commandStatus(ctx context.Context, limit time.Duration, path string, args ...string) ([]byte, int, error) {
+	return n.run(ctx, limit, path, true, args...)
 }
 
-func (n *linuxSystem) run(ctx context.Context, path string, combined bool, args ...string) ([]byte, int, error) {
+func (n *linuxSystem) run(ctx context.Context, limit time.Duration, path string, combined bool, args ...string) ([]byte, int, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, -1, ErrUnavailable
 	}
@@ -240,7 +251,7 @@ func (n *linuxSystem) run(ctx context.Context, path string, combined bool, args 
 	if !ok || e != nil || !os.SameFile(before, actual) || before.Size() != actual.Size() || !before.ModTime().Equal(actual.ModTime()) {
 		return nil, -1, ErrUnavailable
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = n.opts.StateDir

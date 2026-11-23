@@ -55,9 +55,12 @@ func (wizardDatabaseSpy) Probe(context.Context) (string, error) { return "10.11"
 func (wizardDatabaseSpy) AllDatabases(context.Context) ([]dbhost.Database, error) {
 	return nil, nil
 }
-func (wizardDatabaseSpy) AllUsers(context.Context) ([]dbhost.User, error)      { return nil, nil }
-func (wizardDatabaseSpy) CreateDatabase(context.Context, string, string) error { return nil }
-func (wizardDatabaseSpy) CreateUser(context.Context, string, string, string) error {
+func (wizardDatabaseSpy) AllUsers(context.Context) ([]dbhost.User, error) { return nil, nil }
+func (wizardDatabaseSpy) ServerHas(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+func (wizardDatabaseSpy) CreateDatabaseStrict(context.Context, string, string) error { return nil }
+func (wizardDatabaseSpy) CreateUserStrict(context.Context, string, string, string) error {
 	return nil
 }
 func (wizardDatabaseSpy) SetPrivileges(context.Context, string, string, string, []string) error {

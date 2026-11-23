@@ -9,6 +9,17 @@ import (
 // answering — surfaces fail-closed, mirroring the reference's offline state.
 var ErrUnavailable = errors.New("database server unavailable")
 
+// ErrExists is returned by the strict creates when the database or user is
+// already in the registry or on the server (MariaDB errors 1007 and 1396).
+// Nothing was created or registered.
+var ErrExists = errors.New("database or user already exists")
+
+// ErrNotRegistered is returned by the strict creates when the server made the
+// database or user but the registry file could not be written. The object
+// exists and belongs to the caller to remove; the registry keeps the entry in
+// memory, so DropDatabase and DropUser still accept it.
+var ErrNotRegistered = errors.New("created on the database server but not recorded in the registry")
+
 // Database is one registry entry: the prefixed database plus the users
 // granted on it.
 type Database struct {

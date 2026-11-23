@@ -101,12 +101,22 @@ func sqlCreateDatabase(db string) string {
 	return fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", quoteIdent(db))
 }
 
+// sqlCreateDatabaseStrict fails with error 1007 if the database exists.
+func sqlCreateDatabaseStrict(db string) string {
+	return fmt.Sprintf("CREATE DATABASE %s CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", quoteIdent(db))
+}
+
 func sqlDropDatabase(db string) string {
 	return fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdent(db))
 }
 
 func sqlCreateUser(user, host, password string) string {
 	return fmt.Sprintf("CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s", quoteString(user), quoteString(host), quoteString(password))
+}
+
+// sqlCreateUserStrict fails with error 1396 if the user exists on that host.
+func sqlCreateUserStrict(user, host, password string) string {
+	return fmt.Sprintf("CREATE USER %s@%s IDENTIFIED BY %s", quoteString(user), quoteString(host), quoteString(password))
 }
 
 func sqlDropUser(user, host string) string {
@@ -134,6 +144,16 @@ const (
 	sqlListUsers     = "SELECT User, Host FROM mysql.user WHERE User NOT IN ('root','mysql','mariadb.sys','mysql.sys','mysql.session','mysql.infoschema','debian-sys-maint') ORDER BY User"
 	sqlVersion       = "SELECT VERSION()"
 )
+
+// sqlServerHasDatabase and sqlServerHasUser count what the server itself
+// holds, registered or not; a user counts on any host.
+func sqlServerHasDatabase(db string) string {
+	return fmt.Sprintf("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=%s", quoteString(db))
+}
+
+func sqlServerHasUser(user string) string {
+	return fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User=%s", quoteString(user))
+}
 
 func sqlPrivileges(user string) string {
 	return fmt.Sprintf("SHOW GRANTS FOR %s@'localhost'", quoteString(user))

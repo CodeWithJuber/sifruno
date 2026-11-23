@@ -78,6 +78,7 @@ func TestSQLBuilders(t *testing.T) {
 type fakeRunner struct {
 	stmts []string
 	rows  map[string][]string
+	errs  map[string]error // statements the server refuses
 	fail  bool
 }
 
@@ -86,6 +87,9 @@ func (f *fakeRunner) Run(_ context.Context, sql string) ([]string, error) {
 		return nil, errors.New("cannot connect")
 	}
 	f.stmts = append(f.stmts, sql)
+	if err, ok := f.errs[sql]; ok {
+		return nil, err
+	}
 	if strings.HasPrefix(sql, sqlVersion[:15]) {
 		return []string{"10.11.19-MariaDB"}, nil
 	}

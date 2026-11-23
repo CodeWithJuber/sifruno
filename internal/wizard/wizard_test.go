@@ -116,17 +116,20 @@ func (f *fakeAccounts) InstallWordPress(ctx context.Context, id string, in hosta
 }
 
 type fakeDatabases struct {
-	mu        sync.Mutex
-	order     *journal
-	calls     []string
-	password  string
-	probeErr  error
-	existing  []dbhost.Database
-	dbErr     error
-	userErr   error
-	privErr   error
-	dropErr   error
-	privsSeen []string
+	mu         sync.Mutex
+	order      *journal
+	calls      []string
+	password   string
+	probeErr   error
+	existing   []dbhost.Database // the registry
+	server     map[string]bool   // "database NAME" or "user NAME" on the server, registered or not
+	late       map[string]bool   // made by someone else after the job's checks: only the creates see them
+	unrecorded string            // "database" or "user": the server makes it, the registry write fails
+	dbErr      error
+	userErr    error
+	privErr    error
+	dropErr    error
+	privsSeen  []string
 }
 
 func (f *fakeDatabases) record(call string) {
@@ -141,11 +144,44 @@ func (f *fakeDatabases) AllDatabases(context.Context) ([]dbhost.Database, error)
 	return slices.Clone(f.existing), nil
 }
 func (f *fakeDatabases) AllUsers(context.Context) ([]dbhost.User, error) { return nil, nil }
-func (f *fakeDatabases) CreateDatabase(_ context.Context, owner, name string) error {
-	f.record("create-db " + owner + " " + name)
-	return f.dbErr
+func (f *fakeDatabases) ServerHas(_ context.Context, kind, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.server[kind+" "+name], nil
 }
-func (f *fakeDatabases) CreateUser(_ context.Context, owner, name, password string) error {
+
+// create is a strict create on the fake server: what exists is refused.
+func (f *fakeDatabases) create(kind, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := kind + " " + name
+	if f.server[key] || f.late[key] {
+		return fmt.Errorf("%w: %s is on the server", dbhost.ErrExists, key)
+	}
+	if f.server == nil {
+		f.server = map[string]bool{}
+	}
+	f.server[key] = true
+	if f.unrecorded == kind {
+		return fmt.Errorf("%w: %s: registry write failed", dbhost.ErrNotRegistered, key)
+	}
+	return nil
+}
+
+func (f *fakeDatabases) remove(kind, name string) {
+	f.mu.Lock()
+	delete(f.server, kind+" "+name)
+	f.mu.Unlock()
+}
+
+func (f *fakeDatabases) CreateDatabaseStrict(_ context.Context, owner, name string) error {
+	f.record("create-db " + owner + " " + name)
+	if f.dbErr != nil {
+		return f.dbErr
+	}
+	return f.create("database", name)
+}
+func (f *fakeDatabases) CreateUserStrict(_ context.Context, owner, name, password string) error {
 	f.record("create-user " + owner + " " + name)
 	f.mu.Lock()
 	f.password = password
@@ -155,7 +191,7 @@ func (f *fakeDatabases) CreateUser(_ context.Context, owner, name, password stri
 		// included, after "near".
 		return fmt.Errorf("%w near 'IDENTIFIED BY '%s'' at line 1", f.userErr, password)
 	}
-	return nil
+	return f.create("user", name)
 }
 func (f *fakeDatabases) SetPrivileges(_ context.Context, owner, user, db string, privs []string) error {
 	f.record("grant " + owner + " " + user + " " + db)
@@ -166,11 +202,19 @@ func (f *fakeDatabases) SetPrivileges(_ context.Context, owner, user, db string,
 }
 func (f *fakeDatabases) DropDatabase(_ context.Context, owner, name string) error {
 	f.record("drop-db " + owner + " " + name)
-	return f.dropErr
+	if f.dropErr != nil {
+		return f.dropErr
+	}
+	f.remove("database", name)
+	return nil
 }
 func (f *fakeDatabases) DropUser(_ context.Context, owner, name string) error {
 	f.record("drop-user " + owner + " " + name)
-	return f.dropErr
+	if f.dropErr != nil {
+		return f.dropErr
+	}
+	f.remove("user", name)
+	return nil
 }
 
 type fixture struct {
@@ -540,7 +584,7 @@ func TestExistingDatabaseIsNeitherReusedNorRemoved(t *testing.T) {
 	if got := stepStates(done); got != "account=undone web=undone database=failed wordpress=skipped" {
 		t.Fatal(got)
 	}
-	if !strings.Contains(done.Error.Why, "example_wp was added") {
+	if !strings.Contains(done.Error.Why, "example_wp already exists on this server and was not made by this job") {
 		t.Fatalf("why %q", done.Error.Why)
 	}
 	if len(f.dbs.calls) != 0 {
@@ -555,6 +599,84 @@ func TestExistingDatabaseIsNeitherReusedNorRemoved(t *testing.T) {
 	done = f.runJob(t, input("example.com"))
 	if done.Error == nil || done.Error.Step != StepAccount || slices.ContainsFunc(f.acc.calls, func(c string) bool { return strings.HasPrefix(c, "create") }) {
 		t.Fatalf("job %+v %q", done.Error, f.acc.calls)
+	}
+}
+
+func undoCalls(f fixture) []string {
+	var drops []string
+	for _, c := range f.dbs.calls {
+		if strings.HasPrefix(c, "drop") {
+			drops = append(drops, c)
+		}
+	}
+	return drops
+}
+
+// A database or user that is on the server but in no registry was not made
+// by the job: it is never adopted, so undo never drops it.
+func TestUnregisteredDatabaseOrUserIsNeverDropped(t *testing.T) {
+	for _, tc := range []struct {
+		kind  string
+		drops []string // what undo may remove: only what the job made
+	}{
+		{"database", nil},
+		{"user", []string{"drop-db example example_wp"}},
+	} {
+		// There before the job: the account step skips the name.
+		f := newFixture(t)
+		f.dbs.server = map[string]bool{tc.kind + " example_wp": true}
+		done := f.runJob(t, input("example.com"))
+		if done.State != StateSucceeded || done.Username != "example07" || slices.Contains(f.acc.calls, "create example") {
+			t.Fatalf("%s before the job: %s %q %q", tc.kind, done.State, done.Username, f.acc.calls)
+		}
+		if slices.ContainsFunc(f.dbs.calls, func(c string) bool { return strings.HasSuffix(c, " example_wp") }) || !f.dbs.server[tc.kind+" example_wp"] {
+			t.Fatalf("%s before the job was touched: %q", tc.kind, f.dbs.calls)
+		}
+
+		// Made by someone else after the job's checks: the strict create
+		// refuses it, the job fails cleanly and removes only what it made.
+		f = newFixture(t)
+		f.dbs.late = map[string]bool{tc.kind + " example_wp": true}
+		done = f.runJob(t, input("example.com"))
+		if got := stepStates(done); got != "account=undone web=undone database=failed wordpress=skipped" {
+			t.Fatalf("%s: %s", tc.kind, got)
+		}
+		if !strings.Contains(done.Error.Why, "named example_wp already exists on this server and was not made by this job") || strings.Contains(done.Error.Next, "could not be removed") {
+			t.Fatalf("%s: %+v", tc.kind, done.Error)
+		}
+		if got := undoCalls(f); !slices.Equal(got, tc.drops) {
+			t.Fatalf("%s: undo %q, want %q", tc.kind, got, tc.drops)
+		}
+	}
+}
+
+// The server made it but the registry write failed: it is the job's, so a
+// failure undoes it.
+func TestUnrecordedDatabaseOrUserIsUndone(t *testing.T) {
+	for _, tc := range []struct {
+		kind  string
+		drops []string
+	}{
+		{"database", []string{"drop-db example example_wp"}},
+		{"user", []string{"drop-user example example_wp", "drop-db example example_wp"}},
+	} {
+		f := newFixture(t)
+		f.dbs.unrecorded = tc.kind
+		done := f.runJob(t, input("example.com"))
+		if got := stepStates(done); got != "account=undone web=undone database=failed wordpress=skipped" {
+			t.Fatalf("%s: %s", tc.kind, got)
+		}
+		if !strings.Contains(done.Error.Why, "could not record it") || !strings.HasSuffix(done.Steps[2].Message, "What this step had created was removed.") {
+			t.Fatalf("%s: %+v %q", tc.kind, done.Error, done.Steps[2].Message)
+		}
+		if got := undoCalls(f); !slices.Equal(got, tc.drops) {
+			t.Fatalf("%s: undo %q, want %q", tc.kind, got, tc.drops)
+		}
+		for key, there := range f.dbs.server {
+			if there {
+				t.Fatalf("%s: %s left on the server", tc.kind, key)
+			}
+		}
 	}
 }
 

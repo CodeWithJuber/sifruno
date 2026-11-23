@@ -33,15 +33,18 @@ type Broker struct {
 	hostaccounts.WordPressService
 }
 
-// Databases is the part of dbhost a job uses. The registry views let a job
-// refuse a name that already exists: dbhost creates with IF NOT EXISTS, so
-// an old database would otherwise be adopted, and then dropped on undo.
+// Databases is the part of dbhost a job uses. The creates are strict: a
+// database or user already on the server, registered or not, is
+// dbhost.ErrExists and is never adopted, so undo drops only what the job
+// made. The registry views and ServerHas let a job skip a taken name before
+// it creates anything.
 type Databases interface {
 	Probe(context.Context) (string, error)
 	AllDatabases(context.Context) ([]dbhost.Database, error)
 	AllUsers(context.Context) ([]dbhost.User, error)
-	CreateDatabase(ctx context.Context, owner, name string) error
-	CreateUser(ctx context.Context, owner, name, password string) error
+	ServerHas(ctx context.Context, kind, name string) (bool, error)
+	CreateDatabaseStrict(ctx context.Context, owner, name string) error
+	CreateUserStrict(ctx context.Context, owner, name, password string) error
 	SetPrivileges(ctx context.Context, owner, user, db string, privs []string) error
 	DropDatabase(ctx context.Context, owner, name string) error
 	DropUser(ctx context.Context, owner, name string) error
@@ -249,9 +252,12 @@ func (j *run) account(ctx context.Context) (string, *stepError) {
 	var last error
 	for try := 0; try < usernameTries; try++ {
 		name := usernameCandidate(base, try, j.runner.digits)
-		// A name whose database is already registered counts as taken: the
-		// job would neither reuse that database nor remove it.
-		if !validUsername(name) || j.databaseNameTaken(ctx, name+dbSuffix) {
+		// A name whose database or database user already exists, registered
+		// or only on the server, counts as taken: the job would neither reuse
+		// it nor remove it. If that cannot be checked now, the database step
+		// checks again and the strict creates refuse an existing name.
+		taken, terr := j.nameTaken(ctx, name+dbSuffix)
+		if !validUsername(name) || (terr == nil && taken) {
 			last = errNameInUse
 			continue
 		}
@@ -284,18 +290,26 @@ func (j *run) account(ctx context.Context) (string, *stepError) {
 
 var errNameInUse = errors.New("account name or its database name already in use")
 
-// databaseNameTaken reports whether the registry lists a database or user
-// with this name. If it cannot be read, the database step checks again.
-func (j *run) databaseNameTaken(ctx context.Context, name string) bool {
+// nameTaken reports whether a database or database user with this name is in
+// the registry or on the database server, registered or not.
+func (j *run) nameTaken(ctx context.Context, name string) (bool, error) {
 	dbs, err := j.runner.databases.AllDatabases(ctx)
 	if err != nil {
-		return false
+		return false, err
 	}
 	users, err := j.runner.databases.AllUsers(ctx)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return slices.ContainsFunc(dbs, func(d dbhost.Database) bool { return d.Name == name }) || slices.ContainsFunc(users, func(u dbhost.User) bool { return u.Name == name })
+	if slices.ContainsFunc(dbs, func(d dbhost.Database) bool { return d.Name == name }) || slices.ContainsFunc(users, func(u dbhost.User) bool { return u.Name == name }) {
+		return true, nil
+	}
+	for _, kind := range []string{"database", "user"} {
+		if has, err := j.runner.databases.ServerHas(ctx, kind, name); err != nil || has {
+			return has, err
+		}
+	}
+	return false, nil
 }
 
 func (j *run) domainOwner(ctx context.Context) (string, bool) {
@@ -329,31 +343,32 @@ func (j *run) database(ctx context.Context) (string, *stepError) {
 	owner := j.job.Username
 	name := dbhost.PrefixedName(owner, strings.TrimPrefix(dbSuffix, "_"))
 	j.dbName = name
-	// The account step skipped names whose database exists; this catches
-	// one registered since.
-	dbs, err := j.runner.databases.AllDatabases(ctx)
+	// The account step skipped names in use; this catches one made since.
+	taken, err := j.nameTaken(ctx, name)
 	if err != nil {
 		return "", databaseFailure(err, j.secrets())
 	}
-	users, err := j.runner.databases.AllUsers(ctx)
+	if taken {
+		return "", nameExists(name, "registry or server already has "+name)
+	}
+	// The creates are strict, so one made by someone else after the check
+	// fails here and is never adopted. Each counts as the job's, for undo,
+	// once the server has made it: on success, or when only the registry
+	// write failed.
+	err = j.runner.databases.CreateDatabaseStrict(ctx, owner, name)
+	j.dbCreated = err == nil || errors.Is(err, dbhost.ErrNotRegistered)
 	if err != nil {
-		return "", databaseFailure(err, j.secrets())
+		return "", createFailure(name, err, j.secrets())
 	}
-	if slices.ContainsFunc(dbs, func(d dbhost.Database) bool { return d.Name == name }) || slices.ContainsFunc(users, func(u dbhost.User) bool { return u.Name == name }) {
-		return "", &stepError{why: "A database or database user named " + name + " was added to this server while the job ran, so the panel will not reuse it or remove it.", next: "Create the website again; the panel will pick another name.", technical: "registry already lists " + name}
-	}
-	if err = j.runner.databases.CreateDatabase(ctx, owner, name); err != nil {
-		return "", databaseFailure(err, j.secrets())
-	}
-	j.dbCreated = true
 	j.dbPassword, err = newDBPassword()
 	if err != nil {
 		return "", &stepError{why: "The panel could not make a password for the database.", next: "Try again.", technical: technical(err)}
 	}
-	if err = j.runner.databases.CreateUser(ctx, owner, name, j.dbPassword); err != nil {
-		return "", databaseFailure(err, j.secrets())
+	err = j.runner.databases.CreateUserStrict(ctx, owner, name, j.dbPassword)
+	j.userCreated = err == nil || errors.Is(err, dbhost.ErrNotRegistered)
+	if err != nil {
+		return "", createFailure(name, err, j.secrets())
 	}
-	j.userCreated = true
 	if err = j.runner.databases.SetPrivileges(ctx, owner, name, name, []string{"ALL PRIVILEGES"}); err != nil {
 		return "", databaseFailure(err, j.secrets())
 	}
@@ -404,6 +419,23 @@ func brokerFailure(err error) *stepError {
 		return &stepError{why: "The account service stopped part-way and needs a check before anything else changes.", next: "Open Accounts and review the account before you try again.", technical: technical(err)}
 	default:
 		return &stepError{why: "The account service did not answer.", next: "Check that the account service is running, then create the website again.", technical: technical(err)}
+	}
+}
+
+// nameExists is the clean failure for a database or user the job did not make.
+func nameExists(name, detail string) *stepError {
+	return &stepError{why: "A database or user named " + name + " already exists on this server and was not made by this job, so the panel will not reuse it or remove it.", next: "Create the website again; the panel will pick another name.", technical: detail}
+}
+
+// createFailure explains a strict create that failed.
+func createFailure(name string, err error, secrets []string) *stepError {
+	switch {
+	case errors.Is(err, dbhost.ErrExists):
+		return nameExists(name, scrub(err.Error(), secrets...))
+	case errors.Is(err, dbhost.ErrNotRegistered):
+		return &stepError{why: "The database server made " + name + ", but the panel could not record it in its list of databases.", next: "Check that the panel's state directory can be written, then create the website again.", technical: scrub(err.Error(), secrets...)}
+	default:
+		return databaseFailure(err, secrets)
 	}
 }
 

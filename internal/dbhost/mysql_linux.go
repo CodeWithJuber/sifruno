@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -144,6 +147,98 @@ func (s *LocalService) CreateUser(ctx context.Context, owner, name, password str
 		return err
 	}
 	return s.Registry.putUser(User{Name: name, Owner: owner, Hosts: []string{s.host()}})
+}
+
+// CreateDatabaseStrict creates a database that must not exist yet, for a
+// caller that removes what it made when a later step fails (the website
+// wizard). Unlike CreateDatabase it never adopts: a name already in the
+// registry or on the server is ErrExists and nothing changes. ErrNotRegistered
+// means the server made the database but the registry write failed.
+func (s *LocalService) CreateDatabaseStrict(ctx context.Context, owner, name string) error {
+	if err := ValidateIdentifier("database", name, MaxDatabaseLen); err != nil {
+		return err
+	}
+	if slices.ContainsFunc(s.Registry.databases(""), func(d Database) bool { return d.Name == name }) {
+		return fmt.Errorf("%w: the registry already lists the database %s", ErrExists, name)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return err
+	}
+	if _, err := s.Run.Run(ctx, sqlCreateDatabaseStrict(name)); err != nil {
+		if isServerError(err, 1007) {
+			return fmt.Errorf("%w: %v", ErrExists, err)
+		}
+		return err
+	}
+	if err := s.Registry.putDatabase(Database{Name: name, Owner: owner}); err != nil {
+		return fmt.Errorf("%w: database %s: %v", ErrNotRegistered, name, err)
+	}
+	return nil
+}
+
+// CreateUserStrict is CreateUser without adoption: a user already in the
+// registry or on the server for this host is ErrExists and nothing changes;
+// ErrNotRegistered means the server made the user but the registry write
+// failed.
+func (s *LocalService) CreateUserStrict(ctx context.Context, owner, name, password string) error {
+	if err := ValidateIdentifier("user", name, MaxUserLen); err != nil {
+		return err
+	}
+	if strings.ContainsAny(password, "\x00\n\r") {
+		return errors.New("password contains control characters")
+	}
+	if slices.ContainsFunc(s.Registry.users(""), func(u User) bool { return u.Name == name }) {
+		return fmt.Errorf("%w: the registry already lists the user %s", ErrExists, name)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return err
+	}
+	if _, err := s.Run.Run(ctx, sqlCreateUserStrict(name, s.host(), password)); err != nil {
+		if isServerError(err, 1396) {
+			return fmt.Errorf("%w: %v", ErrExists, err)
+		}
+		return err
+	}
+	if err := s.Registry.putUser(User{Name: name, Owner: owner, Hosts: []string{s.host()}}); err != nil {
+		return fmt.Errorf("%w: user %s: %v", ErrNotRegistered, name, err)
+	}
+	return nil
+}
+
+// ServerHas reports whether the server itself has a database (kind
+// "database") or a user on any host (kind "user") with this name, whether
+// the registry lists it or not. It only reads.
+func (s *LocalService) ServerHas(ctx context.Context, kind, name string) (bool, error) {
+	var sql string
+	switch kind {
+	case "database":
+		if err := ValidateIdentifier(kind, name, MaxDatabaseLen); err != nil {
+			return false, err
+		}
+		sql = sqlServerHasDatabase(name)
+	case "user":
+		if err := ValidateIdentifier(kind, name, MaxUserLen); err != nil {
+			return false, err
+		}
+		sql = sqlServerHasUser(name)
+	default:
+		return false, fmt.Errorf("unknown kind %q: use database or user", kind)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return false, err
+	}
+	rows, err := s.Run.Run(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+	if len(rows) != 1 {
+		return false, fmt.Errorf("the %s check answered %d rows, not 1", kind, len(rows))
+	}
+	n, err := strconv.Atoi(rows[0])
+	if err != nil || n < 0 {
+		return false, fmt.Errorf("the %s check answered %q, not a count", kind, rows[0])
+	}
+	return n > 0, nil
 }
 
 func (s *LocalService) DropUser(ctx context.Context, owner, name string) error {
@@ -322,6 +417,12 @@ func (s *LocalService) AllUsers(ctx context.Context) ([]User, error) {
 // isNoSuchGrant reports MariaDB error 1141 (no grant defined yet).
 func isNoSuchGrant(err error) bool {
 	return strings.Contains(err.Error(), "1141") || strings.Contains(err.Error(), "no such grant")
+}
+
+// isServerError reports whether err is the mysql client's report of one
+// server error number: "ERROR 1007 (HY000) at line 1: ...".
+func isServerError(err error, code int) bool {
+	return strings.Contains(err.Error(), fmt.Sprintf("ERROR %d (", code))
 }
 
 // GrantsFor returns raw SHOW GRANTS lines for a user (diagnostics).

@@ -2,8 +2,10 @@ package dbhost
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -33,5 +35,169 @@ func TestCLIRunnerSendsSQLOnStdin(t *testing.T) {
 	}
 	if string(stdin) != sql+";\n" {
 		t.Fatalf("stdin %q", stdin)
+	}
+}
+
+// The strict creates never adopt: what exists fails with ErrExists and the
+// registry is left as it was.
+func TestStrictCreatesRefuseWhatExists(t *testing.T) {
+	ctx := context.Background()
+	svc, f := newTestService(t)
+	f.errs = map[string]error{
+		sqlCreateDatabaseStrict("acct_wp"):                     errors.New("ERROR 1007 (HY000) at line 1: Can't create database 'acct_wp'; database exists"),
+		sqlCreateUserStrict("acct_wp", "localhost", "s3cret!"): errors.New("ERROR 1396 (HY000) at line 1: Operation CREATE USER failed for 'acct_wp'@'localhost'"),
+	}
+	if err := svc.CreateDatabaseStrict(ctx, "acct", "acct_wp"); !errors.Is(err, ErrExists) {
+		t.Fatalf("existing database: %v", err)
+	}
+	if err := svc.CreateUserStrict(ctx, "acct", "acct_wp", "s3cret!"); !errors.Is(err, ErrExists) {
+		t.Fatalf("existing user: %v", err)
+	}
+	if dbs, _ := svc.AllDatabases(ctx); len(dbs) != 0 {
+		t.Fatalf("an existing database was registered: %+v", dbs)
+	}
+	if users, _ := svc.AllUsers(ctx); len(users) != 0 {
+		t.Fatalf("an existing user was registered: %+v", users)
+	}
+	for _, stmt := range f.stmts {
+		if strings.Contains(stmt, "IF NOT EXISTS") {
+			t.Fatalf("strict create adopts: %s", stmt)
+		}
+	}
+
+	// Another server error is passed on as it is, not as ErrExists.
+	f.errs = map[string]error{sqlCreateDatabaseStrict("acct_db"): errors.New("ERROR 1044 (42000) at line 1: Access denied")}
+	if err := svc.CreateDatabaseStrict(ctx, "acct", "acct_db"); err == nil || errors.Is(err, ErrExists) || errors.Is(err, ErrNotRegistered) {
+		t.Fatalf("access denied: %v", err)
+	}
+
+	// Already in the registry: refused before any SQL.
+	f.errs = nil
+	if err := svc.CreateDatabase(ctx, "other", "other_wp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CreateUser(ctx, "other", "other_u", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	f.stmts = nil
+	if err := svc.CreateDatabaseStrict(ctx, "acct", "other_wp"); !errors.Is(err, ErrExists) {
+		t.Fatalf("registered database: %v", err)
+	}
+	if err := svc.CreateUserStrict(ctx, "acct", "other_u", "pw"); !errors.Is(err, ErrExists) {
+		t.Fatalf("registered user: %v", err)
+	}
+	if len(f.stmts) != 0 {
+		t.Fatalf("SQL ran for a registered name: %q", f.stmts)
+	}
+	if dbs, _ := svc.ListDatabases(ctx, "other"); len(dbs) != 1 || dbs[0].Owner != "other" {
+		t.Fatalf("registry entry changed: %+v", dbs)
+	}
+}
+
+func TestStrictCreatesRunExactSQLAndRegister(t *testing.T) {
+	ctx := context.Background()
+	svc, f := newTestService(t)
+	if err := svc.CreateDatabaseStrict(ctx, "acct", "acct_wp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CreateUserStrict(ctx, "acct", "acct_wp", "p'w"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"CREATE DATABASE `acct_wp` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+		`CREATE USER 'acct_wp'@'localhost' IDENTIFIED BY 'p\'w'`,
+	} {
+		if !slices.Contains(f.stmts, want) {
+			t.Fatalf("missing %q in %q", want, f.stmts)
+		}
+	}
+	dbs, _ := svc.ListDatabases(ctx, "acct")
+	users, _ := svc.ListUsers(ctx, "acct")
+	if len(dbs) != 1 || dbs[0].Name != "acct_wp" || len(users) != 1 || users[0].Name != "acct_wp" {
+		t.Fatalf("registry %+v %+v", dbs, users)
+	}
+}
+
+// Made on the server but not recorded: ErrNotRegistered, and the caller can
+// still remove it.
+func TestStrictCreatesReportAnUnrecordedObject(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	// The registry file's directory does not exist yet; a plain file put in
+	// its place makes every registry write fail, as root too.
+	reg, err := OpenRegistry(filepath.Join(dir, "state", "dbmap.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "state"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRunner{}
+	svc := &LocalService{Run: f, Registry: reg}
+	if err = svc.CreateDatabaseStrict(ctx, "acct", "acct_wp"); !errors.Is(err, ErrNotRegistered) || errors.Is(err, ErrExists) {
+		t.Fatalf("database: %v", err)
+	}
+	if err = svc.CreateUserStrict(ctx, "acct", "acct_wp", "pw"); !errors.Is(err, ErrNotRegistered) {
+		t.Fatalf("user: %v", err)
+	}
+	f.stmts = nil
+	// The removals pass the ownership check and run their SQL; only the
+	// registry write fails again.
+	_ = svc.DropUser(ctx, "acct", "acct_wp")
+	_ = svc.DropDatabase(ctx, "acct", "acct_wp")
+	joined := strings.Join(f.stmts, "\n")
+	if !strings.Contains(joined, sqlDropUser("acct_wp", "localhost")) || !strings.Contains(joined, sqlDropDatabase("acct_wp")) {
+		t.Fatalf("an unrecorded object could not be removed:\n%s", joined)
+	}
+}
+
+func TestServerHas(t *testing.T) {
+	ctx := context.Background()
+	svc, f := newTestService(t)
+	f.rows = map[string][]string{
+		sqlServerHasDatabase("acct_wp"): {"1"},
+		sqlServerHasDatabase("free_wp"): {"0"},
+		sqlServerHasUser("acct_wp"):     {"2"},
+		sqlServerHasUser("free_wp"):     {"0"},
+	}
+	for _, tc := range []struct {
+		kind, name string
+		want       bool
+	}{{"database", "acct_wp", true}, {"database", "free_wp", false}, {"user", "acct_wp", true}, {"user", "free_wp", false}} {
+		got, err := svc.ServerHas(ctx, tc.kind, tc.name)
+		if err != nil || got != tc.want {
+			t.Fatalf("%s %s: %v %v", tc.kind, tc.name, got, err)
+		}
+	}
+	joined := strings.Join(f.stmts, "\n")
+	for _, want := range []string{
+		"SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='acct_wp'",
+		"SELECT COUNT(*) FROM mysql.user WHERE User='acct_wp'",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in:\n%s", want, joined)
+		}
+	}
+	// A name outside the identifier rules never reaches SQL; an answer that
+	// is not one count is an error, not "absent".
+	f.stmts = nil
+	for _, bad := range []struct{ kind, name string }{{"database", "x' OR '1'='1"}, {"user", ""}, {"table", "acct_wp"}} {
+		if _, err := svc.ServerHas(ctx, bad.kind, bad.name); err == nil {
+			t.Fatalf("%s %q accepted", bad.kind, bad.name)
+		}
+	}
+	if len(f.stmts) != 0 {
+		t.Fatalf("SQL ran for a refused name: %q", f.stmts)
+	}
+	if _, err := svc.ServerHas(ctx, "database", "none_wp"); err == nil {
+		t.Fatal("an empty answer counted as absent")
+	}
+	f.rows[sqlServerHasUser("odd_wp")] = []string{"yes"}
+	if _, err := svc.ServerHas(ctx, "user", "odd_wp"); err == nil {
+		t.Fatal("a non-number counted")
+	}
+	f.fail = true
+	if _, err := svc.ServerHas(ctx, "database", "acct_wp"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("server down: %v", err)
 	}
 }

@@ -78,10 +78,12 @@ check "OpenLiteSpeed is still running after the graceful reload" systemctl is-ac
 echo
 echo "## 4. A config OpenLiteSpeed would reject changes nothing"
 before="$(sha256sum "$LSWS/conf/sifruno.conf" "$vhost/vhconf.conf")"
-if drive web --id "$id" --revision "$rev" --php 8.4 --quota-mib 200 --reason 'PHP 8.4 is not installed' >/dev/null 2>&1; then
+if answer="$(drive web --id "$id" --revision "$rev" --php 8.4 --quota-mib 200 --reason 'PHP 8.4 is not installed' 2>&1 >/dev/null)"; then
   if [ -x "$LSWS/lsphp84/bin/lsphp" ]; then pass "PHP 8.4 is installed here, so the rejection case does not apply"; else fail "the broker refused a site for a PHP that is not installed"; fi
 else
-  pass "the broker refused a site for a PHP that is not installed"
+  echo "  broker answered: $answer"
+  # Rejected, not failed: the config test refused it and the old files went back.
+  check "the broker refused a site for a PHP that is not installed, as a rejected config" grep -q 'rejected' <<<"$answer"
 fi
 check "the config files are byte for byte unchanged" bash -c "[ \"\$(sha256sum $LSWS/conf/sifruno.conf $vhost/vhconf.conf)\" = '$before' ]"
 check "the account revision did not move" bash -c "runuser -u sifpanel -- $BIN/brokerdrive --socket $SOCKET list | python3 -c 'import json,sys; a=[x for x in json.load(sys.stdin) if x[\"id\"]==\"$id\"]; sys.exit(0 if a and a[0][\"revision\"]==$rev and a[0][\"state\"]==\"active\" else 1)'"

@@ -2,6 +2,7 @@
    local brand overrides take precedence without a custom StyleX transform. */
 @layer theme, reset, base, astryx-base, astryx-theme, components, utilities;
 @import "@astryxdesign/core/reset.css";
+@import "../../assets/design-tokens.css";
 @import "tailwindcss";
 @import "@astryxdesign/core/astryx.css";
 @import "@astryxdesign/theme-neutral/theme.css";
@@ -12,7 +13,7 @@
 
 @custom-variant dark (&:is(.dark *));
 @theme inline {
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: var(--sifruno-font);
   --font-heading: var(--font-sans);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -41,20 +42,27 @@
 @font-face { font-family: Inter; font-style: normal; font-weight: 500; font-display: swap; src: url("/brand/fonts/inter-latin-500.woff2") format("woff2"); }
 @font-face { font-family: Inter; font-style: normal; font-weight: 600; font-display: swap; src: url("/brand/fonts/inter-latin-600.woff2") format("woff2"); }
 
+/* Brand colours come from assets/design-tokens.json (via design-tokens.css).
+   Teal leads on light surfaces and mint on dark ones, as the brand guide says;
+   the mixes below only tint neutral surfaces, they add no new hues. */
 :root {
-  --brand-ink: #142f35; --brand-teal: #087f6f; --brand-mint: #b9e5d5;
-  --background: #f5f6f5; --foreground: #242c2f; --card: #ffffff;
-  --muted: #f0f3f1; --muted-foreground: #63706b;
-  --primary: #087f6f; --primary-foreground: #ffffff; --secondary: #edf6f2;
-  --border: #dfe5e1; --input: #8e9d96; --destructive: #b33838; --radius: 6px;
-  --chart-memory: #677773;
+  --brand-ink: var(--sifruno-ink); --brand-teal: var(--sifruno-teal); --brand-mint: var(--sifruno-mint);
+  --background: var(--sifruno-paper); --foreground: var(--sifruno-ink); --card: var(--sifruno-white);
+  --muted: color-mix(in srgb, var(--sifruno-line) 30%, var(--sifruno-paper)); --muted-foreground: var(--sifruno-muted);
+  --primary: var(--sifruno-teal); --primary-foreground: var(--sifruno-white);
+  --secondary: color-mix(in srgb, var(--sifruno-mint) 30%, var(--sifruno-white));
+  --border: var(--sifruno-line); --input: color-mix(in srgb, var(--sifruno-muted) 75%, var(--sifruno-line));
+  --destructive: #b33838; --radius: 6px;
+  --chart-memory: color-mix(in srgb, var(--sifruno-muted) 85%, var(--sifruno-line));
 }
 .dark {
-  --background: #151c1e; --foreground: #e6ede9; --card: #1c2527;
-  --muted: #253032; --muted-foreground: #acbcb4;
-  --primary: #77d1bc; --primary-foreground: #13242a; --secondary: #1b3a33;
-  --border: #34413d; --input: #6b8278; --destructive: #ffaca9;
-  --chart-memory: #b4c7be;
+  --background: var(--sifruno-ink); --foreground: var(--sifruno-paper); --card: var(--sifruno-dark-surface);
+  --muted: color-mix(in srgb, var(--sifruno-dark-surface) 55%, var(--sifruno-ink)); --muted-foreground: var(--sifruno-dark-muted);
+  --primary: var(--sifruno-mint); --primary-foreground: var(--sifruno-ink);
+  --secondary: color-mix(in srgb, var(--sifruno-mint) 16%, var(--sifruno-dark-surface));
+  --border: var(--sifruno-dark-line); --input: color-mix(in srgb, var(--sifruno-dark-muted) 55%, var(--sifruno-dark-line));
+  --destructive: #ffaca9;
+  --chart-memory: var(--sifruno-dark-muted);
 }
 [data-astryx-theme="neutral"] {
   --font-family-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

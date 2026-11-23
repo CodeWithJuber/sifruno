@@ -189,3 +189,77 @@ func TestDeleteRemovesTheSiteFirst(t *testing.T) {
 		t.Fatal("the user was deleted although its site is still configured")
 	}
 }
+
+func TestDeleteEndsRejectedWhenTheConfigFailsItsTest(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	a := createFixture(t, s)
+	if _, err := s.setWeb(ctx, a.ID, WebInput{PHPVersion: "8.3", QuotaMiB: 200, ExpectedRevision: a.Revision, Reason: "Go live"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	before := recordFor(t, s, a.ID)
+	f.failure = "sites-reject"
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: before.Account.Revision, Reason: "Remove"}, "test operator"); !errors.Is(err, ErrWebRejected) {
+		t.Fatalf("delete with a rejected config: %v", err)
+	}
+	after := recordFor(t, s, a.ID)
+	if after.Pending != nil || after.Account != before.Account || after.Web != before.Web || after.HistorySequence != before.HistorySequence+2 {
+		t.Fatalf("a rejected delete changed the account or left it pending: %+v", after)
+	}
+	if _, ok := f.users[a.Username]; !ok {
+		t.Fatal("the user went although its site could not be taken out")
+	}
+	// Nothing is pending, so the next request works.
+	f.failure = ""
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: before.Account.Revision, Reason: "Remove"}, "test operator"); err != nil {
+		t.Fatalf("delete after the rejection: %v", err)
+	}
+}
+
+func TestInterruptedDeleteCanEndRejected(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	a := createFixture(t, s)
+	if _, err := s.setWeb(ctx, a.ID, WebInput{PHPVersion: "8.3", QuotaMiB: 200, ExpectedRevision: a.Revision, Reason: "Go live"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	before := recordFor(t, s, a.ID)
+	f.failure = "sites"
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: before.Account.Revision, Reason: "Remove"}, "test operator"); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("interrupted delete: %v", err)
+	}
+	f.failure = "sites-reject"
+	s.mu.Lock()
+	err := s.refresh(ctx, true)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := recordFor(t, s, a.ID)
+	if after.Pending != nil || after.Account != before.Account {
+		t.Fatalf("a recovered delete whose config failed its test must end rejected: %+v", after)
+	}
+	if _, ok := f.users[a.Username]; !ok {
+		t.Fatal("the user went although its site could not be taken out")
+	}
+}
+
+func TestWebLeavesRoomInTheHistory(t *testing.T) {
+	s, _ := webStore(t)
+	ctx := context.Background()
+	a := createFixture(t, s)
+	revision := a.Revision
+	var err error
+	for i := 0; i < MaxHistoryRows; i++ {
+		var got WebResult
+		got, err = s.setWeb(ctx, a.ID, WebInput{PHPVersion: "8.3", QuotaMiB: 200 + i%2, ExpectedRevision: revision, Reason: "Resize"}, "test operator")
+		if err != nil {
+			break
+		}
+		revision = got.Account.Revision
+	}
+	r := recordFor(t, s, a.ID)
+	if !errors.Is(err, ErrConflict) || r.Pending != nil || r.HistorySequence > MaxHistoryRows-1 || r.HistorySequence <= MaxHistoryRows-3 {
+		t.Fatalf("a full history must refuse before journaling: %v, sequence %d, pending %v", err, r.HistorySequence, r.Pending)
+	}
+}

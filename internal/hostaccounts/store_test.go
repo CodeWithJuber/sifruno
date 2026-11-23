@@ -59,8 +59,11 @@ func (f *fakeNative) ApplyWeb(_ context.Context, r record, previous, next WebSta
 	return nil
 }
 func (f *fakeNative) ApplySites(_ context.Context, sites []olsweb.Site) error {
-	if f.failure == "sites" {
+	switch f.failure {
+	case "sites":
 		return ErrUnavailable
+	case "sites-reject":
+		return ErrWebRejected
 	}
 	f.sites = append([]olsweb.Site(nil), sites...)
 	return nil
@@ -137,13 +140,15 @@ func (f *fakeNative) VerifyIdentity(r record) error {
 }
 
 // Verify adds the state observation, standing in for the lock and expiry
-// check that the native system makes with passwd and chage.
+// check that the native system makes with passwd and chage. Like that check,
+// it compares only an active or suspended state, so a delete's empty target
+// state passes.
 func (f *fakeNative) Verify(_ context.Context, r record) error {
 	if f.full != nil {
 		f.full[r.Account.Username]++
 	}
 	actual, ok := f.users[r.Account.Username]
-	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.State != r.Account.State || r.Ownership != actual.Ownership {
+	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || (r.Account.State != "" && actual.Account.State != r.Account.State) || r.Ownership != actual.Ownership {
 		return ErrRecovery
 	}
 	return nil

@@ -293,7 +293,10 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				// config that now fails its test ends as rejected, unchanged;
 				// any other failure stays pending for the next start.
 				operation := *r.Pending
-				switch e := s.native.ApplyWeb(ctx, r, r.Web, r.WebNext, webSites(items, "")); {
+				applyCtx, cancel := webContext(ctx)
+				e := s.native.ApplyWeb(applyCtx, r, r.Web, r.WebNext, webSites(items, ""))
+				cancel()
+				switch {
 				case errors.Is(e, ErrWebRejected):
 					r.Pending, r.WebNext = nil, WebState{}
 					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
@@ -348,8 +351,17 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			}
 			if r.Pending.Action == "delete" {
 				operation := *r.Pending
-				if r.Web.enabled() && s.native.ApplySites(ctx, webSites(items, r.Account.ID)) != nil {
-					continue
+				if r.Web.enabled() {
+					switch e := s.applySitesWithout(ctx, items, r.Account.ID); {
+					case errors.Is(e, ErrWebRejected):
+						r.Pending = nil
+						if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+							return ErrRecovery
+						}
+						continue
+					case e != nil:
+						continue
+					}
 				}
 				if e := s.native.Delete(ctx, r); e != nil {
 					// Keep the record and retry on the next refresh; an
@@ -677,10 +689,22 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		return Account{}, ErrRecovery
 	}
 	// A live site leaves OpenLiteSpeed's config before its user and home go,
-	// so the server never points at a missing user.
-	if r.Web.enabled() && s.native.ApplySites(ctx, webSites(items, r.Account.ID)) != nil {
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
-		return Account{}, ErrRecovery
+	// so the server never points at a missing user. If the config without it
+	// fails its test, the old files went back and nothing changed: the delete
+	// ends rejected and blocks nothing.
+	if r.Web.enabled() {
+		switch e := s.applySitesWithout(ctx, items, r.Account.ID); {
+		case errors.Is(e, ErrWebRejected):
+			operation := *r.Pending
+			r.Pending = nil
+			if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+				return Account{}, ErrRecovery
+			}
+			return Account{}, ErrWebRejected
+		case e != nil:
+			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+			return Account{}, ErrRecovery
+		}
 	}
 	if e := s.native.Delete(ctx, r); e != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")

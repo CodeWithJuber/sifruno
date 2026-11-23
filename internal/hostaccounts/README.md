@@ -136,8 +136,12 @@ broker.
   `conf/vhosts/sifruno-u<id>/vhconf.conf`, written atomically, owned like the
   OpenLiteSpeed config directory and 0600, through directory handles. The
   broker refuses a config directory that the web user owns or that others
-  may write. `openlitespeed -t` must report no error and no warning about a
-  broker vhost; otherwise the old files go back. Then `lswsctrl reload`
+  may write, and sets the owner and mode only of directories it creates.
+  `openlitespeed -t` is judged per vhost: a vhost whose config this change
+  rewrote fails on an error or a warning, anything outside broker vhosts on
+  an error, and a broker vhost the change did not touch is skipped, because
+  what it reports comes from its own tenant's files. If the test fails, the
+  old files go back with their owner and mode. Then `lswsctrl reload`
   restarts gracefully. The broker never edits `httpd_config.conf`: the
   installer adds `include /usr/local/lsws/conf/sifruno.conf` and
   server-level `namespace 1` once. New files take their SELinux label from
@@ -148,12 +152,15 @@ first and is idempotent: if the tenant swapped or changed those directories
 the request is refused (409) before anything is journaled, so a tenant cannot
 leave an unfinished operation that blocks every account. Then the intent is
 journaled and the apply runs under its own two-minute limit, not the
-caller's. If quota is not enforced or the new config fails its test, the old
-files and the old quota go back, the operation is journaled as `rejected`
-with the account unchanged, and the request answers 422 `web_rejected`. Any
-other failure leaves the operation pending; it is finished, or ends
-rejected, on the next start. Delete takes the site out of the config before
-the user and home go, and keeps the user if that fails.
+caller's. If quota is not enforced or cannot be read, or the new config
+fails its test, the old files and the quota the user had go back, the
+operation is journaled as `rejected` with the account unchanged, and the
+request answers 422 `web_rejected`. Any other failure leaves the operation
+pending; it is finished, or ends rejected, on the next start. A web
+operation needs two history rows and is refused (409) when they are not
+free. Delete takes the site out of the config before the user and home go;
+if that config fails its test, the delete ends `rejected` with the account
+unchanged (422), and after any other failure the user is kept.
 
 Limits for now:
 

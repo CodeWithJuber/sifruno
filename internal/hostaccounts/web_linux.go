@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -151,11 +152,40 @@ func (n *linuxSystem) GrantWebAccess(_ context.Context, r record) error {
 	return nil
 }
 
-// setQuota sets the hard limit and a soft limit 10% lower; 0 removes both.
-func (n *linuxSystem) setQuota(ctx context.Context, uid, hardMiB int) error {
-	limit := fmt.Sprintf("limit -u bsoft=%dm bhard=%dm %d", softQuotaMiB(hardMiB), hardMiB, uid)
+// setQuota sets a user's block limits in KiB; 0 removes a limit.
+func (n *linuxSystem) setQuota(ctx context.Context, uid int, softKiB, hardKiB int64) error {
+	limit := fmt.Sprintf("limit -u bsoft=%dk bhard=%dk %d", softKiB, hardKiB, uid)
 	_, e := n.command(ctx, xfsQuota, "-x", "-c", limit, n.opts.HomesDir)
 	return e
+}
+
+// quotaKiB reads a user's soft and hard block limits in KiB.
+func (n *linuxSystem) quotaKiB(ctx context.Context, uid int) (int64, int64, error) {
+	out, e := n.command(ctx, xfsQuota, "-x", "-c", fmt.Sprintf("quota -u -b -N -v %d", uid), n.opts.HomesDir)
+	if e != nil {
+		return 0, 0, ErrUnavailable
+	}
+	return parseQuotaKiB(out)
+}
+
+// parseQuotaKiB reads one "DEVICE USED SOFT HARD ..." line, in KiB.
+func parseQuotaKiB(out []byte) (int64, int64, error) {
+	var lines [][]string
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		if fields := strings.Fields(sc.Text()); len(fields) > 0 {
+			lines = append(lines, fields)
+		}
+	}
+	if len(lines) != 1 || len(lines[0]) < 4 {
+		return 0, 0, ErrUnavailable
+	}
+	soft, e1 := strconv.ParseInt(lines[0][2], 10, 64)
+	hard, e2 := strconv.ParseInt(lines[0][3], 10, 64)
+	if e1 != nil || e2 != nil || soft < 0 || hard < 0 {
+		return 0, 0, ErrUnavailable
+	}
+	return soft, hard, nil
 }
 
 func (n *linuxSystem) quotaEnforced(ctx context.Context) bool {
@@ -210,30 +240,42 @@ func ownerOfHandle(f *os.File) (uid, gid int, mode os.FileMode, err error) {
 	return int(st.Uid), int(st.Gid), info.Mode().Perm(), nil
 }
 
-func readAt(dir *os.File, name string) ([]byte, bool, error) {
+// fileMeta is a config file's owner and permission bits, put back with its
+// bytes when a change is undone.
+type fileMeta struct {
+	uid, gid int
+	mode     os.FileMode
+}
+
+func readAt(dir *os.File, name string) ([]byte, fileMeta, bool, error) {
 	fd, e := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if errors.Is(e, unix.ENOENT) {
-		return nil, false, nil
+		return nil, fileMeta{}, false, nil
 	}
 	if e != nil {
-		return nil, false, ErrUnavailable
+		return nil, fileMeta{}, false, ErrUnavailable
 	}
 	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
+	uid, gid, mode, e := ownerOfHandle(f)
+	if e != nil {
+		return nil, fileMeta{}, false, ErrUnavailable
+	}
 	info, e := f.Stat()
 	if e != nil || !info.Mode().IsRegular() || info.Size() > maxOLSFile {
-		return nil, false, ErrUnavailable
+		return nil, fileMeta{}, false, ErrUnavailable
 	}
 	b, e := io.ReadAll(io.LimitReader(f, maxOLSFile+1))
 	if e != nil || len(b) > maxOLSFile {
-		return nil, false, ErrUnavailable
+		return nil, fileMeta{}, false, ErrUnavailable
 	}
-	return b, true, nil
+	return b, fileMeta{uid, gid, mode}, true, nil
 }
 
 // writeAt replaces dir/name atomically: a new private file created beside it
-// (never through a link), owned as given, synced, then renamed over it.
-func writeAt(dir *os.File, name string, data []byte, uid, gid int) error {
+// (never through a link), given the owner and mode, synced, then renamed
+// over it.
+func writeAt(dir *os.File, name string, data []byte, meta fileMeta) error {
 	tmp := name + ".sifruno-new"
 	_ = unix.Unlinkat(int(dir.Fd()), tmp, 0)
 	fd, e := unix.Openat(int(dir.Fd()), tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
@@ -243,7 +285,10 @@ func writeAt(dir *os.File, name string, data []byte, uid, gid int) error {
 	f := os.NewFile(uintptr(fd), tmp)
 	_, e = f.Write(data)
 	if e == nil {
-		e = f.Chown(uid, gid)
+		e = f.Chown(meta.uid, meta.gid)
+	}
+	if e == nil {
+		e = f.Chmod(meta.mode)
 	}
 	if e == nil {
 		e = f.Sync()
@@ -270,11 +315,11 @@ type configTxn struct {
 	dirs    []dirChange
 }
 type fileChange struct {
-	dir      *os.File
-	name     string
-	old      []byte
-	existed  bool
-	uid, gid int
+	dir     *os.File
+	name    string
+	old     []byte
+	oldMeta fileMeta
+	existed bool
 }
 type dirChange struct {
 	parent *os.File
@@ -288,8 +333,9 @@ func (t *configTxn) close() {
 }
 
 // subdir opens parent/name without following a link, creating it (0750,
-// owned as given) if needed. A directory it creates is undone by restore.
-func (t *configTxn) subdir(parent *os.File, name string, uid, gid int) (*os.File, error) {
+// owned as given) if needed; restore removes a directory it created. An
+// existing directory keeps its owner and mode and must pass safe, when given.
+func (t *configTxn) subdir(parent *os.File, name string, uid, gid int, safe func(uid, gid int, mode os.FileMode) bool) (*os.File, error) {
 	created := false
 	if e := unix.Mkdirat(int(parent.Fd()), name, 0750); e == nil {
 		created = true
@@ -303,33 +349,39 @@ func (t *configTxn) subdir(parent *os.File, name string, uid, gid int) (*os.File
 	t.handles = append(t.handles, d)
 	if created {
 		t.dirs = append(t.dirs, dirChange{parent, name})
+		if unix.Fchown(int(d.Fd()), uid, gid) != nil || unix.Fchmod(int(d.Fd()), 0750) != nil {
+			return nil, ErrUnavailable
+		}
+		return d, nil
 	}
-	// Only the broker's own directories reach here (sifruno-prefixed or the
-	// fixed log root), so asserting their owner and mode is safe.
-	if unix.Fchown(int(d.Fd()), uid, gid) != nil || unix.Fchmod(int(d.Fd()), 0750) != nil {
-		return nil, ErrUnavailable
+	if safe != nil {
+		if u, g, mode, e := ownerOfHandle(d); e != nil || !safe(u, g, mode) {
+			return nil, ErrUnavailable
+		}
 	}
 	return d, nil
 }
 
-func (t *configTxn) write(dir *os.File, name string, data []byte, uid, gid int) error {
-	old, existed, e := readAt(dir, name)
+// write replaces dir/name with data (owner and mode from meta) and returns
+// whether the bytes changed.
+func (t *configTxn) write(dir *os.File, name string, data []byte, meta fileMeta) (bool, error) {
+	old, oldMeta, existed, e := readAt(dir, name)
 	if e != nil {
-		return e
+		return false, e
 	}
 	if existed && bytes.Equal(old, data) {
-		return nil
+		return false, nil
 	}
-	t.files = append(t.files, fileChange{dir, name, old, existed, uid, gid})
-	return writeAt(dir, name, data, uid, gid)
+	t.files = append(t.files, fileChange{dir, name, old, oldMeta, existed})
+	return true, writeAt(dir, name, data, meta)
 }
 
-func (t *configTxn) remove(dir *os.File, name string, uid, gid int) error {
-	old, existed, e := readAt(dir, name)
+func (t *configTxn) remove(dir *os.File, name string) error {
+	old, oldMeta, existed, e := readAt(dir, name)
 	if e != nil || !existed {
 		return e
 	}
-	t.files = append(t.files, fileChange{dir, name, old, true, uid, gid})
+	t.files = append(t.files, fileChange{dir, name, old, oldMeta, true})
 	if unix.Unlinkat(int(dir.Fd()), name, 0) != nil {
 		return ErrUnavailable
 	}
@@ -343,7 +395,7 @@ func (t *configTxn) restore() error {
 		c := t.files[i]
 		var e error
 		if c.existed {
-			e = writeAt(c.dir, c.name, c.old, c.uid, c.gid)
+			e = writeAt(c.dir, c.name, c.old, c.oldMeta)
 		} else if e = unix.Unlinkat(int(c.dir.Fd()), c.name, 0); errors.Is(e, unix.ENOENT) {
 			e = nil
 		}
@@ -359,25 +411,34 @@ func (t *configTxn) restore() error {
 	return failed
 }
 
+// configDirSafe reports whether the web server's user cannot change a config
+// directory: it does not own it, others cannot write it, and its group may
+// write only if that group is root's.
+func (n *linuxSystem) configDirSafe(uid, gid int, mode os.FileMode) bool {
+	return uid != n.webUID && mode&0002 == 0 && (mode&0020 == 0 || gid == 0)
+}
+
 // writeSites renders the site list and installs it below the OpenLiteSpeed
 // root: changed files are replaced atomically and broker vhosts no longer
-// listed lose their config file.
-func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, error) {
+// listed lose their config file. It returns the vhosts whose config bytes
+// changed, so the test can tell this change's problems from a tenant's.
+func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, map[string]bool, error) {
 	files, e := olsweb.Render(webServer(sites))
 	if e != nil {
-		return nil, ErrWebRejected
+		return nil, nil, ErrWebRejected
 	}
 	t := &configTxn{}
-	fail := func(err error) (*configTxn, error) {
+	changed := map[string]bool{}
+	fail := func(err error) (*configTxn, map[string]bool, error) {
 		if r := t.restore(); r != nil {
 			err = r
 		}
 		t.close()
-		return nil, err
+		return nil, nil, err
 	}
 	root, e := openRootDir(olsweb.ServerRoot)
 	if e != nil {
-		return nil, ErrUnavailable
+		return nil, nil, ErrUnavailable
 	}
 	t.handles = append(t.handles, root)
 	if uid, _, mode, e := ownerOfHandle(root); e != nil || uid != 0 || mode&0022 != 0 {
@@ -390,10 +451,11 @@ func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, error) {
 	t.handles = append(t.handles, conf)
 	confUID, confGID, confMode, e := ownerOfHandle(conf)
 	// The web server's user must not be able to change the server config.
-	if e != nil || confUID == n.webUID || confMode&0002 != 0 || (confMode&0020 != 0 && confGID != 0) {
+	if e != nil || !n.configDirSafe(confUID, confGID, confMode) {
 		return fail(ErrUnavailable)
 	}
-	main, ok, e := readAt(conf, "httpd_config.conf")
+	private := fileMeta{confUID, confGID, 0600}
+	main, _, ok, e := readAt(conf, "httpd_config.conf")
 	if e != nil || !ok || !includesSifruno(main) {
 		return fail(ErrWebRejected)
 	}
@@ -406,11 +468,13 @@ func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, error) {
 	if e != nil {
 		return fail(ErrUnavailable)
 	}
-	vhosts, e := t.subdir(conf, "vhosts", confUID, confGID)
+	vhosts, e := t.subdir(conf, "vhosts", confUID, confGID, n.configDirSafe)
 	if e != nil {
 		return fail(e)
 	}
-	logRoot, e := t.subdir(logs, strings.TrimPrefix(olsweb.LogRoot, olsweb.ServerRoot+"/logs/"), logUID, logGID)
+	// Log directories are not checked: OpenLiteSpeed may own its own, and
+	// the broker writes no file in them, only makes the directories.
+	logRoot, e := t.subdir(logs, strings.TrimPrefix(olsweb.LogRoot, olsweb.ServerRoot+"/logs/"), logUID, logGID, nil)
 	if e != nil {
 		return fail(e)
 	}
@@ -418,16 +482,18 @@ func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, error) {
 	for _, s := range sites {
 		dir := olsweb.NamePrefix + s.Name
 		want[dir] = true
-		vhost, e := t.subdir(vhosts, dir, confUID, confGID)
+		vhost, e := t.subdir(vhosts, dir, confUID, confGID, n.configDirSafe)
 		if e != nil {
 			return fail(e)
 		}
-		if _, e := t.subdir(logRoot, s.Name, logUID, logGID); e != nil {
+		if _, e := t.subdir(logRoot, s.Name, logUID, logGID, nil); e != nil {
 			return fail(e)
 		}
-		if e := t.write(vhost, "vhconf.conf", files[olsweb.VhostConfigPath(s.Name)], confUID, confGID); e != nil {
+		wrote, e := t.write(vhost, "vhconf.conf", files[olsweb.VhostConfigPath(s.Name)], private)
+		if e != nil {
 			return fail(e)
 		}
+		changed[dir] = wrote
 	}
 	entries, e := vhosts.ReadDir(-1)
 	if e != nil {
@@ -446,44 +512,99 @@ func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, error) {
 			return fail(ErrUnavailable)
 		}
 		t.handles = append(t.handles, stale)
-		if e := t.remove(stale, "vhconf.conf", confUID, confGID); e != nil {
+		if e := t.remove(stale, "vhconf.conf"); e != nil {
 			return fail(e)
 		}
 	}
 	// The server fragment that names the vhosts goes last.
-	if e := t.write(conf, strings.TrimPrefix(olsweb.ServerConfigPath, "conf/"), files[olsweb.ServerConfigPath], confUID, confGID); e != nil {
+	if _, e := t.write(conf, strings.TrimPrefix(olsweb.ServerConfigPath, "conf/"), files[olsweb.ServerConfigPath], private); e != nil {
 		return fail(e)
 	}
-	return t, nil
+	return t, changed, nil
 }
 
-// configTest runs `openlitespeed -t`. It exits 2 for an [ERROR] and 1 when it
-// logged anything at all (the stock Example vhost always warns), so the test
-// passes unless it errored or warned about a broker vhost.
-func (n *linuxSystem) configTest(ctx context.Context) error {
+// configTest runs `openlitespeed -t` and judges it with olsTestPasses.
+func (n *linuxSystem) configTest(ctx context.Context, changed map[string]bool) error {
 	out, code, e := n.commandStatus(ctx, olsBinary, "-t")
-	if e != nil || code == 2 || (code != 0 && code != 1) {
+	if e != nil || !olsTestPasses(out, code, changed) {
 		return ErrWebRejected
 	}
+	return nil
+}
+
+// olsTestPasses reads `openlitespeed -t`, which exits 2 after an [ERROR] and
+// 1 after any other message (the stock Example vhost always warns). Lines
+// look like "DATE TIME [WARN] [PID] [config:server:vhosts:vhost:NAME] text";
+// the bracketed context comes from the server, not from a tenant's files.
+//
+// A broker vhost whose config this change did not rewrite is skipped: what
+// it reports comes from its tenant's own files (a public_html removed or
+// swapped), and one tenant must not block another account's change. A
+// rewritten broker vhost fails on an error or a warning, anything else on
+// an error, and an exit status the lines do not explain fails too.
+func olsTestPasses(out []byte, code int, changed map[string]bool) bool {
+	if code < 0 || code > 2 {
+		return false
+	}
+	errorLines := 0
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	for sc.Scan() {
-		line := sc.Text()
-		if strings.Contains(line, "[ERROR]") || (strings.Contains(line, olsweb.NamePrefix) && strings.Contains(line, "[WARN]")) {
-			return ErrWebRejected
+		fields := strings.Fields(sc.Text())
+		level := -1
+		for i, f := range fields {
+			if f == "[ERROR]" || f == "[WARN]" {
+				level = i
+				break
+			}
+		}
+		if level < 0 {
+			continue
+		}
+		isError := fields[level] == "[ERROR]"
+		if isError {
+			errorLines++
+		}
+		vhost := ""
+		if level+2 < len(fields) {
+			vhost = olsContextVhost(fields[level+2])
+		}
+		switch {
+		case strings.HasPrefix(vhost, olsweb.NamePrefix):
+			if changed[vhost] {
+				return false
+			}
+		case isError:
+			return false
 		}
 	}
-	return nil
+	return code != 2 || errorLines > 0
+}
+
+// olsContextVhost returns NAME from a "[...:vhost:NAME...]" context, or "".
+func olsContextVhost(context string) string {
+	if !strings.HasPrefix(context, "[") || !strings.HasSuffix(context, "]") {
+		return ""
+	}
+	i := strings.LastIndex(context, ":vhost:")
+	if i < 0 {
+		return ""
+	}
+	name := context[i+len(":vhost:") : len(context)-1]
+	if j := strings.IndexAny(name, ":]"); j >= 0 {
+		name = name[:j]
+	}
+	return name
 }
 
 // installSites writes and tests the config, then reloads; a failed test puts
 // the old files back and returns ErrWebRejected (ErrRecovery if that fails).
 func (n *linuxSystem) installSites(ctx context.Context, sites []olsweb.Site) error {
-	t, e := n.writeSites(sites)
+	t, changed, e := n.writeSites(sites)
 	if e != nil {
 		return e
 	}
 	defer t.close()
-	if e = n.configTest(ctx); e != nil {
+	if e = n.configTest(ctx, changed); e != nil {
 		if r := t.restore(); r != nil {
 			return r
 		}
@@ -499,16 +620,26 @@ func (n *linuxSystem) ApplyWeb(ctx context.Context, r record, previous, next Web
 	if n.webUID <= 0 || !validWebState(next) {
 		return ErrUnavailable
 	}
+	// Nothing has changed yet, so these refusals leave the account as it was.
 	if !n.quotaEnforced(ctx) {
 		return ErrWebRejected
 	}
-	if e := n.setQuota(ctx, r.Account.UID, next.QuotaMiB); e != nil {
+	soft, hard, e := n.quotaKiB(ctx, r.Account.UID)
+	if e != nil {
+		return ErrWebRejected
+	}
+	// A recovery may run after the new quota was set, so a site that was
+	// already live goes back to its recorded quota rather than the one read.
+	if previous.enabled() {
+		soft, hard = int64(softQuotaMiB(previous.QuotaMiB))*1024, int64(previous.QuotaMiB)*1024
+	}
+	if e := n.setQuota(ctx, r.Account.UID, int64(softQuotaMiB(next.QuotaMiB))*1024, int64(next.QuotaMiB)*1024); e != nil {
 		return e
 	}
-	e := n.installSites(ctx, sites)
+	e = n.installSites(ctx, sites)
 	if errors.Is(e, ErrWebRejected) {
 		// Put the quota back too, so a rejected request changed nothing.
-		if n.setQuota(ctx, r.Account.UID, previous.QuotaMiB) != nil {
+		if n.setQuota(ctx, r.Account.UID, soft, hard) != nil {
 			return ErrRecovery
 		}
 	}

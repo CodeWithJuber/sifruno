@@ -16,6 +16,10 @@ var ErrWebRejected = errors.New("web configuration rejected")
 // leave a half-finished apply behind.
 const webApplyTimeout = 2 * time.Minute
 
+func webContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), webApplyTimeout)
+}
+
 // setWeb makes an account's site live.
 //
 // The step that depends on the tenant's own files (web server access on the
@@ -60,6 +64,11 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 	if r.Account.Revision == ^uint64(0) {
 		return WebResult{}, ErrRecovery
 	}
+	// Two history rows, with room left as beginOperation leaves it, so the
+	// result can always be journaled.
+	if r.HistorySequence > MaxHistoryRows-3 {
+		return WebResult{}, ErrConflict
+	}
 	if s.native.Verify(ctx, r) != nil || s.native.GrantWebAccess(ctx, r) != nil {
 		return WebResult{}, ErrConflict
 	}
@@ -82,7 +91,7 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 	if err != nil {
 		return WebResult{}, ErrRecovery
 	}
-	applyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), webApplyTimeout)
+	applyCtx, cancel := webContext(ctx)
 	defer cancel()
 	switch e := s.native.ApplyWeb(applyCtx, r, previous, want, sites); {
 	case errors.Is(e, ErrWebRejected):
@@ -106,4 +115,11 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 		return WebResult{}, ErrRecovery
 	}
 	return WebResult{Account: r.Account, Web: want}, nil
+}
+
+// applySitesWithout installs every live site except the given account's.
+func (s *store) applySitesWithout(ctx context.Context, items []record, id string) error {
+	applyCtx, cancel := webContext(ctx)
+	defer cancel()
+	return s.native.ApplySites(applyCtx, webSites(items, id))
 }

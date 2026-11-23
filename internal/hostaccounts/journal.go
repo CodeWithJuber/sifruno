@@ -172,9 +172,10 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 					return ErrRecovery
 				}
 			} else if e.Status == "rejected" {
-				// Only a web operation can end rejected: its config test failed
-				// and the old files went back, so the account is unchanged.
-				if e.Action != "web" || e.Before == nil || !sameAccount(e.After, *e.Before) {
+				// Only an operation that rewrites the web config can end
+				// rejected: the config test failed and the old files went back,
+				// so the account is unchanged.
+				if e.Action != "web" && e.Action != "delete" || e.Before == nil || !sameAccount(e.After, *e.Before) {
 					return ErrRecovery
 				}
 				lastSuccess = e

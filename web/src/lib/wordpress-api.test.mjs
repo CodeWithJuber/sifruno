@@ -1,0 +1,265 @@
+// Wizard client checks with synthetic sessions and fetch responses; no server or state.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import test from "node:test";
+
+const moduleURL = (source) => `data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source, { mode: "transform" })).toString("base64")}`;
+const sitesURL = moduleURL(readFileSync(new URL("./sites-api.ts", import.meta.url), "utf8"));
+const api = await import(moduleURL(readFileSync(new URL("./wordpress-api.ts", import.meta.url), "utf8").replace('"./sites-api"', JSON.stringify(sitesURL))));
+
+const jobId = "0123456789abcdef0123456789abcdef";
+const password = "correct horse battery";
+const input = () => ({ domain: "example.com", title: "My site", admin_user: "siteadmin", admin_email: "me@example.com", admin_password: password, php_version: "8.3" });
+const steps = (states = ["running", "pending", "pending", "pending"]) => [
+  { name: "account", title: "Create the hosting account" }, { name: "web", title: "Put the site live with PHP" },
+  { name: "database", title: "Create the database" }, { name: "wordpress", title: "Install WordPress" },
+].map((step, i) => ({ ...step, state: states[i], message: "", started_at: states[i] === "pending" ? "" : "2026-11-23T10:00:00Z", finished_at: "" }));
+const job = (change = {}) => ({
+  id: jobId, kind: "wordpress", domain: "example.com", username: "example", state: "running", steps: steps(),
+  error: null, result: null, actor: "admin", created_at: "2026-11-23T10:00:00Z", updated_at: "2026-11-23T10:00:05Z", ...change,
+});
+const succeeded = () => job({ state: "succeeded", steps: steps(["done", "done", "done", "done"]), result: { url: "http://example.com/", admin_url: "http://example.com/wp-admin/", wordpress_version: "7.1.5", account_id: "a".repeat(32) } });
+const failed = () => job({ state: "failed", steps: steps(["undone", "undone", "undone", "failed"]), error: { step: "wordpress", what: "WordPress could not be installed.", why: "The download failed.", next: "Try again later.", technical: "wp core download: exit 1" } });
+const session = { authenticated: true, csrf_token: "fixture-csrf", expires_at: "2026-11-23T10:15:00Z" };
+const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+
+async function withFetch(mock, operation) {
+  const original = globalThis.fetch; globalThis.fetch = mock;
+  try { await operation(); } finally { globalThis.fetch = original; }
+}
+
+test("domain check mirrors hostaccounts.validDomain", () => {
+  for (const ok of ["example.com", "a.b", "my-site.example.co.uk", "xn--bcher-kva.example", "01.2.3.4", "1.2.3.4.5", `${"a".repeat(63)}.com`, `${"a.".repeat(125)}abc`]) {
+    assert.equal(api.checkDomain(ok), undefined, ok);
+  }
+  for (const bad of ["", "example", "Example.com", "1.2.3.4", "255.255.255.255", "::1", "2001:db8::1", "example.com:8080", "http://example.com", "example.com/", "-example.com", "example-.com", "exa_mple.com", "example..com", ".example.com", "example.com.", "exa mple.com", "bücher.example", `${"a".repeat(64)}.com`, `${"a.".repeat(126)}ab`]) {
+    assert.equal(typeof api.checkDomain(bad), "string", bad);
+  }
+  assert.match(api.checkDomain("1.2.3.4"), /IP address/);
+  assert.match(api.checkDomain("http://example.com"), /without http/);
+});
+
+test("title is 1-200 UTF-8 bytes of printable text after trimming the ends", () => {
+  for (const ok of ["My site", "x", "Café & Bäckerei — Dubai", "موقعي", "a".repeat(200), "é".repeat(100), "😀".repeat(50), " leading and trailing ", `  ${"a".repeat(200)}  `]) {
+    assert.equal(api.checkTitle(ok), undefined, ok);
+  }
+  // Bytes, not characters: these are at most 200 characters but over 200 bytes.
+  for (const bad of ["é".repeat(101), "😀".repeat(51), "موقع".repeat(26)]) assert.match(api.checkTitle(bad), /of 200 bytes/, bad);
+  assert.match(api.checkTitle("é".repeat(101)), /202 of 200 bytes/);
+  for (const bad of ["", "   ", "a\nb", "tab\there", "zero\u200bwidth", "no\u00a0break", "a".repeat(201), "bell\u0007"]) {
+    assert.equal(typeof api.checkTitle(bad), "string", JSON.stringify(bad));
+  }
+  assert.match(api.checkTitle("   "), /not only spaces/);
+});
+
+test("admin username follows ^[A-Za-z0-9_.@][A-Za-z0-9_.@-]{0,59}$", () => {
+  for (const ok of ["siteadmin", "a", "Admin.User", "me@example.com", "_x-y", "@", "a".repeat(60)]) assert.equal(api.checkAdminUser(ok), undefined, ok);
+  for (const bad of ["", "-admin", "has space", "ümlaut", "a".repeat(61), "semi;colon", "admin\n"]) assert.equal(typeof api.checkAdminUser(bad), "string", bad);
+});
+
+test("admin email is a plain address of at most 100 characters", () => {
+  for (const ok of ["me@example.com", "first.last+tag@sub.example.co", "a@b", `${"a".repeat(88)}@example.com`]) assert.equal(api.checkAdminEmail(ok), undefined, ok);
+  for (const bad of ["", "me", "me@", "@example.com", "Me <me@example.com>", "me@example.com ", "me@exa mple.com", "me@@example.com", `${"a".repeat(89)}@example.com`]) {
+    assert.equal(typeof api.checkAdminEmail(bad), "string", bad);
+  }
+});
+
+test("admin password is 12-128 UTF-8 bytes with no space at either end and no control characters", () => {
+  for (const ok of ["a".repeat(12), "a".repeat(128), "correct horse battery", "Пароль-надёжный", "ñ".repeat(64), "ñ".repeat(6), "😀".repeat(3), "x y z 1 2 3 !@#", "zero​width-pw", "inner nbsp-pw"]) {
+    assert.equal(api.checkAdminPassword(ok), undefined, JSON.stringify(ok));
+  }
+  for (const bad of ["", "a".repeat(11), "a".repeat(129), "ñ".repeat(5), "ñ".repeat(65), "😀".repeat(33), " leading-space-pw", "trailing-space-pw ", "trailing-nbsp-pw ", "tab\tinside-pw", "new\nline-password", "del\u007fcharacter-pw"]) {
+    assert.equal(typeof api.checkAdminPassword(bad), "string", JSON.stringify(bad));
+  }
+  // A problem message never repeats the password itself.
+  for (const bad of [" leading-space-pw", "short-pw"]) assert.equal(api.checkAdminPassword(bad).includes(bad.trim()), false);
+});
+
+test("PHP version is one of 8.1-8.4 and defaults to 8.3", () => {
+  assert.equal(api.defaultPhpVersion, "8.3");
+  assert.deepEqual([...api.phpVersions], ["8.1", "8.2", "8.3", "8.4"]);
+  for (const ok of api.phpVersions) assert.equal(api.checkPhpVersion(ok), undefined);
+  for (const bad of ["", "8.0", "8.5", "8", "8.3 ", "7.4"]) assert.equal(typeof api.checkPhpVersion(bad), "string", bad);
+  assert.deepEqual(api.checkWordPressInput(input()), {});
+  assert.deepEqual(Object.keys(api.checkWordPressInput({ ...input(), domain: "", php_version: "9" })), ["domain", "php_version"]);
+});
+
+test("job parsing accepts the contract's running, succeeded and failed shapes", () => {
+  const running = api.parseJob(job());
+  assert.equal(running.state, "running"); assert.equal(running.steps.length, 4); assert.equal(running.error, null); assert.equal(running.result, null);
+  assert.equal(api.parseJob(succeeded()).result.wordpress_version, "7.1.5");
+  assert.equal(api.parseJob(failed()).error.what, "WordPress could not be installed.");
+  assert.deepEqual(api.jobProgress(api.parseJob(job({ steps: steps(["done", "done", "running", "pending"]) }))), { done: 2, total: 4 });
+  assert.deepEqual(api.jobProgress(api.parseJob(succeeded())), { done: 4, total: 4 });
+  // The short step form in the contract (name and title only besides state) is filled in.
+  const short = api.parseJob(job({ steps: [{ name: "account", title: "Create the hosting account", state: "pending" }] }));
+  assert.deepEqual(short.steps[0], { name: "account", title: "Create the hosting account", state: "pending", message: "", started_at: "", finished_at: "" });
+  // The username is empty until the account step picks one.
+  assert.equal(api.parseJob(job({ username: "" })).username, "");
+  assert.equal(api.parseJobResponse({ job: job() }).id, jobId);
+  assert.equal(api.parseJobList({ jobs: [job(), succeeded()] }).length, 2);
+});
+
+test("job parsing matches the finished backend: $schema keys, the fixed actor, restart and undo failures", () => {
+  // Huma adds "$schema" next to "job" and "jobs"; unknown keys are ignored.
+  const schema = "http://127.0.0.1/schemas/JobBody.json";
+  assert.equal(api.parseJobResponse({ $schema: schema, job: job({ actor: "local-operator" }) }).actor, "local-operator");
+  assert.equal(api.parseJobList({ $schema: schema, jobs: [job(), failed()] }).length, 2);
+  // A job that was running when the panel restarted comes back as failed.
+  const restarted = api.parseJob(job({ state: "failed", steps: steps(["done", "failed", "pending", "pending"]), error: { step: "web", what: "The panel restarted while this website was being created.", why: "The setup was interrupted.", next: "Try again.", technical: "" } }));
+  assert.equal(restarted.state, "failed"); assert.match(restarted.error.what, /panel restarted/);
+  // Undo problems are passed through as written.
+  const leftovers = api.parseJob(job({ state: "failed", steps: steps(["done", "undone", "undone", "failed"]), error: { step: "wordpress", what: "WordPress could not be installed.", why: "The download failed.", next: "These could not be removed: the hosting account example. Remove it in Customers, then try again.", technical: "undo account: userdel exited 1\nwordpress: download timed out" } }));
+  assert.match(leftovers.error.next, /could not be removed/); assert.match(leftovers.error.technical, /^undo account: /);
+});
+
+test("job parsing fails closed on values outside the contract", () => {
+  for (const change of [
+    { id: "ABCDEF" + "0".repeat(26) }, { id: "short" }, { kind: "static" }, { state: "done" }, { domain: "" },
+    { username: "Root" }, { username: "ab" }, { steps: [] }, { steps: "account" }, { steps: steps(["running", "waiting", "pending", "pending"]) },
+    { steps: [{ name: "", title: "x", state: "pending" }] }, { created_at: "yesterday" }, { error: "boom" },
+    { state: "succeeded", result: null }, { state: "succeeded", steps: steps(["done", "done", "done", "done"]), result: { url: "javascript:alert(1)", admin_url: "http://example.com/wp-admin/", wordpress_version: "7.1.5" } },
+    { result: { url: "http://example.com/", admin_url: "data:text/html,hi", wordpress_version: "7.1.5" } },
+    { result: { url: "http://example.com/", admin_url: "http://example.com/wp-admin/" } },
+  ]) assert.equal(api.parseJob(job(change)), undefined, JSON.stringify(change));
+  assert.equal(api.parseJob(null), undefined);
+  assert.equal(api.parseJobResponse(job()), undefined);
+  assert.equal(api.parseJobList({ jobs: Array.from({ length: 21 }, job) }), undefined);
+  assert.equal(api.parseJobList({ jobs: [job(), { ...job(), kind: "x" }] }), undefined);
+});
+
+test("create reads the session token, then posts exactly the six fields with CSRF", async () => {
+  const calls = [];
+  await withFetch(async (url, options) => {
+    calls.push({ url, options });
+    if (url === "/api/v1/session") return json(session);
+    return json({ $schema: "http://127.0.0.1/schemas/JobBody.json", job: job() }, 202);
+  }, async () => {
+    const created = await api.createWordPressSite({ ...input(), extra: "dropped" });
+    assert.equal(created.id, jobId);
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].options.method, "GET");
+  const post = calls[1];
+  assert.equal(post.url, "/api/v1/websites/wordpress"); assert.equal(post.options.method, "POST");
+  assert.equal(post.options.credentials, "same-origin"); assert.equal(post.options.cache, "no-store");
+  assert.equal(post.options.headers["X-CSRF-Token"], "fixture-csrf"); assert.equal(post.options.headers["Content-Type"], "application/json");
+  assert.deepEqual(Object.keys(JSON.parse(post.options.body)), ["domain", "title", "admin_user", "admin_email", "admin_password", "php_version"]);
+  assert.deepEqual(JSON.parse(post.options.body), input());
+});
+
+test("create sends the title trimmed, as the server stores it", async () => {
+  let sent;
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    sent = JSON.parse(options.body); return json({ job: job() }, 202);
+  }, async () => { await api.createWordPressSite({ ...input(), title: "  My site  " }); });
+  assert.equal(sent.title, "My site");
+});
+
+test("create refuses invalid input before anything is sent", async () => {
+  await withFetch(async () => assert.fail("must not dispatch"), async () => {
+    for (const change of [{ domain: "Example.com" }, { admin_password: "short" }, { php_version: "8.0" }, { title: "" }]) {
+      await assert.rejects(api.createWordPressSite({ ...input(), ...change }), (error) => error instanceof api.WordPressApiError && error.status === 422);
+    }
+  });
+});
+
+test("create stops when the session has ended", async () => {
+  let posts = 0;
+  await withFetch(async (url) => {
+    if (url === "/api/v1/session") return json({ authenticated: false }, 401);
+    ++posts; return json({ job: job() }, 202);
+  }, async () => {
+    await assert.rejects(api.createWordPressSite(input()), { status: 401 });
+  });
+  assert.equal(posts, 0);
+});
+
+for (const [status, detail] of [
+  [400, "The request body is not valid JSON."], [409, "A website for example.com is already being set up."],
+  [409, "Two website setups are already running. Wait for one to finish."], [413, "The request body is larger than 4 KiB."],
+  [415, "Send the request as application/json."], [422, "unexpected property \"extra\""],
+  [503, "The MariaDB service is not running."], [503, "Website creation is not set up on this server"],
+]) {
+  test(`create surfaces HTTP ${status} problem detail without the password`, async () => {
+    await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ title: "Problem", status, detail }, status), async () => {
+      await assert.rejects(api.createWordPressSite(input()), (error) => {
+        assert(error instanceof api.WordPressApiError);
+        assert.equal(error.status, status); assert.equal(error.detail, detail);
+        assert.equal(error.message, "The website was not created.");
+        assert(error.next.length > 0); assert.match(error.technical, new RegExp(`HTTP ${status}`));
+        for (const part of [error.message, error.detail, error.next, error.technical]) assert.equal(part.includes(password), false);
+        return true;
+      });
+    });
+  });
+}
+
+test("create rejects a 202 that does not describe a job for this domain", async () => {
+  for (const body of [{ job: job({ domain: "other.com" }) }, { job: { id: jobId } }, {}]) {
+    await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json(body, 202), async () => {
+      await assert.rejects(api.createWordPressSite(input()), { status: 0 });
+    });
+  }
+});
+
+test("create gives up after 20 seconds and says the site may exist", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let posted;
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    return new Promise((_, reject) => { posted = true; options.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))); });
+  }, async () => {
+    const pending = api.createWordPressSite(input());
+    while (!posted) await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(api.createTimeoutMs - 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(1);
+    await assert.rejects(pending, (error) => {
+      assert.equal(error.status, 0);
+      assert.match(error.detail, /20 seconds/);
+      assert.match(error.next, /first try worked/);
+      return true;
+    });
+  });
+});
+
+test("reading a job validates the id first and the answer after", async () => {
+  await withFetch(async () => assert.fail("must not dispatch"), async () => {
+    for (const bad of ["", "../session", "ABCDEF0123456789ABCDEF0123456789", jobId + "0"]) {
+      await assert.rejects(api.getWebsiteJob(bad), { status: 404 });
+    }
+  });
+  const seen = [];
+  await withFetch(async (url, options) => { seen.push([url, options.method, options.headers["X-CSRF-Token"]]); return json({ job: job() }); }, async () => {
+    assert.equal((await api.getWebsiteJob(jobId)).id, jobId);
+  });
+  assert.deepEqual(seen, [[`/api/v1/websites/jobs/${jobId}`, "GET", undefined]]);
+  await withFetch(async () => json({ job: job({ id: "f".repeat(32) }) }), async () => {
+    await assert.rejects(api.getWebsiteJob(jobId), { status: 0 });
+  });
+  await withFetch(async () => json({ title: "Not Found", status: 404, detail: "no such job" }, 404), async () => {
+    await assert.rejects(api.getWebsiteJob(jobId), (error) => error.status === 404 && error.detail === "no such job" && error.message === "The setup progress could not be loaded.");
+  });
+  await withFetch(async () => { throw new TypeError("offline"); }, async () => {
+    await assert.rejects(api.getWebsiteJob(jobId), (error) => error.status === 0 && /reach its server/.test(error.detail));
+  });
+});
+
+test("listing jobs returns newest-first records as given", async () => {
+  await withFetch(async (url) => { assert.equal(url, "/api/v1/websites/jobs"); return json({ jobs: [succeeded(), failed()] }); }, async () => {
+    const jobs = await api.listWebsiteJobs();
+    assert.deepEqual(jobs.map((j) => j.state), ["succeeded", "failed"]);
+  });
+  await withFetch(async () => json({ items: [] }), async () => {
+    await assert.rejects(api.listWebsiteJobs(), { status: 0 });
+  });
+});
+
+test("server text is kept to one short line", async () => {
+  await withFetch(async () => json({ status: 503, detail: `line one\nline two\u0000${"x".repeat(900)}` }, 503), async () => {
+    await assert.rejects(api.getWebsiteJob(jobId), (error) => !/[\n\u0000]/.test(error.detail) && error.detail.length <= 500);
+  });
+});

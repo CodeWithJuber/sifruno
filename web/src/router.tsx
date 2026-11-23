@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { AppShell, isPublicPreview } from "@/shell/AppShell";
-import { ActivityView, HomeView, NetworkView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView } from "@/shell/views";
+import { ActivityView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView } from "@/shell/views";
 
 // Every page has its own URL, so back, reload and shared links work. The Go
 // server already answers unknown extension-less paths with index.html.
@@ -15,10 +15,19 @@ const previewOnly = () => { if (!isPublicPreview()) throw redirect({ to: "/" });
 const route = (path: string, component: () => ReactNode, beforeLoad?: () => void) =>
   createRoute({ getParentRoute: () => rootRoute, path, component, beforeLoad });
 
+// One setup job's progress. The id is in the address, so a reload keeps it.
+const websiteJobRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/jobs/$jobId", component: WebsiteJobRoute, beforeLoad: privateOnly });
+function WebsiteJobRoute() {
+  const { jobId } = websiteJobRoute.useParams();
+  return <WebsiteJobView jobId={jobId} />;
+}
+
 const routeTree = rootRoute.addChildren([
   route("/", HomeView),
   route("/tour", TourView, previewOnly),
   route("/websites", ShellRendered, privateOnly),
+  route("/websites/new", NewWebsiteView, privateOnly),
+  websiteJobRoute,
   route("/websites/files", ShellRendered, privateOnly),
   route("/websites/backups", ShellRendered, privateOnly),
   route("/activity", ActivityView, privateOnly),

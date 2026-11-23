@@ -18,6 +18,8 @@ const Access = lazy(() => import("@/Access"));
 const Storage = lazy(() => import("@/HostResources").then((m) => ({ default: m.Storage })));
 const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ default: m.NetworkResources })));
 const PanelPreview = lazy(() => import("@/PanelPreview"));
+const NewWebsite = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.NewWebsite })));
+const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.WebsiteJob })));
 
 export function LoadingState({ label }: { label: string }) {
   return <div className="flex flex-col gap-4" role="status" aria-label={label}><Skeleton className="h-28 w-full" /><Skeleton className="h-64 w-full" /><span className="sr-only">{label}</span></div>;
@@ -109,6 +111,15 @@ export function SecurityView() {
 
 export function TourView() {
   return <PanelPreview />;
+}
+
+export function NewWebsiteView() {
+  return <NewWebsite />;
+}
+
+// Keyed by the id, so moving from one setup job to another starts fresh.
+export function WebsiteJobView({ jobId }: { jobId: string }) {
+  return <WebsiteJob key={jobId} jobId={jobId} />;
 }
 
 // Kept-alive screens (Websites, Files, Backups, Customers) are rendered by the

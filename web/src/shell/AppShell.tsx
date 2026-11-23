@@ -44,7 +44,7 @@ const shortcutLabel = /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘K" : "Ct
 
 function pageForPath(pathname: string): Page | undefined {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
-  return pages.find((p) => p.path === path);
+  return pages.find((p) => p.path === path || p.pattern?.test(path));
 }
 
 function initialTheme(): "light" | "dark" {

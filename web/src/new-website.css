@@ -1,0 +1,115 @@
+/* New website wizard: the overall progress bar and the running-step spinner.
+   Both are native <progress> elements so assistive technology gets the
+   progressbar role for free. */
+
+/* Determinate bar: only accent-color and inline-size, which keep the
+   browser's own bar (more styling would silently disable it). */
+.wizard-progress {
+  inline-size: 100%;
+  accent-color: var(--primary);
+}
+
+/* Spinner: an indeterminate <progress> drawn as a ring with a moving arc. */
+@property --wizard-arc-start {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@property --wizard-arc-end {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+/* The dash animation is added only where @property works. */
+@property --wizard-dash-animation {
+  syntax: "*";
+  inherits: false;
+  initial-value: , wizard-spinner-dash 3s ease-in-out infinite;
+}
+
+progress.wizard-spinner:indeterminate::-webkit-progress-bar {
+  display: none;
+  background: none;
+}
+progress.wizard-spinner:indeterminate::-webkit-progress-value {
+  display: none;
+  background: none;
+}
+progress.wizard-spinner:indeterminate::-moz-progress-bar {
+  display: none;
+  background: none;
+}
+
+progress.wizard-spinner:indeterminate {
+  --_from: calc(90deg + var(--wizard-arc-start, 0deg));
+  --_to: calc(90deg + var(--wizard-arc-end, 158deg));
+  --_size: 1rem;
+  --_thickness: 2px;
+  --_spinner-color: currentColor;
+  --_track-color: color-mix(in srgb, currentColor 22%, transparent);
+  --_duration: 1.5s;
+
+  position: relative;
+  inline-size: var(--_size);
+  block-size: var(--_size);
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  appearance: none;
+  background: conic-gradient(from var(--_from), var(--_spinner-color) calc(var(--_to) - var(--_from)), transparent 0) var(--_track-color);
+  animation: wizard-spinner-spin var(--_duration) linear infinite var(--wizard-dash-animation, );
+}
+
+@supports (background-clip: border-area) {
+  progress.wizard-spinner:indeterminate {
+    background-clip: border-area;
+    background-origin: border-box;
+    border: var(--_thickness) solid transparent;
+  }
+}
+
+@supports not (background-clip: border-area) {
+  progress.wizard-spinner:indeterminate {
+    --_clip: calc(100% - var(--_thickness));
+    mask-image: radial-gradient(farthest-side, transparent var(--_clip), black var(--_clip));
+  }
+}
+
+/* Forced colours drop background gradients; draw the ring in system colours. */
+@media (forced-colors: active) {
+  progress.wizard-spinner:indeterminate {
+    forced-color-adjust: none;
+    --_spinner-color: CanvasText;
+    --_track-color: Canvas;
+  }
+}
+
+/* Slow, steady rotation instead of stopping, so the step still looks alive. */
+@media (prefers-reduced-motion: reduce) {
+  progress.wizard-spinner:indeterminate {
+    --_duration: 6s;
+    --wizard-dash-animation: ;
+    --wizard-arc-end: 158deg;
+  }
+}
+
+@keyframes wizard-spinner-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+@keyframes wizard-spinner-dash {
+  from {
+    --wizard-arc-start: 0deg;
+    --wizard-arc-end: 3deg;
+  }
+  50% {
+    --wizard-arc-start: 100deg;
+    --wizard-arc-end: 358deg;
+  }
+  to {
+    --wizard-arc-start: 360deg;
+    --wizard-arc-end: 363deg;
+  }
+}

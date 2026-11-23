@@ -23,6 +23,7 @@ import (
 	"sifruno/internal/serverinfo"
 	"sifruno/internal/sites"
 	"sifruno/internal/trail"
+	"sifruno/internal/wizard"
 )
 
 type Options struct {
@@ -43,6 +44,9 @@ type Options struct {
 	// WHM, when non-nil, serves the WHM API 1 compatibility transport under
 	// /json-api/ (internal/whmapi). Nil keeps the fail-closed 501 placeholder.
 	WHM http.Handler
+	// Wizard runs the "create a WordPress site" jobs. Nil answers 503 on the
+	// /api/v1/websites routes.
+	Wizard *wizard.Runner
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -67,6 +71,7 @@ func New(o Options) http.Handler {
 	api := humago.New(mux, cfg)
 	registerSites(api, o)
 	registerAccounts(api, o)
+	registerWizard(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)
@@ -206,7 +211,7 @@ func New(o Options) http.Handler {
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !origins[origin] && !(remote && origin == "https://"+r.Host) {
-			if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isSessionPath(r.URL.Path) {
+			if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isWizardPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 				operator.WriteError(w, 403, "origin_not_allowed", "Origin not allowed")
 				return
 			}
@@ -235,13 +240,13 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedSessionMutation(r)
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedSessionMutation(r)
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isSessionPath(r.URL.Path) {
+		if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isWizardPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 			if o.Operator == nil {
 				operator.WriteError(w, 503, "operator_unavailable", "Operator authentication unavailable")
 				return
@@ -287,6 +292,26 @@ func New(o Options) http.Handler {
 				}
 			}
 			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
+		}
+		if isWizardPath(r.URL.Path) {
+			// The same admission as the account routes: session, and for the
+			// POST also Origin and CSRF, rechecked after the body is read.
+			actor, ok := o.Operator.Authorize(w, r, mutation)
+			if !ok {
+				return
+			}
+			if mutation {
+				if !prepareWizardJSON(w, r) {
+					return
+				}
+				actor, ok = o.Operator.Authorize(w, r, true)
+				if !ok {
+					return
+				}
+			}
+			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
+			// Starting a job lists accounts and probes the database first.
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
 		}
 		mux.ServeHTTP(w, r)

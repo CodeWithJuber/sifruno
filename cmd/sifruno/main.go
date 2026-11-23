@@ -34,6 +34,7 @@ import (
 	"sifruno/internal/tlshost"
 	"sifruno/internal/trail"
 	"sifruno/internal/whmapi"
+	"sifruno/internal/wizard"
 )
 
 func main() {
@@ -143,6 +144,9 @@ func run() error {
 	}
 	var whmHandler http.Handler
 	var whmServer *whmapi.Server
+	// The database service is built with the WHM transport and shared with
+	// the website wizard, so both write the same registry.
+	var dbSvc *dbhost.LocalService
 	if *accountsSocket != "" {
 		// WHM API 1 compatibility transport over the real account broker.
 		// Tokens live in a root-only JSON file; an absent store denies all
@@ -200,7 +204,7 @@ func run() error {
 		if dberr != nil {
 			return dberr
 		}
-		dbSvc := &dbhost.LocalService{
+		dbSvc = &dbhost.LocalService{
 			Run:      dbhost.CLIRunner{Socket: *dbSocket, DefaultsFile: *dbDefaults},
 			Registry: dbReg,
 		}
@@ -239,6 +243,20 @@ func run() error {
 			whmServer.SetBackupStore(bs)
 		}
 	}
+	var websiteJobs *wizard.Runner
+	if *accountsSocket != "" && dbSvc != nil {
+		broker := hostaccounts.NewClient(*accountsSocket)
+		web, okWeb := broker.(hostaccounts.WebService)
+		wordpress, okWordPress := broker.(hostaccounts.WordPressService)
+		if !okWeb || !okWordPress {
+			return errors.New("the account broker client lacks the web or WordPress operation")
+		}
+		jobs, jerr := wizard.OpenStore(filepath.Join(dir, "wizard"))
+		if jerr != nil {
+			return jerr
+		}
+		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress}, dbSvc, jobs)
+	}
 	var remoteServer *http.Server
 	var remoteListener net.Listener
 	var remoteHosts []string
@@ -275,7 +293,7 @@ func run() error {
 		servers = append(servers, ingressServer)
 		listeners = append(listeners, ingressListener)
 	}
-	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	if remoteServer != nil {
 		// The same API, behind operator.Remote: only the panel's host names,
 		// only TLS, and only admin sessions.

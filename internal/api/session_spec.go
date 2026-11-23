@@ -122,7 +122,7 @@ func documentOperator(a huma.API) {
 	add(&huma.Operation{OperationID: "operator-revoke-other-sessions", Method: http.MethodPost, Path: "/api/v1/session/revoke-others", Summary: "Revoke all other local operator sessions", Description: "Send exactly an empty JSON object, bounded to 2048 bytes. The authorizing session is rechecked and retained under the same lock as deletion. A zero count is valid when no other session remains. All cookies for removed sessions immediately lose admission; restart also clears admission.", Security: writeSecurity, Parameters: []*huma.Param{origin(), csrf()}, RequestBody: emptyBody, Responses: responses("OperatorSessionRevocation", 400, 401, 403, 413, 415, 503)})
 	storeProblem := spec.Components.Schemas.Schema(reflect.TypeOf(huma.ErrorModel{}), true, "ErrorModel")
 	for path, item := range spec.Paths {
-		if !isSitePath(path) && !isAccountPath(path) {
+		if !isSitePath(path) && !isAccountPath(path) && !isWizardPath(path) {
 			continue
 		}
 		for _, op := range []*huma.Operation{item.Get, item.Post, item.Put} {
@@ -132,6 +132,9 @@ func documentOperator(a huma.API) {
 			op.Description = "Authenticated app-owned static website operation. Loopback only; OS accounts, DNS, TLS, PHP, mail, databases and full host backups are outside this slice."
 			if isAccountPath(path) {
 				op.Description = "Authenticated native Linux identity/home operation through a separate root broker. Domain is reserved metadata only. No web, DNS, mail or full cPanel provisioning. Suspension sets account expiry for new PAM-aware access; existing processes are unaffected. A timed-out create must be reconciled by refreshing the list before retrying."
+			}
+			if isWizardPath(path) {
+				op.Description = "Authenticated WordPress website job. The POST checks the request (exactly the six keys, each once, at most 4 KiB; 422 names the field), starts a background job and answers 202; the job creates the hosting account, puts its site live, creates the database and installs WordPress through the root broker and the database service, and on a failure removes what it created, newest first. Poll the job by ID. Job records hold no passwords. Sites are plain HTTP for now; certificates are a later slice."
 			}
 			op.Security = readSecurity
 			if op.Method != http.MethodGet {

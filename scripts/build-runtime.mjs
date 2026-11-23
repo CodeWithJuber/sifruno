@@ -129,7 +129,7 @@ async function notices(destination, target) {
   }
   // Include licenses for actual UI imports and their runtime dependency closure.
   // shadcn CLI is a build tool; its MIT license is retained for generated source.
-  const queue = ['react', 'react-dom', '@astryxdesign/core', '@astryxdesign/theme-neutral', '@stylexjs/stylex', '@base-ui/react', 'lucide-react', 'class-variance-authority', 'cn', 'tw-animate-css', 'tailwindcss'];
+  const queue = ['react', 'react-dom', '@astryxdesign/core', '@astryxdesign/theme-neutral', '@stylexjs/stylex', '@base-ui/react', '@tanstack/react-router', 'lucide-react', 'class-variance-authority', 'cn', 'tw-animate-css', 'tailwindcss'];
   const seen = new Set();
   while (queue.length) {
     const name = queue.shift();

@@ -29,11 +29,11 @@ const time = (timestamp: string) => new Date(timestamp).toLocaleTimeString(undef
 
 type HostingTarget = "websites" | "accounts" | "backups" | "files" | "access";
 const hostingModules = [
-  { id: "websites", label: "Websites", description: "Manage local static sites and their files.", detail: "Static sites", icon: Globe },
-  { id: "accounts", label: "Accounts", description: "Local Linux identities and home directories.", detail: "Linux broker required", icon: Users },
-  { id: "backups", label: "Backups", description: "Create, export and restore website snapshots.", detail: "Native ZIP snapshots", icon: Archive },
-  { id: "files", label: "File Manager", description: "Browse and edit saved website files.", detail: "Website files", icon: Folder },
-  { id: "access", label: "Access", description: "Review operator sessions and server access.", detail: "Operator sessions", icon: LockKeyhole },
+  { id: "websites", label: "Websites", description: "Create and manage your websites.", detail: "Static sites", icon: Globe },
+  { id: "accounts", label: "Customers", description: "Customer accounts and their home folders.", detail: "Linux broker required", icon: Users },
+  { id: "backups", label: "Backups", description: "Create, download and restore website backups.", detail: "Native ZIP snapshots", icon: Archive },
+  { id: "files", label: "Files", description: "View and edit your website's files.", detail: "Website files", icon: Folder },
+  { id: "access", label: "Security", description: "Sessions signed in to this panel.", detail: "Operator sessions", icon: LockKeyhole },
 ] as const;
 
 export function HostingWorkspace({ publicPreview, platform, onNavigate, onPreview }: { publicPreview: boolean; platform?: PlatformReport; onNavigate: (target: HostingTarget) => void; onPreview: () => void }) {

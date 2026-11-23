@@ -1,35 +1,5 @@
 import { useEffect, useState } from "react";
 
-export interface Obligation {
-  id: string;
-  category: string;
-  title: string;
-  vendor?: string;
-  source: string;
-  status: string;
-  reason: string;
-}
-export interface StatusReport {
-  product: string;
-  stage: string;
-  ready: boolean;
-  reference: {
-    family: string;
-    documentation_version: string;
-    exact_build: string;
-    os: string;
-    artifact_sha256: string;
-    licensed_reference_verified: boolean;
-  };
-  inventory_complete: boolean;
-  total: number;
-  passed: number;
-  untested: number;
-  blockers: string[];
-  entries: Obligation[];
-  ai_monthly_cap_usd_micros: number;
-  pilot_accounts: number;
-}
 export interface TrailItem {
   id: string;
   reason: string;
@@ -152,51 +122,6 @@ const strings = (v: ObjectValue, keys: string[]) =>
 const money = (v: ObjectValue, keys: string[]) =>
   keys.every((k) => Number.isSafeInteger(v[k]) && (v[k] as number) >= 0);
 
-export function validStatus(v: unknown): v is StatusReport {
-  if (
-    !isObject(v) ||
-    !strings(v, ["product", "stage"]) ||
-    typeof v.ready !== "boolean" ||
-    typeof v.inventory_complete !== "boolean"
-  )
-    return false;
-  if (
-    !money(v, [
-      "total",
-      "passed",
-      "untested",
-      "ai_monthly_cap_usd_micros",
-      "pilot_accounts",
-    ])
-  )
-    return false;
-  if (
-    !Array.isArray(v.blockers) ||
-    !v.blockers.every((x) => typeof x === "string")
-  )
-    return false;
-  if (
-    !isObject(v.reference) ||
-    !strings(v.reference, [
-      "family",
-      "documentation_version",
-      "exact_build",
-      "os",
-      "artifact_sha256",
-    ]) ||
-    typeof v.reference.licensed_reference_verified !== "boolean"
-  )
-    return false;
-  return (
-    Array.isArray(v.entries) &&
-    v.entries.every(
-      (e) =>
-        isObject(e) &&
-        strings(e, ["id", "category", "title", "source", "status", "reason"]) &&
-        (e.vendor === undefined || typeof e.vendor === "string"),
-    )
-  );
-}
 export function validTrail(v: unknown): v is TrailReport {
   return (
     isObject(v) &&
@@ -348,17 +273,6 @@ export function useResource<T>(
     };
   }, [url, validate, revision, pollMilliseconds]);
   return resource;
-}
-
-export function safeSource(source: string): string | undefined {
-  try {
-    const url = new URL(source);
-    return url.protocol === "https:" && !url.username && !url.password
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 export const usd = (micros: number) =>

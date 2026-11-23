@@ -15,10 +15,17 @@
 
 ### Removed
 
+- The Compatibility and Platforms screens and the "hosting engine in
+  development" notice. Their API routes remain.
 - The Ghidra and REA analysis tooling and the `rea-agents` dev dependency.
 
 ### Added
 
+- Phase 1 panel shell: a shadcn/ui sidebar and top bar, Ctrl+K search over
+  pages and actions, and a URL for every page (TanStack Router). The menu
+  names the job: Home, Websites (Files, Backups), Activity, and under
+  Administration: Customers, Server, Security, Settings. Panel colours come
+  from the brand tokens.
 - Broker-managed SFTP keys: `SetSSHKeys` writes a root-owned key file per
   account, each key restricted to `internal-sftp`.
 - `panelctl htaccess scan`: classifies every `.htaccess` directive and sorts

@@ -5,7 +5,9 @@ The [documentation index](../docs/archive/README.md) covers each UI workflow and
 historical evidence. Current publication and remaining acceptance gates are in
 [project state](../docs/archive/PROJECT-STATE.md); no live preview is certified here.
 
-React 19, TypeScript, Vite and Tailwind render the approved V3 Sifruno identity with local Inter fonts. The dashboard reuses actual Meta Astryx 0.6.5 components: Button, Card, SideNav, SegmentedControl, ProgressBar and the precompiled neutral Theme. Secondary tools retain official shadcn source and Base UI primitives. See NOTICE.md for source and license attribution.
+React 19, TypeScript, Vite and Tailwind render the approved V3 Sifruno identity with local Inter fonts. Colours come from `assets/design-tokens.css`. The panel shell (sidebar, top bar, Ctrl+K search and page URLs) is shadcn/ui on Base UI with TanStack Router. The screens inside it still reuse Meta Astryx 0.6.5 components (Button, Card, SegmentedControl, ProgressBar and the precompiled neutral Theme) until each is rebuilt. See NOTICE.md for source and license attribution.
+
+Every page has its own URL: `/` Home, `/websites`, `/websites/files`, `/websites/backups`, `/activity`, `/customers`, `/server` (with `/server/storage` and `/server/network`), `/security` and `/settings`. The Go service answers these paths with `index.html`. Websites, Files, Backups and Customers stay mounted once opened, so unsaved drafts survive navigation.
 
 ```powershell
 cd web
@@ -19,7 +21,6 @@ Vite binds to `127.0.0.1:5173` and proxies `/api` to the local Go service at `12
 | --- | --- |
 | `GET /api/v1/server?range_seconds=60` | Real CPU, memory, storage, uptime and network readings; actual 5-second history, maximum 10 minutes |
 | `GET /api/v1/services` | Native service inventory, search, state filter, facts and pagination |
-| `GET /api/v1/status` | Compatibility counts, blockers, reference baseline and searchable obligations |
 | `GET /api/v1/trail` | Experimental scoped-file recovery summaries |
 | `GET /api/v1/budget` | Monthly USD-micro ledger and operator approval policy |
 | `GET /api/v1/platform` | Actual control-plane target and modern/legacy feasibility profiles |
@@ -38,9 +39,9 @@ Each site's preview links to its registered `site-<id>.localhost:8082` host usin
 
 Each response is validated against its typed contract, with a ten-second timeout, retry states and explicit missing measurements. Server readings poll every five seconds; services poll every thirty seconds and honor the native collector's cache. Chart controls request 60/300/600-second ranges. History starts with this server process; unavailable values create chart gaps. No estimated history or hosted-account statistics are seeded. Service rows use opaque process-lifetime IDs because privacy-normalized names can repeat.
 
-Default Overview is a real monitoring screen. Services are inspected read-only; this UI does not expose placeholder provisioning/restart actions. Compatibility remains uncertified unless the service's actual evidence changes. Scoped-file recovery is experimental and does not certify server/database backups or migration. Platforms distinguish compiled targets from unverified legacy candidates. No paid-model calls occur from these screens.
+Home is a real monitoring screen. Services are inspected read-only; this UI does not expose placeholder provisioning/restart actions. Compatibility evidence and platform profiles are no longer panel screens; `GET /api/v1/status` and `GET /api/v1/platform` still answer for developers. Scoped-file recovery (Activity) is experimental and does not certify server/database backups or migration. No paid-model calls occur from these screens.
 
-The slim white/slate interface follows the approved dashboard concept at `../assets/design/sifruno-dashboard-concept.png`, replacing all illustration values with API data. Local CSS deliberately orders reset/Tailwind/Astryx layers and overrides only product tokens and layout. Astryx's built neutral theme avoids runtime stylesheet injection and custom StyleX compilation. The optional `sifruno-public-preview` meta marker visibly identifies a public preview and excludes private workspaces and their requests; backend authorization remains responsible for route access. Its explicitly labelled sample tour is separate from private Files, Backups, Websites, Accounts and Access workflows.
+The slim white/slate interface follows the approved dashboard concept at `../assets/design/sifruno-dashboard-concept.png`, replacing all illustration values with API data. Local CSS deliberately orders reset/Tailwind/Astryx layers and overrides only product tokens and layout. Astryx's built neutral theme avoids runtime stylesheet injection and custom StyleX compilation. The optional `sifruno-public-preview` meta marker visibly identifies a public preview and excludes private workspaces and their requests; backend authorization remains responsible for route access. Its explicitly labelled sample tour (`/tour`, public preview only) is separate from private Websites, Files, Backups, Customers and Security workflows.
 
 The private UI also includes [session controls](../docs/archive/operator-sessions.md),
 [File Manager](../docs/archive/file-manager-ui.md), [Backups](../docs/archive/backups-ui.md),

@@ -37,6 +37,8 @@ func TestWordPressInputValidation(t *testing.T) {
 		"email without a domain":      func(in *WordPressInput) { in.AdminEmail = "owner" },
 		"short admin password":        func(in *WordPressInput) { in.AdminPassword = "short" },
 		"password with a newline":     func(in *WordPressInput) { in.AdminPassword = "first line\nsecond" },
+		"password with an edge space": func(in *WordPressInput) { in.DBPassword = " leading-space-pw" },
+		"password ending in a space":  func(in *WordPressInput) { in.AdminPassword = "trailing-space-pw " },
 		"database of another account": func(in *WordPressInput) { in.DBName = "otheracct_wp" },
 		"database user of another":    func(in *WordPressInput) { in.DBUser = "otheracct_wp" },
 		"bare prefix":                 func(in *WordPressInput) { in.DBName = "fixtureacct_" },

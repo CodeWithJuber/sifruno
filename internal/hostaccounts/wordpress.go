@@ -59,9 +59,11 @@ var (
 	wpVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?([-.][A-Za-z0-9]+)?$`)
 )
 
-// validSecret accepts a password that fits on one stdin line.
+// validSecret accepts a password that fits on one stdin line. WP-CLI trims
+// what its prompt reads (php-cli-tools Streams::input), so an edge space
+// would be dropped there but not by the database: it is refused.
 func validSecret(s string) bool {
-	if len(s) < 12 || len(s) > 128 {
+	if len(s) < 12 || len(s) > 128 || strings.Trim(s, " ") != s {
 		return false
 	}
 	for _, r := range s {

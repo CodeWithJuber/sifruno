@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"sifruno/config"
+	"sifruno/internal/acme"
 	"sifruno/internal/api"
 	"sifruno/internal/backuphost"
 	"sifruno/internal/budget"
@@ -62,8 +63,9 @@ func run() error {
 	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
 	dnsIP := flag.String("dns-ip", "127.0.0.1", "Default A-record address for account zones (set to the public web IP in production)")
 	tlsRoot := flag.String("tls-root", "", "TLS certificate store root (installssl/listcrts); empty disables the TLS surface")
-	acmeDirectory := flag.String("acme-directory", "", "ACME v2 directory URL for AutoSSL issuance (e.g. Let's Encrypt staging/production); empty disables AutoSSL")
-	acmeEmail := flag.String("acme-email", "", "Contact email for the ACME account")
+	acmeDirectory := flag.String("acme-directory", acme.LetsEncrypt, "ACME v2 directory URL for website certificates; the WHM AutoSSL surface uses it only when this flag is given")
+	acmeEmail := flag.String("acme-email", "", "Contact email for the ACME account; with --accounts-socket it turns on website certificates (HTTP-01) and accepts the certificate authority's terms of service")
+	acmeCAFile := flag.String("acme-ca-file", "", "Optional PEM bundle trusted for the ACME server only, instead of the system roots (a test CA such as Pebble)")
 	acmeInsecure := flag.Bool("acme-insecure-skip-verify", false, "Skip ACME directory TLS verification (test rigs with a private CA only; never in production)")
 	acmeResolver := flag.String("acme-dns-resolver", "127.0.0.1:53", "Resolver used to confirm _acme-challenge TXT propagation before ACME validation")
 	backupRoot := flag.String("backup-root", "", "Backup archive root; empty disables the backup surface")
@@ -73,6 +75,8 @@ func run() error {
 	tlsKey := flag.String("tls-key", "", "Private key for --tls-cert")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
+	given := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
 		return err
@@ -187,7 +191,9 @@ func run() error {
 		if *tlsRoot != "" {
 			tlsStore := &tlshost.Store{Root: *tlsRoot}
 			whmServer.SetTLSStore(tlsStore)
-			if *acmeDirectory != "" {
+			// Before --acme-directory had a default, AutoSSL ran only when
+			// it was given; that stays so.
+			if *acmeDirectory != "" && given["acme-directory"] {
 				acme := tlshost.NewACMEClient(*acmeDirectory, *acmeEmail, filepath.Join(*tlsRoot, "_acme"))
 				if *acmeInsecure {
 					acme.HTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} // test rigs only
@@ -244,6 +250,7 @@ func run() error {
 		}
 	}
 	var websiteJobs *wizard.Runner
+	var certificates *acme.Manager
 	if *accountsSocket != "" && dbSvc != nil {
 		broker := hostaccounts.NewClient(*accountsSocket)
 		web, okWeb := broker.(hostaccounts.WebService)
@@ -254,6 +261,17 @@ func run() error {
 		jobs, jerr := wizard.OpenStore(filepath.Join(dir, "wizard"))
 		if jerr != nil {
 			return jerr
+		}
+		if *acmeEmail != "" {
+			if installer := certificateInstaller(broker); installer == nil {
+				fmt.Fprintln(os.Stderr, "Website certificates are off: the account broker client has no certificate operation, so new websites use http")
+			} else {
+				m, aerr := acme.New(acme.Config{Email: *acmeEmail, Directory: *acmeDirectory, CAFile: *acmeCAFile, StateDir: filepath.Join(dir, "acme")}, installer, brokerSites{broker})
+				if aerr != nil {
+					return aerr
+				}
+				certificates = m
+			}
 		}
 		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress}, dbSvc, jobs)
 	}
@@ -310,6 +328,11 @@ func run() error {
 	} else {
 		defer stop()
 	}
+	if certificates != nil {
+		renewDone := make(chan struct{})
+		go func() { defer close(renewDone); certificates.Run(ctx) }()
+		defer func() { stop(); <-renewDone }()
+	}
 	done := make(chan error, len(servers))
 	for i, running := range servers {
 		go func(s *http.Server, l net.Listener) { done <- s.Serve(l) }(running, listeners[i])
@@ -335,6 +358,27 @@ func run() error {
 		}
 	}
 	return err
+}
+
+// certificateInstaller joins the account broker's certificate operation to
+// the panel's acme.Installer. The broker client has no such operation in
+// this build (it comes with the broker's half of the SSL slice), so there is
+// nothing to join and website certificates stay off.
+func certificateInstaller(hostaccounts.Service) acme.Installer { return nil }
+
+// brokerSites lists the broker's accounts for the certificate renewal loop.
+type brokerSites struct{ hostaccounts.Service }
+
+func (b brokerSites) Sites(ctx context.Context) ([]acme.Site, error) {
+	accounts, err := b.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sites := make([]acme.Site, 0, len(accounts))
+	for _, a := range accounts {
+		sites = append(sites, acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: a.State == "active"})
+	}
+	return sites, nil
 }
 
 // splitHosts reads --panel-host: comma-separated, lower-cased, de-duplicated.

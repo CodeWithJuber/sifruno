@@ -51,3 +51,20 @@ Run on 2026-11-23 with `proof.sh panel-shell` on the dev VM (AlmaLinux 9.9, SELi
 Screenshot: [Websites over HTTPS](phase1-https/1440-light-https-websites.jpg).
 
 What this run does not show: a certificate from a real authority (Let's Encrypt via lego comes with the first-run hostname step), a firewall opened to the internet, or behaviour behind a reverse proxy.
+
+## Phase 1: the broker's web operation
+
+Run on 2026-11-23 with `scripts/devvm/proof.sh broker-web` on a fresh dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3.37, QEMU software emulation). The root broker ran with `--web-user nobody`, and `brokerdrive`, acting as the panel's user, sent the typed requests.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Broker web operation: a site goes live from one request (web server ACL, XFS quota, vhost written, tested and gracefully reloaded, PHP running as the site user, `.htaccess` and `.git` denied), a config OpenLiteSpeed rejects changes nothing, the access grant refuses a swapped `public_html`, a tenant's broken docroot does not fail another account's change, and delete takes the site out first | [phase1-broker-web.txt](phase1-broker-web.txt) | 26 passed, 0 failed |
+
+Earlier runs of the same proof found two problems, both fixed before this run: the broker would not start with `--web-user`, because the package installs `lswsctrl` as a symlink and the broker runs only regular root-owned tools (it now reloads through `systemctl reload lsws`); and the proof's own check on a broken docroot was stricter than the broker's rule (it now runs the broker's rule on the saved output).
+
+What this run does not show:
+
+- **The symlink refusal through a live request.** Section 5 runs the access grant as root against a throwaway fixture. Through the broker, a swap made before a request is caught first by its per-request identity check, which records the account for an operator.
+- **A tenant's broken site during another account's change.** Section 6 records OpenLiteSpeed's real output for a moved docroot and judges it with the broker's rule; it does not run a change while the docroot is broken, for the same reason.
+- **The recovery paths.** An apply interrupted by a crash, a delete whose config fails its test, and a filesystem without quota enforcement are covered by unit tests, not on the VM.
+- **Speed on real hardware.** Under software emulation the web operation took 16 seconds in this run (10 to 13 in earlier ones).

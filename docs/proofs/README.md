@@ -69,6 +69,16 @@ What this run does not show:
 - **The recovery paths.** An apply interrupted by a crash, a delete whose config fails its test, and a filesystem without quota enforcement are covered by unit tests, not on the VM.
 - **Speed on real hardware.** Under software emulation the web operation took 16 seconds in this run (10 to 13 in earlier ones).
 
+## Phase 1: the broker's WordPress install
+
+Run on 2026-11-23 with `scripts/devvm/proof.sh broker-wordpress` on the dev VM, built from `36f2a55`. The broker ran with `--web-user nobody`; `dbdrive` created the site's database through the panel's `dbhost` code (as root over the socket, standing in for the panel's admin option file), and `brokerdrive` asked the broker to install WordPress.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| WordPress install: WP-CLI 2.12.0 pinned by sha512, run as the site user with its LSPHP, the database and admin passwords on stdin (no process argument held either in 153 samples taken during the install), `wp-config.php` 0600 pointing at 127.0.0.1, tables and admin user in the site's database, the site serving WordPress, a second install refused at the download step with nothing changed, and delete afterwards | [phase1-broker-wordpress.txt](phase1-broker-wordpress.txt) | 22 passed, 0 failed |
+
+The install took 230 s under software emulation, past the broker's 45 s request limit, so this run also shows that the long-running response arrives. Later commits refused a suspend or web change during an install, refused passwords with an edge space (WP-CLI's prompt trims them), and gave OpenLiteSpeed's test and restart their own time limits; those are covered by unit tests and by the wizard proof below, which ran the same install through the panel. A re-run on `d99cdd0` failed at its first step because the proof's own driver stopped waiting for the web change after 60 s while the broker finished it; the driver now waits six minutes (`0b9bd2c`).
+
 ## Phase 1: the New website wizard
 
 Run on 2026-11-23 with `scripts/devvm/proof.sh wordpress-wizard` on the dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3, MariaDB 10.11, QEMU software emulation), built from `f3affc7`. The panel ran in the VM as `sifpanel` with the real broker (`--web-user`) and the MariaDB admin option file that provisioning makes; headless Chrome on the host reached it through `vm.sh forward` and drove the wizard as an admin would.

@@ -1,4 +1,4 @@
-# Phase 0 proofs
+# Proofs
 
 Transcripts of the Phase 0 proofs from [the plan](../PRODUCT-PLAN.md), run on 2026-11-22 on a fresh dev VM built with [scripts/devvm](../../scripts/devvm/README.md): AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3.37, MariaDB 10.11.18, under QEMU software emulation (no KVM). Each `PASS` or `FAIL` line with two spaces is a check the script made against the running system; lines with one space are the verify tool's own report. A run passes only with zero `FAIL  ` lines.
 
@@ -15,3 +15,15 @@ What these runs do not show:
 - **Proof 3 on a real cPanel site.** The rehearsal uses an Apache site built in the VM. The plan's proof copies one of HostLelo's own cPanel sites over root SSH; that needs the owner's server.
 - **Speed on real hardware.** Without KVM, timings are upper bounds, not the plan's "2 minutes" gate: about 19 s per account create, 24 s to list 107 accounts, 259 s from account creation to a live WordPress site. An earlier run on a busier host needed more than two minutes for WordPress's first page after a restart.
 - **Broker operations that do not exist yet.** In Proof 1 the script, not the broker, gives the web server access to the home (an ACL) and sets the XFS quota.
+
+## Phase 1: panel shell
+
+Run on 2026-11-23 with `scripts/devvm/proof.sh panel-shell` on a fresh dev VM (AlmaLinux 9.9, SELinux enforcing, QEMU software emulation). The panel ran inside the guest with throwaway state; headless Chrome on the host drove it through a loopback port forward.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| New panel shell: sidebar menu by job, a URL per page, Ctrl+K search, sign-in, Websites to Files handoff, back button and reload, phone width, dark theme, public preview | [phase1-panel-shell.txt](phase1-panel-shell.txt) | 29 passed, 0 failed |
+
+Screenshots from that run are in [phase1-panel-shell/](phase1-panel-shell/): Home, Websites (light and dark), the search box, and the phone menu.
+
+What this run does not show: the screens inside the shell are still the old Astryx ones, and only English exists, so right-to-left layout was not checked.

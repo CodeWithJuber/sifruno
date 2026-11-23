@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | panel-shell
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -24,6 +24,11 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify
                 with a password folder to the Compat tier, and migrate verify
                 keeps the cutover gate closed against an OpenLiteSpeed copy
                 (where the folder opens) and opens it against an Apache copy.
+  panel-shell   Phase 1 panel shell: the panel runs in the VM with throwaway
+                state and a browser on this host drives it (menu, page URLs,
+                Ctrl+K, sign-in, Websites to Files, phone width, public
+                preview). Needs Node, the repo's npm packages and Playwright's
+                Chromium, or a Chrome binary in SIFRUNO_PROOF_CHROME.
 USAGE
 }
 
@@ -89,6 +94,46 @@ case "${1:-}" in
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/migrate-verify.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  panel-shell)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    # shellcheck disable=SC1091
+    . "${SIFRUNO_DEVVM_DIR:-$HOME/.cache/sifruno-devvm}/ports"
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    guest="/opt/sifruno-proof/panel-$stamp"
+    build "$stage/sifruno" ./cmd/sifruno
+    (cd "$REPO" && npm run --silent panel:build >/dev/null)
+    # Seed the state here so the browser checks can read its operator key
+    # without the key ever leaving a file. A few seconds is enough to create it.
+    timeout 5 "$stage/sifruno" --listen 127.0.0.1:0 --sites-listen "" --state "$stage/state" --ui "$REPO/web/dist" >/dev/null 2>&1 || true
+    test -s "$stage/state/operator/access.key"
+    tar -czf "$stage/dist.tgz" -C "$REPO/web" dist
+    tar -czf "$stage/state.tgz" -C "$stage" state
+    # Each run gets its own directory in the disposable VM; stop the last one.
+    "$HERE/vm.sh" ssh "pkill -x sifruno; if [ -f /opt/sifruno-proof/relay.pid ]; then kill \$(cat /opt/sifruno-proof/relay.pid) 2>/dev/null; fi; install -d -m 0700 $guest" || true
+    for file in sifruno dist.tgz state.tgz; do
+      "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/panel-relay.py" /opt/sifruno-proof/panel-relay.py
+    # The panel accepts browser writes only from its own origin, so it listens
+    # on the same port number QEMU forwards from this host to guest port 80.
+    "$HERE/vm.sh" ssh "set -e; cd $guest; tar -xzf dist.tgz; tar -xzf state.tgz; chmod 0755 sifruno; restorecon -R /opt/sifruno-proof; \
+      (nohup ./sifruno --listen 127.0.0.1:$HTTP_PORT --sites-listen 127.0.0.1:8082 --state ./state --ui ./dist > panel.log 2>&1 &); \
+      nohup /usr/bin/python3 /opt/sifruno-proof/panel-relay.py $HTTP_PORT > relay.log 2>&1 & echo \$! > /opt/sifruno-proof/relay.pid"
+    # Python starts slowly under software emulation; wait for the relay.
+    for _ in $(seq 90); do curl -fs -o /dev/null "http://127.0.0.1:$HTTP_PORT/" && break; sleep 2; done
+    mkdir -p "$OUT"
+    run="$OUT/panel-shell-$stamp"
+    transcript="$run.txt"
+    status=0
+    {
+      # shellcheck disable=SC2016 # expands in the guest
+      "$HERE/vm.sh" ssh 'echo "guest: $(cat /etc/almalinux-release), kernel $(uname -r), SELinux $(getenforce)"'
+      (cd "$REPO" && node scripts/devvm/proofs/panel-shell.qa.mjs "http://127.0.0.1:$HTTP_PORT" "$stage/state" "$run" "${SIFRUNO_PROOF_CHROME:-}")
+    } | tee "$transcript" || status=$?
+    echo "Transcript: $transcript (screenshots in $run/)"
     exit "$status"
     ;;
   *)

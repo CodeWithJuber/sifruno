@@ -2,9 +2,9 @@
 
 Sifruno is an open source hosting panel. The goal: a new user gets a WordPress site live in two minutes, a developer deploys an app in any language with `git push`, and an AI agent can do the same through the API. The first customer is HostLelo itself.
 
-**Status: Phase 0. Sifruno cannot host a real site yet.** The repository has a Go backend (accounts broker, Apache and PHP-FPM config compiler, databases, a typed API, checkpoints and rollback) and a local panel that manages static sites on the server's loopback address. The work now is cleanup and three proofs on an AlmaLinux 9 dev VM. The [product plan](docs/PRODUCT-PLAN.md) says what gets built, in what order, and what "done" means for each phase.
+**Status: Phase 0. Sifruno cannot host a real site yet.** The repository has a Go backend (accounts broker, Apache and PHP-FPM config compiler, databases, a typed API, checkpoints and rollback) and a local panel that manages static sites on the server's loopback address. The work now is cleanup and three proofs on an AlmaLinux 9 dev VM. The first Phase 1 slice, the new panel shell with a URL for every page, is in place. The [product plan](docs/PRODUCT-PLAN.md) says what gets built, in what order, and what "done" means for each phase.
 
-![The current panel's Websites screen, before the Phase 1 rebuild](docs/archive/screenshots/websites-workflow-desktop.jpg)
+![The panel's Home page in the new shell, running in the dev VM](docs/proofs/phase1-panel-shell/1440-light-home.jpg)
 
 ## Install
 

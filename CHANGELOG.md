@@ -34,7 +34,8 @@
   and closed (401/403) URLs, and keeps the cutover gate closed on any failure
   or unaccepted warning.
 - `internal/olsweb`: renders OpenLiteSpeed config for a site from a typed spec.
-- `scripts/devvm`: a disposable AlmaLinux 9 dev VM and the Phase 0 proofs.
+- `scripts/devvm`: a disposable AlmaLinux 9 dev VM, the Phase 0 proofs and
+  the Phase 1 panel shell proof (`proof.sh panel-shell`).
 
 - Recovery archive v1 (`recovery-2026-10-11-v1`) for the Windows-server handoff:
   all 270 original dirty source paths, 130 recovery branches, an offline Git

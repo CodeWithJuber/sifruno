@@ -36,6 +36,12 @@ scripts/devvm/vm.sh ssh 'bash /root/provision.sh'
 scripts/devvm/proof.sh broker-sftp 105
 ```
 
+The panel shell proof drives the panel in the VM with a browser on the host, so it also needs Node with the repo's npm packages and Playwright's Chromium (or a Chrome binary named in `SIFRUNO_PROOF_CHROME`):
+
+```bash
+scripts/devvm/proof.sh panel-shell
+```
+
 `proof.sh` prints PASS or FAIL for each check, saves the transcript under `artifacts/devvm/` and exits non-zero if anything failed. When you are finished:
 
 ```bash

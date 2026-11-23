@@ -65,5 +65,9 @@ export const beginSetup = (csrf: string, username: string) =>
 export const finishSetup = (csrf: string, username: string, password: string, totp_code: string) =>
   request("/api/v1/session/setup/admin", validSession, { method: "POST", body: { username, password, totp_code }, csrf });
 
+// On the server itself the panel is reached through loopback; anywhere else it
+// came through the HTTPS listener, where only admin sign-in works.
+export const onThisServer = () => ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+
 // Groups of four are easier to type into an authenticator app.
 export const groupedSecret = (secret: string) => secret.replace(/(.{4})(?=.)/g, "$1 ");

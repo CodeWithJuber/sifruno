@@ -5,7 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { AuthError, beginSetup, finishSetup, groupedSecret, signInAdmin, signInWithKey } from "@/lib/auth-api";
+import { AuthError, beginSetup, finishSetup, groupedSecret, onThisServer, signInAdmin, signInWithKey } from "@/lib/auth-api";
 import type { AuthSession, SetupSecret } from "@/lib/auth-api";
 
 // Shown in place of a private page until someone is signed in. With no admin
@@ -62,6 +62,9 @@ function KeyForm({ intro, onSession }: { intro: ReactNode; onSession: (s: AuthSe
 }
 
 export function AuthGate({ adminRequired, keySession, onSession }: Props) {
+  if (adminRequired && !onThisServer()) return <section className={panel} aria-labelledby="setup-remote-title" data-testid="setup-on-server">
+    <Heading id="setup-remote-title" icon={<ShieldCheck />} title="Create the admin account on the server first">This panel has no admin account yet. First-run setup needs the server's access key, so it works only when you open the panel on the server itself. Then sign in here.</Heading>
+  </section>;
   return adminRequired ? <Setup keySession={keySession} onSession={onSession} /> : <SignIn onSession={onSession} />;
 }
 
@@ -93,7 +96,7 @@ function SignIn({ onSession }: { onSession: Props["onSession"] }) {
       </FieldGroup>
     </form>
     <Problem error={error} />
-    <Button variant="link" className="mt-3 px-0" onClick={() => setUseKey(true)}>Sign in with the server's access key instead</Button>
+    {onThisServer() && <Button variant="link" className="mt-3 px-0" onClick={() => setUseKey(true)}>Sign in with the server's access key instead</Button>}
   </section>;
 }
 

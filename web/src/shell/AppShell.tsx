@@ -12,7 +12,7 @@ import { useResource, validPlatform, validServer, validServices } from "@/lib/ap
 import type { Resource, ServerReport } from "@/lib/api";
 import type { BackupCopySelection, ZIPImportRequest } from "@/lib/backupCopy";
 import type { RestoreHandoff } from "@/lib/restoreHandoff";
-import { currentSession, setupStatus, signOut } from "@/lib/auth-api";
+import { currentSession, onThisServer, setupStatus, signOut } from "@/lib/auth-api";
 import type { AuthSession } from "@/lib/auth-api";
 import { AuthGate } from "@/shell/AuthGate";
 import { CommandPalette } from "@/shell/CommandPalette";
@@ -82,9 +82,13 @@ export function AppShell() {
   // Bumped on sign-out so the kept-alive screens drop what they had loaded.
   const [authEpoch, setAuthEpoch] = useState(0);
   const handoffSequence = useRef(0);
-  const platform = useResource("/api/v1/platform", validPlatform, revision);
-  const server = useResource(`/api/v1/server?range_seconds=${range}`, validServer, revision, 5000);
-  const services = useResource("/api/v1/services", validServices, revision, 30000);
+  // Over the network every reading needs a session, so nothing is fetched
+  // until an admin is signed in there.
+  const remote = !publicPreview && !onThisServer();
+  const readingsAllowed = !remote || Boolean(auth.session && !auth.adminRequired);
+  const platform = useResource(readingsAllowed ? "/api/v1/platform" : null, validPlatform, revision);
+  const server = useResource(readingsAllowed ? `/api/v1/server?range_seconds=${range}` : null, validServer, revision, 5000);
+  const services = useResource(readingsAllowed ? "/api/v1/services" : null, validServices, revision, 30000);
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
   const setPageResource = useCallback((id: PageId, value: Resource<unknown>) => setPageResources((current) => current[id] === value ? current : { ...current, [id]: value }), []);
   const reporters = useMemo(() => Object.fromEntries(keptAlive.map((id) => [id, (value: Resource<unknown>) => setPageResource(id, value)])) as Record<KeptAlive, (value: Resource<unknown>) => void>, [setPageResource]);
@@ -134,7 +138,7 @@ export function AppShell() {
   }, [auth.session]);
 
   const pageId = page?.id;
-  const gated = !publicPreview && page?.audience === "private" && !signedIn;
+  const gated = !publicPreview && (page?.audience === "private" || remote) && !signedIn;
   useEffect(() => {
     if (!pageId) return;
     if (signedIn && (keptAlive as readonly string[]).includes(pageId)) setVisited((current) => current.has(pageId) ? current : new Set(current).add(pageId));

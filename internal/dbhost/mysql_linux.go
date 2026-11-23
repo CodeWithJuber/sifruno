@@ -30,7 +30,11 @@ func (r CLIRunner) Run(ctx context.Context, sql string) ([]string, error) {
 	if r.DefaultsFile != "" {
 		args = append([]string{"--defaults-extra-file=" + r.DefaultsFile}, args...)
 	}
-	cmd := exec.CommandContext(ctx, bin, append(args, "-e", sql)...)
+	// SQL goes on stdin, never in an argument: statements carry passwords
+	// (CREATE USER ... IDENTIFIED BY), and every local user can read a
+	// process's arguments.
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = strings.NewReader(sql + ";\n")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

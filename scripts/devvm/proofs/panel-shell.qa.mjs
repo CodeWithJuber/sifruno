@@ -3,12 +3,17 @@
 // state's operator key for first-run setup and never prints it; the admin's
 // password and authenticator key exist only in this process.
 //   node panel-shell.qa.mjs <origin> <state-dir> <out-dir> [chrome-executable]
+//     [https-origin certificate-sha256]
+// With the last two, it also signs in over the HTTPS listener: the host name
+// in https-origin is mapped to 127.0.0.1 and the served certificate must
+// have the fingerprint the panel printed.
 import { createHmac, randomBytes } from "node:crypto";
+import { connect } from "node:tls";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 
-const [origin, stateDir, outDir, chrome] = process.argv.slice(2);
+const [origin, stateDir, outDir, chrome, httpsOrigin, expectedFingerprint] = process.argv.slice(2);
 mkdirSync(outDir, { recursive: true });
 let key = readFileSync(join(stateDir, "operator/access.key"), "utf8").trim();
 const run = Date.now().toString(36);
@@ -39,9 +44,10 @@ function totp(secret, step) {
 }
 const stepNow = () => Math.floor(Date.now() / 30000);
 
-const browser = await chromium.launch({ headless: true, ...(chrome ? { executablePath: chrome } : {}) });
-async function context(viewport, preview = false) {
-  const ctx = await browser.newContext({ viewport });
+const remoteHost = httpsOrigin ? new URL(httpsOrigin).hostname : "";
+const browser = await chromium.launch({ headless: true, ...(chrome ? { executablePath: chrome } : {}), ...(remoteHost ? { args: [`--host-resolver-rules=MAP ${remoteHost} 127.0.0.1`] } : {}) });
+async function context(viewport, preview = false, options = {}) {
+  const ctx = await browser.newContext({ viewport, ...options });
   if (preview) {
     await ctx.route((url) => url.origin === origin && !url.pathname.startsWith("/api/") && !url.pathname.includes("."), async (route) => {
       const response = await route.fetch();
@@ -52,7 +58,7 @@ async function context(viewport, preview = false) {
   const page = await ctx.newPage();
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
   // Refused sign-ins (401, 422, 429) are expected here; the browser logs each one.
-  page.on("console", (m) => { if (m.type() === "error" && !/\b(401|422|429)\b|Unauthorized/.test(m.text())) errors.push(`console: ${m.text()}`); });
+  page.on("console", (m) => { if (m.type() === "error" && !/\b(401|403|421|422|429)\b|Unauthorized/.test(m.text())) errors.push(`console: ${m.text()}`); });
   return { ctx, page };
 }
 
@@ -117,7 +123,8 @@ try {
   answered = await signIn("admin", password, totp(secret, used));
   check("the code used for setup cannot sign in again", answered === 401, `HTTP ${answered}`);
   while (stepNow() <= used) await sleep(1000);
-  answered = await signIn("admin", password, totp(secret, stepNow()));
+  let lastStep = stepNow();
+  answered = await signIn("admin", password, totp(secret, lastStep));
   await page.getByTestId("signed-in-as").waitFor();
   check("the admin signs in with password and a fresh code", answered === 200 && path(page) === "/websites", `HTTP ${answered}`);
 
@@ -218,6 +225,45 @@ try {
   check("preview redirects private URLs to Home", path(pub.page) === "/");
   check("preview makes no private API calls", privateCalls.length === 0, privateCalls.join(","));
   await pub.ctx.close();
+
+  if (httpsOrigin) {
+    // The panel beyond loopback, as another machine sees it.
+    const { port } = new URL(httpsOrigin);
+    const served = await new Promise((resolve, reject) => {
+      const socket = connect({ host: "127.0.0.1", port: Number(port), servername: remoteHost, rejectUnauthorized: false }, () => { const fp = socket.getPeerCertificate().fingerprint256; socket.end(); resolve(fp); });
+      socket.on("error", reject);
+    });
+    check("the HTTPS listener serves the certificate whose fingerprint the panel printed", served === expectedFingerprint, `${served} vs ${expectedFingerprint}`);
+    const net = await context({ width: 1440, height: 900 }, false, { ignoreHTTPSErrors: true });
+    await net.page.goto(httpsOrigin + "/");
+    await net.page.getByTestId("admin-sign-in").waitFor();
+    check("over HTTPS even Home asks for sign-in first", (await net.page.getByRole("heading", { name: "Server monitoring" }).count()) === 0);
+    check("over HTTPS there is no access-key option", (await net.page.getByText("Sign in with the server's access key instead").count()) === 0);
+    const probe = await net.page.evaluate(async () => {
+      const reading = await fetch("/api/v1/server");
+      const key = await fetch("/api/v1/session/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ access_key: "A".repeat(43) }) });
+      const setup = await fetch("/api/v1/session/setup/totp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "admin" }) });
+      return [reading.status, key.status, setup.status];
+    });
+    check("over HTTPS readings need a session and the key and setup are refused", probe[0] === 401 && probe[1] === 403 && probe[2] === 403, probe.join(","));
+    const foreign = await net.ctx.request.get(`https://127.0.0.1:${port}/`, { failOnStatusCode: false });
+    check("an unknown host name gets 421", foreign.status() === 421, `HTTP ${foreign.status()}`);
+    while (stepNow() <= lastStep) await sleep(1000);
+    lastStep = stepNow();
+    await net.page.getByLabel("Username", { exact: true }).fill("admin");
+    await net.page.getByLabel("Password", { exact: true }).fill(password);
+    await net.page.getByLabel("6-digit code", { exact: true }).fill(totp(secret, lastStep));
+    await net.page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await net.page.getByRole("heading", { name: "Server monitoring" }).waitFor();
+    check("an admin signs in over HTTPS and sees the server readings", (await net.page.getByTestId("signed-in-as").innerText()).includes("admin"));
+    const cookie = (await net.ctx.cookies()).find((c) => c.name === "sifruno_operator");
+    check("the session cookie over HTTPS is Secure, HttpOnly and SameSite=Strict", cookie?.secure === true && cookie?.httpOnly === true && cookie?.sameSite === "Strict");
+    await net.page.getByTestId("nav-websites").click();
+    await net.page.getByRole("button", { name: `Open website ${siteName}`, exact: true }).waitFor();
+    check("websites made on the server are there over HTTPS", true);
+    await net.page.screenshot({ path: join(outDir, "1440-light-https-websites.png") });
+    await net.ctx.close();
+  }
 
   // Last, because it locks the admin's name for a minute: the per-name limit
   // also guards a real account.

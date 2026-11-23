@@ -28,7 +28,8 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 with throwaway state and a browser on this host drives it
                 (first-run admin setup with 2FA, sign-in, code replay and rate
                 limits, menu, page URLs, Ctrl+K, Websites to Files, phone
-                width, public preview). Needs Node, the repo's npm packages and Playwright's
+                width, public preview), and over the HTTPS listener as
+                another machine would (admin-only, certificate fingerprint). Needs Node, the repo's npm packages and Playwright's
                 Chromium, or a Chrome binary in SIFRUNO_PROOF_CHROME.
 USAGE
 }
@@ -121,10 +122,14 @@ case "${1:-}" in
     # The panel accepts browser writes only from its own origin, so it listens
     # on the same port number QEMU forwards from this host to guest port 80.
     "$HERE/vm.sh" ssh "set -e; cd $guest; tar -xzf dist.tgz; tar -xzf state.tgz; chmod 0755 sifruno; restorecon -R /opt/sifruno-proof; \
-      (nohup ./sifruno --listen 127.0.0.1:$HTTP_PORT --sites-listen 127.0.0.1:8082 --state ./state --ui ./dist > panel.log 2>&1 &); \
+      (nohup ./sifruno --listen 127.0.0.1:$HTTP_PORT --sites-listen 127.0.0.1:8082 --state ./state --ui ./dist --https-listen 0.0.0.0:443 --panel-host panel.sifruno.test > panel.log 2>&1 &); \
       nohup /usr/bin/python3 /opt/sifruno-proof/panel-relay.py $HTTP_PORT > relay.log 2>&1 & echo \$! > /opt/sifruno-proof/relay.pid"
     # Python starts slowly under software emulation; wait for the relay.
     for _ in $(seq 90); do curl -fs -o /dev/null "http://127.0.0.1:$HTTP_PORT/" && break; sleep 2; done
+    # The guest also serves HTTPS on 443 (QEMU forwards HTTPS_PORT to it) for
+    # panel.sifruno.test with a self-signed certificate; the browser checks
+    # that it serves the fingerprint the panel printed at start.
+    fingerprint="$("$HERE/vm.sh" ssh "grep -o 'SHA-256 [0-9A-F:]*' $guest/panel.log | head -1 | cut -d' ' -f2")"
     mkdir -p "$OUT"
     run="$OUT/panel-shell-$stamp"
     transcript="$run.txt"
@@ -132,7 +137,7 @@ case "${1:-}" in
     {
       # shellcheck disable=SC2016 # expands in the guest
       "$HERE/vm.sh" ssh 'echo "guest: $(cat /etc/almalinux-release), kernel $(uname -r), SELinux $(getenforce)"'
-      (cd "$REPO" && node scripts/devvm/proofs/panel-shell.qa.mjs "http://127.0.0.1:$HTTP_PORT" "$stage/state" "$run" "${SIFRUNO_PROOF_CHROME:-}")
+      (cd "$REPO" && node scripts/devvm/proofs/panel-shell.qa.mjs "http://127.0.0.1:$HTTP_PORT" "$stage/state" "$run" "${SIFRUNO_PROOF_CHROME:-}" "https://panel.sifruno.test:$HTTPS_PORT" "$fingerprint")
     } | tee "$transcript" || status=$?
     echo "Transcript: $transcript (screenshots in $run/)"
     exit "$status"

@@ -39,3 +39,15 @@ Run on 2026-11-23 with the same `proof.sh panel-shell`, extended for sign-in, on
 Screenshots are in [phase1-admin-login/](phase1-admin-login/): the authenticator step (the key is masked) and the sign-in form after a wrong code.
 
 What this run does not show: the panel off loopback (HTTPS is the next slice), more than one admin, and an outside review of the sign-in code, which the plan requires before paying customers.
+
+## Phase 1: the panel over HTTPS
+
+Run on 2026-11-23 with `proof.sh panel-shell` on the dev VM (AlmaLinux 9.9, SELinux enforcing). Besides the loopback panel, the guest ran the HTTPS listener on port 443 for `panel.sifruno.test` with a self-signed certificate; the host's browser reached it through QEMU's port forward as another machine would, with the name mapped to that port.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| HTTPS beyond loopback: served certificate matches the fingerprint the panel printed, every page asks for sign-in first, readings 401 and access key and setup 403 over the network, unknown host name 421, admin sign-in over HTTPS with a Secure cookie, plus every sign-in and shell check above | [phase1-https.txt](phase1-https.txt) | 48 passed, 0 failed |
+
+Screenshot: [Websites over HTTPS](phase1-https/1440-light-https-websites.jpg).
+
+What this run does not show: a certificate from a real authority (Let's Encrypt via lego comes with the first-run hostname step), a firewall opened to the internet, or behaviour behind a reverse proxy.

@@ -35,10 +35,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
-	// A WordPress install downloads WordPress and takes minutes.
+	// A WordPress install downloads WordPress and takes minutes; a web
+	// change, a certificate and a delete rewrite the web server's config,
+	// which the broker allows up to four minutes on a busy host.
 	timeout := 60 * time.Second
-	if global.Arg(0) == "wordpress" {
+	switch global.Arg(0) {
+	case "wordpress":
 		timeout = 12 * time.Minute
+	case "web", "certificate", "delete":
+		timeout = 6 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

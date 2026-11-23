@@ -54,7 +54,7 @@ func run() error {
 	dbDefaults := flag.String("db-defaults-file", "", "Option file with the panel database admin credentials (0600); empty uses socket auth as the invoking user")
 	mailHomesFlag := flag.String("mail-homes", "/srv/sfn-mail", "Mailbox root for the mail surface (cPanel mail/ + etc/ layout; controller-writable)")
 	dnsRoot := flag.String("dns-root", "/srv/sfn-dns", "DNS zone store root (BIND master files; maps to the reference's /var/named)")
-	dnsReload := flag.String("dns-reload-cmd", "", "Command run after zone changes to notify the authoritative server (e.g. named reload)")
+	dnsReload := flag.String("dns-reload-cmd", "", "Program and plain arguments run after zone changes, executed without a shell (e.g. /usr/sbin/rndc reload)")
 	dnsNS1 := flag.String("dns-ns1", "ns1.hostlelo.com", "Default first nameserver for account zones")
 	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
 	dnsIP := flag.String("dns-ip", "127.0.0.1", "Default A-record address for account zones (set to the public web IP in production)")
@@ -167,7 +167,11 @@ func run() error {
 				State: dir,
 			})
 		}
-		dnsStore := &dnshost.Store{Root: *dnsRoot, Reload: dnshost.ExecReloader{Command: *dnsReload}}
+		reloadArgv, rerr := dnshost.ParseReloadCommand(*dnsReload)
+		if rerr != nil {
+			return rerr
+		}
+		dnsStore := &dnshost.Store{Root: *dnsRoot, Reload: dnshost.ExecReloader{Argv: reloadArgv}}
 		whmServer.SetDNSStore(dnsStore)
 		whmServer.SetDNSDefaults(*dnsNS1, *dnsNS2, *dnsIP)
 		if *tlsRoot != "" {

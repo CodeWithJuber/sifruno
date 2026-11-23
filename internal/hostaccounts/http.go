@@ -136,6 +136,38 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(item)
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/ssh-keys"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/ssh-keys")
+			if !idPattern.MatchString(id) || r.ContentLength != 0 {
+				writeError(w, ErrInvalid)
+				return
+			}
+			result, err := s.sshKeys(ctx, id)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/ssh-keys"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/ssh-keys")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input SSHKeysInput `json:"input"`
+				Actor string       `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"keys", "expected_revision", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			result, err := s.setSSHKeys(ctx, id, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/delete"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/delete")
 			if !idPattern.MatchString(id) {

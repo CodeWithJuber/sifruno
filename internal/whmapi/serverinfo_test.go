@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -103,5 +107,33 @@ func TestP1UnknownAppUnchanged(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &env) == nil && env.Metadata.Result == 1 {
 			t.Fatal("unknown function reported success")
 		}
+	}
+}
+
+// procRunning replaced a shell loop. It must still see a live process by a
+// fragment of its command line, and must not report the test binary itself.
+func TestProcRunningReadsProcWithoutShell(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc")
+	}
+	const marker = "31415.9265"
+	child := exec.Command("sleep", marker)
+	if err := child.Start(); err != nil {
+		t.Skipf("sleep unavailable: %v", err)
+	}
+	defer func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	}()
+	if !procRunning("sleep " + marker) {
+		t.Fatal("live child not found by command line")
+	}
+	if procRunning("no-such-process-" + marker + "; echo hit") {
+		t.Fatal("matched a command line that does not exist")
+	}
+	// The panel's own entry asks about the binary procRunning runs in, so the
+	// calling process must match itself.
+	if self, err := os.Executable(); err != nil || !procRunning(filepath.Base(self)) {
+		t.Fatalf("own process not found: %v", err)
 	}
 }

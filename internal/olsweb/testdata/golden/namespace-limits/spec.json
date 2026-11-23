@@ -1,0 +1,20 @@
+{
+  "httpd_workers": 2,
+  "listeners": [
+    {"name": "v4", "address": "192.0.2.10", "port": 8080},
+    {"name": "v6", "address": "2001:db8::10", "port": 8080}
+  ],
+  "sites": [
+    {
+      "name": "isolated",
+      "username": "isouser",
+      "group": "isouser",
+      "domains": ["isolated.example.com"],
+      "doc_root": "/home/isouser/sites/isolated",
+      "php_version": "8.4",
+      "limits": {"memory_mib": 512, "processes": 400, "php_children": 6},
+      "isolation": {"namespace": true, "cgroups": true},
+      "tls": {}
+    }
+  ]
+}

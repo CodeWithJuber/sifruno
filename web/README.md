@@ -1,9 +1,9 @@
 # Sifruno server panel UI
 
 For prerequisites and a complete source build, use the [installation guide](../docs/installation.md).
-The [documentation index](../docs/README.md) covers each UI workflow and its
+The [documentation index](../docs/archive/README.md) covers each UI workflow and its
 historical evidence. Current publication and remaining acceptance gates are in
-[project state](../docs/PROJECT-STATE.md); no live preview is certified here.
+[project state](../docs/archive/PROJECT-STATE.md); no live preview is certified here.
 
 React 19, TypeScript, Vite and Tailwind render the approved V3 Sifruno identity with local Inter fonts. The dashboard reuses actual Meta Astryx 0.6.5 components: Button, Card, SideNav, SegmentedControl, ProgressBar and the precompiled neutral Theme. Secondary tools retain official shadcn source and Base UI primitives. See NOTICE.md for source and license attribution.
 
@@ -42,12 +42,12 @@ Default Overview is a real monitoring screen. Services are inspected read-only; 
 
 The slim white/slate interface follows the approved dashboard concept at `../assets/design/sifruno-dashboard-concept.png`, replacing all illustration values with API data. Local CSS deliberately orders reset/Tailwind/Astryx layers and overrides only product tokens and layout. Astryx's built neutral theme avoids runtime stylesheet injection and custom StyleX compilation. The optional `sifruno-public-preview` meta marker visibly identifies a public preview and excludes private workspaces and their requests; backend authorization remains responsible for route access. Its explicitly labelled sample tour is separate from private Files, Backups, Websites, Accounts and Access workflows.
 
-The private UI also includes [session controls](../docs/operator-sessions.md),
-[File Manager](../docs/file-manager-ui.md), [Backups](../docs/backups-ui.md),
-[backup schedules](../docs/native-backup-schedules.md) and
-[restore preview](../docs/native-restore-preview.md) for app-owned static sites.
-The [Accounts workspace](../docs/accounts-workflow.md) requires a separately
-admitted broker. Its [web-configuration preview](../docs/accounts-web-preview.md)
+The private UI also includes [session controls](../docs/archive/operator-sessions.md),
+[File Manager](../docs/archive/file-manager-ui.md), [Backups](../docs/archive/backups-ui.md),
+[backup schedules](../docs/archive/native-backup-schedules.md) and
+[restore preview](../docs/archive/native-restore-preview.md) for app-owned static sites.
+The [Accounts workspace](../docs/archive/accounts-workflow.md) requires a separately
+admitted broker. Its [web-configuration preview](../docs/archive/accounts-web-preview.md)
 shows metadata only; it neither applies configuration nor proves serving health.
 
 ```powershell

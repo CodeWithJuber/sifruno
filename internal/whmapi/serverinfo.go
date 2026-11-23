@@ -10,22 +10,35 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/shirou/gopsutil/v4/load"
 )
 
-// procRunning reports whether any process whose command line contains
-// match is alive (excluding the caller itself).
+// procRunning reports whether any process whose command line contains match
+// is alive. It reads /proc directly: nothing here may reach a shell, because
+// this package answers network calls. The calling process counts too: the
+// "sifruno" service entry asks about the panel binary this code runs in.
 func procRunning(match string) bool {
-	out, err := exec.Command("sh", "-c",
-		`SELF=$$; for p in /proc/[0-9]*; do
-			pid=${p#/proc/}; [ "$pid" = "$SELF" ] && continue
-			cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
-			case "$cmd" in *`+match+`*) echo hit; break;; esac
-		done`).Output()
-	return err == nil && strings.TrimSpace(string(out)) == "hit"
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		pid := entry.Name()
+		if pid == "" || pid[0] < '0' || pid[0] > '9' {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", pid, "cmdline"))
+		if err != nil {
+			continue // the process exited, or it is not ours to read
+		}
+		if strings.Contains(strings.ReplaceAll(string(raw), "\x00", " "), match) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleGetHostname(w http.ResponseWriter, r *http.Request) {

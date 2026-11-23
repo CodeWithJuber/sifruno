@@ -21,7 +21,12 @@ var (
 	ErrRecovery    = errors.New("native account recovery required")
 )
 
-const MaxAccounts = 100
+// MaxAccounts bounds one broker's inventory. Every request reads all records
+// and checks each account's files, so the bound is a cost limit, not a
+// product limit: BenchmarkStoreScale records what a list and a create cost at
+// this size. The earlier bound of 100 came from running two utilities per
+// account on every request, which the rotating audit batch replaced.
+const MaxAccounts = 2000
 const MaxRequestBytes = 16 << 10
 
 type Capability struct {
@@ -128,5 +133,5 @@ func unavailable(reason string) Capability {
 	return Capability{Reason: reason, Backend: "unavailable", Restrictions: restrictions()}
 }
 func restrictions() []string {
-	return []string{"domain_is_metadata_only", "managed_service_identities_with_system_flag", "files_only_nss_and_bounded_yes_or_no_useradd_defaults_required", "private_primary_group_only", "password_locked_and_nologin_in_all_states", "suspension_is_pam_account_expiry_only", "existing_processes_mail_web_and_databases_unaffected", "no_delete_or_original_backup_restore", "no_cpanel_compatibility_certification"}
+	return []string{"domain_is_metadata_only", "managed_regular_identities_with_subordinate_ids", "files_only_nss_and_bounded_yes_or_no_useradd_defaults_required", "private_primary_group_only", "password_locked_and_nologin_in_all_states", "ssh_keys_are_sftp_only_and_broker_managed", "suspension_is_pam_account_expiry_only", "existing_processes_mail_web_and_databases_unaffected", "no_delete_or_original_backup_restore", "no_cpanel_compatibility_certification"}
 }

@@ -1,7 +1,7 @@
 # Disposable characterization lab
 
-See the [complete documentation index](../docs/README.md) and
-[current project state](../docs/PROJECT-STATE.md) before selecting a harness.
+See the [complete documentation index](../docs/archive/README.md) and
+[current project state](../docs/archive/PROJECT-STATE.md) before selecting a harness.
 These tools and dated receipts have distinct prerequisites and qualification
 limits. Their presence in main is not evidence of execution on current main.
 The runtime-input guest archive is non-runnable WIP.

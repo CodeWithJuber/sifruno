@@ -1,8 +1,8 @@
 # Native Linux account foundation
 
 This package separates an unprivileged controller from a root-only local Unix
-socket broker. It supplies native managed service identities, private primary groups, homes and
-public_html directories. Domain is validated reserved metadata only: this slice
+socket broker. It supplies managed regular Linux identities with subordinate ID
+ranges, private primary groups, homes, public_html directories and SFTP keys. Domain is validated reserved metadata only: this slice
 does not configure web servers, DNS, TLS, mail, databases, PHP or cPanel behavior.
 
 The broker requires an explicitly declared dedicated root-owned state directory
@@ -25,15 +25,19 @@ locked-password and account-expiry observations use passwd status and chage list
 Only exact locked status tokens L and LK are supported. The root-owned regular
 nonwritable /etc/default/useradd must contain exactly one literal
 CREATE_MAIL_SPOOL=yes or CREATE_MAIL_SPOOL=no line. This bounded policy is rechecked
-before utilities; the broker never rewrites it. New identities use fixed
-useradd --system with explicit UID/GID and home creation, retaining locked
-passwords and nologin. Shadow's system-account mode omits mail creation and
-ordinary password-aging defaults; expiry suspension remains explicit. Mail
-policy is a useradd default, not a login.defs -K key. See the
-[service-account contract and qualification](../../docs/service-account-mail-policy.md).
-Subordinate UID/GID allocation is disabled through supported fixed -K
-count options. Explicit --groups '' excludes supplementary defaults; native
-verification requires the private primary group only and no member additions.
+before utilities; the broker never rewrites it. New identities are regular
+(non-system) users created by fixed useradd arguments with explicit UID/GID and
+home creation, retaining locked passwords and nologin. Regular mode lets shadow
+allocate the subordinate UID and GID ranges from login.defs, which rootless
+containers need; the earlier system-account mode with a zero subordinate count
+ruled them out. Mail policy is a useradd default, not a login.defs -K key: with
+CREATE_MAIL_SPOOL=yes a regular user gets a spool file, and Delete removes that
+one file when it is a regular file owned by the account. The earlier
+[service-account contract](../../docs/archive/service-account-mail-policy.md)
+describes the system-account mode this replaced. Explicit --groups '' excludes
+supplementary defaults; native verification requires the private primary group
+only and no member additions. The broker does not check the subordinate ranges
+itself; the dev VM proof does.
 
 This implementation explicitly requires files-only passwd/group/shadow policy in
 the existing nsswitch.conf. LDAP, SSSD, systemd dynamic identities and other NSS
@@ -48,12 +52,13 @@ these are native foundation limits, not cPanel username rules. Domain must be a
 lowercase ASCII multi-label DNS name and remains metadata. Actor is1–120bytes;
 reason is1–500UTF8bytes, with controls and outer whitespace refused. Requests are
 strict JSON≤16KiB, including duplicate/unknown/case-alias/null/invalidUTF8 guards.
-There are at most100managed accounts and256immutable audit event rows per account.
+There are at most 2000 managed accounts (`MaxAccounts`) and 256 immutable audit event
+rows per account, so one account takes about 127 operations before its journal is full.
 
 UID/GID pairs in20000–60000 are reserved in durable private bbolt metadata before
 OS changes. Controller UID, existing local users/groups/homes and metadata
 username/domain reservations are never adopted. groupadd/useradd create a fresh
-private group, explicitUID/GID, system-account mode, nologin shell, locked password and an empty home
+private group, explicit UID/GID, regular-user mode, nologin shell, locked password and an empty home
 from a private empty skeleton. A root-only ownership marker stays in broker state,
 outside tenant-owned directories. Home/public_html mutation uses nofollow opened
 directory handles. Captured dev/inode identities are durably recorded before
@@ -85,3 +90,42 @@ audit and recovery logic; they cannot certify provisioning. Real shadow-utils,
 Unix peer credentials and ownership require root-owned disposable guest execution.
 Non-Linux or unconfigured clients expose unavailable capability. No production
 account actions are authorized by compiling or testing this package.
+
+## SFTP keys
+
+`SetSSHKeys` replaces an account's whole key set. A key is admitted only as
+`type base64 [comment]` of an allowed type (ed25519, ECDSA P-256/384/521, RSA
+2048 to 4096 bits) whose blob is exactly one well-formed key of that type; an
+options prefix is refused. The broker writes the set to the fixed root-owned
+file `/etc/sifruno/ssh/authorized_keys/<username>` (root, the account's private
+group, 0640), each key behind `restrict,command="internal-sftp"`. The file lives
+outside the home so an account cannot add keys or plant a link, and it is
+replaced by rename so sshd never reads a partial file. The directory must
+already exist as root-owned 0711; the broker does not create host policy, and
+without it the operation reports unavailable. The intent and the target set are
+journaled before the file changes, and an interrupted write is finished on
+restart. The journal names a set by digest and never copies key text.
+
+The shell stays nologin and the password stays locked. Whether a key gives SFTP
+depends on the host's sshd policy, which the installer owns: `AuthorizedKeysFile`
+must point at the directory above, and accounts must be held to
+`ForceCommand internal-sftp` with forwarding off. `scripts/devvm/provision.sh`
+shows that policy. SFTP is not chrooted; accounts are kept apart by home
+ownership and mode.
+
+## Verification cost
+
+Every request checks every account's files: its passwd and group identity (from
+one cached parse, reused only while both files are the same objects with the
+same change times), its home and public_html identities, and its ownership
+marker. That check starts no process. The password-lock and expiry observation
+needs `passwd --status` and `chage --list`, two processes per account, and
+running it for all accounts on every request is what limited the broker to
+about a hundred. It now runs for the account an operation touches and for a
+rotating batch of 16 accounts per request, so an outside change to lock or
+expiry is noticed when that account is next touched or when the rotation
+reaches it, not on the very next request. With 16 accounts or fewer nothing
+changes: all are fully checked every time.
+
+`BenchmarkStoreScale` measures the store and journal at the account bound with
+the fake native system. Native costs are measured on the dev VM.

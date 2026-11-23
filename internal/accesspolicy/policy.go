@@ -5,8 +5,12 @@ package accesspolicy
 import "errors"
 
 const (
-	MaxActors   = 256
-	MaxAccounts = 100 // Matches the native hostaccounts capacity.
+	MaxActors = 256
+	// MaxAccounts bounds one policy snapshot. The account broker admits more
+	// accounts than this since its own bound was raised
+	// (hostaccounts.MaxAccounts); this bound is raised with the login and roles
+	// work, which is where policy is first enforced on broker operations.
+	MaxAccounts = 100
 )
 
 var ErrInvalid = errors.New("invalid access policy input")

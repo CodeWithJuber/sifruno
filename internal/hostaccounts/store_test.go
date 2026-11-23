@@ -21,6 +21,10 @@ type fakeNative struct {
 	calls   int
 	failure string
 	changed bool
+	// full and cheap count the two kinds of verification per username.
+	full, cheap map[string]int
+	keys        map[string][]string
+	keyWrites   int
 }
 
 func (f *fakeNative) GuardState(string) error   { return nil }
@@ -29,7 +33,16 @@ func (f *fakeNative) Plan(_ context.Context, name string) (int, int, error) {
 	if _, ok := f.users[name]; ok {
 		return 0, 0, ErrConflict
 	}
-	uid := 20000 + len(f.users)
+	// Lowest free ID, like the native allocator, so deletes do not make the
+	// fake hand out an ID that is still in use.
+	used := map[int]bool{}
+	for _, r := range f.users {
+		used[r.Account.UID] = true
+	}
+	uid := 20000
+	for used[uid] {
+		uid++
+	}
 	return uid, uid, nil
 }
 func fakeOwned(r record) ownership {
@@ -73,10 +86,55 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 	delete(f.users, r.Account.Username)
 	return nil
 }
+func (f *fakeNative) VerifyIdentity(r record) error {
+	if f.cheap != nil {
+		f.cheap[r.Account.Username]++
+	}
+	actual, ok := f.users[r.Account.Username]
+	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || r.Ownership != actual.Ownership {
+		return ErrRecovery
+	}
+	return nil
+}
+
+// Verify adds the state observation, standing in for the lock and expiry
+// check that the native system makes with passwd and chage.
 func (f *fakeNative) Verify(_ context.Context, r record) error {
+	if f.full != nil {
+		f.full[r.Account.Username]++
+	}
 	actual, ok := f.users[r.Account.Username]
 	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.State != r.Account.State || r.Ownership != actual.Ownership {
 		return ErrRecovery
+	}
+	return nil
+}
+func (f *fakeNative) VerifySSHKeys(r record, canonical []string) error {
+	if f.failure == "keys-drift" {
+		return ErrRecovery
+	}
+	got := f.keys[r.Account.Username]
+	if len(got) != len(canonical) {
+		return ErrRecovery
+	}
+	for i := range got {
+		if got[i] != canonical[i] {
+			return ErrRecovery
+		}
+	}
+	return nil
+}
+func (f *fakeNative) SetSSHKeys(_ context.Context, r record, canonical []string) error {
+	f.keyWrites++
+	if f.failure == "keys-before" {
+		return ErrUnavailable
+	}
+	if f.keys == nil {
+		f.keys = map[string][]string{}
+	}
+	f.keys[r.Account.Username] = append([]string(nil), canonical...)
+	if f.failure == "keys-after" {
+		return ErrUnavailable
 	}
 	return nil
 }

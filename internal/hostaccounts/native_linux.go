@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -33,10 +34,43 @@ type nativeGroup struct {
 	GID     int
 	Members string
 }
+
+// sshKeysDir is where sshd reads managed accounts' keys. It sits outside
+// every home so a tenant cannot add keys or plant a link there, and it is a
+// fixed path like the utilities: the installer creates it (root, 0711) and
+// points sshd's AuthorizedKeysFile at it. A host without it has no SFTP keys.
+const sshKeysDir = "/etc/sifruno/ssh/authorized_keys"
+
+// mailSpoolDir is where useradd leaves a spool for a regular user when the
+// host's CREATE_MAIL_SPOOL default is yes. Delete removes that one file.
+const mailSpoolDir = "/var/spool/mail"
+
 type linuxSystem struct {
-	opts  BrokerOptions
-	tools map[string]os.FileInfo
-	db    os.FileInfo
+	opts    BrokerOptions
+	tools   map[string]os.FileInfo
+	db      os.FileInfo
+	sshDir  string
+	mailDir string
+	cacheMu sync.Mutex
+	cache   *accountDatabase
+}
+
+// accountDatabase is one parse of /etc/passwd and /etc/group with the
+// lookups identity needs. It is reused only while both files are provably
+// the same objects with the same change times, so verifying every account
+// costs two stats instead of two full parses per account.
+type accountDatabase struct {
+	passwd, group fileStamp
+	usersByName   map[string][]nativeUser
+	usersByUID    map[int][]nativeUser
+	groupsByName  map[string][]nativeGroup
+	groupsByGID   map[int][]nativeGroup
+	memberOfAny   map[string]bool
+}
+type fileStamp struct {
+	dev, ino     uint64
+	size         int64
+	mtime, ctime int64
 }
 
 func newLinuxSystem(opts BrokerOptions) (*linuxSystem, error) {
@@ -44,7 +78,7 @@ func newLinuxSystem(opts BrokerOptions) (*linuxSystem, error) {
 	if e != nil || supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return nil, ErrUnavailable
 	}
-	return &linuxSystem{opts: opts, tools: tools}, nil
+	return &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir}, nil
 }
 
 func trustedUtilities() (map[string]os.FileInfo, error) {
@@ -325,36 +359,103 @@ func (n *linuxSystem) Plan(ctx context.Context, name string) (int, int, error) {
 	}
 	return 0, 0, ErrConflict
 }
+func stampOf(path string) (fileStamp, error) {
+	info, e := trustedFile(path, false)
+	if e != nil {
+		return fileStamp{}, ErrUnavailable
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fileStamp{}, ErrUnavailable
+	}
+	return fileStamp{uint64(st.Dev), st.Ino, st.Size, st.Mtim.Nano(), st.Ctim.Nano()}, nil
+}
+
+// database returns the current passwd and group view. The stamps are taken
+// before and after the parse, so a file replaced mid-read is never cached.
+func (n *linuxSystem) database() (*accountDatabase, error) {
+	n.cacheMu.Lock()
+	defer n.cacheMu.Unlock()
+	passwd, e := stampOf("/etc/passwd")
+	if e != nil {
+		return nil, e
+	}
+	group, e := stampOf("/etc/group")
+	if e != nil {
+		return nil, e
+	}
+	if n.cache != nil && n.cache.passwd == passwd && n.cache.group == group {
+		return n.cache, nil
+	}
+	n.cache = nil
+	users, e := systemUsers()
+	if e != nil {
+		return nil, e
+	}
+	groups, e := systemGroups()
+	if e != nil {
+		return nil, e
+	}
+	after, e := stampOf("/etc/passwd")
+	if e != nil || after != passwd {
+		return nil, ErrUnavailable
+	}
+	if after, e = stampOf("/etc/group"); e != nil || after != group {
+		return nil, ErrUnavailable
+	}
+	db := indexAccounts(users, groups)
+	db.passwd, db.group = passwd, group
+	n.cache = db
+	return db, nil
+}
+
+func indexAccounts(users []nativeUser, groups []nativeGroup) *accountDatabase {
+	db := &accountDatabase{usersByName: map[string][]nativeUser{}, usersByUID: map[int][]nativeUser{}, groupsByName: map[string][]nativeGroup{}, groupsByGID: map[int][]nativeGroup{}, memberOfAny: map[string]bool{}}
+	for _, u := range users {
+		db.usersByName[u.Username] = append(db.usersByName[u.Username], u)
+		db.usersByUID[u.UID] = append(db.usersByUID[u.UID], u)
+	}
+	for _, g := range groups {
+		db.groupsByName[g.Name] = append(db.groupsByName[g.Name], g)
+		db.groupsByGID[g.GID] = append(db.groupsByGID[g.GID], g)
+		for _, member := range strings.Split(g.Members, ",") {
+			db.memberOfAny[member] = true
+		}
+	}
+	return db
+}
+
+// managedIdentity is the indexed form of the identity rules: exactly one
+// passwd entry with this name, no other name on its UID, the recorded
+// UID/GID/home/tag, the nologin shell, and a private primary group that has
+// this GID alone, no members, and no membership of the account anywhere.
+// privateGroupOnly states the same group rule over the raw list.
+func (db *accountDatabase) managedIdentity(r record) (nativeUser, bool) {
+	named := db.usersByName[r.Account.Username]
+	if len(named) != 1 || len(db.usersByUID[r.Account.UID]) != 1 {
+		return nativeUser{}, false
+	}
+	user := named[0]
+	if user.UID != r.Account.UID || user.GID != r.Account.GID || user.Home != r.Account.Home || user.Shell != nologin || user.Tag != r.Tag {
+		return nativeUser{}, false
+	}
+	group := db.groupsByName[r.Account.Username]
+	if len(group) != 1 || group[0].GID != r.Account.GID || group[0].Members != "" || len(db.groupsByGID[r.Account.GID]) != 1 || db.memberOfAny[r.Account.Username] {
+		return nativeUser{}, false
+	}
+	return user, true
+}
+
 func (n *linuxSystem) identity(r record) (nativeUser, error) {
 	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return nativeUser{}, ErrUnavailable
 	}
-	users, e := systemUsers()
+	db, e := n.database()
 	if e != nil {
 		return nativeUser{}, e
 	}
-	var user nativeUser
-	found := false
-	for _, u := range users {
-		if u.Username != r.Account.Username && u.UID == r.Account.UID {
-			return nativeUser{}, ErrRecovery
-		}
-		if u.Username == r.Account.Username {
-			if found {
-				return nativeUser{}, ErrRecovery
-			}
-			user = u
-			found = true
-		}
-	}
-	if !found || user.UID != r.Account.UID || user.GID != r.Account.GID || user.Home != r.Account.Home || user.Shell != nologin || user.Tag != r.Tag {
-		return nativeUser{}, ErrRecovery
-	}
-	groups, e := systemGroups()
-	if e != nil {
-		return nativeUser{}, e
-	}
-	if !privateGroupOnly(groups, r.Account.Username, r.Account.GID) {
+	user, ok := db.managedIdentity(r)
+	if !ok {
 		return nativeUser{}, ErrRecovery
 	}
 	return user, nil
@@ -464,8 +565,14 @@ func (n *linuxSystem) Create(ctx context.Context, r record, persist func(ownersh
 	return n.RecoverCreate(ctx, r, persist)
 }
 
+// useraddArgs creates a regular (non-system) user. Shadow then allocates the
+// subordinate UID and GID ranges from login.defs, which rootless containers
+// need later; system-account mode skipped them. The explicit IDs, private
+// group, empty supplementary groups, empty skeleton, nologin shell and locked
+// password are unchanged. On a host whose CREATE_MAIL_SPOOL default is yes a
+// regular user also gets a mail spool file; Delete removes it.
 func useraddArgs(r record, skel string) []string {
-	return []string{"--system", "-K", "SUB_UID_COUNT=0", "-K", "SUB_GID_COUNT=0", "--uid", strconv.Itoa(r.Account.UID), "--gid", strconv.Itoa(r.Account.GID), "--no-user-group", "--groups", "", "--create-home", "--home-dir", r.Account.Home, "--skel", skel, "--shell", nologin, "--comment", r.Tag, "--password", "!", "--expiredate", "", "--", r.Account.Username}
+	return []string{"--uid", strconv.Itoa(r.Account.UID), "--gid", strconv.Itoa(r.Account.GID), "--no-user-group", "--groups", "", "--create-home", "--home-dir", r.Account.Home, "--skel", skel, "--shell", nologin, "--comment", r.Tag, "--password", "!", "--expiredate", "", "--", r.Account.Username}
 }
 
 func lockedStatus(token string) bool { return token == "L" || token == "LK" }
@@ -602,14 +709,16 @@ func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(
 	}
 	return r.Ownership, nil
 }
-func (n *linuxSystem) Verify(ctx context.Context, r record) error {
+
+// VerifyIdentity checks everything about a managed account that files alone
+// show: the passwd and group identity, the recorded home and public_html
+// objects, and the ownership marker. It starts no process, so the store can
+// run it for every account on every request.
+func (n *linuxSystem) VerifyIdentity(r record) error {
 	if authority(n.opts.HomesDir) != nil {
 		return ErrRecovery
 	}
 	if _, e := n.identity(r); e != nil {
-		return e
-	}
-	if e := n.admission(ctx, r); e != nil {
 		return e
 	}
 	home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750)
@@ -625,6 +734,16 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 		return ErrRecovery
 	}
 	return nil
+}
+
+// Verify adds the password-lock and expiry observation, which needs the
+// passwd and chage utilities. The store runs it for the account an operation
+// touches and for a rotating batch, not for every account on every request.
+func (n *linuxSystem) Verify(ctx context.Context, r record) error {
+	if e := n.VerifyIdentity(r); e != nil {
+		return e
+	}
+	return n.admission(ctx, r)
 }
 
 // Delete removes the managed identity. Every destructive step is gated on
@@ -686,7 +805,178 @@ func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return ErrUnavailable
 	}
+	if e = n.removeAccountFiles(r); e != nil {
+		return e
+	}
 	if e = os.Remove(n.markerPath(r)); e != nil && !errors.Is(e, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// removeAccountFiles removes the two per-account files that live outside the
+// home: the managed SFTP key file and the mail spool useradd may have made.
+// Each is removed only when it is the expected kind of object, so a name
+// reused later never inherits either one.
+func (n *linuxSystem) removeAccountFiles(r record) error {
+	if !validUsername(r.Account.Username) {
+		return ErrRecovery
+	}
+	if !idPattern.MatchString(r.Account.ID) {
+		return ErrRecovery
+	}
+	// The temporary name SetSSHKeys writes before its rename survives a crash
+	// between the two; it holds only public keys but goes with the account.
+	for _, path := range []string{filepath.Join(n.sshDir, r.Account.Username), filepath.Join(n.sshDir, ".new-"+r.Account.ID)} {
+		if e := removeRegular(path, 0, false); e != nil {
+			return e
+		}
+	}
+	return removeRegular(filepath.Join(n.mailDir, r.Account.Username), r.Account.UID, true)
+}
+
+// removeRegular unlinks path when it is a regular file owned by uid. A
+// missing file or a missing parent directory is a completed removal. Any
+// other object is left alone and reported: the broker does not guess.
+func removeRegular(path string, uid int, ownerMayBeRoot bool) error {
+	info, e := os.Lstat(path)
+	if errors.Is(e, os.ErrNotExist) || errors.Is(e, syscall.ENOTDIR) {
+		return nil
+	}
+	if e != nil {
+		return ErrUnavailable
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || st.Nlink != 1 || !(int(st.Uid) == uid || ownerMayBeRoot && st.Uid == 0) {
+		return ErrRecovery
+	}
+	if e = os.Remove(path); e != nil && !errors.Is(e, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// SetSSHKeys makes the account's managed key file hold exactly the given
+// canonical keys, each behind the fixed SFTP-only options. The file is
+// root-owned and readable by the account's private group only, which is what
+// sshd needs to read it as the user and all StrictModes accepts. It is
+// written beside the target and renamed, so sshd never sees a partial file.
+// An empty set removes the file. The key directory must already exist as a
+// root-owned 0711 directory under root-owned parents; the broker does not
+// create host policy.
+func (n *linuxSystem) SetSSHKeys(ctx context.Context, r record, canonical []string) error {
+	if ctx == nil || ctx.Err() != nil {
+		return ErrUnavailable
+	}
+	if !validUsername(r.Account.Username) || len(canonical) > MaxSSHKeys {
+		return ErrInvalid
+	}
+	for _, line := range canonical {
+		if c, _, ok := normalizeSSHKey(line); !ok || c != line {
+			return ErrInvalid
+		}
+	}
+	info, e := os.Lstat(n.sshDir)
+	if e != nil || authority(n.sshDir) != nil || info.Mode() != os.ModeDir|0711 {
+		return ErrUnavailable
+	}
+	target := filepath.Join(n.sshDir, r.Account.Username)
+	if len(canonical) == 0 {
+		if e = removeRegular(target, 0, false); e != nil {
+			return e
+		}
+		return syncDirectory(n.sshDir)
+	}
+	if existing, e := os.Lstat(target); e == nil {
+		st, ok := existing.Sys().(*syscall.Stat_t)
+		if !ok || !existing.Mode().IsRegular() || st.Uid != 0 || st.Nlink != 1 {
+			return ErrRecovery
+		}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	content := renderAuthorizedKeys(canonical)
+	temp := filepath.Join(n.sshDir, ".new-"+r.Account.ID)
+	if e = os.Remove(temp); e != nil && !errors.Is(e, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	f, e := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
+	if e != nil {
+		return ErrUnavailable
+	}
+	_, e = f.Write(content)
+	if e == nil {
+		e = f.Chown(0, r.Account.GID)
+	}
+	if e == nil {
+		// Chmod after Chown: the mode must not depend on the process umask.
+		e = f.Chmod(0640)
+	}
+	if e == nil {
+		e = f.Sync()
+	}
+	closed := f.Close()
+	if e != nil || closed != nil {
+		_ = os.Remove(temp)
+		return ErrUnavailable
+	}
+	if e = os.Rename(temp, target); e != nil {
+		_ = os.Remove(temp)
+		return ErrUnavailable
+	}
+	if e = syncDirectory(n.sshDir); e != nil {
+		return e
+	}
+	return n.verifySSHKeys(r, canonical)
+}
+
+// VerifySSHKeys is verifySSHKeys for the store, extended to the empty set,
+// whose installed form is the absence of the file.
+func (n *linuxSystem) VerifySSHKeys(r record, canonical []string) error {
+	if !validUsername(r.Account.Username) {
+		return ErrInvalid
+	}
+	if len(canonical) == 0 {
+		if _, e := os.Lstat(filepath.Join(n.sshDir, r.Account.Username)); errors.Is(e, os.ErrNotExist) || errors.Is(e, syscall.ENOTDIR) {
+			return nil
+		}
+		return ErrRecovery
+	}
+	return n.verifySSHKeys(r, canonical)
+}
+
+// verifySSHKeys re-reads the installed file and requires the exact bytes,
+// owner, group and mode that SetSSHKeys writes.
+func (n *linuxSystem) verifySSHKeys(r record, canonical []string) error {
+	target := filepath.Join(n.sshDir, r.Account.Username)
+	f, e := os.OpenFile(target, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	if e != nil {
+		return ErrRecovery
+	}
+	defer f.Close()
+	info, e := f.Stat()
+	if e != nil {
+		return ErrRecovery
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0640 || st.Uid != 0 || int(st.Gid) != r.Account.GID || st.Nlink != 1 {
+		return ErrRecovery
+	}
+	want := renderAuthorizedKeys(canonical)
+	got, e := io.ReadAll(io.LimitReader(f, int64(len(want))+1))
+	if e != nil || !bytes.Equal(got, want) {
+		return ErrRecovery
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	d, e := openDirectoryAt(unix.AT_FDCWD, path)
+	if e != nil {
+		return ErrUnavailable
+	}
+	defer d.Close()
+	if d.Sync() != nil {
 		return ErrUnavailable
 	}
 	return nil

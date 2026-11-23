@@ -45,7 +45,7 @@ func (c *client) List(ctx context.Context) ([]Account, error) {
 	var out struct {
 		Items []Account `json:"items"`
 	}
-	err := c.request(ctx, "GET", "/v1/accounts", nil, &out)
+	err := c.requestBounded(ctx, "GET", "/v1/accounts", nil, &out, maxListResponseBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,41 @@ func (c *client) Delete(ctx context.Context, id string, in DeleteInput, actor st
 	}{in, actor}, &out)
 	return out, err
 }
+
+// maxResponseBytes bounds every broker answer except the account list, whose
+// size grows with the inventory: one account is well under 8 KiB of JSON.
+const maxResponseBytes = 256 << 10
+const maxListResponseBytes = MaxAccounts * (8 << 10)
+
+func (c *client) SSHKeys(ctx context.Context, id string) (SSHKeysResult, error) {
+	if !idPattern.MatchString(id) {
+		return SSHKeysResult{}, ErrInvalid
+	}
+	var out SSHKeysResult
+	err := c.request(ctx, "GET", "/v1/accounts/"+id+"/ssh-keys", nil, &out)
+	return out, err
+}
+
+func (c *client) SetSSHKeys(ctx context.Context, id string, in SSHKeysInput, actor string) (SSHKeysResult, error) {
+	if _, _, ok := normalizeSSHKeys(in.Keys); !ok || !idPattern.MatchString(id) || in.ExpectedRevision == 0 || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return SSHKeysResult{}, ErrInvalid
+	}
+	if in.Keys == nil {
+		in.Keys = []string{}
+	}
+	var out SSHKeysResult
+	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/ssh-keys", struct {
+		Input SSHKeysInput `json:"input"`
+		Actor string       `json:"actor"`
+	}{in, actor}, &out)
+	return out, err
+}
+
 func (c *client) request(ctx context.Context, method, path string, input, output any) error {
+	return c.requestBounded(ctx, method, path, input, output, maxResponseBytes)
+}
+
+func (c *client) requestBounded(ctx context.Context, method, path string, input, output any, limit int64) error {
 	if ctx == nil {
 		return ErrInvalid
 	}
@@ -128,8 +162,8 @@ func (c *client) request(ctx context.Context, method, path string, input, output
 		return ErrUnavailable
 	}
 	defer response.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(response.Body, 256<<10+1))
-	if err != nil || len(b) > 256<<10 {
+	b, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil || int64(len(b)) > limit {
 		return ErrUnavailable
 	}
 	if response.StatusCode != 200 {

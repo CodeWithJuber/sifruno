@@ -1,0 +1,35 @@
+{
+  "listeners": [
+    {"name": "http", "address": "*", "port": 80},
+    {"name": "https", "address": "*", "port": 443, "secure": true,
+     "cert_file": "/etc/sifruno/tls/listener-fullchain.pem",
+     "key_file": "/etc/sifruno/tls/listener-privkey.pem"}
+  ],
+  "sites": [
+    {
+      "name": "legacy",
+      "username": "legacyapp",
+      "group": "legacyapp",
+      "domains": ["legacy.example.net"],
+      "doc_root": "/home/legacyapp/www/htdocs",
+      "php_version": "8.1",
+      "limits": {"php_children": 2},
+      "isolation": {},
+      "tls": {}
+    },
+    {
+      "name": "blog",
+      "username": "blogowner",
+      "group": "blogowner",
+      "domains": ["example.com", "www.example.com"],
+      "doc_root": "/home/blogowner/public_html",
+      "php_version": "8.3",
+      "limits": {},
+      "isolation": {},
+      "tls": {
+        "cert_file": "/etc/sifruno/tls/blog/fullchain.pem",
+        "key_file": "/etc/sifruno/tls/blog/privkey.pem"
+      }
+    }
+  ]
+}

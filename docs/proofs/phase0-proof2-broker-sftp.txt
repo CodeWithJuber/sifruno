@@ -1,0 +1,75 @@
+# Proof 2: broker creates a real Linux user that can sign in over SFTP
+# 2026-11-22T22:14:37Z  AlmaLinux release 9.9 (Chartreuse Bobcat)  kernel 5.14.0-741.22.1.el9_9.x86_64  SELinux Enforcing
+# openssh-server-9.9p1-16.el9_9.alma.1.x86_64 shadow-utils-4.9-17.el9.x86_64
+
+## Host policy and broker start
+PASS  broker host policy report says supported
+PASS  broker is running and its socket exists
+PASS  socket is owned by the controller with mode 0600
+PASS  root itself is not admitted on the socket
+PASS  controller sees an available broker
+
+## Create a real user
+account id 35af5f7688267695103cfa36c0b1d36d, uid 20000
+PASS  passwd entry exists with the nologin shell
+PASS  UID is a regular user ID in 20000-60000
+PASS  private primary group exists and has no members
+PASS  password is locked
+PASS  subordinate UID range was allocated
+PASS  subordinate GID range was allocated
+PASS  home is owned by the account with mode 0750
+PASS  public_html is owned by the account with mode 0750
+  /etc/subuid:proofone:100000:65536
+  /etc/subgid:proofone:100000:65536
+
+## SFTP key through the broker
+PASS  no key yet: SFTP sign-in is refused
+PASS  broker reports one key and revision 2
+PASS  key file is root-owned, group = account, mode 0640
+PASS  every key line carries the SFTP-only options
+PASS  fingerprint reported by the broker matches ssh-keygen
+PASS  SFTP sign-in with the key works and can upload into public_html
+PASS  uploaded file is owned by the account
+PASS  a different key is refused
+
+## What the account must not be able to do
+PASS  no shell: a remote command does not run
+PASS  no port forwarding to the local database port
+PASS  the account did write its own ~/.ssh/authorized_keys
+PASS  a key the account added itself does not grant sign-in
+
+## A second account is separate
+PASS  second account signs in with its own key
+PASS  second account cannot list the first account's home
+PASS  second account cannot read the first account's file
+PASS  second account cannot read the first account's key file
+PASS  first account's key does not open the second account
+
+## Suspend, resume, remove keys
+PASS  suspended account cannot sign in
+PASS  resumed account signs in again
+PASS  key file is gone after removing all keys
+PASS  sign-in is refused after removing all keys
+
+## More than 100 accounts
+created 105 of 105 accounts in 2002s
+PASS  all bulk accounts were created
+list returned 107 accounts in 23760 ms
+PASS  inventory holds more than 100 accounts
+PASS  every listed account is active
+
+## Delete
+PASS  deleted account has no passwd entry
+PASS  deleted account's home is gone
+PASS  deleted account's key file is gone
+PASS  deleted account's mail spool is gone
+PASS  deleted account's subordinate ranges are gone
+PASS  deleted account cannot sign in
+
+## Root-only Go tests of the key file code
+PASS  TestRootOnlySSHKeyFileLifecycle passed as root
+
+## SELinux
+AVC denials in the last 10 minutes: 0
+
+# Result: 0 failed

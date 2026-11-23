@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | panel-shell
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | wordpress-wizard | panel-shell
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -32,6 +32,13 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 The WordPress install: dbhost creates the site's database,
                 the broker runs WP-CLI as the site user with the passwords
                 on stdin, and the site serves WordPress.
+  wordpress-wizard
+                The New website wizard end to end: the panel runs as sifpanel
+                with the broker and the MariaDB option file, a browser on this
+                host signs in and creates a WordPress site, follows the job to
+                the last screen, and the VM checks the site it made. Needs
+                Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the
+                web packages.
   panel-shell   Phase 1 panel shell and admin sign-in: the panel runs in the VM
                 with throwaway state and a browser on this host drives it
                 (first-run admin setup with 2FA, sign-in, code replay and rate
@@ -147,6 +154,49 @@ case "${1:-}" in
     "$HERE/vm.sh" ssh /opt/sifruno-proof/broker-wordpress.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
+    ;;
+  wordpress-wizard)
+    stage="$(mktemp -d)"
+    tunnel=""
+    trap 'if [ -n "$tunnel" ]; then kill "$tunnel" 2>/dev/null; fi; rm -rf -- "$stage"' EXIT
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    guest="/var/lib/sifpanel/wizard-$stamp"
+    port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+    build "$stage/sifruno" ./cmd/sifruno
+    build "$stage/hostbroker" ./cmd/hostbroker
+    (cd "$REPO" && npm run --silent panel:build >/dev/null)
+    # Seed the state here so the browser can read its operator key from a
+    # file; a few seconds is enough to create it.
+    timeout 5 "$stage/sifruno" --listen 127.0.0.1:0 --sites-listen "" --state "$stage/state" --ui "$REPO/web/dist" >/dev/null 2>&1 || true
+    test -s "$stage/state/operator/access.key"
+    tar -czf "$stage/dist.tgz" -C "$REPO/web" dist
+    tar -czf "$stage/state.tgz" -C "$stage" state
+    "$HERE/vm.sh" ssh "systemctl stop sifruno-broker-proof 2>/dev/null; pkill -x sifruno; install -d -m 0755 /opt/sifruno-proof; install -d -o sifpanel -g sifpanel -m 0700 $guest" || true
+    "$HERE/vm.sh" put "$stage/hostbroker" /opt/sifruno-proof/hostbroker
+    for file in sifruno dist.tgz state.tgz; do
+      "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/wordpress-wizard.guest.sh" /opt/sifruno-proof/wordpress-wizard.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/wordpress-wizard.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    run="$OUT/wordpress-wizard-$stamp"
+    transcript="$run.txt"
+    domain="wiz$(date +%s | tail -c 6).proof.test"
+    # The panel binds the guest's loopback only; reach it through SSH on the
+    # same port number, so the browser's Origin matches the panel's address.
+    "$HERE/vm.sh" forward "$port" &
+    tunnel=$!
+    # Steps run inside the pipe to tee (a subshell), so a failure leaves a
+    # marker file rather than a variable.
+    {
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/wordpress-wizard.guest.sh start $guest $port" || touch "$stage/failed"
+      for _ in $(seq 30); do curl -fs -o /dev/null "http://127.0.0.1:$port/" && break; sleep 1; done
+      (cd "$REPO" && node scripts/devvm/proofs/wordpress-wizard.qa.mjs "http://127.0.0.1:$port" "$stage/state" "$run" "$domain" \
+        "$HERE/vm.sh" "$guest/state/wizard/jobs.json" "${SIFRUNO_PROOF_CHROME:-}") || touch "$stage/failed"
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/wordpress-wizard.guest.sh check $guest $domain" || touch "$stage/failed"
+    } 2>&1 | tee "$transcript"
+    echo "Transcript: $transcript (screenshots in $run/)"
+    [ ! -e "$stage/failed" ]
     ;;
   panel-shell)
     stage="$(mktemp -d)"

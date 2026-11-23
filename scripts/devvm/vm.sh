@@ -25,6 +25,9 @@ usage: vm.sh <command>
   ssh [cmd]   run a command (or open a shell) as root in the VM
   put SRC DST copy a local file into the VM
   get SRC DST copy a file out of the VM
+  forward PORT
+              forward 127.0.0.1:PORT on this host to 127.0.0.1:PORT in the VM
+              over SSH until stopped (the panel binds loopback only)
   status      say whether the VM is running and on which ports
   stop        power the VM off
   destroy     stop the VM and delete its disks, key and seed (keeps the image)
@@ -154,6 +157,13 @@ cmd_get() {
   exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "root@127.0.0.1:$1" "$2"
 }
 
+cmd_forward() {
+  [ $# -eq 1 ] || { usage >&2; exit 2; }
+  case "$1" in ''|*[!0-9]*) usage >&2; exit 2 ;; esac
+  ssh_base
+  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$1:127.0.0.1:$1" root@127.0.0.1
+}
+
 cmd_status() {
   if running; then
     # shellcheck disable=SC1091
@@ -191,6 +201,7 @@ case "${1:-}" in
   ssh) shift; cmd_ssh "$@" ;;
   put) shift; cmd_put "$@" ;;
   get) shift; cmd_get "$@" ;;
+  forward) shift; cmd_forward "$@" ;;
   status) cmd_status ;;
   stop) cmd_stop ;;
   destroy) cmd_destroy ;;

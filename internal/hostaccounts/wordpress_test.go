@@ -137,6 +137,12 @@ func TestWordPressInstallHoldsNoLock(t *testing.T) {
 	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: a.Revision, Reason: "Remove"}, "test operator"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("delete during an install: %v", err)
 	}
+	if _, err := s.setState(ctx, a.ID, StateInput{State: "suspended", ExpectedRevision: a.Revision, Reason: "Pause"}, "test operator"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("suspend during an install: %v", err)
+	}
+	if _, err := s.setWeb(ctx, a.ID, WebInput{PHPVersion: "8.2", QuotaMiB: 200, ExpectedRevision: a.Revision, Reason: "Change PHP"}, "test operator"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("web change during an install: %v", err)
+	}
 	// Refused before the native system, so it does not wait at the gate.
 	if _, err := s.installWordPress(ctx, a.ID, wordpressInput(a.Username, a.Revision), "test operator"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("a second install during the first: %v", err)

@@ -909,7 +909,8 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	if !found {
 		return Account{}, ErrNotFound
 	}
-	if r.Account.Revision != in.ExpectedRevision {
+	// A running WordPress install would keep going as a suspended user.
+	if r.Account.Revision != in.ExpectedRevision || s.installing[id] {
 		return Account{}, ErrConflict
 	}
 	if r.Account.State == in.State {

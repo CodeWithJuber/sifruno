@@ -58,7 +58,8 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 		return WebResult{}, ErrNotFound
 	}
 	r := items[index]
-	if r.Account.Revision != in.ExpectedRevision || r.Account.State != "active" {
+	// A running WordPress install uses the site's current PHP.
+	if r.Account.Revision != in.ExpectedRevision || r.Account.State != "active" || s.installing[id] {
 		return WebResult{}, ErrConflict
 	}
 	if r.Account.Revision == ^uint64(0) {

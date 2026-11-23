@@ -68,3 +68,22 @@ What this run does not show:
 - **A tenant's broken site during another account's change.** Section 6 records OpenLiteSpeed's real output for a moved docroot and judges it with the broker's rule; it does not run a change while the docroot is broken, for the same reason.
 - **The recovery paths.** An apply interrupted by a crash, a delete whose config fails its test, and a filesystem without quota enforcement are covered by unit tests, not on the VM.
 - **Speed on real hardware.** Under software emulation the web operation took 16 seconds in this run (10 to 13 in earlier ones).
+
+## Phase 1: the New website wizard
+
+Run on 2026-11-23 with `scripts/devvm/proof.sh wordpress-wizard` on the dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3, MariaDB 10.11, QEMU software emulation), built from `f3affc7`. The panel ran in the VM as `sifpanel` with the real broker (`--web-user`) and the MariaDB admin option file that provisioning makes; headless Chrome on the host reached it through `vm.sh forward` and drove the wizard as an admin would.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| New website: first-run admin sign-in, the wizard form (autocomplete, feedback only after leaving a field), Create starts a panel job that creates the account, puts the site live, creates the database and installs WordPress, the job page to the last screen (Open site, Open WordPress admin, Set up DNS; after a reload; at phone width), the same domain refused, the WordPress admin password in neither the jobs API, the browser's storage nor the job file; on the VM the job file is private, the files and `wp-config.php` (0600) are the site user's, the site serves the title typed in the wizard and `wp-admin` redirects to the login | [phase1-wordpress-wizard.txt](phase1-wordpress-wizard.txt) | 30 passed, 0 failed |
+
+Screenshots are in [phase1-wordpress-wizard/](phase1-wordpress-wizard/): the form (the password masked), the job while it runs, and the last screen at desktop and phone width. The job took 318 s under software emulation.
+
+The first run of this proof found a broker bug: `systemctl reload lsws` took 18 s on the busy VM, past the broker's 15 s command limit, so the web step was left pending and the wizard could not undo the account it had made. OpenLiteSpeed's config test and restart now have their own limits (`b8d3b97`), and delete removes the user on the operation's own limit (`f3affc7`).
+
+What this run does not show:
+
+- **SSL.** The site is http; certificates with lego are the next slice.
+- **Real DNS.** The proof domain resolves nowhere; the site was reached with a Host header.
+- **The failure paths on the VM.** Undo after a failed step, a pre-existing database name, a slow step and a panel restart during a job are covered by unit tests (`internal/wizard`), not by this run.
+- **More than one job.** Jobs run one at a time; the refusal of a second is a unit test.

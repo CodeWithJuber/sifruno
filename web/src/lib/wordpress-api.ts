@@ -243,7 +243,7 @@ function explain(operation: Operation, status: number, detail: string): { why: s
     case 401: return { why: "Your sign-in has ended.", next: read ? `Sign in again to see the progress.${keepsRunning}` : "Sign in again, then press Create website. Your entries are kept." };
     case 403: return { why: detail || "The panel refused the request because the session or page origin did not match.", next: "Reload the page, sign in if asked, and try again." };
     case 404: return { why: detail || "The address may be wrong, or the setup record was removed.", next: "Check the address, or start again from New website." };
-    case 409: return { why: detail || "Another setup is using this domain, the domain is already in use, or too many setups are running.", next: "Wait for the running setups to finish, or use a domain that is not in use yet." };
+    case 409: return { why: detail || "Another website is being created right now, or this domain is already in use.", next: "Do what the message above says, then try again." };
     case 413: return { why: detail || "The request was too large for the server.", next: "Shorten the site title or the password, then try again." };
     case 415: return { why: detail || "The server did not accept the request format.", next: versions };
     case 422: return { why: detail || "The server did not accept one of the values.", next: "Fix the value the message names, then press Create website again." };

@@ -12,7 +12,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { dateLabel } from "@/lib/api";
-import { createWordPressSite, defaultPhpVersion, fieldChecks, getWebsiteJob, jobProgress, phpVersions, validJobId, WordPressApiError } from "@/lib/wordpress-api";
+import { createWordPressSite, defaultPhpVersion, fieldChecks, getWebsiteJob, httpReason, jobProgress, phpVersions, usesHttps, validJobId, WordPressApiError } from "@/lib/wordpress-api";
 import type { JobStep, StepState, WebsiteJob, WordPressField, WordPressInput } from "@/lib/wordpress-api";
 import { useShell } from "@/shell/context";
 import "./new-website.css";
@@ -482,12 +482,16 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
 
   if (job.state === "succeeded" && job.result) {
     const result = job.result;
+    const secure = usesHttps(result);
+    // Why the site has no certificate yet, as the "ssl" step said it.
+    const reason = secure ? "" : httpReason(job);
     return <section className={`${panel} flex w-full max-w-2xl flex-col gap-5`} data-testid="job-succeeded">
       <div className="flex items-start gap-3">
         <CircleCheck className="mt-0.5 size-6 shrink-0 text-primary" aria-hidden="true" />
         <div className="flex min-w-0 flex-col gap-1">
           {heading(<>{job.domain} is ready</>)}
-          <p className="text-sm">WordPress is installed. The site uses http for now; https comes in a later update.</p>
+          <p className="text-sm" data-testid="site-protocol">{secure ? "WordPress is installed. The site uses https with its own certificate." : "WordPress is installed. The site uses http for now."}</p>
+          {reason && <p className="text-sm text-muted-foreground" data-testid="http-reason">{reason}</p>}
         </div>
       </div>
       <JobFacts job={job} version={result.wordpress_version} />

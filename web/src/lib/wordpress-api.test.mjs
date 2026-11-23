@@ -11,16 +11,16 @@ const api = await import(moduleURL(readFileSync(new URL("./wordpress-api.ts", im
 const jobId = "0123456789abcdef0123456789abcdef";
 const password = "correct horse battery";
 const input = () => ({ domain: "example.com", title: "My site", admin_user: "siteadmin", admin_email: "me@example.com", admin_password: password, php_version: "8.3" });
-const steps = (states = ["running", "pending", "pending", "pending"]) => [
+const steps = (states = ["running", "pending", "pending", "pending", "pending"]) => [
   { name: "account", title: "Create the hosting account" }, { name: "web", title: "Put the site live with PHP" },
-  { name: "database", title: "Create the database" }, { name: "wordpress", title: "Install WordPress" },
+  { name: "ssl", title: "Turn on https" }, { name: "database", title: "Create the database" }, { name: "wordpress", title: "Install WordPress" },
 ].map((step, i) => ({ ...step, state: states[i], message: "", started_at: states[i] === "pending" ? "" : "2026-11-23T10:00:00Z", finished_at: "" }));
 const job = (change = {}) => ({
   id: jobId, kind: "wordpress", domain: "example.com", username: "example", state: "running", steps: steps(),
   error: null, result: null, actor: "admin", created_at: "2026-11-23T10:00:00Z", updated_at: "2026-11-23T10:00:05Z", ...change,
 });
-const succeeded = () => job({ state: "succeeded", steps: steps(["done", "done", "done", "done"]), result: { url: "http://example.com/", admin_url: "http://example.com/wp-admin/", wordpress_version: "7.1.5", account_id: "a".repeat(32) } });
-const failed = () => job({ state: "failed", steps: steps(["undone", "undone", "undone", "failed"]), error: { step: "wordpress", what: "WordPress could not be installed.", why: "The download failed.", next: "Try again later.", technical: "wp core download: exit 1" } });
+const succeeded = () => job({ state: "succeeded", steps: steps(["done", "done", "skipped", "done", "done"]), result: { url: "http://example.com/", admin_url: "http://example.com/wp-admin/", wordpress_version: "7.1.5", account_id: "a".repeat(32) } });
+const failed = () => job({ state: "failed", steps: steps(["undone", "undone", "skipped", "undone", "failed"]), error: { step: "wordpress", what: "WordPress could not be installed.", why: "The download failed.", next: "Try again later.", technical: "wp core download: exit 1" } });
 const session = { authenticated: true, csrf_token: "fixture-csrf", expires_at: "2026-11-23T10:15:00Z" };
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 
@@ -87,11 +87,12 @@ test("PHP version is one of 8.1-8.4 and defaults to 8.3", () => {
 
 test("job parsing accepts the contract's running, succeeded and failed shapes", () => {
   const running = api.parseJob(job());
-  assert.equal(running.state, "running"); assert.equal(running.steps.length, 4); assert.equal(running.error, null); assert.equal(running.result, null);
+  assert.equal(running.state, "running"); assert.equal(running.steps.length, 5); assert.equal(running.error, null); assert.equal(running.result, null);
   assert.equal(api.parseJob(succeeded()).result.wordpress_version, "7.1.5");
   assert.equal(api.parseJob(failed()).error.what, "WordPress could not be installed.");
-  assert.deepEqual(api.jobProgress(api.parseJob(job({ steps: steps(["done", "done", "running", "pending"]) }))), { done: 2, total: 4 });
-  assert.deepEqual(api.jobProgress(api.parseJob(succeeded())), { done: 4, total: 4 });
+  assert.deepEqual(api.jobProgress(api.parseJob(job({ steps: steps(["done", "done", "running", "pending", "pending"]) }))), { done: 2, total: 5 });
+  // A skipped "ssl" step counts as finished: the job carries on without it.
+  assert.deepEqual(api.jobProgress(api.parseJob(succeeded())), { done: 5, total: 5 });
   // The short step form in the contract (name and title only besides state) is filled in.
   const short = api.parseJob(job({ steps: [{ name: "account", title: "Create the hosting account", state: "pending" }] }));
   assert.deepEqual(short.steps[0], { name: "account", title: "Create the hosting account", state: "pending", message: "", started_at: "", finished_at: "" });
@@ -107,19 +108,44 @@ test("job parsing matches the finished backend: $schema keys, the fixed actor, r
   assert.equal(api.parseJobResponse({ $schema: schema, job: job({ actor: "local-operator" }) }).actor, "local-operator");
   assert.equal(api.parseJobList({ $schema: schema, jobs: [job(), failed()] }).length, 2);
   // A job that was running when the panel restarted comes back as failed.
-  const restarted = api.parseJob(job({ state: "failed", steps: steps(["done", "failed", "pending", "pending"]), error: { step: "web", what: "The panel restarted while this website was being created.", why: "The setup was interrupted.", next: "Try again.", technical: "" } }));
+  const restarted = api.parseJob(job({ state: "failed", steps: steps(["done", "failed", "pending", "pending", "pending"]), error: { step: "web", what: "The panel restarted while this website was being created.", why: "The setup was interrupted.", next: "Try again.", technical: "" } }));
   assert.equal(restarted.state, "failed"); assert.match(restarted.error.what, /panel restarted/);
   // Undo problems are passed through as written.
-  const leftovers = api.parseJob(job({ state: "failed", steps: steps(["done", "undone", "undone", "failed"]), error: { step: "wordpress", what: "WordPress could not be installed.", why: "The download failed.", next: "These could not be removed: the hosting account example. Remove it in Customers, then try again.", technical: "undo account: userdel exited 1\nwordpress: download timed out" } }));
+  const leftovers = api.parseJob(job({ state: "failed", steps: steps(["done", "undone", "skipped", "undone", "failed"]), error: { step: "wordpress", what: "WordPress could not be installed.", why: "The download failed.", next: "These could not be removed: the hosting account example. Remove it in Customers, then try again.", technical: "undo account: userdel exited 1\nwordpress: download timed out" } }));
   assert.match(leftovers.error.next, /could not be removed/); assert.match(leftovers.error.technical, /^undo account: /);
+});
+
+test("the ssl step: skipped keeps its reason, and the last screen tells https from http", () => {
+  const notPointing = "The domain does not point at this server yet, so the site uses http. The panel tries again every few hours.";
+  const httpSite = succeeded();
+  httpSite.steps[2] = { ...httpSite.steps[2], state: "skipped", message: notPointing, finished_at: "2026-11-23T10:01:00Z" };
+  const parsed = api.parseJob(httpSite);
+  assert.deepEqual(parsed.steps.map((s) => `${s.name}=${s.state}`), ["account=done", "web=done", "ssl=skipped", "database=done", "wordpress=done"]);
+  assert.equal(api.usesHttps(parsed.result), false);
+  assert.equal(api.httpReason(parsed), notPointing);
+  // Not set up on this server: the same, with that reason.
+  const plain = succeeded(); plain.steps[2].message = "Certificates are not set up on this server.";
+  assert.equal(api.httpReason(api.parseJob(plain)), "Certificates are not set up on this server.");
+
+  const httpsSite = job({ state: "succeeded", steps: steps(["done", "done", "done", "done", "done"]), result: { url: "https://example.com/", admin_url: "https://example.com/wp-admin/", wordpress_version: "7.1.5", account_id: "a".repeat(32) } });
+  const secure = api.parseJob(httpsSite);
+  assert.equal(api.usesHttps(secure.result), true);
+  assert.equal(api.httpReason(secure), "");
+  // Both links must be https to call the site https.
+  assert.equal(api.usesHttps({ ...secure.result, admin_url: "http://example.com/wp-admin/" }), false);
+
+  // A job from before the ssl step: four steps, no reason, still http.
+  const old = job({ state: "succeeded", steps: steps(["done", "done", "done", "done", "done"]).filter((s) => s.name !== "ssl"), result: succeeded().result });
+  const oldParsed = api.parseJob(old);
+  assert.equal(oldParsed.steps.length, 4); assert.equal(api.httpReason(oldParsed), ""); assert.equal(api.usesHttps(oldParsed.result), false);
 });
 
 test("job parsing fails closed on values outside the contract", () => {
   for (const change of [
     { id: "ABCDEF" + "0".repeat(26) }, { id: "short" }, { kind: "static" }, { state: "done" }, { domain: "" },
-    { username: "Root" }, { username: "ab" }, { steps: [] }, { steps: "account" }, { steps: steps(["running", "waiting", "pending", "pending"]) },
+    { username: "Root" }, { username: "ab" }, { steps: [] }, { steps: "account" }, { steps: steps(["running", "waiting", "pending", "pending", "pending"]) },
     { steps: [{ name: "", title: "x", state: "pending" }] }, { created_at: "yesterday" }, { error: "boom" },
-    { state: "succeeded", result: null }, { state: "succeeded", steps: steps(["done", "done", "done", "done"]), result: { url: "javascript:alert(1)", admin_url: "http://example.com/wp-admin/", wordpress_version: "7.1.5" } },
+    { state: "succeeded", result: null }, { state: "succeeded", steps: steps(["done", "done", "done", "done", "done"]), result: { url: "javascript:alert(1)", admin_url: "http://example.com/wp-admin/", wordpress_version: "7.1.5" } },
     { result: { url: "http://example.com/", admin_url: "data:text/html,hi", wordpress_version: "7.1.5" } },
     { result: { url: "http://example.com/", admin_url: "http://example.com/wp-admin/" } },
   ]) assert.equal(api.parseJob(job(change)), undefined, JSON.stringify(change));

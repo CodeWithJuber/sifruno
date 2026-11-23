@@ -354,3 +354,16 @@ export async function listWebsiteJobs(options: { signal?: AbortSignal } = {}): P
 export function jobProgress(job: WebsiteJob): { done: number; total: number } {
   return { done: job.steps.filter((step) => step.state === "done" || step.state === "skipped").length, total: job.steps.length };
 }
+
+// The site uses https when the server installed WordPress with https links.
+// parseResult has already checked that both are http or https URLs.
+export function usesHttps(result: JobResult): boolean {
+  return [result.url, result.admin_url].every((link) => new URL(link).protocol === "https:");
+}
+
+// Why a finished site uses http: the "ssl" step's message when that step was
+// skipped. Empty for a job from before the step existed.
+export function httpReason(job: WebsiteJob): string {
+  const step = job.steps.find((s) => s.name === "ssl");
+  return step?.state === "skipped" ? step.message : "";
+}

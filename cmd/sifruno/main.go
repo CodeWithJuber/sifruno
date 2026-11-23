@@ -262,6 +262,9 @@ func run() error {
 		if jerr != nil {
 			return jerr
 		}
+		// A nil interface, not a nil *acme.Manager: the wizard reads nil as
+		// "certificates are not set up".
+		var certs wizard.Certificates
 		if *acmeEmail != "" {
 			if installer := certificateInstaller(broker); installer == nil {
 				fmt.Fprintln(os.Stderr, "Website certificates are off: the account broker client has no certificate operation, so new websites use http")
@@ -270,10 +273,10 @@ func run() error {
 				if aerr != nil {
 					return aerr
 				}
-				certificates = m
+				certificates, certs = m, m
 			}
 		}
-		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress}, dbSvc, jobs)
+		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress}, dbSvc, jobs, certs)
 	}
 	var remoteServer *http.Server
 	var remoteListener net.Listener

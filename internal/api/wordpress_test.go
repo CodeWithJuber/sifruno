@@ -88,7 +88,7 @@ func wizardFixture(t *testing.T) (siteFixture, *wizard.Runner, *wizardBrokerSpy)
 		t.Fatal(err)
 	}
 	spy := &wizardBrokerSpy{}
-	runner := wizard.New(spy, wizardDatabaseSpy{}, store)
+	runner := wizard.New(spy, wizardDatabaseSpy{}, store, nil)
 	t.Cleanup(runner.Wait) // before the store's directory is removed
 	f.handler = New(Options{Operator: f.manager, Wizard: runner, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
 	return f, runner, spy
@@ -132,11 +132,11 @@ func checkJobShape(t *testing.T, raw json.RawMessage) {
 		t.Fatalf("job keys %q", keys)
 	}
 	var steps []map[string]any
-	if err := json.Unmarshal(job["steps"], &steps); err != nil || len(steps) != 4 {
+	if err := json.Unmarshal(job["steps"], &steps); err != nil || len(steps) != 5 {
 		t.Fatalf("steps %s", job["steps"])
 	}
-	names := []string{"account", "web", "database", "wordpress"}
-	titles := []string{"Create the hosting account", "Put the site live with PHP", "Create the database", "Install WordPress"}
+	names := []string{"account", "web", "ssl", "database", "wordpress"}
+	titles := []string{"Create the hosting account", "Put the site live with PHP", "Turn on https", "Create the database", "Install WordPress"}
 	for i, s := range steps {
 		if len(s) != 6 || s["name"] != names[i] || s["title"] != titles[i] {
 			t.Fatalf("step %d: %v", i, s)

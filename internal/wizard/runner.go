@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"sifruno/internal/acme"
 	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
 )
@@ -30,6 +31,14 @@ type Broker struct {
 	hostaccounts.Service
 	hostaccounts.WebService
 	hostaccounts.WordPressService
+}
+
+// Certificates gets a certificate for the site and installs it on the
+// account at its revision, answering the account's new revision and the
+// certificate's expiry. acme.Manager is the real one. A failure wraps one of
+// acme's error kinds; the job explains it and carries on over http.
+type Certificates interface {
+	Secure(ctx context.Context, accountID, domain string, revision uint64) (uint64, time.Time, error)
 }
 
 // Databases is the part of dbhost a job uses. The creates are strict: a
@@ -54,8 +63,10 @@ const (
 	// a second job would wait behind it and time out.
 	maxRunning     = 1
 	usernameTries  = 5                // broker creates tried per job
-	jobLimit       = 15 * time.Minute // all four steps together
+	jobLimit       = 15 * time.Minute // all five steps together
 	webWait        = 6 * time.Minute  // the least SetWeb gets: the broker's web apply alone may take 4
+	sslWait        = 6 * time.Minute  // the least the certificate step gets: issuing takes at most 3, then the broker applies it as it does a web change
+	refreshLimit   = 30 * time.Second // reading the account's revision after the certificate step
 	installWait    = 12 * time.Minute // the least InstallWordPress gets: the broker allows the install 10
 	undoLimit      = 3 * time.Minute  // removing what a failed job created
 	quotaMiB       = 1024
@@ -68,9 +79,10 @@ const (
 
 // Runner starts jobs and runs them in the background.
 type Runner struct {
-	accounts  Accounts
-	databases Databases
-	store     *Store
+	accounts     Accounts
+	databases    Databases
+	certificates Certificates // nil: certificates are not set up, and sites use http
+	store        *Store
 
 	mu      sync.Mutex
 	running map[string]string // domain -> job ID
@@ -84,9 +96,11 @@ type Runner struct {
 	waits map[string]time.Duration
 }
 
-// New returns a runner over the broker, the database service and a store.
-func New(accounts Accounts, databases Databases, store *Store) *Runner {
-	return &Runner{accounts: accounts, databases: databases, store: store, running: map[string]string{}, digits: randomDigits, limit: jobLimit, waits: map[string]time.Duration{StepWeb: webWait, StepWordPress: installWait}}
+// New returns a runner over the broker, the database service, a store and
+// the certificate service. certificates may be nil: the "ssl" step is then
+// skipped and sites use http.
+func New(accounts Accounts, databases Databases, store *Store, certificates Certificates) *Runner {
+	return &Runner{accounts: accounts, databases: databases, certificates: certificates, store: store, running: map[string]string{}, digits: randomDigits, limit: jobLimit, waits: map[string]time.Duration{StepWeb: webWait, StepSSL: sslWait, StepWordPress: installWait}}
 }
 
 // stepContext is the job's context with its deadline moved, if need be, to
@@ -208,6 +222,7 @@ type run struct {
 
 	dbPassword string
 	wpVersion  string
+	https      bool // the site has its certificate, so WordPress is installed with https
 	// secrets is every password the run has held, kept only to scrub them
 	// out of what the job records: error text from the broker or the
 	// database server can echo them, even after the install step.
@@ -233,7 +248,7 @@ func (j *run) execute(ctx context.Context) {
 		// job's undo. This does not erase the bytes; Go cannot zero a string.
 		j.in.AdminPassword, j.dbPassword, j.secrets = "", "", nil
 	}()
-	steps := []func(context.Context) (string, *stepError){j.account, j.web, j.database, j.wordpress}
+	steps := []func(context.Context) (string, *stepError){j.account, j.web, j.ssl, j.database, j.wordpress}
 	for i, step := range steps {
 		j.begin(i)
 		stepCtx, cancel := stepContext(ctx, j.runner.waits[j.job.Steps[i].Name])
@@ -261,10 +276,18 @@ func (j *run) execute(ctx context.Context) {
 			j.fail(i, failure)
 			return
 		}
+		if j.job.Steps[i].Name == StepSSL && !j.https {
+			j.skip(i, message)
+			continue
+		}
 		j.finish(i, message)
 	}
+	scheme := "http://"
+	if j.https {
+		scheme = "https://"
+	}
 	j.job.State = StateSucceeded
-	j.job.Result = &Result{URL: "http://" + j.in.Domain + "/", AdminURL: "http://" + j.in.Domain + "/wp-admin/", WordPressVersion: j.wpVersion, AccountID: j.accountID}
+	j.job.Result = &Result{URL: scheme + j.in.Domain + "/", AdminURL: scheme + j.in.Domain + "/wp-admin/", WordPressVersion: j.wpVersion, AccountID: j.accountID}
 	j.touch()
 }
 
@@ -279,8 +302,13 @@ func (j *run) begin(i int) {
 	j.touch()
 }
 
-func (j *run) finish(i int, message string) {
-	j.job.Steps[i].State = StepDone
+func (j *run) finish(i int, message string) { j.end(i, StepDone, message) }
+
+// skip ends a step that did not do its work but does not stop the job.
+func (j *run) skip(i int, message string) { j.end(i, StepSkipped, message) }
+
+func (j *run) end(i int, state, message string) {
+	j.job.Steps[i].State = state
 	j.job.Steps[i].Message = redact(message, j.secrets...)
 	j.job.Steps[i].FinishedAt = timestamp(time.Now())
 	j.touch()
@@ -384,6 +412,62 @@ func (j *run) web(ctx context.Context) (string, *stepError) {
 	return "The site is live with PHP " + j.in.PHPVersion + ".", nil
 }
 
+// Plain reasons for a site that stays on http. The panel's renewal loop tries
+// again every few hours.
+const (
+	sslNotSetUp    = "Certificates are not set up on this server."
+	sslNotPointing = "The domain does not point at this server yet, so the site uses http. The panel tries again every few hours."
+	sslLimited     = "The certificate authority is not issuing more certificates for this domain right now, so the site uses http. The panel tries again every few hours."
+	sslNotTaken    = "A certificate was issued, but the web server did not take it, so the site uses http. The panel tries again every few hours."
+	sslNoAnswer    = "The certificate authority could not be reached or did not issue a certificate, so the site uses http. The panel tries again every few hours."
+)
+
+// ssl gets the site a certificate and installs it. It never fails the job:
+// without a certificate the step is skipped with the reason, the site stays
+// on http, and nothing is undone.
+func (j *run) ssl(ctx context.Context) (string, *stepError) {
+	certs := j.runner.certificates
+	if certs == nil {
+		return sslNotSetUp, nil
+	}
+	revision, notAfter, err := certs.Secure(ctx, j.accountID, j.in.Domain, j.revision)
+	if err == nil {
+		j.revision, j.https = revision, true
+		return "Installed a certificate for " + j.in.Domain + ", valid until " + notAfter.UTC().Format(time.DateOnly) + ".", nil
+	}
+	// The broker may have applied the certificate after the panel stopped
+	// waiting, which moves the account's revision; the install step needs
+	// the current one.
+	j.refreshRevision(ctx)
+	switch {
+	case errors.Is(err, acme.ErrValidation):
+		return sslNotPointing, nil
+	case errors.Is(err, acme.ErrRateLimited):
+		return sslLimited, nil
+	case errors.Is(err, acme.ErrInstall):
+		return sslNotTaken, nil
+	default:
+		return sslNoAnswer, nil
+	}
+}
+
+// refreshRevision reads the account's current revision from the broker,
+// keeping the one the job has if the list cannot be read.
+func (j *run) refreshRevision(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshLimit)
+	defer cancel()
+	items, err := j.runner.accounts.List(ctx)
+	if err != nil {
+		return
+	}
+	for _, a := range items {
+		if a.ID == j.accountID {
+			j.revision = a.Revision
+			return
+		}
+	}
+}
+
 // database creates the database and its user, with every privilege on it.
 func (j *run) database(ctx context.Context) (string, *stepError) {
 	owner := j.job.Username
@@ -426,7 +510,7 @@ func (j *run) database(ctx context.Context) (string, *stepError) {
 func (j *run) wordpress(ctx context.Context) (string, *stepError) {
 	in := hostaccounts.WordPressInput{
 		ExpectedRevision: j.revision,
-		HTTPS:            false,
+		HTTPS:            j.https,
 		Title:            j.in.Title,
 		AdminUser:        j.in.AdminUser,
 		AdminEmail:       j.in.AdminEmail,
@@ -591,7 +675,8 @@ func (j *run) undo() (left, notes []string) {
 			gone, err = true, nil
 		}
 	}
-	for _, name := range []string{StepWeb, StepAccount} {
+	// The certificate goes with the account: the broker removes its files.
+	for _, name := range []string{StepSSL, StepWeb, StepAccount} {
 		step := &j.job.Steps[j.index(name)]
 		if step.State != StepDone {
 			continue

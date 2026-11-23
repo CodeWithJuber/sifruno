@@ -1,9 +1,9 @@
 // Package wizard runs the "create a WordPress site" wizard as a panel job:
-// a hosting account, its live site, a database and WordPress, one step after
-// another, outside the request that asked for it. Every root action is one of
-// the account broker's typed operations; databases go through dbhost. The job
-// record is the job log: it is kept in the panel's private state directory
-// and never holds a password.
+// a hosting account, its live site, its certificate, a database and
+// WordPress, one step after another, outside the request that asked for it.
+// Every root action is one of the account broker's typed operations;
+// databases go through dbhost. The job record is the job log: it is kept in
+// the panel's private state directory and never holds a password.
 package wizard
 
 import (
@@ -41,7 +41,8 @@ type Job struct {
 
 // Step is one part of the job. StartedAt and FinishedAt are RFC 3339 or
 // empty. "undone" means the job removed what the step created after a later
-// step failed.
+// step failed. "skipped" means the step did not run because an earlier one
+// failed, or, for "ssl", that the site has no certificate yet and uses http.
 type Step struct {
 	Name       string `json:"name"`
 	Title      string `json:"title"`
@@ -88,6 +89,7 @@ const (
 const (
 	StepAccount   = "account"
 	StepWeb       = "web"
+	StepSSL       = "ssl"
 	StepDatabase  = "database"
 	StepWordPress = "wordpress"
 )
@@ -95,6 +97,7 @@ const (
 var stepTitles = []struct{ name, title string }{
 	{StepAccount, "Create the hosting account"},
 	{StepWeb, "Put the site live with PHP"},
+	{StepSSL, "Turn on https"},
 	{StepDatabase, "Create the database"},
 	{StepWordPress, "Install WordPress"},
 }
@@ -266,7 +269,8 @@ func readStore(path string) ([]Job, error) {
 		return nil, fmt.Errorf("website job store version %d is not supported", data.Version)
 	}
 	for _, j := range data.Jobs {
-		if !ValidID(j.ID) || len(j.Steps) != len(stepTitles) {
+		// A job from before the "ssl" step has one step fewer; it is kept.
+		if !ValidID(j.ID) || (len(j.Steps) != len(stepTitles) && len(j.Steps) != len(stepTitles)-1) {
 			return nil, errors.New("website job store holds an invalid job")
 		}
 	}

@@ -274,7 +274,7 @@ func newFixture(t *testing.T) fixture {
 	order := &journal{}
 	acc := &fakeAccounts{order: order, conflict: map[string]bool{}}
 	dbs := &fakeDatabases{order: order}
-	r := New(acc, dbs, store)
+	r := New(acc, dbs, store, nil)
 	digits := []string{"07", "42", "13", "99", "55"}
 	n := 0
 	r.digits = func() string { d := digits[n%len(digits)]; n++; return d }
@@ -321,7 +321,7 @@ func TestWordPressJobSucceeds(t *testing.T) {
 	if done.State != StateSucceeded || done.Error != nil || done.Username != "example" || done.Actor != "local-operator" {
 		t.Fatalf("finished job: %+v", done)
 	}
-	if got := stepStates(done); got != "account=done web=done database=done wordpress=done" {
+	if got := stepStates(done); got != "account=done web=done ssl=skipped database=done wordpress=done" {
 		t.Fatal(got)
 	}
 	for _, s := range done.Steps {
@@ -435,7 +435,7 @@ func TestUsernameConflictRetry(t *testing.T) {
 	if done.State != StateFailed || done.Error == nil || done.Error.Step != StepAccount || !strings.Contains(done.Error.Why, "5 account names") {
 		t.Fatalf("job %+v %+v", done, done.Error)
 	}
-	if got := stepStates(done); got != "account=failed web=skipped database=skipped wordpress=skipped" {
+	if got := stepStates(done); got != "account=failed web=skipped ssl=skipped database=skipped wordpress=skipped" {
 		t.Fatal(got)
 	}
 	if slices.ContainsFunc(f.acc.calls, func(c string) bool { return strings.HasPrefix(c, "delete") }) || len(f.dbs.calls) != 0 {
@@ -472,13 +472,13 @@ func TestFailureAtEachStepUndoesInReverse(t *testing.T) {
 		{
 			name:   "account",
 			setup:  func(f fixture) { f.acc.createFn = func(context.Context) error { return hostaccounts.ErrUnavailable } },
-			states: "account=failed web=skipped database=skipped wordpress=skipped",
+			states: "account=failed web=skipped ssl=skipped database=skipped wordpress=skipped",
 			step:   StepAccount, what: "The hosting account could not be created.",
 		},
 		{
 			name:   "web",
 			setup:  func(f fixture) { f.acc.webErr = hostaccounts.ErrWebRejected },
-			states: "account=undone web=failed database=skipped wordpress=skipped",
+			states: "account=undone web=failed ssl=skipped database=skipped wordpress=skipped",
 			step:   StepWeb, what: "The site could not be put live.",
 			undoAcc: []string{"delete 0001 rev=1"},
 		},
@@ -487,7 +487,7 @@ func TestFailureAtEachStepUndoesInReverse(t *testing.T) {
 			setup: func(f fixture) {
 				f.dbs.userErr = errors.New("ERROR 1064 (42000) at line 1: You have an error in your SQL syntax")
 			},
-			states: "account=undone web=undone database=failed wordpress=skipped",
+			states: "account=undone web=undone ssl=skipped database=failed wordpress=skipped",
 			step:   StepDatabase, what: "The database could not be created.",
 			undoAcc: []string{"delete 0001 rev=2"},
 			undoDB:  []string{"drop-db example example_wp"},
@@ -496,7 +496,7 @@ func TestFailureAtEachStepUndoesInReverse(t *testing.T) {
 		{
 			name:   "database grant",
 			setup:  func(f fixture) { f.dbs.privErr = errors.New("ERROR 1044 (42000): Access denied") },
-			states: "account=undone web=undone database=failed wordpress=skipped",
+			states: "account=undone web=undone ssl=skipped database=failed wordpress=skipped",
 			step:   StepDatabase, what: "The database could not be created.",
 			undoAcc: []string{"delete 0001 rev=2"},
 			undoDB:  []string{"drop-user example example_wp", "drop-db example example_wp"},
@@ -504,7 +504,7 @@ func TestFailureAtEachStepUndoesInReverse(t *testing.T) {
 		{
 			name:   "wordpress",
 			setup:  func(f fixture) { f.acc.installF = func(context.Context) error { return installErr } },
-			states: "account=undone web=undone database=undone wordpress=failed",
+			states: "account=undone web=undone ssl=skipped database=undone wordpress=failed",
 			step:   StepWordPress, what: "WordPress could not be installed.",
 			undoAcc: []string{"delete 0001 rev=2"},
 			undoDB:  []string{"drop-user example example_wp", "drop-db example example_wp"},
@@ -573,7 +573,7 @@ func TestUndoFailureIsRecorded(t *testing.T) {
 	f.acc.webErr = hostaccounts.ErrRecovery
 	f.acc.delErr = hostaccounts.ErrConflict
 	done := f.runJob(t, input("example.com"))
-	if got := stepStates(done); got != "account=done web=failed database=skipped wordpress=skipped" {
+	if got := stepStates(done); got != "account=done web=failed ssl=skipped database=skipped wordpress=skipped" {
 		t.Fatal(got)
 	}
 	if done.Steps[0].Message != "Could not be removed after a later step failed." {
@@ -593,7 +593,7 @@ func TestTimeLimitStopsTheJobAndStillUndoes(t *testing.T) {
 	if done.State != StateFailed || done.Error.Step != StepWordPress || !strings.Contains(done.Error.Why, "longer than the panel waits") {
 		t.Fatalf("job %+v", done.Error)
 	}
-	if got := stepStates(done); got != "account=undone web=undone database=undone wordpress=failed" {
+	if got := stepStates(done); got != "account=undone web=undone ssl=skipped database=undone wordpress=failed" {
 		t.Fatal(got)
 	}
 	if f.acc.delCtx != nil {
@@ -674,7 +674,7 @@ func TestUndoUsesTheAccountsCurrentRevision(t *testing.T) {
 	f.acc.webErr = hostaccounts.ErrUnavailable
 	f.acc.webBumps = true
 	done := f.runJob(t, input("example.com"))
-	if got := stepStates(done); got != "account=undone web=failed database=skipped wordpress=skipped" {
+	if got := stepStates(done); got != "account=undone web=failed ssl=skipped database=skipped wordpress=skipped" {
 		t.Fatal(got)
 	}
 	if got := deletes(f); !slices.Equal(got, []string{"delete 0001 rev=2"}) || len(f.acc.accounts) != 0 || strings.Contains(done.Error.Next, "could not be removed") {
@@ -691,7 +691,7 @@ func TestUndoUsesTheAccountsCurrentRevision(t *testing.T) {
 		return &hostaccounts.InstallError{Step: "install", Detail: "failed"}
 	}
 	done = f.runJob(t, input("example.com"))
-	if got := stepStates(done); got != "account=undone web=undone database=undone wordpress=failed" {
+	if got := stepStates(done); got != "account=undone web=undone ssl=skipped database=undone wordpress=failed" {
 		t.Fatal(got)
 	}
 	if got := deletes(f); len(got) != 0 {
@@ -706,7 +706,7 @@ func TestUndoUsesTheAccountsCurrentRevision(t *testing.T) {
 	f.acc.webErr = hostaccounts.ErrWebRejected
 	f.acc.delErr = hostaccounts.ErrNotFound
 	done = f.runJob(t, input("example.com"))
-	if got := stepStates(done); got != "account=undone web=failed database=skipped wordpress=skipped" || done.Steps[0].Message != "Was already gone when the job came to remove it." {
+	if got := stepStates(done); got != "account=undone web=failed ssl=skipped database=skipped wordpress=skipped" || done.Steps[0].Message != "Was already gone when the job came to remove it." {
 		t.Fatalf("%s %q", got, done.Steps[0].Message)
 	}
 }
@@ -869,7 +869,7 @@ func TestExistingDatabaseIsNeitherReusedNorRemoved(t *testing.T) {
 		return nil
 	}
 	done = f.runJob(t, input("example.com"))
-	if got := stepStates(done); got != "account=undone web=undone database=failed wordpress=skipped" {
+	if got := stepStates(done); got != "account=undone web=undone ssl=skipped database=failed wordpress=skipped" {
 		t.Fatal(got)
 	}
 	if !strings.Contains(done.Error.Why, "example_wp already exists on this server and was not made by this job") {
@@ -926,7 +926,7 @@ func TestUnregisteredDatabaseOrUserIsNeverDropped(t *testing.T) {
 		f = newFixture(t)
 		f.dbs.late = map[string]bool{tc.kind + " example_wp": true}
 		done = f.runJob(t, input("example.com"))
-		if got := stepStates(done); got != "account=undone web=undone database=failed wordpress=skipped" {
+		if got := stepStates(done); got != "account=undone web=undone ssl=skipped database=failed wordpress=skipped" {
 			t.Fatalf("%s: %s", tc.kind, got)
 		}
 		if !strings.Contains(done.Error.Why, "named example_wp already exists on this server and was not made by this job") || strings.Contains(done.Error.Next, "could not be removed") {
@@ -951,11 +951,11 @@ func TestUnrecordedDatabaseOrUserIsUndone(t *testing.T) {
 		f := newFixture(t)
 		f.dbs.unrecorded = tc.kind
 		done := f.runJob(t, input("example.com"))
-		if got := stepStates(done); got != "account=undone web=undone database=failed wordpress=skipped" {
+		if got := stepStates(done); got != "account=undone web=undone ssl=skipped database=failed wordpress=skipped" {
 			t.Fatalf("%s: %s", tc.kind, got)
 		}
-		if !strings.Contains(done.Error.Why, "could not record it") || !strings.HasSuffix(done.Steps[2].Message, "What this step had created was removed.") {
-			t.Fatalf("%s: %+v %q", tc.kind, done.Error, done.Steps[2].Message)
+		if !strings.Contains(done.Error.Why, "could not record it") || !strings.HasSuffix(done.Steps[3].Message, "What this step had created was removed.") {
+			t.Fatalf("%s: %+v %q", tc.kind, done.Error, done.Steps[3].Message)
 		}
 		if got := undoCalls(f); !slices.Equal(got, tc.drops) {
 			t.Fatalf("%s: undo %q, want %q", tc.kind, got, tc.drops)
@@ -995,11 +995,11 @@ func TestRestartTurnsRunningJobsIntoFailed(t *testing.T) {
 		if a.State != StateFailed || a.Error == nil || a.Error.Step != StepWeb || a.Error.What != "The panel restarted while this website was being created." || a.Error.Next != "Check Websites and Accounts, remove what was left, then create it again." {
 			t.Fatalf("running job after restart: %+v %+v", a, a.Error)
 		}
-		if got := stepStates(a); got != "account=done web=failed database=skipped wordpress=skipped" {
+		if got := stepStates(a); got != "account=done web=failed ssl=skipped database=skipped wordpress=skipped" {
 			t.Fatal(got)
 		}
 		b, _ := store.Get(between.ID)
-		if b.State != StateFailed || b.Error.Step != StepWeb || stepStates(b) != "account=done web=failed database=skipped wordpress=skipped" {
+		if b.State != StateFailed || b.Error.Step != StepWeb || stepStates(b) != "account=done web=failed ssl=skipped database=skipped wordpress=skipped" {
 			t.Fatalf("job between steps: %+v %s", b.Error, stepStates(b))
 		}
 		c, _ := store.Get(finished.ID)

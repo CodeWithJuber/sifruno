@@ -25,14 +25,18 @@ const (
 )
 
 const (
-	issueLimit   = 3 * time.Minute     // lego's part of one attempt: order, challenge, download
-	firstCheck   = 2 * time.Minute     // the renewal loop's first look after start
-	checkEvery   = 12 * time.Hour      // and every 12 hours after that
-	retryEvery   = 6 * time.Hour       // at most one attempt per site in this time
-	renewBefore  = 30 * 24 * time.Hour // renew once less than this is left
-	minWait      = time.Minute         // the loop never spins faster than this
-	logLimit     = 300                 // bytes of error text in one log line
-	stateDirMode = 0o700
+	issueLimit = 3 * time.Minute // lego's part of one attempt: order, challenge, download
+	firstCheck = 2 * time.Minute // the renewal loop's first look after start
+	checkEvery = 12 * time.Hour  // and every 12 hours after that
+	retryEvery = 6 * time.Hour   // at most one attempt per site in this time
+	// After the broker refused to install an issued certificate, wait a
+	// week: each refused install takes two rows of the account's journal,
+	// which holds 256, so retrying every 6 hours would fill it in a month.
+	installRetryEvery = 7 * 24 * time.Hour
+	renewBefore       = 30 * 24 * time.Hour // renew once less than this is left
+	minWait           = time.Minute         // the loop never spins faster than this
+	logLimit          = 300                 // bytes of error text in one log line
+	stateDirMode      = 0o700
 )
 
 // Installer installs a finished certificate (the chain, leaf first) and its
@@ -210,7 +214,7 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 		if notAfter.IsZero() {
 			notAfter = r.NotAfter
 		}
-		if due(notAfter, r.LastAttempt, now) {
+		if due(notAfter, r.LastAttempt.Add(retryWait(r)), now) {
 			// Secure logs the outcome; the error is already in the record.
 			_, _, _ = m.Secure(ctx, s.AccountID, s.Domain, s.Revision)
 		}
@@ -218,13 +222,22 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 	return m.nextWait()
 }
 
-// due: no certificate yet, or less than 30 days left, and no attempt in the
-// last 6 hours.
-func due(notAfter, lastAttempt, now time.Time) bool {
-	if now.Sub(lastAttempt) < retryEvery {
+// due: no certificate yet, or less than 30 days left, and the site may be
+// tried again (now is past retryAt).
+func due(notAfter, retryAt, now time.Time) bool {
+	if now.Before(retryAt) {
 		return false
 	}
 	return notAfter.IsZero() || notAfter.Sub(now) < renewBefore
+}
+
+// retryWait is how long a site waits after its last attempt: 6 hours, or a
+// week after the broker refused to install what was issued.
+func retryWait(r record) time.Duration {
+	if r.LastResult == ErrInstall.Error() {
+		return installRetryEvery
+	}
+	return retryEvery
 }
 
 // nextWait is the time to the next check: 12 hours, or sooner when a
@@ -235,7 +248,7 @@ func (m *Manager) nextWait() time.Duration {
 	now := m.now()
 	wait := checkEvery
 	for _, r := range m.records.all() {
-		at := r.LastAttempt.Add(retryEvery)
+		at := r.LastAttempt.Add(retryWait(r))
 		if !r.NotAfter.IsZero() {
 			if renew := r.NotAfter.Add(-renewBefore); renew.After(at) {
 				at = renew

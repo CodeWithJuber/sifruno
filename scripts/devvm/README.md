@@ -61,6 +61,7 @@ scripts/devvm/vm.sh destroy
 - **`/home`.** A separate XFS filesystem mounted with user and group quota. XFS only enables quota at mount time. Root is the only login, so `/home` holds nothing but accounts, which the broker requires of its homes directory.
 - **Broker host policy.** `passwd`, `group` and `shadow` in `nsswitch.conf` are set to `files` (stock AlmaLinux lists `sss` and `systemd` too, and the broker refuses that). The controller user `sifpanel` and the root-owned key directory `/etc/sifruno/ssh/authorized_keys` (mode 0711) are created.
 - **sshd policy.** Deny by default: every login is SFTP-only and reads its keys from the broker's directory, with forwarding and TTYs off, unless it is root or in `wheel`. The file is validated with `sshd -t` before a reload.
+- **Certificates.** `/var/lib/sifruno-acme` (sifpanel, 0755) holds the panel's HTTP-01 challenge files, which every vhost serves at `/.well-known/acme-challenge/`. For the proofs only, Let's Encrypt's test CA Pebble (pinned release and checksums) and its DNS test server are installed as the `pebble` and `pebble-challtestsrv` units, off at boot: the DNS server answers 127.0.0.1 for every name, and Pebble's ACME directory is `https://127.0.0.1:14000/dir`, served with a certificate from `/etc/pebble/api-ca.pem`. Pebble makes a new issuing CA at every start; fetch it from `https://127.0.0.1:15000/roots/0`.
 
 ## Proofs
 

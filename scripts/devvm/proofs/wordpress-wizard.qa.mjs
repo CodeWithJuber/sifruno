@@ -114,8 +114,20 @@ try {
     const version = (await page.getByTestId("job-wordpress-version").innerText()).trim();
     console.log(`  hosting account ${user}, WordPress ${version}`);
     check("it shows the hosting account and the WordPress version", /^[a-z][a-z0-9_]{2,31}$/.test(user) && /^\d+\.\d+/.test(version));
-    check("Open site points at the new site", (await page.getByTestId("open-site").getAttribute("href")) === `http://${domain}/`);
-    check("Open WordPress admin points at wp-admin", (await page.getByTestId("open-admin").getAttribute("href")) === `http://${domain}/wp-admin/`);
+    // The HTTPS step is found by its name in the job and on the page by its
+    // place and state, so the check does not depend on the step's title.
+    const job = (await page.evaluate(async (id) => (await fetch(`/api/v1/websites/jobs/${id}`)).json(), jobId)).job;
+    const names = job.steps.map((s) => s.name);
+    const ssl = job.steps.find((s) => s.name === "ssl");
+    console.log(`  steps: ${job.steps.map((s) => `${s.name} ${s.state}`).join(", ")}`);
+    check("the steps include HTTPS, after the site goes live and before the database",
+      names.includes("ssl") && names.indexOf("ssl") === names.indexOf("web") + 1 && names.indexOf("database") === names.indexOf("ssl") + 1, names.join(" "));
+    check("the HTTPS step is done, with a certificate from the test CA", ssl?.state === "done", ssl ? `${ssl.state}: ${ssl.message}` : "no ssl step");
+    const shown = await page.getByTestId("job-steps").locator("li").evaluateAll((items) => items.map((li) => li.getAttribute("data-state")));
+    check("the step list shows every step's state, HTTPS included", JSON.stringify(shown) === JSON.stringify(job.steps.map((s) => s.state)), shown.join(" "));
+    const scheme = ssl?.state === "done" ? "https" : "http";
+    check(`Open site points at the new site over ${scheme}`, (await page.getByTestId("open-site").getAttribute("href")) === `${scheme}://${domain}/`);
+    check(`Open WordPress admin points at wp-admin over ${scheme}`, (await page.getByTestId("open-admin").getAttribute("href")) === `${scheme}://${domain}/wp-admin/`);
     await page.getByTestId("set-up-dns").click();
     check("Set up DNS explains the record to add", (await page.getByTestId("dns-help").innerText()).includes(domain));
     await page.reload();

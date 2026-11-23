@@ -36,7 +36,8 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 The New website wizard end to end: the panel runs as sifpanel
                 with the broker and the MariaDB option file, a browser on this
                 host signs in and creates a WordPress site, follows the job to
-                the last screen, and the VM checks the site it made. Needs
+                the last screen, and the VM checks the site it made, over
+                https with a certificate from the VM's Pebble test CA. Needs
                 Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the
                 web packages.
   panel-shell   Phase 1 panel shell and admin sign-in: the panel runs in the VM

@@ -128,7 +128,9 @@ try {
   await page.getByTestId("signed-in-as").waitFor();
   check("the admin signs in with password and a fresh code", answered === 200 && path(page) === "/websites", `HTTP ${answered}`);
 
-  // Create a website so the Files handoff has something to carry.
+  // Create a static site so the Files handoff has something to carry. Static
+  // sites live at /websites/static since Websites lists the WordPress sites.
+  await page.goto(origin + "/websites/static");
   await page.getByRole("button", { name: "Create website", exact: true }).first().click();
   await page.getByTestId("website-create-form").getByLabel("Website name", { exact: true }).fill(siteName);
   await page.getByTestId("website-create-form").getByLabel("Domain", { exact: true }).fill(`shell-qa-${run}.test`);
@@ -149,7 +151,7 @@ try {
 
   await page.goBack();
   await page.getByTestId("website-details").waitFor();
-  check("back button returns to /websites with the site still open", path(page) === "/websites" && (await page.getByTestId("website-details").getAttribute("data-site-id")) === siteId, path(page));
+  check("back button returns to /websites/static with the site still open", path(page) === "/websites/static" && (await page.getByTestId("website-details").getAttribute("data-site-id")) === siteId, path(page));
 
   await page.goto(origin + "/websites/backups");
   await page.getByRole("heading", { name: "Backups", level: 1 }).waitFor();
@@ -180,7 +182,7 @@ try {
   await page.getByRole("heading", { name: "AI spending" }).waitFor();
   check("Activity and Settings pages load", true);
 
-  await page.goto(origin + "/websites");
+  await page.goto(origin + "/websites/static");
   await page.getByRole("button", { name: "Switch to dark theme" }).click();
   check("dark theme applies", await page.evaluate(() => document.documentElement.classList.contains("dark")));
   await page.getByRole("button", { name: `Open website ${siteName}`, exact: true }).click();

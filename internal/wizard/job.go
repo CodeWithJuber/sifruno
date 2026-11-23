@@ -111,9 +111,10 @@ const (
 )
 
 const (
-	maxJobs        = 50      // the store keeps the newest 50
+	maxJobs        = 50      // the newest 50 jobs that did not succeed
+	maxSucceeded   = 2000    // succeeded jobs name the sites: as many as the broker has accounts
 	maxListed      = 20      // GET /jobs answers at most 20
-	maxStoreBytes  = 4 << 20 // a full store is well under 1 MiB
+	maxStoreBytes  = 8 << 20 // a full store is about 2.5 MiB
 	storeFile      = "jobs.json"
 	storeFileMode  = 0o600
 	storeDirMode   = 0o700
@@ -233,8 +234,7 @@ func OpenStore(dir string) (*Store, error) {
 			changed = true
 		}
 	}
-	if len(s.jobs) > maxJobs {
-		s.jobs = s.jobs[len(s.jobs)-maxJobs:]
+	if s.trimLocked() {
 		changed = true
 	}
 	if changed {
@@ -345,21 +345,40 @@ func (s *Store) put(j Job) error {
 	if !replaced {
 		s.jobs = append(s.jobs, j)
 	}
-	// Drop the oldest finished jobs; a running job is never dropped.
-	for len(s.jobs) > maxJobs {
-		dropped := false
-		for i := range s.jobs {
-			if s.jobs[i].State != StateRunning {
-				s.jobs = append(s.jobs[:i], s.jobs[i+1:]...)
-				dropped = true
-				break
-			}
-		}
-		if !dropped {
-			break
+	s.trimLocked()
+	return s.writeLocked()
+}
+
+// trimLocked drops the oldest jobs past the limits and reports whether it
+// dropped any. Succeeded jobs are what Websites lists, so they have their own,
+// larger limit; a running job is never dropped.
+func (s *Store) trimLocked() bool {
+	succeeded, other := 0, 0
+	for _, j := range s.jobs {
+		switch j.State {
+		case StateSucceeded:
+			succeeded++
+		case StateRunning:
+		default:
+			other++
 		}
 	}
-	return s.writeLocked()
+	dropped := false
+	kept := s.jobs[:0]
+	for _, j := range s.jobs { // oldest first
+		switch {
+		case j.State == StateSucceeded && succeeded > maxSucceeded:
+			succeeded--
+			dropped = true
+		case j.State != StateSucceeded && j.State != StateRunning && other > maxJobs:
+			other--
+			dropped = true
+		default:
+			kept = append(kept, j)
+		}
+	}
+	s.jobs = kept
+	return dropped
 }
 
 // forget removes a job from memory only: used when its first save failed,

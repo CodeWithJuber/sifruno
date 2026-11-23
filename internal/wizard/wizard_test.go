@@ -1142,7 +1142,8 @@ func TestStoreKeepsTheNewest50(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(store.jobs) != 50 {
+	// The newest 50 finished jobs, plus the running one outside that limit.
+	if len(store.jobs) != 51 {
 		t.Fatalf("kept %d", len(store.jobs))
 	}
 	if _, ok := store.Get(fmt.Sprintf("%032x", 1)); !ok {

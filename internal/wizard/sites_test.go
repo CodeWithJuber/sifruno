@@ -107,3 +107,33 @@ func TestSucceededListsEveryKeptSiteNewestFirst(t *testing.T) {
 		t.Fatal("Succeeded shares the store's result")
 	}
 }
+
+// Succeeded jobs are the sites Websites lists, so the store keeps them past
+// the 50 it keeps of the others; a running job is never dropped.
+func TestStoreKeepsSucceededJobs(t *testing.T) {
+	s := &Store{}
+	for i := 0; i < 60; i++ {
+		s.jobs = append(s.jobs, Job{ID: fmt.Sprintf("s%02d", i), State: StateSucceeded}, Job{ID: fmt.Sprintf("f%02d", i), State: StateFailed})
+	}
+	s.jobs = append(s.jobs, Job{ID: "running", State: StateRunning})
+	if !s.trimLocked() {
+		t.Fatal("nothing was dropped")
+	}
+	succeeded, failed, running := 0, 0, 0
+	for _, j := range s.jobs {
+		switch j.State {
+		case StateSucceeded:
+			succeeded++
+		case StateFailed:
+			failed++
+			if j.ID < "f10" {
+				t.Fatalf("an old failed job %s was kept over a newer one", j.ID)
+			}
+		case StateRunning:
+			running++
+		}
+	}
+	if succeeded != 60 || failed != maxJobs || running != 1 {
+		t.Fatalf("kept %d succeeded, %d failed, %d running", succeeded, failed, running)
+	}
+}

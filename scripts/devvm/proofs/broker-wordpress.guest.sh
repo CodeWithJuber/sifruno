@@ -114,12 +114,14 @@ check "the admin user exists" \
 echo
 echo "## 5. The site serves WordPress"
 # The first request starts lsphp and loads WordPress cold; under software
-# emulation that can take minutes.
+# emulation on a busy host that has taken more than five minutes.
 ok=no
-for _ in $(seq 1 150); do
+first=$(date +%s)
+for _ in $(seq 1 300); do
   if page / | grep -q 'Sifruno WordPress proof'; then ok=yes; break; fi
   sleep 2
 done
+echo "  first page after $(( $(date +%s) - first )) s"
 check "the home page carries the site title" test "$ok" = yes
 check "wp-login.php answers 200" test "$(code /wp-login.php)" = 200
 check "wp-config.php is not served as text" bash -c "! page /wp-config.php | grep -q DB_PASSWORD"

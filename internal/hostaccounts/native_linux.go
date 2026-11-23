@@ -47,6 +47,7 @@ const mailSpoolDir = "/var/spool/mail"
 
 type linuxSystem struct {
 	opts    BrokerOptions
+	webUID  int // OpenLiteSpeed's user; 0 while the web operation is off
 	tools   map[string]os.FileInfo
 	db      os.FileInfo
 	sshDir  string
@@ -73,12 +74,16 @@ type fileStamp struct {
 	mtime, ctime int64
 }
 
-func newLinuxSystem(opts BrokerOptions) (*linuxSystem, error) {
+func newLinuxSystem(opts BrokerOptions, web *WebOptions) (*linuxSystem, error) {
 	tools, e := trustedUtilities()
 	if e != nil || supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return nil, ErrUnavailable
 	}
-	return &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir}, nil
+	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir}
+	if web != nil && n.enableWeb(web) != nil {
+		return nil, ErrUnavailable
+	}
+	return n, nil
 }
 
 func trustedUtilities() (map[string]os.FileInfo, error) {
@@ -210,16 +215,30 @@ func (b *commandBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func (n *linuxSystem) command(ctx context.Context, path string, args ...string) ([]byte, error) {
-	if ctx == nil || ctx.Err() != nil {
+	out, code, e := n.run(ctx, path, false, args...)
+	if e != nil || code != 0 {
 		return nil, ErrUnavailable
 	}
+	return out, nil
+}
+
+// commandStatus is command for a program whose non-zero exit is an answer,
+// not a failure (openlitespeed -t); its output is stdout and stderr together.
+func (n *linuxSystem) commandStatus(ctx context.Context, path string, args ...string) ([]byte, int, error) {
+	return n.run(ctx, path, true, args...)
+}
+
+func (n *linuxSystem) run(ctx context.Context, path string, combined bool, args ...string) ([]byte, int, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, -1, ErrUnavailable
+	}
 	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
-		return nil, ErrUnavailable
+		return nil, -1, ErrUnavailable
 	}
 	before, ok := n.tools[path]
 	actual, e := trustedFile(path, false)
 	if !ok || e != nil || !os.SameFile(before, actual) || before.Size() != actual.Size() || !before.ModTime().Equal(actual.ModTime()) {
-		return nil, ErrUnavailable
+		return nil, -1, ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -237,10 +256,18 @@ func (n *linuxSystem) command(ctx context.Context, path string, args ...string) 
 	out, stderr := &commandBuffer{}, &commandBuffer{}
 	cmd.Stdout = out
 	cmd.Stderr = stderr
-	if cmd.Run() != nil || ctx.Err() != nil {
-		return nil, ErrUnavailable
+	if combined {
+		cmd.Stderr = out
 	}
-	return out.Bytes(), nil
+	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		return nil, -1, ErrUnavailable
+	}
+	var exit *exec.ExitError
+	if runErr != nil && !errors.As(runErr, &exit) {
+		return nil, -1, ErrUnavailable
+	}
+	return out.Bytes(), cmd.ProcessState.ExitCode(), nil
 }
 func readSystemFile(path string) ([]byte, error) {
 	return readBoundedSystemFile(path, 4<<20)

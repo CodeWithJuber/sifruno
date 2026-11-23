@@ -131,6 +131,21 @@ func (c *client) SetSSHKeys(ctx context.Context, id string, in SSHKeysInput, act
 	return out, err
 }
 
+// SetWeb asks the broker to make the account's site live. A 422
+// web_rejected answer means the new config failed its test and was restored:
+// the account is unchanged.
+func (c *client) SetWeb(ctx context.Context, id string, in WebInput, actor string) (WebResult, error) {
+	if !idPattern.MatchString(id) || !validWebState(WebState{PHPVersion: in.PHPVersion, QuotaMiB: in.QuotaMiB}) || in.ExpectedRevision == 0 || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return WebResult{}, ErrInvalid
+	}
+	var out WebResult
+	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/web", struct {
+		Input WebInput `json:"input"`
+		Actor string   `json:"actor"`
+	}{in, actor}, &out)
+	return out, err
+}
+
 func (c *client) request(ctx context.Context, method, path string, input, output any) error {
 	return c.requestBounded(ctx, method, path, input, output, maxResponseBytes)
 }
@@ -182,6 +197,8 @@ func (c *client) requestBounded(ctx context.Context, method, path string, input,
 			return ErrNotFound
 		case "recovery":
 			return ErrRecovery
+		case "web_rejected":
+			return ErrWebRejected
 		default:
 			return ErrUnavailable
 		}

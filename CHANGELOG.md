@@ -21,6 +21,14 @@
 
 ### Added
 
+- Broker web operation (needs human review): `SetWeb` (`hostbroker
+  --web-user`) gives OpenLiteSpeed read access to an account's site through
+  an ACL written on no-follow directory handles, sets an XFS quota, renders
+  the account's vhost with olsweb, tests it with `openlitespeed -t` and
+  reloads gracefully. A config that fails its test is restored and
+  journaled as rejected, leaving the account unchanged; delete takes the
+  site out before removing the user. `proof.sh broker-web` proves it on the
+  dev VM.
 - The panel over HTTPS beyond loopback (needs human review):
   `--https-listen` with `--panel-host`, and `--tls-cert`/`--tls-key` or a
   self-signed certificate kept in the state directory (fingerprint printed

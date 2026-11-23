@@ -89,15 +89,3 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 		}
 	}
 }
-
-func TestQuotaReadBack(t *testing.T) {
-	soft, hard, err := parseQuotaKiB([]byte("/dev/vdb 0 184320 204800 00 [--------] /home\n"))
-	if err != nil || soft != 184320 || hard != 204800 {
-		t.Fatalf("got %d %d %v", soft, hard, err)
-	}
-	for _, bad := range []string{"", "/dev/vdb 0 x 1 00 /home\n", "/dev/vdb 0 1\n", "a 0 1 2\nb 0 1 2\n"} {
-		if _, _, err := parseQuotaKiB([]byte(bad)); err == nil {
-			t.Errorf("%q accepted", bad)
-		}
-	}
-}

@@ -152,8 +152,9 @@ first and is idempotent: if the tenant swapped or changed those directories
 the request is refused (409) before anything is journaled, so a tenant cannot
 leave an unfinished operation that blocks every account. Then the intent is
 journaled and the apply runs under its own two-minute limit, not the
-caller's. If quota is not enforced or cannot be read, or the new config
-fails its test, the old files and the quota the user had go back, the
+caller's. If quota is not enforced or the new config fails its test, the
+old files and the recorded quota go back (none for a first enable: the
+broker owns its accounts' quotas, so one set by hand is removed), the
 operation is journaled as `rejected` with the account unchanged, and the
 request answers 422 `web_rejected`. Any other failure leaves the operation
 pending; it is finished, or ends rejected, on the next start. A web
@@ -166,6 +167,9 @@ Limits for now:
 
 - Delete of an account with a live site needs the web operation on: a broker
   started without `--web-user` cannot rewrite the config, so it refuses.
+- Delete of an account with a live site is rejected while OpenLiteSpeed's
+  config is broken outside the tenants' sites, or the `include` line is
+  missing: the site cannot be taken out, so the user stays.
 - Delete removes the vhost's `vhconf.conf` but leaves its empty directory and
   the site's logs under `/usr/local/lsws/logs/sifruno`.
 - A suspended account's site keeps serving; suspension still blocks new

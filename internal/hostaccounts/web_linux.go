@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -152,40 +151,11 @@ func (n *linuxSystem) GrantWebAccess(_ context.Context, r record) error {
 	return nil
 }
 
-// setQuota sets a user's block limits in KiB; 0 removes a limit.
-func (n *linuxSystem) setQuota(ctx context.Context, uid int, softKiB, hardKiB int64) error {
-	limit := fmt.Sprintf("limit -u bsoft=%dk bhard=%dk %d", softKiB, hardKiB, uid)
+// setQuota sets the hard limit and a soft limit 10% lower; 0 removes both.
+func (n *linuxSystem) setQuota(ctx context.Context, uid, hardMiB int) error {
+	limit := fmt.Sprintf("limit -u bsoft=%dm bhard=%dm %d", softQuotaMiB(hardMiB), hardMiB, uid)
 	_, e := n.command(ctx, xfsQuota, "-x", "-c", limit, n.opts.HomesDir)
 	return e
-}
-
-// quotaKiB reads a user's soft and hard block limits in KiB.
-func (n *linuxSystem) quotaKiB(ctx context.Context, uid int) (int64, int64, error) {
-	out, e := n.command(ctx, xfsQuota, "-x", "-c", fmt.Sprintf("quota -u -b -N -v %d", uid), n.opts.HomesDir)
-	if e != nil {
-		return 0, 0, ErrUnavailable
-	}
-	return parseQuotaKiB(out)
-}
-
-// parseQuotaKiB reads one "DEVICE USED SOFT HARD ..." line, in KiB.
-func parseQuotaKiB(out []byte) (int64, int64, error) {
-	var lines [][]string
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	for sc.Scan() {
-		if fields := strings.Fields(sc.Text()); len(fields) > 0 {
-			lines = append(lines, fields)
-		}
-	}
-	if len(lines) != 1 || len(lines[0]) < 4 {
-		return 0, 0, ErrUnavailable
-	}
-	soft, e1 := strconv.ParseInt(lines[0][2], 10, 64)
-	hard, e2 := strconv.ParseInt(lines[0][3], 10, 64)
-	if e1 != nil || e2 != nil || soft < 0 || hard < 0 {
-		return 0, 0, ErrUnavailable
-	}
-	return soft, hard, nil
 }
 
 func (n *linuxSystem) quotaEnforced(ctx context.Context) bool {
@@ -620,26 +590,19 @@ func (n *linuxSystem) ApplyWeb(ctx context.Context, r record, previous, next Web
 	if n.webUID <= 0 || !validWebState(next) {
 		return ErrUnavailable
 	}
-	// Nothing has changed yet, so these refusals leave the account as it was.
+	// Nothing has changed yet, so this refusal leaves the account as it was.
 	if !n.quotaEnforced(ctx) {
 		return ErrWebRejected
 	}
-	soft, hard, e := n.quotaKiB(ctx, r.Account.UID)
-	if e != nil {
-		return ErrWebRejected
-	}
-	// A recovery may run after the new quota was set, so a site that was
-	// already live goes back to its recorded quota rather than the one read.
-	if previous.enabled() {
-		soft, hard = int64(softQuotaMiB(previous.QuotaMiB))*1024, int64(previous.QuotaMiB)*1024
-	}
-	if e := n.setQuota(ctx, r.Account.UID, int64(softQuotaMiB(next.QuotaMiB))*1024, int64(next.QuotaMiB)*1024); e != nil {
+	if e := n.setQuota(ctx, r.Account.UID, next.QuotaMiB); e != nil {
 		return e
 	}
-	e = n.installSites(ctx, sites)
+	e := n.installSites(ctx, sites)
 	if errors.Is(e, ErrWebRejected) {
-		// Put the quota back too, so a rejected request changed nothing.
-		if n.setQuota(ctx, r.Account.UID, soft, hard) != nil {
+		// The broker owns its accounts' quotas: a rejected change goes back
+		// to the recorded one, and a first enable to none. A quota read back
+		// here could already be the new one when this is a recovery.
+		if n.setQuota(ctx, r.Account.UID, previous.QuotaMiB) != nil {
 			return ErrRecovery
 		}
 	}

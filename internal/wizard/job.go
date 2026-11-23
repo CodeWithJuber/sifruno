@@ -26,17 +26,18 @@ import (
 
 // Job is one wizard run as the API shows it and the store keeps it.
 type Job struct {
-	ID        string   `json:"id"`
-	Kind      string   `json:"kind"`
-	Domain    string   `json:"domain"`
-	Username  string   `json:"username"`
-	State     string   `json:"state"`
-	Steps     []Step   `json:"steps"`
-	Error     *Failure `json:"error"`
-	Result    *Result  `json:"result"`
-	Actor     string   `json:"actor"`
-	CreatedAt string   `json:"created_at"`
-	UpdatedAt string   `json:"updated_at"`
+	ID         string   `json:"id"`
+	Kind       string   `json:"kind"`
+	Domain     string   `json:"domain"`
+	Username   string   `json:"username"`
+	PHPVersion string   `json:"php_version"` // from the request; "" in a job saved before it was recorded
+	State      string   `json:"state"`
+	Steps      []Step   `json:"steps"`
+	Error      *Failure `json:"error"`
+	Result     *Result  `json:"result"`
+	Actor      string   `json:"actor"`
+	CreatedAt  string   `json:"created_at"`
+	UpdatedAt  string   `json:"updated_at"`
 }
 
 // Step is one part of the job. StartedAt and FinishedAt are RFC 3339 or

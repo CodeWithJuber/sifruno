@@ -318,7 +318,7 @@ func TestWordPressJobSucceeds(t *testing.T) {
 	}
 	f.runner.Wait()
 	done, _ := f.runner.Get(job.ID)
-	if done.State != StateSucceeded || done.Error != nil || done.Username != "example" || done.Actor != "local-operator" {
+	if done.State != StateSucceeded || done.Error != nil || done.Username != "example" || done.Actor != "local-operator" || done.PHPVersion != "8.3" || job.PHPVersion != "8.3" {
 		t.Fatalf("finished job: %+v", done)
 	}
 	if got := stepStates(done); got != "account=done web=done ssl=skipped database=done wordpress=done" {

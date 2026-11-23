@@ -1,0 +1,289 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http/httptest"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"sifruno/internal/hostaccounts"
+	"sifruno/internal/wizard"
+)
+
+// sitesBroker is one fake broker for both sides of the join: the wizard
+// creates accounts through it, and the panel lists them. It provisions
+// nothing.
+type sitesBroker struct {
+	mu       sync.Mutex
+	next     int
+	accounts []hostaccounts.Account
+	listErr  error
+	lists    int
+}
+
+func (b *sitesBroker) List(context.Context) ([]hostaccounts.Account, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.lists++
+	if b.listErr != nil {
+		return nil, b.listErr
+	}
+	return slices.Clone(b.accounts), nil
+}
+func (b *sitesBroker) Create(_ context.Context, in hostaccounts.CreateInput, _ string) (hostaccounts.Account, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.next++
+	a := hostaccounts.Account{ID: fmt.Sprintf("acc%029x", b.next), Username: in.Username, Domain: in.Domain, State: "active", Revision: 1}
+	b.accounts = append(b.accounts, a)
+	return a, nil
+}
+func (b *sitesBroker) Delete(context.Context, string, hostaccounts.DeleteInput, string) (hostaccounts.Account, error) {
+	return hostaccounts.Account{}, nil
+}
+func (b *sitesBroker) SetWeb(_ context.Context, id string, in hostaccounts.WebInput, _ string) (hostaccounts.WebResult, error) {
+	return hostaccounts.WebResult{Account: hostaccounts.Account{ID: id, Revision: in.ExpectedRevision + 1}}, nil
+}
+func (b *sitesBroker) InstallWordPress(context.Context, string, hostaccounts.WordPressInput, string) (hostaccounts.WordPressResult, error) {
+	return hostaccounts.WordPressResult{Version: "7.1.5"}, nil
+}
+func (b *sitesBroker) Capability(context.Context) (hostaccounts.Capability, error) {
+	return hostaccounts.Capability{Available: true}, nil
+}
+func (b *sitesBroker) SetState(context.Context, string, hostaccounts.StateInput, string) (hostaccounts.Account, error) {
+	return hostaccounts.Account{}, errors.New("not used")
+}
+func (b *sitesBroker) SetPlan(context.Context, string, hostaccounts.PlanInput, string) (hostaccounts.Account, error) {
+	return hostaccounts.Account{}, errors.New("not used")
+}
+
+// change edits the broker's record of one account, as a later operation
+// (suspension, a certificate) would.
+func (b *sitesBroker) change(id string, edit func(*hostaccounts.Account)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.accounts {
+		if b.accounts[i].ID == id {
+			edit(&b.accounts[i])
+		}
+	}
+}
+
+func sitesFixture(t *testing.T) (siteFixture, *wizard.Runner, *sitesBroker) {
+	t.Helper()
+	f := websiteFixture(t)
+	store, err := wizard.OpenStore(filepath.Join(realTempDir(t), "wizard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := &sitesBroker{}
+	runner := wizard.New(broker, wizardDatabaseSpy{}, store, nil)
+	t.Cleanup(runner.Wait)
+	f.handler = New(Options{Operator: f.manager, Accounts: broker, Wizard: runner, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	return f, runner, broker
+}
+
+func makeSite(t *testing.T, runner *wizard.Runner, domain, php string) wizard.Job {
+	t.Helper()
+	job, err := runner.Start(context.Background(), wizard.Input{Domain: domain, Title: "My site", AdminUser: "siteadmin", AdminEmail: "me@example.com", AdminPassword: wizardPassword, PHPVersion: php}, "local-operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.Wait()
+	done, ok := runner.Get(job.ID)
+	if !ok || done.State != wizard.StateSucceeded {
+		t.Fatalf("job for %s: %+v", domain, done)
+	}
+	return done
+}
+
+func decodeSites(t *testing.T, body []byte) []Website {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil || len(withoutSchema(raw)) != 1 || raw["sites"] == nil {
+		t.Fatalf("list body %s", body)
+	}
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(raw["sites"], &items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		checkWebsiteShape(t, item)
+	}
+	var sites []Website
+	if err := json.Unmarshal(raw["sites"], &sites); err != nil {
+		t.Fatal(err)
+	}
+	return sites
+}
+
+// checkWebsiteShape compares one entry's keys with the contract, exactly.
+func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage) {
+	t.Helper()
+	delete(item, "$schema")
+	keys := slices.Sorted(func(yield func(string) bool) {
+		for k := range item {
+			if !yield(k) {
+				return
+			}
+		}
+	})
+	want := []string{"account_id", "admin_url", "created_at", "domain", "https", "php_version", "state", "url", "username", "wordpress_version"}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("website keys %q", keys)
+	}
+	var https map[string]any
+	if err := json.Unmarshal(item["https"], &https); err != nil || len(https) != 2 {
+		t.Fatalf("https %s", item["https"])
+	}
+	if _, ok := https["on"].(bool); !ok {
+		t.Fatalf("https.on %s", item["https"])
+	}
+	if _, ok := https["not_after"].(string); !ok {
+		t.Fatalf("https.not_after %s", item["https"])
+	}
+}
+
+func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
+	f, runner, broker := sitesFixture(t)
+	first := makeSite(t, runner, "first.example", "8.2")
+	second := makeSite(t, runner, "second.example", "8.3")
+	third := makeSite(t, runner, "third.example", "8.4")
+	// An account the wizard did not make is not a website here.
+	broker.mu.Lock()
+	broker.accounts = append(broker.accounts, hostaccounts.Account{ID: strings.Repeat("e", 32), Username: "manual", Domain: "manual.example", State: "active", Revision: 1})
+	broker.mu.Unlock()
+	// The broker is the authority for state, certificate and domain.
+	notAfter := time.Date(2027, 2, 21, 12, 30, 0, 0, time.UTC)
+	broker.change(second.Result.AccountID, func(a *hostaccounts.Account) {
+		a.Certificate = hostaccounts.CertificateState{NotAfter: notAfter.Unix(), Fingerprint: strings.Repeat("f", 64)}
+	})
+	broker.change(first.Result.AccountID, func(a *hostaccounts.Account) { a.State = "suspended" })
+	// Deleted on the broker: gone from the list.
+	broker.mu.Lock()
+	broker.accounts = slices.DeleteFunc(broker.accounts, func(a hostaccounts.Account) bool { return a.ID == third.Result.AccountID })
+	broker.mu.Unlock()
+
+	cookie, _ := websiteSignIn(t, f)
+	w := websiteRequest(f.handler, "GET", "/api/v1/websites/sites", nil, cookie, "")
+	if w.Code != 200 {
+		t.Fatalf("list status %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), wizardPassword) {
+		t.Fatal("password in the list")
+	}
+	sites := decodeSites(t, w.Body.Bytes())
+	if len(sites) != 2 || sites[0].AccountID != second.Result.AccountID || sites[1].AccountID != first.Result.AccountID {
+		t.Fatalf("sites %+v", sites)
+	}
+	want := Website{AccountID: second.Result.AccountID, Username: "second", Domain: "second.example", State: "active",
+		HTTPS: WebsiteHTTPS{On: true, NotAfter: "2027-02-21T12:30:00Z"}, PHPVersion: "8.3", WordPressVersion: "7.1.5",
+		URL: "http://second.example/", AdminURL: "http://second.example/wp-admin/", CreatedAt: second.CreatedAt}
+	if sites[0] != want {
+		t.Fatalf("second site %+v\nwant %+v", sites[0], want)
+	}
+	if s := sites[1]; s.State != "suspended" || s.HTTPS != (WebsiteHTTPS{}) || s.PHPVersion != "8.2" || s.Username != "first" {
+		t.Fatalf("first site %+v", s)
+	}
+	if !strings.Contains(w.Body.String(), `"https":{"on":false,"not_after":""}`) {
+		t.Fatalf("http site's https is not off and empty: %s", w.Body.String())
+	}
+
+	// One site, the same entry.
+	w = websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+second.Result.AccountID, nil, cookie, "")
+	var one map[string]json.RawMessage
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &one) != nil {
+		t.Fatalf("one site %d: %s", w.Code, w.Body.String())
+	}
+	checkWebsiteShape(t, one)
+	var got Website
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got != want {
+		t.Fatalf("one site %+v", got)
+	}
+	// Deleted, not made by the wizard, unknown, or not an ID: 404.
+	for _, id := range []string{third.Result.AccountID, strings.Repeat("e", 32), strings.Repeat("0", 32), "not-an-id", strings.ToUpper(second.Result.AccountID)} {
+		w = websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+id, nil, cookie, "")
+		if w.Code != 404 || !strings.HasPrefix(problemDetail(t, w), "That website was not found.") {
+			t.Fatalf("GET %s: %d %s", id, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestWebsitesListIsEmptyWithoutSites(t *testing.T) {
+	f, _, _ := sitesFixture(t)
+	cookie, _ := websiteSignIn(t, f)
+	w := websiteRequest(f.handler, "GET", "/api/v1/websites/sites", nil, cookie, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sites":[]`) {
+		t.Fatalf("empty list %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWebsitesListAdmission(t *testing.T) {
+	f, runner, broker := sitesFixture(t)
+	site := makeSite(t, runner, "example.com", "8.3")
+	before := broker.lists
+	for _, path := range []string{"/api/v1/websites/sites", "/api/v1/websites/sites/" + site.Result.AccountID} {
+		if w := websiteRequest(f.handler, "GET", path, nil, nil, ""); w.Code != 401 {
+			t.Fatalf("unauthenticated %s: %d", path, w.Code)
+		}
+	}
+	if broker.lists != before {
+		t.Fatal("an unauthenticated read reached the broker")
+	}
+	cookie, csrf := websiteSignIn(t, f)
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		if w := websiteRequest(f.handler, method, "/api/v1/websites/sites", `{}`, cookie, csrf); w.Code != 405 {
+			t.Fatalf("%s status %d", method, w.Code)
+		}
+	}
+	// A page on another origin cannot read the list, even with the cookie.
+	r := httptest.NewRequest("GET", "http://127.0.0.1:8080/api/v1/websites/sites", nil)
+	r.RemoteAddr = "127.0.0.1:14000"
+	r.Header.Set("Origin", "http://other.example")
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, r)
+	if w.Code != 403 || strings.Contains(w.Body.String(), "example.com") {
+		t.Fatalf("cross-origin read %d: %s", w.Code, w.Body.String())
+	}
+	if w = websiteRequest(f.handler, "GET", "/api/v1/websites/sites", nil, cookie, ""); w.Code != 200 {
+		t.Fatalf("same-origin read %d", w.Code)
+	}
+}
+
+func TestWebsitesListNotAvailable(t *testing.T) {
+	f, runner, broker := sitesFixture(t)
+	site := makeSite(t, runner, "example.com", "8.3")
+	cookie, _ := websiteSignIn(t, f)
+	paths := []string{"/api/v1/websites/sites", "/api/v1/websites/sites/" + site.Result.AccountID}
+
+	broker.mu.Lock()
+	broker.listErr = hostaccounts.ErrUnavailable
+	broker.mu.Unlock()
+	for _, path := range paths {
+		w := websiteRequest(f.handler, "GET", path, nil, cookie, "")
+		if w.Code != 503 || problemDetail(t, w) != websitesNoBroker {
+			t.Fatalf("broker down %s: %d %s", path, w.Code, w.Body.String())
+		}
+	}
+
+	for name, options := range map[string]Options{
+		"no wizard": {Operator: f.manager, Accounts: broker},
+		"no broker": {Operator: f.manager, Wizard: runner},
+	} {
+		h := New(Options{Operator: options.Operator, Accounts: options.Accounts, Wizard: options.Wizard, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+		for _, path := range paths {
+			w := websiteRequest(h, "GET", path, nil, cookie, "")
+			if w.Code != 503 || problemDetail(t, w) != websitesNotSetUp {
+				t.Fatalf("%s %s: %d %s", name, path, w.Code, w.Body.String())
+			}
+		}
+	}
+}

@@ -119,6 +119,18 @@ func (r *Runner) Get(id string) (Job, bool) { return r.store.Get(id) }
 // List returns the newest jobs, newest first, at most 20.
 func (r *Runner) List() []Job { return r.store.List(maxListed) }
 
+// Succeeded returns every kept job that made a site, newest first: all
+// 50 the store keeps, not only the 20 that List answers.
+func (r *Runner) Succeeded() []Job {
+	out := []Job{}
+	for _, j := range r.store.List(maxJobs) {
+		if j.State == StateSucceeded && j.Result != nil && j.Result.AccountID != "" {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
 // Wait blocks until every started job has finished.
 func (r *Runner) Wait() { r.wg.Wait() }
 
@@ -158,6 +170,7 @@ func (r *Runner) Start(ctx context.Context, in Input, actor string) (Job, error)
 		return Job{}, refuse(ErrUnavailable, "The panel could not create a job ID, so no website was started. Try again.")
 	}
 	job := newJob(id, in.Domain, actor, time.Now())
+	job.PHPVersion = in.PHPVersion
 	if err = r.store.put(job); err != nil {
 		r.store.forget(id)
 		return Job{}, refuse(ErrUnavailable, "The panel could not save the job record, so no website was started. Check the panel's state directory, then try again.")

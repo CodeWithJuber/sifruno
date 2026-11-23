@@ -127,7 +127,7 @@ func checkJobShape(t *testing.T, raw json.RawMessage) {
 			}
 		}
 	})
-	want := []string{"actor", "created_at", "domain", "error", "id", "kind", "result", "state", "steps", "updated_at", "username"}
+	want := []string{"actor", "created_at", "domain", "error", "id", "kind", "php_version", "result", "state", "steps", "updated_at", "username"}
 	if !slices.Equal(keys, want) {
 		t.Fatalf("job keys %q", keys)
 	}
@@ -249,7 +249,7 @@ func TestWordPressWizardJobShapes(t *testing.T) {
 	if err := json.Unmarshal(started["job"], &job); err != nil {
 		t.Fatal(err)
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(job.ID) || job.Kind != "wordpress" || job.Domain != "example.com" || job.State != "running" || job.Actor == "" || job.CreatedAt == "" || job.Error != nil || job.Result != nil {
+	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(job.ID) || job.Kind != "wordpress" || job.Domain != "example.com" || job.PHPVersion != "8.3" || job.State != "running" || job.Actor == "" || job.CreatedAt == "" || job.Error != nil || job.Result != nil {
 		t.Fatalf("started job %+v", job)
 	}
 	if !strings.Contains(string(started["job"]), `"error":null`) || !strings.Contains(string(started["job"]), `"result":null`) {

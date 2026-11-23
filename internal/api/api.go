@@ -72,6 +72,7 @@ func New(o Options) http.Handler {
 	registerSites(api, o)
 	registerAccounts(api, o)
 	registerWizard(api, o)
+	registerWebsites(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)

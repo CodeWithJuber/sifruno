@@ -48,6 +48,10 @@ type Account struct {
 	Revision   uint64    `json:"revision"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	// Certificate is the site's installed certificate, left out when there
+	// is none. It always equals the record's TLS, so the account list shows
+	// it and the journal's before and after rows record it.
+	Certificate CertificateState `json:"certificate,omitzero"`
 }
 type CreateInput struct {
 	Username string `json:"username"`

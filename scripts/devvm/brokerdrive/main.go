@@ -31,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|wordpress|delete [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|delete [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -67,8 +67,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Passwords come from files, so they are not in this process's arguments.
 	adminPasswordFile := command.String("admin-password-file", "", "File holding the WordPress admin password (wordpress)")
 	dbPasswordFile := command.String("db-password-file", "", "File holding the database password (wordpress)")
+	certFile := command.String("cert-file", "", "PEM certificate chain, leaf first (certificate)")
 	var keyFiles multiFlag
-	command.Var(&keyFiles, "key-file", "Public key file to install (ssh-keys); repeat for several, omit all to remove access")
+	command.Var(&keyFiles, "key-file", "Public key file to install (ssh-keys); repeat for several, omit all to remove access. With certificate: the PEM private key, once")
 	if command.Parse(global.Args()[1:]) != nil || command.NArg() != 0 {
 		return 2
 	}
@@ -116,6 +117,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		result, err = web.SetWeb(ctx, *id, hostaccounts.WebInput{PHPVersion: *php, QuotaMiB: *quota, ExpectedRevision: *revision, Reason: *reason}, *actor)
+	case "certificate":
+		certs, ok := service.(hostaccounts.CertificateService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no certificate surface")
+			return 1
+		}
+		if *certFile == "" || len(keyFiles) != 1 {
+			fmt.Fprintln(stderr, "certificate needs --cert-file and one --key-file")
+			return 2
+		}
+		chain, readErr := os.ReadFile(*certFile)
+		if readErr != nil {
+			fmt.Fprintln(stderr, "read the certificate file:", readErr)
+			return 2
+		}
+		// The key goes to the broker in the request body and is never printed.
+		key, readErr := os.ReadFile(keyFiles[0])
+		if readErr != nil {
+			fmt.Fprintln(stderr, "read the key file:", readErr)
+			return 2
+		}
+		result, err = certs.SetCertificate(ctx, *id, hostaccounts.CertificateInput{ExpectedRevision: *revision, CertPEM: string(chain), KeyPEM: string(key), Reason: *reason}, *actor)
 	case "wordpress":
 		wp, ok := service.(hostaccounts.WordPressService)
 		if !ok {

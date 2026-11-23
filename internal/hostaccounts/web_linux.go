@@ -398,26 +398,26 @@ func (n *linuxSystem) configDirSafe(uid, gid int, mode os.FileMode) bool {
 }
 
 // writeSites renders the site list and installs it below the OpenLiteSpeed
-// root: changed files are replaced atomically and broker vhosts no longer
-// listed lose their config file. It returns the vhosts whose config bytes
-// changed, so the test can tell this change's problems from a tenant's.
-func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, map[string]bool, error) {
+// root as part of t: changed files are replaced atomically and broker vhosts
+// no longer listed lose their config file. When a site has a certificate it
+// first makes sure the HTTPS listener's own certificate exists. It returns
+// the vhosts whose config bytes changed, so the test can tell this change's
+// problems from a tenant's. On an error the caller restores t.
+func (n *linuxSystem) writeSites(t *configTxn, sites []olsweb.Site) (map[string]bool, error) {
 	files, e := olsweb.Render(webServer(sites))
 	if e != nil {
-		return nil, nil, ErrWebRejected
+		return nil, ErrWebRejected
 	}
-	t := &configTxn{}
 	changed := map[string]bool{}
-	fail := func(err error) (*configTxn, map[string]bool, error) {
-		if r := t.restore(); r != nil {
-			err = r
+	fail := func(err error) (map[string]bool, error) { return nil, err }
+	if anyCertificate(sites) {
+		if e := n.ensureListenerCertificate(t); e != nil {
+			return fail(e)
 		}
-		t.close()
-		return nil, nil, err
 	}
 	root, e := openRootDir(olsweb.ServerRoot)
 	if e != nil {
-		return nil, nil, ErrUnavailable
+		return fail(ErrUnavailable)
 	}
 	t.handles = append(t.handles, root)
 	if uid, _, mode, e := ownerOfHandle(root); e != nil || uid != 0 || mode&0022 != 0 {
@@ -499,7 +499,7 @@ func (n *linuxSystem) writeSites(sites []olsweb.Site) (*configTxn, map[string]bo
 	if _, e := t.write(conf, strings.TrimPrefix(olsweb.ServerConfigPath, "conf/"), files[olsweb.ServerConfigPath], private); e != nil {
 		return fail(e)
 	}
-	return t, changed, nil
+	return changed, nil
 }
 
 // configTest runs `openlitespeed -t` and judges it with olsTestPasses.
@@ -578,12 +578,24 @@ func olsContextVhost(context string) string {
 // installSites writes and tests the config, then reloads; a failed test puts
 // the old files back and returns ErrWebRejected (ErrRecovery if that fails).
 func (n *linuxSystem) installSites(ctx context.Context, sites []olsweb.Site) error {
-	t, changed, e := n.writeSites(sites)
-	if e != nil {
-		return e
-	}
+	return n.installWith(ctx, &configTxn{}, sites, "")
+}
+
+// installWith completes t, which may already hold a site's certificate
+// files, with the rendered config, tests it and reloads. A failed write or
+// test puts back everything t changed and returns the error (ErrRecovery if
+// that fails). touched names a vhost whose certificate t rewrote, so the
+// test judges it as changed even when its vhconf.conf bytes are the same.
+func (n *linuxSystem) installWith(ctx context.Context, t *configTxn, sites []olsweb.Site, touched string) error {
 	defer t.close()
-	if e = n.configTest(ctx, changed); e != nil {
+	changed, e := n.writeSites(t, sites)
+	if e == nil {
+		if touched != "" {
+			changed[touched] = true
+		}
+		e = n.configTest(ctx, changed)
+	}
+	if e != nil {
 		if r := t.restore(); r != nil {
 			return r
 		}

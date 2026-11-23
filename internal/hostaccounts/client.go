@@ -153,6 +153,24 @@ func (c *client) SetWeb(ctx context.Context, id string, in WebInput, actor strin
 	return out, err
 }
 
+// SetCertificate asks the broker to install a certificate and key for the
+// account's live site. A 422 certificate_rejected answer means the leaf does
+// not name the account's domain or is not valid now; 422 web_rejected means
+// the config with it failed its test and was restored. Either way the
+// account is unchanged.
+func (c *client) SetCertificate(ctx context.Context, id string, in CertificateInput, actor string) (CertificateResult, error) {
+	if !idPattern.MatchString(id) || !validCertificateInput(in, actor) {
+		return CertificateResult{}, ErrInvalid
+	}
+	var out CertificateResult
+	// The install runs the web apply, which can take minutes on a busy host.
+	err := c.exchange(ctx, c.slow, "POST", "/v1/accounts/"+id+"/certificate", struct {
+		Input CertificateInput `json:"input"`
+		Actor string           `json:"actor"`
+	}{in, actor}, maxCertificateRequestBytes, &out, maxResponseBytes)
+	return out, err
+}
+
 // InstallWordPress asks the broker to install WordPress into the account's
 // live site. A failed WP-CLI step comes back as an *InstallError.
 func (c *client) InstallWordPress(ctx context.Context, id string, in WordPressInput, actor string) (WordPressResult, error) {
@@ -176,6 +194,11 @@ func (c *client) requestBounded(ctx context.Context, method, path string, input,
 }
 
 func (c *client) send(ctx context.Context, h *http.Client, method, path string, input, output any, limit int64) error {
+	return c.exchange(ctx, h, method, path, input, MaxRequestBytes, output, limit)
+}
+
+// exchange is send with its own bound on the request body.
+func (c *client) exchange(ctx context.Context, h *http.Client, method, path string, input any, inputLimit int, output any, limit int64) error {
 	if ctx == nil {
 		return ErrInvalid
 	}
@@ -185,7 +208,7 @@ func (c *client) send(ctx context.Context, h *http.Client, method, path string, 
 	var body io.Reader
 	if input != nil {
 		b, err := json.Marshal(input)
-		if err != nil || len(b) > MaxRequestBytes {
+		if err != nil || len(b) > inputLimit {
 			return ErrInvalid
 		}
 		body = bytes.NewReader(b)
@@ -226,6 +249,8 @@ func (c *client) send(ctx context.Context, h *http.Client, method, path string, 
 			return ErrRecovery
 		case "web_rejected":
 			return ErrWebRejected
+		case "certificate_rejected":
+			return ErrCertificateRejected
 		case "install_failed":
 			return &InstallError{Step: failure.Step, Detail: installDetail([]byte(failure.Detail))}
 		default:

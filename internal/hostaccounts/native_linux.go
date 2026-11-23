@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"sifruno/internal/olsweb"
 )
 
 const nologin = "/usr/sbin/nologin"
@@ -52,6 +53,9 @@ type linuxSystem struct {
 	db      os.FileInfo
 	sshDir  string
 	mailDir string
+	// tlsDir is olsweb.TLSRoot, the only path the rendered config names; it
+	// is a field so a root-only test can use a scratch directory.
+	tlsDir  string
 	cacheMu sync.Mutex
 	cache   *accountDatabase
 }
@@ -79,7 +83,7 @@ func newLinuxSystem(opts BrokerOptions, web *WebOptions) (*linuxSystem, error) {
 	if e != nil || supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return nil, ErrUnavailable
 	}
-	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir}
+	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir, tlsDir: olsweb.TLSRoot}
 	if web != nil && n.enableWeb(web) != nil {
 		return nil, ErrUnavailable
 	}
@@ -852,16 +856,20 @@ func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 	return nil
 }
 
-// removeAccountFiles removes the two per-account files that live outside the
-// home: the managed SFTP key file and the mail spool useradd may have made.
-// Each is removed only when it is the expected kind of object, so a name
-// reused later never inherits either one.
+// removeAccountFiles removes what an account has outside the home: its
+// site's TLS directory, the managed SFTP key file and the mail spool useradd
+// may have made. Each is removed only when it is the expected kind of
+// object, so a name reused later never inherits any of them. The store runs
+// a delete only after the site has left the OpenLiteSpeed config.
 func (n *linuxSystem) removeAccountFiles(r record) error {
 	if !validUsername(r.Account.Username) {
 		return ErrRecovery
 	}
 	if !idPattern.MatchString(r.Account.ID) {
 		return ErrRecovery
+	}
+	if e := n.removeSiteTLS(r); e != nil {
+		return e
 	}
 	// The temporary name SetSSHKeys writes before its rename survives a crash
 	// between the two; it holds only public keys but goes with the account.

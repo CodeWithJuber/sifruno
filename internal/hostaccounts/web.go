@@ -74,7 +74,8 @@ func softQuotaMiB(hard int) int { return hard - hard/10 }
 // webSites lists every live site as OpenLiteSpeed should serve it, sorted by
 // name, without the account named by except (used while removing a site).
 // Settings in flight are used for the account they belong to, so a recovery
-// renders the same config as the interrupted write.
+// renders the same config as the interrupted write. A site with a
+// certificate gets its files in olsweb.TLSRoot/<site name>/.
 func webSites(items []record, except string) []olsweb.Site {
 	sites := []olsweb.Site{}
 	for _, r := range items {
@@ -88,7 +89,11 @@ func webSites(items []record, except string) []olsweb.Site {
 		if !w.enabled() || (r.Pending != nil && r.Pending.Action == "delete") {
 			continue
 		}
-		sites = append(sites, olsweb.Site{
+		certificate := r.TLS
+		if r.Pending != nil && r.Pending.Action == "certificate" {
+			certificate = r.TLSNext
+		}
+		site := olsweb.Site{
 			Name:       siteName(r.Account.ID),
 			Username:   r.Account.Username,
 			Group:      r.Account.Username,
@@ -97,14 +102,33 @@ func webSites(items []record, except string) []olsweb.Site {
 			PHPVersion: w.PHPVersion,
 			Limits:     olsweb.Limits{PHPChildren: 4},
 			Isolation:  olsweb.Isolation{Namespace: true},
-		})
+		}
+		if certificate.installed() {
+			site.TLS = siteTLS(site.Name)
+		}
+		sites = append(sites, site)
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].Name < sites[j].Name })
 	return sites
 }
 
 // webServer is the whole OpenLiteSpeed fragment the broker owns: plain HTTP
-// on port 80 for now; certificates are a later slice.
+// on port 80 for every site, and HTTPS on 443 for the sites with their own
+// certificate. olsweb leaves the HTTPS listener out while no site has one.
 func webServer(sites []olsweb.Site) olsweb.Server {
-	return olsweb.Server{Listeners: []olsweb.Listener{{Name: "http", Address: "*", Port: 80}}, Sites: sites}
+	return olsweb.Server{Listeners: []olsweb.Listener{
+		{Name: "http", Address: "*", Port: 80},
+		{Name: "https", Address: "*", Port: 443, Secure: true, CertFile: olsweb.TLSRoot + "/" + listenerCertFile, KeyFile: olsweb.TLSRoot + "/" + listenerKeyFile},
+	}, Sites: sites}
+}
+
+// anyCertificate reports whether a site list renders the HTTPS listener,
+// which needs the listener's own certificate on disk.
+func anyCertificate(sites []olsweb.Site) bool {
+	for _, s := range sites {
+		if s.TLS.CertFile != "" {
+			return true
+		}
+	}
+	return false
 }

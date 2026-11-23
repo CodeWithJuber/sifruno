@@ -53,6 +53,11 @@ type record struct {
 	// unfinished web operation applies, durable before anything changes.
 	Web     WebState `json:"web"`
 	WebNext WebState `json:"web_next"`
+	// TLS is the site's installed certificate (empty: none); Account.Certificate
+	// always equals it. TLSNext is what an unfinished certificate operation
+	// installs; its files were staged before the intent was journaled.
+	TLS     CertificateState `json:"tls"`
+	TLSNext CertificateState `json:"tls_next"`
 }
 type nativeSystem interface {
 	Plan(context.Context, string) (int, int, error)
@@ -77,6 +82,15 @@ type nativeSystem interface {
 	ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site) error
 	// ApplySites installs the full site list only, tested and reloaded.
 	ApplySites(context.Context, []olsweb.Site) error
+	// StageCertificate writes a checked chain and key as the site's staged
+	// pair, root-only, where OpenLiteSpeed does not read them; with both
+	// empty it removes the staged pair. It touches no tenant file.
+	StageCertificate(ctx context.Context, r record, chainPEM, keyPEM []byte) error
+	// ApplyCertificate installs the staged pair, which must be the one named
+	// by next, as the site's live certificate files and installs the full
+	// site list: written, tested, reloaded. A failed test restores the old
+	// files and returns ErrWebRejected. It must be safe to repeat.
+	ApplyCertificate(ctx context.Context, r record, next CertificateState, sites []olsweb.Site) error
 	// InstallWordPress runs WP-CLI as the account's user into its live
 	// site; it changes only the tenant's files.
 	InstallWordPress(context.Context, record, WordPressInput) (WordPressResult, error)
@@ -217,7 +231,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -230,6 +244,8 @@ func (s *store) records() ([]record, error) {
 					validTarget = sshDigestPattern.MatchString(r.Pending.Target) && canonicalSSHKeys(r.SSHKeysNext) && r.Pending.Target == sshKeysDigest(splitSSHKeys(r.SSHKeysNext))
 				case "web":
 					validTarget = webDigestPattern.MatchString(r.Pending.Target) && validWebState(r.WebNext) && r.Pending.Target == webDigest(r.WebNext)
+				case "certificate":
+					validTarget = certificateDigestPattern.MatchString(r.Pending.Target) && validCertificateState(r.TLSNext) && r.Pending.Target == certificateDigest(r.TLSNext)
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
@@ -239,6 +255,9 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if (r.Web.enabled() && !validWebState(r.Web)) || (!r.Web.enabled() && r.Web != WebState{}) || (r.WebNext != WebState{} && (r.Pending == nil || r.Pending.Action != "web")) {
+				return ErrRecovery
+			}
+			if (r.TLS.installed() && !validCertificateState(r.TLS)) || (!r.TLS.installed() && r.TLS != CertificateState{}) || r.Account.Certificate != r.TLS || (r.TLSNext != CertificateState{} && (r.Pending == nil || r.Pending.Action != "certificate")) {
 				return ErrRecovery
 			}
 			if verifyHistory(tx, r) != nil {
@@ -320,6 +339,38 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
 					return ErrRecovery
 				}
+				continue
+			} else if r.Pending.Action == "certificate" {
+				// Finish the interrupted install from the staged pair, which
+				// was durable before the intent: installing it is idempotent.
+				// A config that now fails its test ends as rejected, unchanged;
+				// any other failure, a missing or different staged pair
+				// included, stays pending for the next start.
+				operation := *r.Pending
+				applyCtx, cancel := webContext(ctx)
+				e := s.native.ApplyCertificate(applyCtx, r, r.TLSNext, webSites(items, ""))
+				cancel()
+				switch {
+				case errors.Is(e, ErrWebRejected):
+					r.Pending, r.TLSNext = nil, CertificateState{}
+					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+						return ErrRecovery
+					}
+					s.discardStagedCertificate(r)
+					continue
+				case e != nil:
+					continue
+				}
+				r.TLS, r.TLSNext = r.TLSNext, CertificateState{}
+				r.Account.Certificate = r.TLS
+				r.Account.Revision++
+				r.Account.UpdatedAt = time.Now().UTC()
+				r.Actor, r.Reason = r.Pending.Actor, r.Pending.Reason
+				r.Pending = nil
+				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+					return ErrRecovery
+				}
+				s.discardStagedCertificate(r)
 				continue
 			} else if r.Pending.Action == "ssh_keys" {
 				// Finish the interrupted key write: the target set was durable

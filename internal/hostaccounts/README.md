@@ -51,7 +51,7 @@ Usernames are3–32ASCIIbytes, `[a-z][a-z0-9_]*`, with reserved service names re
 these are native foundation limits, not cPanel username rules. Domain must be a
 lowercase ASCII multi-label DNS name and remains metadata. Actor is1–120bytes;
 reason is1–500UTF8bytes, with controls and outer whitespace refused. Requests are
-strict JSON≤16KiB, including duplicate/unknown/case-alias/null/invalidUTF8 guards.
+strict JSON≤16KiB (a certificate request up to 160 KiB), including duplicate/unknown/case-alias/null/invalidUTF8 guards.
 There are at most 2000 managed accounts (`MaxAccounts`) and 256 immutable audit event
 rows per account, so one account takes about 127 operations before its journal is full.
 
@@ -177,6 +177,82 @@ Limits for now:
   the site's logs under `/usr/local/lsws/logs/sifruno`.
 - A suspended account's site keeps serving; suspension still blocks new
   logins only.
+
+## Certificates
+
+`SetCertificate` (`POST /v1/accounts/{id}/certificate`) installs a finished
+certificate and key for an account's live site. The broker never runs ACME:
+the panel obtains the certificate (HTTP-01 through the shared challenge
+directory `/var/lib/sifruno-acme`, which every vhost maps at
+`/.well-known/acme-challenge/`) and sends it here. The input is exactly
+`expected_revision`, `cert_pem`, `key_pem` and `reason`; it needs the web
+operation on (`--web-user`), and the request may be up to 160 KiB.
+
+Checked before anything is journaled:
+
+- Form (400 `invalid`): each PEM at most 64 KiB, with nothing but
+  whitespace around its blocks and no PEM headers. The chain is 1 to 4
+  `CERTIFICATE` blocks, each signed by the next, so the leaf comes first.
+  If the leaf lists extended key usages, `serverAuth` is one of them. The
+  key is one EC key on P-256 or P-384 (SEC 1 or PKCS #8) or one RSA key of
+  2048 to 4096 bits (PKCS #1 or PKCS #8), and it matches the leaf.
+- Fit (422 `certificate_rejected`): the leaf's DNS names include the
+  account's domain exactly (the common name is ignored, and a wildcard does
+  not count), and NotBefore <= now < NotAfter.
+- Account (409 `conflict`): the revision matches, the account is active, its
+  site is live, no WordPress install is running, and its identity verifies.
+
+The broker writes only what it parsed: each certificate re-encoded from its
+DER, leaf first, and the key as PKCS #8, never the caller's text. Files live
+in `/etc/sifruno/tls`, which the broker makes root-owned 0700 with `mkdirat`
+under a root-owned `/etc/sifruno` (the installer's), and opens with
+`O_NOFOLLOW` from a handle on its parent; each site has its own 0700
+directory there, `/etc/sifruno/tls/u<id>/`. Every file is root-owned 0600,
+written beside its target with `O_EXCL|O_NOFOLLOW`, synced and renamed.
+
+1. The parsed pair is staged as `cert.pem.next` and `key.pem.next` in the
+   site's directory. OpenLiteSpeed never reads these.
+2. The intent is journaled: action `certificate`, the target names the
+   leaf's SHA-256 and NotAfter, the record's `tls_next` holds them, and the
+   intent's `after` row has the revision plus one and the new certificate.
+3. Under the web operation's own four-minute limit, the staged pair is read
+   back, checked again and compared with the journaled leaf, then written as
+   `cert.pem` (full chain) and `key.pem`. Every site with a certificate is
+   rendered with a `vhssl` block, and the HTTPS listener (`*:443`,
+   `sifruno-https`) is rendered, mapping only those sites. The listener's
+   own certificate, `/etc/sifruno/tls/listener.crt` and `listener.key`, is
+   made in Go when the first site gets a certificate (self-signed, CN
+   `sifruno`, ECDSA P-256, ten years) and made again only if it is missing,
+   broken or expired. No `openssl` runs.
+4. `openlitespeed -t` is judged with the web operation's per-vhost rule;
+   the site counts as changed when its certificate files changed, even if
+   its vhconf.conf did not. Then `systemctl reload lsws`.
+5. The result is journaled: `succeeded` with the record's `tls` and the
+   account's `certificate` set, or `rejected` when the test failed. A
+   rejected install puts back the old certificate files and config and
+   leaves the account unchanged (422 `web_rejected`). Then the staged pair
+   is removed.
+
+Any other failure leaves the operation pending. On the next start the
+broker finishes it from the staged pair, or ends it `rejected` if the config
+now fails its test. If the staged pair is missing or names another
+certificate, the operation stays pending for a person: the broker does not
+guess what to install. The account list shows `certificate` (`not_after` in
+Unix seconds, `fingerprint` as lowercase hex SHA-256 of the leaf) for each
+account that has one, so the panel can renew in time; the journal's before
+and after rows record it too. Delete takes the site out of the config first,
+then removes the site's TLS directory with the user: only the live and
+staged pairs and `writeAt`'s temporary names, and an unexpected file keeps
+the delete pending rather than being removed.
+
+Limits for now:
+
+- One certificate per site, for the account's own domain only.
+- A suspended site answers 403 to challenges as to everything else, so it
+  cannot renew while suspended.
+- OpenLiteSpeed refuses a challenge context whose directory is missing, so
+  `/var/lib/sifruno-acme` must exist before any site's config is tested; the
+  installer makes it, owned by the panel user, 0755.
 
 ## WordPress
 

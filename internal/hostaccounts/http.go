@@ -194,6 +194,32 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(result)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/certificate"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/certificate")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input CertificateInput `json:"input"`
+				Actor string           `json:"actor"`
+			}
+			// Two PEMs of up to 64 KiB do not fit the usual request bound.
+			if decodeBodyWithin(w, r, &in, []string{"expected_revision", "cert_pem", "key_pem", "reason"}, maxCertificateRequestBytes) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			// The install runs the web apply, on its own limit.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
+			result, err := s.setCertificate(ctx, id, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/wordpress"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/wordpress")
 			if !idPattern.MatchString(id) {
@@ -270,6 +296,8 @@ func writeError(w http.ResponseWriter, err error) {
 		code, status = "not_found", 404
 	case errors.Is(err, ErrWebRejected):
 		code, status = "web_rejected", 422
+	case errors.Is(err, ErrCertificateRejected):
+		code, status = "certificate_rejected", 422
 	case errors.Is(err, ErrRecovery):
 		code, status = "recovery", 503
 	}
@@ -279,11 +307,17 @@ func writeError(w http.ResponseWriter, err error) {
 	}{code})
 }
 func decodeBody(w http.ResponseWriter, r *http.Request, out any, inputKeys []string) error {
+	return decodeBodyWithin(w, r, out, inputKeys, MaxRequestBytes)
+}
+
+// decodeBodyWithin is decodeBody with its own size bound, for the one
+// request whose input is larger than MaxRequestBytes.
+func decodeBodyWithin(w http.ResponseWriter, r *http.Request, out any, inputKeys []string, limit int64) error {
 	media, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" || params["charset"] != "" && strings.ToLower(params["charset"]) != "utf-8" {
 		return ErrInvalid
 	}
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBytes))
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil || !utf8.Valid(b) {
 		return ErrInvalid
 	}

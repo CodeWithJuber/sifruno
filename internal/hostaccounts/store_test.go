@@ -36,6 +36,58 @@ type fakeNative struct {
 	wpInstalls int
 	wpStarted  chan struct{}
 	wpGate     chan struct{}
+	// staged and live model each site's TLS directory by username: the
+	// staged chain and key, and the installed leaf. certApply counts
+	// installs; tlsGoneWhileServed records a delete that removed a TLS
+	// directory while the site was still in the config.
+	staged             map[string][2][]byte
+	live               map[string]CertificateState
+	certApply          int
+	tlsGoneWhileServed bool
+}
+
+func (f *fakeNative) StageCertificate(_ context.Context, r record, chainPEM, keyPEM []byte) error {
+	if f.failure == "stage" {
+		return ErrUnavailable
+	}
+	if len(chainPEM) == 0 && len(keyPEM) == 0 {
+		delete(f.staged, r.Account.Username)
+		return nil
+	}
+	if f.staged == nil {
+		f.staged = map[string][2][]byte{}
+	}
+	f.staged[r.Account.Username] = [2][]byte{append([]byte(nil), chainPEM...), append([]byte(nil), keyPEM...)}
+	return nil
+}
+
+// ApplyCertificate installs the staged pair the way the native system does:
+// read back, checked again and compared with the journaled leaf.
+func (f *fakeNative) ApplyCertificate(_ context.Context, r record, next CertificateState, sites []olsweb.Site) error {
+	f.certApply++
+	switch f.failure {
+	case "cert-before":
+		return ErrUnavailable
+	case "cert-reject":
+		return ErrWebRejected
+	}
+	pair, ok := f.staged[r.Account.Username]
+	if !ok {
+		return ErrRecovery
+	}
+	bundle, err := parseCertificate(string(pair[0]), string(pair[1]))
+	if err != nil || bundle.state != next {
+		return ErrRecovery
+	}
+	if f.live == nil {
+		f.live = map[string]CertificateState{}
+	}
+	f.live[r.Account.Username] = next
+	f.sites = append([]olsweb.Site(nil), sites...)
+	if f.failure == "cert-after" {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (f *fakeNative) InstallWordPress(_ context.Context, r record, in WordPressInput) (WordPressResult, error) {
@@ -143,6 +195,16 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 		return ErrRecovery
 	}
 	delete(f.users, r.Account.Username)
+	// The native delete removes the site's TLS directory with the account.
+	if _, has := f.live[r.Account.Username]; has {
+		for _, s := range f.sites {
+			if s.Name == siteName(r.Account.ID) {
+				f.tlsGoneWhileServed = true
+			}
+		}
+	}
+	delete(f.live, r.Account.Username)
+	delete(f.staged, r.Account.Username)
 	return nil
 }
 func (f *fakeNative) VerifyIdentity(r record) error {

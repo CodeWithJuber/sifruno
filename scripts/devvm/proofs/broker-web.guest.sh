@@ -102,7 +102,35 @@ fi
 check "/etc gained no ACL entry for OpenLiteSpeed's user" bash -c "! getfacl -n --omit-header /etc 2>/dev/null | grep -q '^user:$ols_uid:'"
 
 echo
-echo "## 6. Deleting the account takes the site out first"
+echo "## 6. What OpenLiteSpeed reports when a tenant breaks its own site"
+# The broker skips, for other accounts' changes, what OpenLiteSpeed reports
+# under a broker vhost the change did not rewrite. This shows what a tenant's
+# broken docroot looks like in the real test output. No broker request runs
+# while it is broken: the broker would mark that account as changed outside it.
+BROKEN_USER="brk${RUNID}"
+broken="$(drive create --username "$BROKEN_USER" --domain "${BROKEN_USER}.proof.test" --reason 'Broken site proof')" || fail "broker creates the third account"
+bid="$(printf '%s' "$broken" | field '["id"]')"
+brev="$(printf '%s' "$broken" | field '["revision"]')"
+drive web --id "$bid" --revision "$brev" --php 8.3 --quota-mib 100 --reason 'Go live' >/dev/null || fail "the third site goes live"
+bvhost="sifruno-u${bid:0:31}"
+norm() { sed -E 's/^[0-9-]+ [0-9:.]+ //; s/\[[0-9]+\] //' | grep -E '^\[(ERROR|WARN)\]' | sort -u; }
+baseline="$("$LSWS/bin/openlitespeed" -t 2>&1 | norm)"
+runuser -u "$BROKEN_USER" -- sh -c "cd /home/$BROKEN_USER && mv public_html public_gone"
+after_break="$("$LSWS/bin/openlitespeed" -t 2>&1 | norm)"
+runuser -u "$BROKEN_USER" -- sh -c "cd /home/$BROKEN_USER && mv public_gone public_html"
+new_lines="$(comm -13 <(printf '%s\n' "$baseline") <(printf '%s\n' "$after_break") | grep -v '^$')"
+if [ -z "$new_lines" ]; then
+  pass "openlitespeed -t reports nothing new for the broken site, so it cannot fail another account's change"
+else
+  echo "  new lines from openlitespeed -t after the tenant moved public_html:"
+  printf '%s\n' "$new_lines" | sed 's/^/    /'
+  # shellcheck disable=SC2016 # $1 and $2 expand in the inner shell
+  check "every new line carries the broken site's vhost context, which other accounts' changes skip" \
+    bash -c '! printf "%s\n" "$1" | grep -vE "^\[(ERROR|WARN)\] \[[^]]*:vhost:$2[]:]" | grep -q .' _ "$new_lines" "$bvhost"
+fi
+
+echo
+echo "## 7. Deleting the account takes the site out first"
 drive delete --id "$id" --revision "$rev" --reason 'Remove the proof site' >/dev/null || fail "the broker deletes the account"
 check "the vhost config is gone" test ! -e "$vhost/vhconf.conf"
 check "the server fragment no longer names it" bash -c "! grep -q '$(basename "$vhost")' $LSWS/conf/sifruno.conf"

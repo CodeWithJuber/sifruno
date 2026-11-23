@@ -36,6 +36,8 @@ scripts/devvm/vm.sh ssh 'bash /root/provision.sh'
 scripts/devvm/proof.sh broker-sftp 105
 ```
 
+`scripts/devvm/proof.sh broker-web` proves the broker's web operation (web server access, quota, vhost, reload, delete) after provisioning.
+
 The panel shell proof drives the panel in the VM with a browser on the host, so it also needs Node with the repo's npm packages and Playwright's Chromium (or a Chrome binary named in `SIFRUNO_PROOF_CHROME`):
 
 ```bash

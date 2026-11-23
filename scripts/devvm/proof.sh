@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | panel-shell
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | panel-shell
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -24,6 +24,10 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 with a password folder to the Compat tier, and migrate verify
                 keeps the cutover gate closed against an OpenLiteSpeed copy
                 (where the folder opens) and opens it against an Apache copy.
+  broker-web    The broker's web operation: OpenLiteSpeed may read the home,
+                a quota is set, the vhost is rendered, tested and reloaded,
+                a rejected config changes nothing, a symlinked public_html is
+                refused, and delete takes the site out first.
   panel-shell   Phase 1 panel shell and admin sign-in: the panel runs in the VM
                 with throwaway state and a browser on this host drives it
                 (first-run admin setup with 2FA, sign-in, code replay and rate
@@ -95,6 +99,26 @@ case "${1:-}" in
     transcript="$OUT/proof3-migrate-verify-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/migrate-verify.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  broker-web)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    # A broker left running by an earlier proof holds its binary open, so
+    # stop it before the copy replaces the file. Its state stays on disk.
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in hostbroker brokerdrive; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/broker-web.guest.sh" /opt/sifruno-proof/broker-web.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/broker-web.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/broker-web-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    status=0
+    "$HERE/vm.sh" ssh /opt/sifruno-proof/broker-web.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

@@ -73,12 +73,16 @@ case "${1:-}" in
     check "the account's Linux user exists" getent passwd "$user"
     check "WordPress is in its public_html, owned by it" test "$(stat -c %U "/home/$user/public_html/wp-load.php" 2>/dev/null)" = "$user"
     check "wp-config.php is mode 0600" test "$(stat -c %a "/home/$user/public_html/wp-config.php" 2>/dev/null)" = 600
+    # Over http the site serves WordPress, or, once its address is https,
+    # WordPress sends the visitor to https (checked further down).
     ok=no
     for _ in $(seq 1 300); do
-      if curl -s -H "Host: $domain" http://127.0.0.1/ | grep -q 'Sifruno wizard proof'; then ok=yes; break; fi
+      answer="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" http://127.0.0.1/)"
+      if [ "$answer" = "301 https://$domain/" ] || curl -s -H "Host: $domain" http://127.0.0.1/ | grep -q 'Sifruno wizard proof'; then ok=yes; break; fi
       sleep 2
     done
-    check "the site serves WordPress with the title from the wizard" test "$ok" = yes
+    echo "  over http: ${answer:-no answer}"
+    check "over http the site serves WordPress, or sends the visitor to its https address" test "$ok" = yes
     check "wp-admin redirects to the login page" bash -c "curl -s -o /dev/null -w '%{http_code}' -H 'Host: $domain' http://127.0.0.1/wp-admin/ | grep -qx 302"
 
     # HTTPS: the certificate comes from this run's Pebble, so curl trusts

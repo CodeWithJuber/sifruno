@@ -25,7 +25,7 @@ Vite binds to `127.0.0.1:5173` and proxies `/api` to the local Go service at `12
 | `GET /api/v1/budget` | Monthly USD-micro ledger and operator approval policy |
 | `GET /api/v1/platform` | Actual control-plane target and modern/legacy feasibility profiles |
 
-The local Websites view loads separately when opened. `GET /api/v1/session` checks the operator session; `POST /api/v1/session/login` signs in and `POST /api/v1/session/logout` signs out. The access key stays in a password input and is cleared after submission; the UI never stores it, cookies or CSRF tokens in localStorage. Authenticated requests use same-origin cookies; writes send JSON and the session's CSRF token. Use the Go-served same-origin panel for these operator flows.
+Private pages show the shell's sign-in until someone is signed in. `GET /api/v1/session/setup` says whether first-run admin setup is needed; `POST /api/v1/session/setup/totp` and `/setup/admin` create the first admin; `GET /api/v1/session` checks the session; `POST /api/v1/session/login` signs in with a username, password and code (or the local access key) and `POST /api/v1/session/logout` signs out. See [internal/operator](../internal/operator/README.md). The access key stays in a password input and is cleared after submission; the UI never stores it, cookies or CSRF tokens in localStorage. Authenticated requests use same-origin cookies; writes send JSON and the session's CSRF token. Use the Go-served same-origin panel for these operator flows.
 
 | Authenticated site route | Actual operation |
 | --- | --- |

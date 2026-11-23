@@ -1,0 +1,268 @@
+package operator
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"net/http"
+	"time"
+
+	"golang.org/x/time/rate"
+)
+
+// Admin sign-in and first-run setup. The local access key stays what it was:
+// a loopback-only credential for whoever can read the panel's private state
+// (that person can already forge sessions from session.keys). Password plus
+// code is the login for people, and the one that will face the network.
+
+const setupLifetime = 10 * time.Minute
+
+type pendingSetup struct {
+	username string
+	secret   string
+	expires  time.Time
+}
+
+// Five tries at once, then one more each minute. Every name, existing or not,
+// lands in one of loginBuckets buckets chosen by a keyed hash, so an existing
+// and a made-up username are throttled the same way and a 429 reveals nothing
+// about which names exist. Memory stays fixed whatever names are tried.
+const loginBuckets = 256
+
+func newAccountLimiter() *rate.Limiter { return rate.NewLimiter(rate.Every(time.Minute), 5) }
+
+// loginBucket is called with adminMu held.
+func (m *Manager) loginBucket(username string) *rate.Limiter {
+	mac := hmac.New(sha256.New, m.bucketKey[:])
+	mac.Write([]byte(username))
+	return m.buckets[mac.Sum(nil)[0]]
+}
+
+// acquireHash bounds concurrent Argon2id work (19 MiB each) so a burst of
+// sign-ins cannot exhaust memory.
+func (m *Manager) acquireHash(r *http.Request) bool {
+	select {
+	case m.hashSlots <- struct{}{}:
+		return true
+	case <-r.Context().Done():
+		return false
+	}
+}
+func (m *Manager) releaseHash() { <-m.hashSlots }
+
+// adminLogin checks a password and a one-time code. Every failure gets the
+// same answer, so the response does not reveal which part was wrong or
+// whether the account exists. A used code is recorded before the session
+// starts and cannot be replayed.
+func (m *Manager) adminLogin(w http.ResponseWriter, r *http.Request, username, password, code string) bool {
+	m.adminMu.Lock()
+	allowed := m.loginBucket(username).Allow()
+	i, found := m.admins.find(username)
+	var record adminRecord
+	if found {
+		record = m.admins.Admins[i]
+	}
+	m.adminMu.Unlock()
+	if !allowed {
+		w.Header().Set("Retry-After", "60")
+		WriteError(w, 429, "rate_limited", "Too many sign-in attempts for this username. Wait a minute and try again.")
+		return false
+	}
+	if !m.acquireHash(r) {
+		WriteError(w, 503, "operator_unavailable", "Sign-in was interrupted. Try again.")
+		return false
+	}
+	hash := m.dummy
+	if found {
+		hash = record.Password
+	}
+	passwordOK := hash.matches(password) && found
+	m.releaseHash()
+	if !passwordOK {
+		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
+		return false
+	}
+	m.adminMu.Lock()
+	defer m.adminMu.Unlock()
+	// Re-read under the lock: another sign-in may have used a code meanwhile.
+	i, found = m.admins.find(username)
+	if !found {
+		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
+		return false
+	}
+	step, ok := verifyTOTP(m.admins.Admins[i].TOTP.Secret, code, m.now(), m.admins.Admins[i].TOTP.LastStep)
+	if !ok {
+		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
+		return false
+	}
+	next := m.admins
+	next.Admins = append([]adminRecord(nil), m.admins.Admins...)
+	next.Admins[i].TOTP.LastStep = step
+	if err := saveAdmins(m.dir, next); err != nil {
+		WriteError(w, 503, "operator_unavailable", "Sign-in could not be recorded on the server. Try again; if it keeps failing, check the panel's disk.")
+		return false
+	}
+	m.admins = next
+	return true
+}
+
+type setupStatus struct {
+	AdminRequired bool `json:"admin_required"`
+}
+
+// getSetup tells the panel whether to show first-run setup or sign-in. It
+// reveals only whether an admin exists, and only on loopback.
+func (m *Manager) getSetup(w http.ResponseWriter, r *http.Request) {
+	if !localRequest(r) {
+		WriteError(w, 403, "local_access_required", "Local operator access required")
+		return
+	}
+	m.adminMu.Lock()
+	required := len(m.admins.Admins) == 0
+	m.adminMu.Unlock()
+	writeJSON(w, setupStatus{AdminRequired: required})
+}
+
+// setupSession admits setup steps only from a session opened with the access
+// key, and only while no admin exists yet.
+func (m *Manager) setupSession(w http.ResponseWriter, r *http.Request) (string, activeSession, bool) {
+	id, a, ok := m.managementAuthorization(w, r, true)
+	if !ok {
+		return "", activeSession{}, false
+	}
+	m.adminMu.Lock()
+	done := len(m.admins.Admins) > 0
+	m.adminMu.Unlock()
+	if done || a.username != "" {
+		WriteError(w, 409, "setup_complete", "An admin account already exists. Sign in with it instead.")
+		return "", activeSession{}, false
+	}
+	return id, a, true
+}
+
+type setupSecret struct {
+	Secret    string    `json:"secret"`
+	URI       string    `json:"otpauth_uri"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// beginSetup issues the authenticator secret for the chosen username. The
+// secret is shown once, to this session only, and expires after 10 minutes.
+func (m *Manager) beginSetup(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := m.setupSession(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Username string `json:"username"`
+	}
+	if !decodeJSON(w, r, &input, false) {
+		return
+	}
+	if !validUsername(input.Username) {
+		WriteError(w, 422, "invalid_username", "Choose a username of 3 to 32 lowercase letters, digits, dots, dashes or underscores, starting with a letter.")
+		return
+	}
+	secret, err := newTOTPSecret()
+	if err != nil {
+		WriteError(w, 503, "operator_unavailable", "Setup is unavailable right now. Try again.")
+		return
+	}
+	expires := m.now().UTC().Add(setupLifetime).Truncate(time.Second)
+	m.adminMu.Lock()
+	now := m.now()
+	for key, p := range m.pending {
+		if !now.Before(p.expires) {
+			delete(m.pending, key)
+		}
+	}
+	m.pending[id] = pendingSetup{username: input.Username, secret: secret, expires: expires}
+	m.adminMu.Unlock()
+	writeJSON(w, setupSecret{Secret: secret, URI: totpURI(input.Username, secret), ExpiresAt: expires})
+}
+
+// finishSetup creates the first admin once the person proves their
+// authenticator works, then turns the current session into that admin's.
+func (m *Manager) finishSetup(w http.ResponseWriter, r *http.Request) {
+	id, a, ok := m.setupSession(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		TOTPCode string `json:"totp_code"`
+	}
+	if !decodeJSON(w, r, &input, false) {
+		return
+	}
+	m.adminMu.Lock()
+	pending, found := m.pending[id]
+	m.adminMu.Unlock()
+	if !found || !m.now().Before(pending.expires) || pending.username != input.Username {
+		WriteError(w, 409, "setup_expired", "This setup step expired or changed. Start again from the username step.")
+		return
+	}
+	if problem := passwordProblem(input.Username, input.Password); problem != "" {
+		WriteError(w, 422, "invalid_password", problem)
+		return
+	}
+	step, ok := verifyTOTP(pending.secret, input.TOTPCode, m.now(), -1)
+	if !ok {
+		WriteError(w, 422, "invalid_code", "That code did not match. Check that your phone's clock is right and enter the newest code.")
+		return
+	}
+	if !m.acquireHash(r) {
+		WriteError(w, 503, "operator_unavailable", "Setup was interrupted. Try again.")
+		return
+	}
+	hash, err := hashPassword(input.Password)
+	m.releaseHash()
+	if err != nil {
+		WriteError(w, 503, "operator_unavailable", "Setup is unavailable right now. Try again.")
+		return
+	}
+	m.adminMu.Lock()
+	if len(m.admins.Admins) > 0 {
+		m.adminMu.Unlock()
+		WriteError(w, 409, "setup_complete", "An admin account already exists. Sign in with it instead.")
+		return
+	}
+	// The session may have been revoked while the password was hashed; decide
+	// with it still active (lock order adminMu, then mu).
+	m.mu.Lock()
+	stillActive := m.authorizingSessionLocked(id, a)
+	m.mu.Unlock()
+	if !stillActive {
+		m.adminMu.Unlock()
+		WriteError(w, 401, "unauthorized", "This session ended before the admin was created. Start setup again.")
+		return
+	}
+	next := adminFile{Version: 1, Admins: []adminRecord{{Username: input.Username, Password: hash,
+		TOTP: adminTOTP{Secret: pending.secret, LastStep: step}, CreatedAt: m.now().UTC().Truncate(time.Second)}}}
+	if err := saveAdmins(m.dir, next); err != nil {
+		m.adminMu.Unlock()
+		WriteError(w, 503, "operator_unavailable", "The admin account could not be saved on the server. Check the panel's disk, then try again.")
+		return
+	}
+	m.admins = next
+	delete(m.pending, id)
+	m.adminMu.Unlock()
+
+	m.mu.Lock()
+	current, ok := m.active[id]
+	if ok && current == a {
+		current.username = input.Username
+		m.active[id] = current
+	}
+	m.mu.Unlock()
+	if !ok || current.username != input.Username {
+		WriteError(w, 401, "unauthorized", "The admin account was created, but this session ended. Sign in with it.")
+		return
+	}
+	s, _, _, valid := m.session(r)
+	if !valid {
+		WriteError(w, 401, "unauthorized", "The admin account was created, but this session ended. Sign in with it.")
+		return
+	}
+	writeJSON(w, Session{Authenticated: true, CSRFToken: s.Values["csrf"].(string), ExpiresAt: current.expires, Username: input.Username})
+}

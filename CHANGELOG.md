@@ -21,6 +21,13 @@
 
 ### Added
 
+- Admin sign-in with a password and a 6-digit authenticator code (needs
+  human review). A new panel asks for first-run setup on its first private
+  page: the server's access key, then a username and password, then an
+  authenticator app. Passwords are Argon2id hashes in the private state
+  directory; each code works once; each account allows five tries, then one a
+  minute. The access key still signs in locally. New dependency:
+  golang.org/x/crypto v0.57.0, approved by the owner.
 - Phase 1 panel shell: a shadcn/ui sidebar and top bar, Ctrl+K search over
   pages and actions, and a URL for every page (TanStack Router). The menu
   names the job: Home, Websites (Files, Backups), Activity, and under

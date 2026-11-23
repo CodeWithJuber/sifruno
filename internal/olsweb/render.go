@@ -29,6 +29,10 @@ var denyRules = []string{
 // suspendedRules refuse every request, static files included.
 var suspendedRules = []string{`RewriteRule .* - [F,L]`}
 
+// acmeChallengeURI is the HTTP-01 path (RFC 8555 section 8.3). Every vhost
+// maps it to ACMEChallengeDir.
+const acmeChallengeURI = "/.well-known/acme-challenge/"
+
 // Render validates s and returns the managed files keyed by their path
 // relative to ServerRoot: ServerConfigPath and one VhostConfigPath per site.
 // Equal input in any order gives byte-identical output.
@@ -60,8 +64,16 @@ func VhostConfigPath(name string) string {
 }
 
 // renderServer writes the server-level fragment: one virtualhost block per
-// site, then the listeners with their map lines.
+// site, then the listeners with their map lines. A secure listener is left
+// out while no site has its own certificate, because it would map no site.
 func renderServer(listeners []Listener, sites []site) []byte {
+	anyCertificate := false
+	for _, v := range sites {
+		if v.TLS.CertFile != "" {
+			anyCertificate = true
+			break
+		}
+	}
 	var b bytes.Buffer
 	b.WriteString(header)
 	b.WriteString("# Included from httpd_config.conf by: include " + pathpkg.Join(ServerRoot, ServerConfigPath) + "\n")
@@ -85,6 +97,9 @@ func renderServer(listeners []Listener, sites []site) []byte {
 		b.WriteString("}\n")
 	}
 	for _, l := range listeners {
+		if l.Secure && !anyCertificate {
+			continue
+		}
 		addr, _ := listenerAddress(l) // validated by normalize
 		b.WriteString("\nlistener " + NamePrefix + l.Name + " {\n")
 		kv(&b, "address", addr)
@@ -108,7 +123,8 @@ func renderServer(listeners []Listener, sites []site) []byte {
 }
 
 // renderVhost writes one site's vhconf.conf. A suspended site keeps its logs
-// and certificate but has no PHP handler and refuses every request.
+// and certificate but has no PHP handler and refuses every request, ACME
+// challenges included, because its vhost-level rule runs before any context.
 func renderVhost(v site) []byte {
 	var b bytes.Buffer
 	logDir := pathpkg.Join(LogRoot, v.Name)
@@ -167,6 +183,7 @@ func renderVhost(v site) []byte {
 		rules = denyRules
 		autoLoad = "1"
 	}
+	renderACMEChallenge(&b)
 
 	b.WriteString("\nrewrite  {\n")
 	kv(&b, "enable", "1")
@@ -221,6 +238,26 @@ func renderPHP(b *bytes.Buffer, v site) {
 
 	b.WriteString("\nscripthandler  {\n")
 	kv(b, "add", "lsapi:"+name+" php")
+	b.WriteString("}\n")
+}
+
+// renderACMEChallenge maps the HTTP-01 path to ACMEChallengeDir as static
+// files only. allowBrowse is OpenLiteSpeed's "Accessible" switch (0 answers
+// 403), not a directory listing, which autoIndex 0 turns off. forceType
+// serves every file as text/plain, so no suffix reaches the PHP handler.
+// The context's own rewrite block with enable 0 stops OpenLiteSpeed from
+// applying a parent context's rules, the tenant's .htaccess among them, and
+// from running rules of a .htaccess in the challenge directory. The
+// vhost-level rules still run first, and none of them matches this path.
+func renderACMEChallenge(b *bytes.Buffer) {
+	b.WriteString("\ncontext " + acmeChallengeURI + " {\n")
+	kv(b, "location", ACMEChallengeDir+"/")
+	kv(b, "allowBrowse", "1")
+	kv(b, "autoIndex", "0")
+	kv(b, "forceType", "text/plain")
+	b.WriteString("  rewrite  {\n")
+	fmt.Fprintf(b, "    %-21s %s\n", "enable", "0")
+	b.WriteString("  }\n")
 	b.WriteString("}\n")
 }
 

@@ -12,16 +12,36 @@
 //     restrained 1, enableScript 0 when suspended) and the Sifruno listeners
 //     with their map lines. httpd_config.conf includes it with one line at
 //     the top level, so Sifruno never rewrites the administrator's file.
+//     A plain listener maps every site. A secure listener maps only the
+//     sites with their own certificate and is left out while there are
+//     none.
 //   - conf/vhosts/sifruno-NAME/vhconf.conf: docRoot, index files, error and
 //     access logs in LogRoot/NAME/, the optional vhssl certificate, the
 //     site's own lsphp extprocessor (lsapi over uds://tmp/lshttpd/
 //     sifruno-NAME.sock, started through the CGI daemon as extUser/extGroup =
 //     the account, with rlimits and LSAPI children), the php script handler
 //     that uses it, namespace 2 and cgroups 2 when an active site asks for
-//     them, and a rewrite
+//     them, a static context that maps /.well-known/acme-challenge/ to
+//     ACMEChallengeDir, and a rewrite
 //     block with .htaccess autoload plus vhost-level deny rules. A suspended
 //     site has no extprocessor or handler, autoLoadHtaccess 0 and one rule
-//     answering 403 to everything.
+//     answering 403 to everything, challenges included.
+//
+// # Certificates
+//
+// Render only names files; it never reads them. The paths it accepts are
+// fixed by TLSRoot: a listener's certificate and key are files directly in
+// TLSRoot, and a site's are files directly in TLSRoot/NAME/, so one site
+// cannot name another's key. The root broker (internal/hostaccounts) writes
+// them, root-owned 0600 in root-owned 0700 directories: TLSRoot/listener.crt
+// and listener.key are the secure listener's self-signed default (CN
+// "sifruno", ECDSA P-256), and TLSRoot/NAME/cert.pem (full chain, leaf
+// first) and key.pem are the site's own. certChain 1 makes OpenLiteSpeed
+// send the whole chain. The challenge context gives ACME HTTP-01 one shared
+// directory outside every home: the panel writes one random-named file per
+// token there and removes it after validation. The context is static only
+// (forceType text/plain, autoIndex 0, its own rewrite block with enable 0),
+// and the deny rules for other dot paths stay as they are.
 //
 // Server-level settings stay with the administrator: namespace containers
 // need "namespace 1" (or 2) in httpd_config.conf, cgroups need "cgroups 1"
@@ -132,6 +152,24 @@
 //   - dist/admin/html.open/lib/LSWebAdmin: WebAdmin refuses root and lsadm
 //     as extUser, root, sudo, wheel, shadow and lsadm as extGroup.
 //
+// Read 2026-11-23, same tag, for the challenge context:
+//
+//   - src/http/httpvhost.cpp configContext: a context without "type" is
+//     static ("null"); "allowBrowse" defaults to 1 and 0 makes the context
+//     inaccessible; a location that does not exist is an [ERROR] ("path is
+//     not accessible"), so ACMEChallengeDir must exist before a render is
+//     tested; with autoLoadHtaccess the context loads LOCATION/.htaccess.
+//   - src/http/httpcontext.cpp config: a context reads autoIndex,
+//     forceType and a rewrite block with enable, inherit and rules.
+//   - src/http/httpsession.cpp processContextRewrite: vhost-level rules run
+//     first; then the matched context's rules, or those of the nearest parent
+//     with its own rewrite settings, run only if that context enables them.
+//   - src/http/httpreq.cpp checkSymLink: restrained refuses only a path that
+//     goes through a symlink to a target outside vhRoot and outside the
+//     context's location, so a context outside the home is served.
+//   - dist/conf/mime.properties: txt is text/plain, so forceType text/plain
+//     names a known type.
+//
 // # Unverified
 //
 // Not confirmed on an official page or by running a server:
@@ -158,4 +196,7 @@
 //   - That 256 MiB of address space is enough for lsphp 8.x with OPcache.
 //   - HTTP/3: a secure listener serves QUIC when the stock quicEnable 1 is
 //     set; nothing here configures it.
+//   - That OpenLiteSpeed serves a challenge file through this context, and
+//     that it loads root-only 0600 keys on a graceful restart; the source
+//     reading above says so, and the dev VM proof is where it is run.
 package olsweb

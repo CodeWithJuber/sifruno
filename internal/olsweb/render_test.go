@@ -33,7 +33,7 @@ func loadSpec(t *testing.T, path string) Server {
 // TestGolden renders each testdata/golden/<case>/spec.json and compares the
 // whole file set, both ways, with testdata/golden/<case>/want/.
 func TestGolden(t *testing.T) {
-	cases := []string{"wordpress", "second-php", "suspended", "namespace-limits"}
+	cases := []string{"wordpress", "second-php", "suspended", "namespace-limits", "certificate", "no-certificate"}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join("testdata", "golden", name)
@@ -192,6 +192,84 @@ func TestRenderShape(t *testing.T) {
 	shop := string(files[VhostConfigPath("shop")])
 	if !strings.Contains(shop, "uds://tmp/lshttpd/sifruno-shop.sock") || !strings.Contains(blog, "uds://tmp/lshttpd/sifruno-blog.sock") {
 		t.Error("sites do not get their own lsphp socket")
+	}
+}
+
+// Every vhost, suspended or not, with or without a certificate, maps the
+// HTTP-01 path to the shared challenge directory as static files only.
+func TestACMEChallengeContext(t *testing.T) {
+	files, err := Render(baseServer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "\ncontext /.well-known/acme-challenge/ {\n" +
+		"  location                /var/lib/sifruno-acme/\n" +
+		"  allowBrowse             1\n" +
+		"  autoIndex               0\n" +
+		"  forceType               text/plain\n" +
+		"  rewrite  {\n" +
+		"    enable                0\n" +
+		"  }\n" +
+		"}\n"
+	for _, name := range []string{"blog", "legacy", "paused", "iso", "shop"} {
+		vhost := string(files[VhostConfigPath(name)])
+		if strings.Count(vhost, "context ") != 1 || !strings.Contains(vhost, want) {
+			t.Errorf("%s: no single challenge context:\n%s", name, vhost)
+		}
+		// The context comes before the vhost rewrite block, which keeps its
+		// deny rules (or the suspended refusal) unchanged.
+		if strings.Index(vhost, want) > strings.Index(vhost, "\nrewrite  {\n") {
+			t.Errorf("%s: challenge context after the vhost rewrite block", name)
+		}
+	}
+	if !strings.Contains(string(files[VhostConfigPath("blog")]), denyRules[0]+"\n") {
+		t.Error("the deny rules for other dot paths are gone")
+	}
+}
+
+// The secure listener exists only while some site has its own certificate,
+// and then maps only those sites.
+func TestSecureListenerOnlyWithCertificates(t *testing.T) {
+	s := baseServer()
+	for i := range s.Sites {
+		s.Sites[i].TLS = TLS{}
+	}
+	files, err := Render(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := string(files[ServerConfigPath])
+	if strings.Contains(server, "listener sifruno-https") || strings.Contains(server, "secure                  1") {
+		t.Errorf("secure listener rendered without any certificate:\n%s", server)
+	}
+	if !strings.Contains(server, "listener sifruno-http {") {
+		t.Error("the plain listener went away")
+	}
+	for path, data := range files {
+		if strings.Contains(string(data), "vhssl") {
+			t.Errorf("%s has vhssl without a certificate", path)
+		}
+	}
+
+	s.Sites[4].TLS = TLS{CertFile: TLSRoot + "/shop/cert.pem", KeyFile: TLSRoot + "/shop/key.pem"}
+	files, err = Render(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server = string(files[ServerConfigPath])
+	start := strings.Index(server, "listener sifruno-https {")
+	if start < 0 {
+		t.Fatalf("secure listener missing with one certificate:\n%s", server)
+	}
+	https := server[start:]
+	if strings.Count(https, "map ") != 1 || !strings.Contains(https, "map                     sifruno-shop shop.example.com\n") {
+		t.Errorf("secure listener must map only the site with a certificate:\n%s", https)
+	}
+	if !strings.Contains(string(files[VhostConfigPath("shop")]), "vhssl  {\n  keyFile                 /etc/sifruno/tls/shop/key.pem\n  certFile                /etc/sifruno/tls/shop/cert.pem\n  certChain               1\n}\n") {
+		t.Error("the site with a certificate has no vhssl block")
+	}
+	if strings.Contains(string(files[VhostConfigPath("blog")]), "vhssl") {
+		t.Error("vhssl rendered for a site without a certificate")
 	}
 }
 

@@ -15,6 +15,11 @@ const (
 	// TLSRoot holds listener certificates directly and one directory per site
 	// (TLSRoot/<site name>/) for that site's certificate and key.
 	TLSRoot = "/etc/sifruno/tls"
+	// ACMEChallengeDir holds the HTTP-01 challenge files for every site. It
+	// is outside every home, so no tenant can write or link into it. Every
+	// vhost maps /.well-known/acme-challenge/ to it; tokens are random, so
+	// one directory serves all sites.
+	ACMEChallengeDir = "/var/lib/sifruno-acme"
 	// NamePrefix starts every virtual host, listener and external app name
 	// Sifruno emits, so they never collide with the administrator's own.
 	NamePrefix = "sifruno-"
@@ -59,7 +64,9 @@ type Server struct {
 
 // Listener is one Sifruno-owned listener. Plain listeners map every site; a
 // secure listener maps only the sites that have their own certificate, so no
-// site is served under another name's certificate.
+// site is served under another name's certificate. A secure listener is
+// rendered only while at least one site has a certificate: with none it
+// would serve no site.
 type Listener struct {
 	Name string `json:"name"`
 	// Address is "*" for all interfaces or a literal IPv4/IPv6 address.

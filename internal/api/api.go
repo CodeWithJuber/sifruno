@@ -198,11 +198,14 @@ func New(o Options) http.Handler {
 			host = h
 		}
 		host = strings.Trim(host, "[]")
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		// Requests from the HTTPS listener already passed operator.Remote's
+		// host-name check; everything else must name loopback.
+		remote := operator.IsRemote(r)
+		if !remote && host != "localhost" && host != "127.0.0.1" && host != "::1" {
 			http.Error(w, "Loopback Host required", http.StatusForbidden)
 			return
 		}
-		if origin := r.Header.Get("Origin"); origin != "" && !origins[origin] {
+		if origin := r.Header.Get("Origin"); origin != "" && !origins[origin] && !(remote && origin == "https://"+r.Host) {
 			if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 				operator.WriteError(w, 403, "origin_not_allowed", "Origin not allowed")
 				return
@@ -218,6 +221,9 @@ func New(o Options) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+		if remote && !remoteAdmitted(w, r, o.Operator) {
+			return
+		}
 		for _, prefix := range []string{"/json-api", "/execute", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
 			if strings.HasPrefix(r.URL.Path, prefix) {
 				if o.WHM != nil && (prefix == "/json-api" || prefix == "/execute") {
@@ -285,4 +291,29 @@ func New(o Options) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// remoteAdmitted applies the network rules: the panel page and its assets
+// load for anyone (they hold no data), session routes check themselves, the
+// WHM transport has its own listener, and every other API or spec route needs
+// an admin session, including the monitoring readings that loopback serves
+// without one.
+func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager) bool {
+	path := r.URL.Path
+	for _, prefix := range []string{"/json-api", "/execute", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
+		if strings.HasPrefix(path, prefix) {
+			http.NotFound(w, r)
+			return false
+		}
+	}
+	if isSessionPath(path) || !(strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/openapi")) {
+		return true
+	}
+	if op == nil {
+		operator.WriteError(w, 503, "operator_unavailable", "Operator authentication unavailable")
+		return false
+	}
+	mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
+	_, ok := op.Authorize(w, r, mutation)
+	return ok
 }

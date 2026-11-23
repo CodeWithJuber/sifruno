@@ -21,6 +21,12 @@
 
 ### Added
 
+- The panel over HTTPS beyond loopback (needs human review):
+  `--https-listen` with `--panel-host`, and `--tls-cert`/`--tls-key` or a
+  self-signed certificate kept in the state directory (fingerprint printed
+  at start). Over that listener only admin sign-in works, every API route
+  needs an admin session, and the access key and first-run setup are
+  refused. Loopback behaviour is unchanged.
 - Admin sign-in with a password and a 6-digit authenticator code (needs
   human review). A new panel asks for first-run setup on its first private
   page: the server's access key, then a username and password, then an

@@ -3,6 +3,8 @@ package operator
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/binary"
+	"net"
 	"net/http"
 	"time"
 
@@ -26,15 +28,32 @@ type pendingSetup struct {
 // lands in one of loginBuckets buckets chosen by a keyed hash, so an existing
 // and a made-up username are throttled the same way and a 429 reveals nothing
 // about which names exist. Memory stays fixed whatever names are tried.
-const loginBuckets = 256
+//
+// Over the network the bucket is chosen by username and caller IP together,
+// from a separate, larger set: one outside address cannot lock the admin out
+// of other addresses or out of the server itself. The separate remote global
+// limiter still caps all network attempts together.
+const (
+	loginBuckets       = 256
+	remoteLoginBuckets = 4096
+)
 
 func newAccountLimiter() *rate.Limiter { return rate.NewLimiter(rate.Every(time.Minute), 5) }
 
 // loginBucket is called with adminMu held.
-func (m *Manager) loginBucket(username string) *rate.Limiter {
+func (m *Manager) loginBucket(username string, r *http.Request) *rate.Limiter {
 	mac := hmac.New(sha256.New, m.bucketKey[:])
 	mac.Write([]byte(username))
-	return m.buckets[mac.Sum(nil)[0]]
+	if !IsRemote(r) {
+		return m.buckets[mac.Sum(nil)[0]]
+	}
+	peer, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		peer = r.RemoteAddr
+	}
+	mac.Write([]byte{0})
+	mac.Write([]byte(peer))
+	return m.remoteBuckets[binary.BigEndian.Uint16(mac.Sum(nil))%remoteLoginBuckets]
 }
 
 // acquireHash bounds concurrent Argon2id work (19 MiB each) so a burst of
@@ -55,7 +74,7 @@ func (m *Manager) releaseHash() { <-m.hashSlots }
 // starts and cannot be replayed.
 func (m *Manager) adminLogin(w http.ResponseWriter, r *http.Request, username, password, code string) bool {
 	m.adminMu.Lock()
-	allowed := m.loginBucket(username).Allow()
+	allowed := m.loginBucket(username, r).Allow()
 	i, found := m.admins.find(username)
 	var record adminRecord
 	if found {
@@ -110,9 +129,9 @@ type setupStatus struct {
 }
 
 // getSetup tells the panel whether to show first-run setup or sign-in. It
-// reveals only whether an admin exists, and only on loopback.
+// reveals only whether an admin exists.
 func (m *Manager) getSetup(w http.ResponseWriter, r *http.Request) {
-	if !localRequest(r) {
+	if !admitted(r) {
 		WriteError(w, 403, "local_access_required", "Local operator access required")
 		return
 	}
@@ -125,6 +144,10 @@ func (m *Manager) getSetup(w http.ResponseWriter, r *http.Request) {
 // setupSession admits setup steps only from a session opened with the access
 // key, and only while no admin exists yet.
 func (m *Manager) setupSession(w http.ResponseWriter, r *http.Request) (string, activeSession, bool) {
+	if !localRequest(r) {
+		WriteError(w, 403, "local_access_required", "First-run setup works only on the server itself.")
+		return "", activeSession{}, false
+	}
 	id, a, ok := m.managementAuthorization(w, r, true)
 	if !ok {
 		return "", activeSession{}, false

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"sifruno/internal/hostpkgs"
 	"sifruno/internal/mailhost"
 	"sifruno/internal/operator"
+	"sifruno/internal/panelcert"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
 	"sifruno/internal/sites"
@@ -64,6 +66,10 @@ func run() error {
 	acmeInsecure := flag.Bool("acme-insecure-skip-verify", false, "Skip ACME directory TLS verification (test rigs with a private CA only; never in production)")
 	acmeResolver := flag.String("acme-dns-resolver", "127.0.0.1:53", "Resolver used to confirm _acme-challenge TXT propagation before ACME validation")
 	backupRoot := flag.String("backup-root", "", "Backup archive root; empty disables the backup surface")
+	httpsListen := flag.String("https-listen", "", "Optional HTTPS address for the panel beyond loopback, e.g. 0.0.0.0:2083; only admin sign-in (password and code) works there")
+	panelHosts := flag.String("panel-host", "", "Comma-separated host names or IPs the HTTPS listener answers for; required with --https-listen")
+	tlsCert := flag.String("tls-cert", "", "Certificate chain for --https-listen; without it a self-signed certificate is kept in the state directory")
+	tlsKey := flag.String("tls-key", "", "Private key for --tls-cert")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
 	flag.Parse()
 	host, port, err := net.SplitHostPort(*listen)
@@ -233,6 +239,33 @@ func run() error {
 			whmServer.SetBackupStore(bs)
 		}
 	}
+	var remoteServer *http.Server
+	var remoteListener net.Listener
+	var remoteHosts []string
+	var httpsNote string
+	if *httpsListen != "" {
+		hosts := splitHosts(*panelHosts)
+		if len(hosts) == 0 {
+			return errors.New("--https-listen needs --panel-host with the names people type to reach the panel")
+		}
+		cert, cerr := panelcert.Load(dir, *tlsCert, *tlsKey, hosts, time.Now())
+		if cerr != nil {
+			return cerr
+		}
+		listener, lerr := tls.Listen("tcp", *httpsListen, &tls.Config{Certificates: []tls.Certificate{cert.Certificate}, MinVersion: tls.VersionTLS12})
+		if lerr != nil {
+			return lerr
+		}
+		defer listener.Close()
+		remote := &http.Server{Addr: *httpsListen, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+		remoteServer, remoteListener, remoteHosts = remote, listener, hosts
+		kind := "operator-provided"
+		if cert.SelfSigned {
+			kind = "self-signed; browsers warn until you add --tls-cert"
+		}
+		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — admin sign-in only\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
+			*httpsListen, strings.Join(hosts, ", "), kind, cert.NotAfter.UTC().Format("2006-01-02"), cert.Fingerprint)
+	}
 	if *whmListen != "" {
 		ingressListener, ingressServer, ierr := listenWHMIngress(*whmListen, *whmTLSCert, *whmTLSKey, whmHandler)
 		if ierr != nil {
@@ -243,6 +276,13 @@ func run() error {
 		listeners = append(listeners, ingressListener)
 	}
 	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	if remoteServer != nil {
+		// The same API, behind operator.Remote: only the panel's host names,
+		// only TLS, and only admin sessions.
+		remoteServer.Handler = operator.Remote(server.Handler, remoteHosts)
+		servers = append(servers, remoteServer)
+		listeners = append(listeners, remoteListener)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	if *backupScheduler {
 		workerDone := make(chan struct{})
@@ -260,6 +300,7 @@ func run() error {
 	if *sitesListen != "" {
 		fmt.Printf("Local static website listener http://%s\n", *sitesListen)
 	}
+	fmt.Print(httpsNote)
 	select {
 	case err = <-done:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -276,4 +317,18 @@ func run() error {
 		}
 	}
 	return err
+}
+
+// splitHosts reads --panel-host: comma-separated, lower-cased, de-duplicated.
+func splitHosts(value string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(value, ",") {
+		h := strings.ToLower(strings.TrimSpace(part))
+		if h != "" && !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	return out
 }

@@ -3,6 +3,7 @@ package operator
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -214,10 +215,11 @@ func TestAdminLoginRateLimitPerAccount(t *testing.T) {
 // rate-limit bucket of name.
 func nameInBucket(t *testing.T, m *Manager, name string, same bool) string {
 	t.Helper()
-	target := m.loginBucket(name)
+	local := httptest.NewRequest("POST", "http://127.0.0.1:8080/", nil)
+	target := m.loginBucket(name, local)
 	for i := 0; i < 100000; i++ {
 		candidate := "guess" + strconv.Itoa(i)
-		if (m.loginBucket(candidate) == target) == same {
+		if (m.loginBucket(candidate, local) == target) == same {
 			return candidate
 		}
 	}

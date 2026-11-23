@@ -73,9 +73,13 @@ type Manager struct {
 	admins    adminFile
 	bucketKey [32]byte
 	buckets   [loginBuckets]*rate.Limiter
-	pending   map[string]pendingSetup
-	dummy     passwordHash
-	hashSlots chan struct{}
+	// Network sign-ins have their own limits, so traffic from outside can
+	// never use up the server's own (the access key is the way back in).
+	remoteLimiter *rate.Limiter
+	remoteBuckets [remoteLoginBuckets]*rate.Limiter
+	pending       map[string]pendingSetup
+	dummy         passwordHash
+	hashSlots     chan struct{}
 }
 
 // Open creates project-owned private state without rotating existing secrets.
@@ -153,6 +157,10 @@ func Open(dir string) (*Manager, error) {
 	}
 	for i := range m.buckets {
 		m.buckets[i] = newAccountLimiter()
+	}
+	m.remoteLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
+	for i := range m.remoteBuckets {
+		m.remoteBuckets[i] = newAccountLimiter()
 	}
 	return m, nil
 }
@@ -309,13 +317,19 @@ func (m *Manager) pruneLocked() {
 // Authorize protects every website read. Mutations additionally require an
 // exact request Origin and the active session's independent CSRF token.
 func (m *Manager) Authorize(w http.ResponseWriter, r *http.Request, mutation bool) (string, bool) {
-	if !localRequest(r) {
+	if !admitted(r) {
 		WriteError(w, 403, "local_access_required", "Local operator access required")
 		return "", false
 	}
 	s, _, a, ok := m.session(r)
 	if !ok {
 		WriteError(w, 401, "unauthorized", "Operator session required")
+		return "", false
+	}
+	// A session opened with the access key on the server is not accepted over
+	// the network, even if its cookie travels there.
+	if IsRemote(r) && a.username == "" {
+		WriteError(w, 403, "admin_sign_in_required", "Sign in with your admin account. The access key works only on the server itself.")
 		return "", false
 	}
 	if mutation {
@@ -418,7 +432,7 @@ func (m *Manager) Register(mux *http.ServeMux) {
 }
 
 func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
-	if !localRequest(r) {
+	if !admitted(r) {
 		WriteError(w, 403, "local_access_required", "Local operator access required")
 		return
 	}
@@ -426,7 +440,11 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 403, "origin_not_allowed", "Exact local Origin required")
 		return
 	}
-	if !m.limiter.Allow() {
+	limiter := m.limiter
+	if IsRemote(r) {
+		limiter = m.remoteLimiter
+	}
+	if !limiter.Allow() {
 		w.Header().Set("Retry-After", "3")
 		WriteError(w, 429, "rate_limited", "Login attempt limit reached")
 		return
@@ -444,6 +462,10 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 	adminFields := input.Username != "" || input.Password != "" || input.TOTPCode != ""
 	switch {
 	case !adminFields:
+		if IsRemote(r) {
+			WriteError(w, 403, "local_access_required", "The access key works only on the server itself. Sign in with your admin account.")
+			return
+		}
 		supplied := sha256.Sum256([]byte(input.AccessKey))
 		valid := subtle.ConstantTimeCompare(m.keyHash[:], supplied[:]) == 1 && validToken(input.AccessKey)
 		if !valid {

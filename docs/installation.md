@@ -50,11 +50,13 @@ step. Historical guest/browser results do not certify a current deployment.
    - Choose a username and a password of at least 12 characters.
    - Add the key the panel shows to an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password and others), then enter the 6-digit code it shows.
 
-   From then on, sign in with username, password and a fresh code. The access key still signs in on this machine, for example when the phone with the authenticator app is lost. Sessions last 15 minutes. The panel still listens only on loopback; serving it over HTTPS to other machines is the next Phase 1 step.
+   From then on, sign in with username, password and a fresh code. The access key still signs in on this machine, for example when the phone with the authenticator app is lost. Sessions last 15 minutes.
 
-7. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](archive/site-file-upload.md) for the exact scope and limits.
+7. Optional: reach the panel from another machine. Add `--https-listen 0.0.0.0:2083 --panel-host panel.example.com` (your server's name or IP; several names are comma-separated). Without `--tls-cert` and `--tls-key` the panel makes a self-signed certificate and prints its SHA-256 fingerprint; your browser warns until you use a real certificate, so compare the fingerprint before you continue. Over HTTPS only the admin sign-in works: the access key and first-run setup stay on the server. Open the port in your firewall yourself; this guide does not change firewall rules.
 
-8. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
+8. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](archive/site-file-upload.md) for the exact scope and limits.
+
+9. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
 
 ### Pinned Windows Go toolchain (alternative to installed Go)
 

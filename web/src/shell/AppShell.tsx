@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Theme } from "@astryxdesign/core/theme";
 import { neutralTheme } from "@astryxdesign/theme-neutral/built";
-import { Info, Menu, Moon, RefreshCw, Search, Sun } from "lucide-react";
+import { Info, LogOut, Menu, Moon, RefreshCw, Search, Sun, UserRound } from "lucide-react";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -12,6 +12,9 @@ import { useResource, validPlatform, validServer, validServices } from "@/lib/ap
 import type { Resource, ServerReport } from "@/lib/api";
 import type { BackupCopySelection, ZIPImportRequest } from "@/lib/backupCopy";
 import type { RestoreHandoff } from "@/lib/restoreHandoff";
+import { currentSession, setupStatus, signOut } from "@/lib/auth-api";
+import type { AuthSession } from "@/lib/auth-api";
+import { AuthGate } from "@/shell/AuthGate";
 import { CommandPalette } from "@/shell/CommandPalette";
 import type { CommandGroup } from "@/shell/CommandPalette";
 import { ShellContext } from "@/shell/context";
@@ -74,6 +77,10 @@ export function AppShell() {
   const [backupsHandoff, setBackupsHandoff] = useState<SiteHandoff>();
   const [importRequest, setImportRequest] = useState<ZIPImportRequest>();
   const [pageResources, setPageResources] = useState<Partial<Record<PageId, Resource<unknown>>>>({});
+  // Who is signed in. Private pages wait for this; monitoring pages do not.
+  const [auth, setAuth] = useState<{ checked: boolean; session: AuthSession | null; adminRequired: boolean; error: string }>({ checked: false, session: null, adminRequired: false, error: "" });
+  // Bumped on sign-out so the kept-alive screens drop what they had loaded.
+  const [authEpoch, setAuthEpoch] = useState(0);
   const handoffSequence = useRef(0);
   const platform = useResource("/api/v1/platform", validPlatform, revision);
   const server = useResource(`/api/v1/server?range_seconds=${range}`, validServer, revision, 5000);
@@ -95,14 +102,46 @@ export function AppShell() {
     navigate({ to: "/websites" });
   }, [navigate]);
 
+  const refreshAuth = useCallback(async () => {
+    try {
+      const [status, session] = await Promise.all([setupStatus(), currentSession()]);
+      setAuth({ checked: true, session, adminRequired: status.admin_required, error: "" });
+    } catch (error) {
+      setAuth((current) => ({ ...current, checked: true, error: error instanceof Error ? error.message : "The panel could not check your sign-in." }));
+    }
+  }, []);
+  const signedIn = Boolean(auth.session && !auth.adminRequired);
+  useEffect(() => { if (!publicPreview) void refreshAuth(); }, [publicPreview, refreshAuth]);
+  // Sessions end after 15 minutes; notice it on return to the tab or within a minute.
+  useEffect(() => {
+    if (publicPreview || !auth.session) return;
+    const onFocus = () => { void refreshAuth(); };
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(onFocus, 60000);
+    return () => { window.removeEventListener("focus", onFocus); window.clearInterval(timer); };
+  }, [publicPreview, auth.session, refreshAuth]);
+  const onSession = useCallback((session: AuthSession, adminCreated: boolean) => {
+    setAuth((current) => ({ checked: true, session, adminRequired: adminCreated ? false : current.adminRequired, error: "" }));
+    // Screens that were open before the session ended pick up the new one.
+    refresh();
+  }, [refresh]);
+  const endSession = useCallback(async () => {
+    const csrf = auth.session?.csrf_token;
+    try { if (csrf) await signOut(csrf); } catch { /* Already ended on the server; clear it here either way. */ }
+    setAuth((current) => ({ ...current, session: null }));
+    setVisited(new Set());
+    setAuthEpoch((value) => value + 1);
+  }, [auth.session]);
+
   const pageId = page?.id;
+  const gated = !publicPreview && page?.audience === "private" && !signedIn;
   useEffect(() => {
     if (!pageId) return;
-    if ((keptAlive as readonly string[]).includes(pageId)) setVisited((current) => current.has(pageId) ? current : new Set(current).add(pageId));
+    if (signedIn && (keptAlive as readonly string[]).includes(pageId)) setVisited((current) => current.has(pageId) ? current : new Set(current).add(pageId));
     // A ZIP import or restore request belongs to the visit that asked for it.
     if (pageId !== "websites") setImportRequest(undefined);
     if (pageId !== "backups") setBackupsHandoff((current) => current?.restore ? undefined : current);
-  }, [pageId]);
+  }, [pageId, signedIn]);
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     try { localStorage.setItem("sifruno-theme", theme); } catch { /* Optional, see initialTheme. */ }
@@ -154,7 +193,7 @@ export function AppShell() {
     <TooltipProvider>
       <SidebarProvider>
         <a href="#panel-main" className="skip-link">Skip to panel content</a>
-        <PanelSidebar page={page} publicPreview={publicPreview} status={status} theme={theme} onToggleTheme={toggleTheme} />
+        <PanelSidebar page={page} publicPreview={publicPreview} status={status} theme={theme} onToggleTheme={toggleTheme} session={signedIn ? auth.session : null} onSignOut={() => void endSession()} />
         <div className="flex min-w-0 flex-1 flex-col bg-background">
           <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-card px-4 md:px-7">
             <MobileMenuButton />
@@ -179,11 +218,16 @@ export function AppShell() {
             {publicPreview && page && page.id !== "home" && <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground" role="status"><Info className="size-4" aria-hidden="true" /><span>{page.id === "tour" ? "Public panel tour with sample content. Changes stay in the local panel." : "Public preview of real server monitoring. Websites, files and backups stay in the local panel."}</span></div>}
             <Theme theme={neutralTheme} mode={theme}>
               <Suspense fallback={<LoadingState label="Loading page" />}>
-                <Outlet />
+                {gated && (auth.checked
+                  ? <>{auth.error && <p className="mb-4 text-sm text-destructive" role="alert">{auth.error}</p>}<AuthGate adminRequired={auth.adminRequired} keySession={auth.session} onSession={onSession} /></>
+                  : <LoadingState label="Checking your sign-in" />)}
+                {!gated && <Outlet />}
+                <div hidden={gated} key={authEpoch}>
                 {!publicPreview && visited.has("websites") && <div hidden={pageId !== "websites"}><Websites revision={revision} active={pageId === "websites"} onStatus={reporters.websites} onOpenSiteTool={openSiteTool} importRequest={importRequest} onImportRequestConsumed={consumeImportRequest} /></div>}
                 {!publicPreview && visited.has("customers") && <div hidden={pageId !== "customers"}><Accounts revision={revision} active={pageId === "customers"} onStatus={reporters.customers} /></div>}
                 {!publicPreview && visited.has("backups") && <div hidden={pageId !== "backups"}><Backups revision={revision} active={pageId === "backups"} onStatus={reporters.backups} siteHandoff={backupsHandoff} onHandoffConsumed={consumeBackupsHandoff} onImportZIP={openZIPImport} /></div>}
                 {!publicPreview && visited.has("files") && <div hidden={pageId !== "files"}><FileManager revision={revision} active={pageId === "files"} onStatus={reporters.files} siteHandoff={filesHandoff} onHandoffConsumed={consumeFilesHandoff} /></div>}
+                </div>
               </Suspense>
             </Theme>
             <footer className="flex justify-between gap-4 pt-5 text-xs text-muted-foreground">
@@ -205,7 +249,7 @@ function MobileMenuButton() {
   </Button>;
 }
 
-function PanelSidebar({ page, publicPreview, status, theme, onToggleTheme }: { page?: Page; publicPreview: boolean; status: ReturnType<typeof serverState>; theme: "light" | "dark"; onToggleTheme: () => void }) {
+function PanelSidebar({ page, publicPreview, status, theme, onToggleTheme, session, onSignOut }: { page?: Page; publicPreview: boolean; status: ReturnType<typeof serverState>; theme: "light" | "dark"; onToggleTheme: () => void; session: AuthSession | null; onSignOut: () => void }) {
   const { setOpenMobile } = useSidebar();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   useEffect(() => { setOpenMobile(false); }, [pathname, setOpenMobile]);
@@ -247,6 +291,11 @@ function PanelSidebar({ page, publicPreview, status, theme, onToggleTheme }: { p
       </nav>
     </SidebarContent>
     <SidebarFooter className="border-t border-sidebar-border px-3 py-3">
+      {session && <div className="flex items-center gap-2 border-b border-sidebar-border px-1 pb-2.5 text-xs" data-testid="signed-in-as">
+        <UserRound className="size-4 shrink-0 text-sidebar-muted-foreground" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate">{session.username ? <>Signed in as <strong className="font-medium">{session.username}</strong></> : "Signed in with the access key"}</span>
+        <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-sidebar-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" onClick={onSignOut}><LogOut aria-hidden="true" />Sign out</Button>
+      </div>}
       <div className="flex items-center gap-2.5 px-1 text-xs" role="status">
         <span className={`size-2 shrink-0 rounded-full ${status.live ? "bg-sidebar-primary" : "bg-sidebar-muted-foreground"}`} aria-hidden="true" />
         <div><div>{status.label}</div><div className="text-sidebar-muted-foreground">{status.detail}</div></div>

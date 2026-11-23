@@ -184,7 +184,9 @@ The caller sends the title, the admin user and email, and the database name
 and user, both with the account's `<username>_` prefix. The site address is
 the account's own domain, http or https. Both passwords travel in the request
 body and reach WP-CLI on stdin (`--prompt=dbpass`, `--prompt=admin_password`),
-never in a process argument.
+never in a process argument. They are 12 to 128 printable characters with no
+leading or trailing space, because WP-CLI trims what its prompt reads and the
+database would not.
 
 - WP-CLI 2.12.0 runs from `/usr/local/lib/sifruno/wp-cli.phar`, a root-owned
   0644 file that the installer downloads; the broker checks its bytes
@@ -200,8 +202,9 @@ never in a process argument.
   `--skip-email`, then `core version` for the result.
 - The checks run under the broker lock; the install does not, so a slow
   download holds no other account. The account is marked busy meanwhile:
-  a second install and a delete get 409, because a user with running
-  processes cannot be removed. The install has its own ten-minute limit,
+  a second install, a suspend, a web change and a delete get 409, because
+  the install runs as that user with the site's current PHP, and a user
+  with running processes cannot be removed. The install has its own ten-minute limit,
   not the caller's.
 - Nothing is journaled: the install changes only the tenant's files, with
   the tenant's rights, and the panel's job log records who asked. A failed

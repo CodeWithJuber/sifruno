@@ -12,7 +12,6 @@ RUNID="$(date +%s)"
 RUNID="${RUNID: -5}"
 SITE_USER="web${RUNID}"
 DOMAIN="${SITE_USER}.proof.test"
-OTHER_USER="lnk${RUNID}"
 fails=0
 
 pass() { printf 'PASS  %s\n' "$1"; }
@@ -90,16 +89,13 @@ check "the site still serves" bash -c "curl -s -H 'Host: $DOMAIN' http://127.0.0
 
 echo
 echo "## 5. A tenant's symlink cannot redirect the access grant"
-other="$(drive create --username "$OTHER_USER" --domain "${OTHER_USER}.proof.test" --reason 'Symlink proof')" || fail "broker creates the second account"
-oid="$(printf '%s' "$other" | field '["id"]')"
-orev="$(printf '%s' "$other" | field '["revision"]')"
-runuser -u "$OTHER_USER" -- sh -c "cd /home/$OTHER_USER && mv public_html public_old && ln -s /etc public_html"
-if drive web --id "$oid" --revision "$orev" --php 8.3 --quota-mib 100 --reason 'Symlink swap' >/dev/null 2>&1; then
-  fail "the broker refused to apply web access through a swapped public_html"
-else
-  pass "the broker refused to apply web access through a swapped public_html"
-fi
-check "/etc gained no ACL entry for OpenLiteSpeed's user" bash -c "! getfacl -n --omit-header /etc 2>/dev/null | grep -q '^user:$ols_uid:'"
+# The grant itself, as root on this host, against a throwaway fixture. A swap
+# made before a broker request is caught first by the broker's per-request
+# identity check, which records the account for an operator to inspect.
+grant_log="$("$BIN/hostaccounts.test" -test.run '^TestRootOnlyWebAccessFollowsNoLink$' -test.v 2>&1)"
+printf '%s\n' "$grant_log" | grep -E '^(=== RUN|--- |    )' | sed 's/^/  /'
+check "the grant writes the ACLs, then refuses a symlinked or replaced public_html and leaves the target without an ACL" \
+  grep -q -- '--- PASS: TestRootOnlyWebAccessFollowsNoLink' <<<"$grant_log"
 
 echo
 echo "## 6. What OpenLiteSpeed reports when a tenant breaks its own site"
@@ -113,6 +109,9 @@ bid="$(printf '%s' "$broken" | field '["id"]')"
 brev="$(printf '%s' "$broken" | field '["revision"]')"
 drive web --id "$bid" --revision "$brev" --php 8.3 --quota-mib 100 --reason 'Go live' >/dev/null || fail "the third site goes live"
 bvhost="sifruno-u${bid:0:31}"
+if [ -z "$bid" ] || [ ! -f "$LSWS/conf/vhosts/$bvhost/vhconf.conf" ]; then
+  fail "the third site is live, so its broken docroot can be observed"
+else
 norm() { sed -E 's/^[0-9-]+ [0-9:.]+ //; s/\[[0-9]+\] //' | grep -E '^\[(ERROR|WARN)\]' | sort -u; }
 baseline="$("$LSWS/bin/openlitespeed" -t 2>&1 | norm)"
 runuser -u "$BROKEN_USER" -- sh -c "cd /home/$BROKEN_USER && mv public_html public_gone"
@@ -127,6 +126,7 @@ else
   # shellcheck disable=SC2016 # $1 and $2 expand in the inner shell
   check "every new line carries the broken site's vhost context, which other accounts' changes skip" \
     bash -c '! printf "%s\n" "$1" | grep -vE "^\[(ERROR|WARN)\] \[[^]]*:vhost:$2[]:]" | grep -q .' _ "$new_lines" "$bvhost"
+fi
 fi
 
 echo

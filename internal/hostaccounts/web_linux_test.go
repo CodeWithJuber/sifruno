@@ -3,8 +3,14 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"encoding/binary"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 
 	"sifruno/internal/olsweb"
 )
@@ -87,5 +93,85 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 		if got := olsContextVhost(in); got != want {
 			t.Errorf("olsContextVhost(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The web server's access is written through handles that match the
+// identities recorded at create, so a tenant who swaps public_html gets a
+// refusal, not an ACL on whatever the swap points at.
+func TestRootOnlyWebAccessFollowsNoLink(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: writes ACLs on directories another user owns")
+	}
+	base, e := os.MkdirTemp("/etc", "sifruno-test-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	const uid, gid, webUID = 54322, 54322, 65534
+	homes, target := filepath.Join(base, "homes"), filepath.Join(base, "target")
+	home := filepath.Join(homes, "webacct")
+	public := filepath.Join(home, "public_html")
+	tenantDir := func(p string) {
+		t.Helper()
+		if os.Mkdir(p, 0750) != nil || os.Chown(p, uid, gid) != nil || os.Chmod(p, 0750) != nil {
+			t.Fatalf("fixture %s", p)
+		}
+	}
+	if os.Chmod(base, 0755) != nil || os.Mkdir(homes, 0755) != nil || os.Chmod(homes, 0755) != nil || os.Mkdir(target, 0750) != nil {
+		t.Fatal("fixture")
+	}
+	tenantDir(home)
+	tenantDir(public)
+	homeID, e1 := dirIdentity(home, uid, gid, 0750)
+	publicID, e2 := dirIdentity(public, uid, gid, 0750)
+	if e1 != nil || e2 != nil {
+		t.Fatal("fixture identity")
+	}
+	n := &linuxSystem{opts: BrokerOptions{HomesDir: homes}, webUID: webUID}
+	r := record{Account: Account{ID: strings.Repeat("c", 32), Username: "webacct", UID: uid, GID: gid}, Ownership: ownership{Home: homeID, Public: publicID}}
+	acl := func(p string) []byte {
+		buf := make([]byte, 256)
+		size, e := unix.Getxattr(p, aclXattr, buf)
+		if e != nil {
+			return nil
+		}
+		return buf[:size]
+	}
+
+	if e := n.GrantWebAccess(t.Context(), r); e != nil {
+		t.Fatalf("grant on the recorded directories: %v", e)
+	}
+	if !bytes.Equal(acl(home), webACL(webUID, 1)) || !bytes.Equal(acl(public), webACL(webUID, 5)) {
+		t.Fatal("the grant did not write the expected ACLs")
+	}
+	for _, p := range []string{home, public} {
+		if info, e := os.Stat(p); e != nil || info.Mode().Perm() != 0750 {
+			t.Fatalf("%s lost mode 0750", p)
+		}
+	}
+
+	// The tenant moves public_html away and puts a link to a root directory
+	// in its place.
+	if os.Rename(public, filepath.Join(home, "public_old")) != nil || os.Symlink(target, public) != nil {
+		t.Fatal("swap")
+	}
+	if e := n.GrantWebAccess(t.Context(), r); e == nil {
+		t.Fatal("the grant followed a symlinked public_html")
+	}
+	if acl(target) != nil {
+		t.Fatal("the link's target gained an ACL")
+	}
+
+	// A different directory under the same name is refused too.
+	if os.Remove(public) != nil {
+		t.Fatal("unswap")
+	}
+	tenantDir(public)
+	if e := n.GrantWebAccess(t.Context(), r); e == nil {
+		t.Fatal("the grant accepted a directory other than the recorded public_html")
+	}
+	if acl(public) != nil {
+		t.Fatal("the replacement directory gained an ACL")
 	}
 }

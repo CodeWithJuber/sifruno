@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -89,6 +90,57 @@ func (n *linuxSystem) enableWeb(web *WebOptions) error {
 		}
 	}
 	if n.webUID <= 0 {
+		return ErrUnavailable
+	}
+	return n.ensureChallengeDir(olsweb.ACMEChallengeDir, users)
+}
+
+// ensureChallengeDir makes sure the directory every vhost maps
+// /.well-known/acme-challenge/ to exists and only the panel can write it.
+// OpenLiteSpeed refuses a context whose location is missing, and every web
+// change rewrites every vhost, so without it every change would be
+// rejected: the broker makes it (owner the controller, 0755) or refuses to
+// start the web operation.
+func (n *linuxSystem) ensureChallengeDir(dir string, users []nativeUser) error {
+	if authority(filepath.Dir(dir)) != nil {
+		return ErrUnavailable
+	}
+	uid := int(n.opts.ControllerUID)
+	gid := -1
+	for _, u := range users {
+		if u.UID == uid {
+			gid = u.GID
+		}
+	}
+	if gid < 0 {
+		return ErrUnavailable
+	}
+	parent, e := openRootDir(filepath.Dir(dir))
+	if e != nil {
+		return ErrUnavailable
+	}
+	defer parent.Close()
+	name := filepath.Base(dir)
+	if e := unix.Mkdirat(int(parent.Fd()), name, 0755); e == nil {
+		d, e := openDirectoryAt(int(parent.Fd()), name)
+		if e != nil {
+			return ErrUnavailable
+		}
+		defer d.Close()
+		if unix.Fchown(int(d.Fd()), uid, gid) != nil || unix.Fchmod(int(d.Fd()), 0755) != nil {
+			return ErrUnavailable
+		}
+		return nil
+	} else if !errors.Is(e, unix.EEXIST) {
+		return ErrUnavailable
+	}
+	d, e := openDirectoryAt(int(parent.Fd()), name)
+	if e != nil {
+		return ErrUnavailable
+	}
+	defer d.Close()
+	owner, group, mode, e := ownerOfHandle(d)
+	if e != nil || (owner != uid && owner != 0) || mode&0002 != 0 || (mode&0020 != 0 && group != 0) {
 		return ErrUnavailable
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -209,5 +210,45 @@ func TestOLSOutputOnThisHost(t *testing.T) {
 	want := os.Getenv("SIFRUNO_OLS_TEST_WANT") == "pass"
 	if got := olsTestPasses(out, code, changed); got != want {
 		t.Fatalf("exit %d, rewritten vhosts %v: passes %v, want %v", code, changed, got, want)
+	}
+}
+
+// The broker makes the ACME challenge directory for the panel's user when it
+// is missing, accepts it as it is when safe, and refuses one others can write.
+func TestRootOnlyChallengeDir(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes a directory owned by another user")
+	}
+	base, e := os.MkdirTemp("/etc", "sifruno-test-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	if os.Chmod(base, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	const controller = 54323
+	n := &linuxSystem{opts: BrokerOptions{ControllerUID: controller}}
+	users := []nativeUser{{Username: "panel", UID: controller, GID: controller}}
+	dir := filepath.Join(base, "acme")
+	if e := n.ensureChallengeDir(dir, users); e != nil {
+		t.Fatalf("make: %v", e)
+	}
+	info, e := os.Lstat(dir)
+	st, _ := info.Sys().(*syscall.Stat_t)
+	if e != nil || !info.IsDir() || info.Mode().Perm() != 0755 || st == nil || st.Uid != controller || st.Gid != controller {
+		t.Fatalf("made %v", info)
+	}
+	if e := n.ensureChallengeDir(dir, users); e != nil {
+		t.Fatalf("existing: %v", e)
+	}
+	if os.Chmod(dir, 0777) != nil {
+		t.Fatal("chmod")
+	}
+	if n.ensureChallengeDir(dir, users) == nil {
+		t.Fatal("a directory anyone can write was accepted")
+	}
+	if n.ensureChallengeDir(dir, nil) == nil {
+		t.Fatal("a missing controller user was accepted")
 	}
 }

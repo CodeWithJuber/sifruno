@@ -244,6 +244,10 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				writeError(w, ErrInvalid)
 				return
 			}
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
 			item, err := s.delete(ctx, id, in.Input, in.Actor)
 			if err != nil {
 				writeError(w, err)

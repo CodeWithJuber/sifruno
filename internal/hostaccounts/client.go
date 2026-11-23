@@ -99,10 +99,12 @@ func (c *client) Delete(ctx context.Context, id string, in DeleteInput, actor st
 		return Account{}, ErrInvalid
 	}
 	var out Account
-	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/delete", struct {
+	// A delete first rewrites the web server's config, which can take
+	// minutes on a busy host.
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/delete", struct {
 		Input DeleteInput `json:"input"`
 		Actor string      `json:"actor"`
-	}{in, actor}, &out)
+	}{in, actor}, &out, maxResponseBytes)
 	return out, err
 }
 

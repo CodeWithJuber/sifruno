@@ -714,7 +714,13 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 			return Account{}, ErrRecovery
 		}
 	}
-	if e := s.native.Delete(ctx, r); e != nil {
+	// After the intent is journaled the removal runs on its own limit, so a
+	// caller that gives up (or a slow site rewrite before it) does not leave
+	// a half-removed user for recovery.
+	removeCtx, cancel := webContext(ctx)
+	e = s.native.Delete(removeCtx, r)
+	cancel()
+	if e != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
 	}

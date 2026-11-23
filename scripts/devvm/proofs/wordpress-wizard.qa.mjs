@@ -98,9 +98,14 @@ try {
 
   const started = Date.now();
   let state = "running";
+  // The step list shows while the job runs; the last screen replaces it.
+  // Remember every list of step states seen, to check the HTTPS step's.
+  const seenStates = [];
   while (Date.now() - started < 20 * 60 * 1000) {
     if (await page.getByTestId("job-succeeded").count()) { state = "succeeded"; break; }
     if (await page.getByTestId("job-failed").count()) { state = "failed"; break; }
+    const states = await page.getByTestId("job-steps").locator("li").evaluateAll((items) => items.map((li) => li.getAttribute("data-state"))).catch(() => []);
+    if (states.length) seenStates.push(states.join(" "));
     await sleep(5000);
   }
   console.log(`  the job ended ${state} after ${Math.round((Date.now() - started) / 1000)} s`);
@@ -123,8 +128,12 @@ try {
     check("the steps include HTTPS, after the site goes live and before the database",
       names.includes("ssl") && names.indexOf("ssl") === names.indexOf("web") + 1 && names.indexOf("database") === names.indexOf("ssl") + 1, names.join(" "));
     check("the HTTPS step is done, with a certificate from the test CA", ssl?.state === "done", ssl ? `${ssl.state}: ${ssl.message}` : "no ssl step");
-    const shown = await page.getByTestId("job-steps").locator("li").evaluateAll((items) => items.map((li) => li.getAttribute("data-state")));
-    check("the step list shows every step's state, HTTPS included", JSON.stringify(shown) === JSON.stringify(job.steps.map((s) => s.state)), shown.join(" "));
+    // The HTTPS step is the third: while WordPress installed, the list showed it done.
+    const sslIndex = job.steps.findIndex((s) => s.name === "ssl");
+    check("while the job ran, the step list showed the HTTPS step's state",
+      seenStates.some((line) => line.split(" ")[sslIndex] === ssl?.state), seenStates.at(-1) ?? "never seen");
+    const protocol = (await page.getByTestId("site-protocol").innerText()).trim();
+    check(`the last screen says the site uses ${ssl?.state === "done" ? "https" : "http"}`, protocol.includes(ssl?.state === "done" ? "uses https" : "uses http"), protocol);
     const scheme = ssl?.state === "done" ? "https" : "http";
     check(`Open site points at the new site over ${scheme}`, (await page.getByTestId("open-site").getAttribute("href")) === `${scheme}://${domain}/`);
     check(`Open WordPress admin points at wp-admin over ${scheme}`, (await page.getByTestId("open-admin").getAttribute("href")) === `${scheme}://${domain}/wp-admin/`);

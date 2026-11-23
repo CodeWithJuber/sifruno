@@ -31,6 +31,23 @@ type fakeNative struct {
 	web       map[string]WebState
 	webApply  int
 	webGrants int
+	// wpInstalls counts installs; when wpGate is set, an install signals
+	// wpStarted and waits for the gate, so a test can act meanwhile.
+	wpInstalls int
+	wpStarted  chan struct{}
+	wpGate     chan struct{}
+}
+
+func (f *fakeNative) InstallWordPress(_ context.Context, r record, in WordPressInput) (WordPressResult, error) {
+	f.wpInstalls++
+	if f.wpGate != nil {
+		f.wpStarted <- struct{}{}
+		<-f.wpGate
+	}
+	if f.failure == "wp-fail" {
+		return WordPressResult{}, &InstallError{Step: "download", Detail: installDetail([]byte("Error: could not reach wordpress.org with "+in.DBPassword), in.DBPassword)}
+	}
+	return WordPressResult{Version: "6.8.3"}, nil
 }
 
 func (f *fakeNative) GrantWebAccess(_ context.Context, r record) error {

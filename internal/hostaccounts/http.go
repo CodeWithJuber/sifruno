@@ -188,6 +188,42 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(result)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/wordpress"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/wordpress")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input WordPressInput `json:"input"`
+				Actor string         `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"expected_revision", "https", "title", "admin_user", "admin_email", "admin_password", "db_name", "db_user", "db_password"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			// An install takes minutes, longer than the server's default
+			// write deadline; it runs on its own limit, not this request's.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wordpressTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
+			result, err := s.installWordPress(ctx, id, in.Input, in.Actor)
+			var failed *InstallError
+			if errors.As(err, &failed) {
+				w.WriteHeader(422)
+				json.NewEncoder(w).Encode(struct {
+					Error  string `json:"error"`
+					Step   string `json:"step"`
+					Detail string `json:"detail"`
+				}{"install_failed", failed.Step, failed.Detail})
+				return
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/delete"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/delete")
 			if !idPattern.MatchString(id) {

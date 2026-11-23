@@ -77,6 +77,9 @@ type nativeSystem interface {
 	ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site) error
 	// ApplySites installs the full site list only, tested and reloaded.
 	ApplySites(context.Context, []olsweb.Site) error
+	// InstallWordPress runs WP-CLI as the account's user into its live
+	// site; it changes only the tenant's files.
+	InstallWordPress(context.Context, record, WordPressInput) (WordPressResult, error)
 	// Delete removes the managed system identity and owned home after
 	// ownership verification; it must be safe to retry after a crash.
 	Delete(context.Context, record) error
@@ -91,6 +94,9 @@ type store struct {
 	web    *WebOptions // nil: the web operation is off
 	native nativeSystem
 	closed bool
+	// installing holds accounts with a WordPress install running outside
+	// the lock; delete refuses them while their user's processes run.
+	installing map[string]bool
 	// auditAfter is the ID of the last account the rotating full check
 	// reached. Keying the rotation on an ID, not a position, keeps it fair
 	// while accounts are created and deleted between requests.
@@ -673,7 +679,9 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	if !found {
 		return Account{}, ErrNotFound
 	}
-	if r.Account.Revision != in.ExpectedRevision {
+	// A running WordPress install keeps the user's processes alive, and
+	// userdel refuses a user with running processes.
+	if r.Account.Revision != in.ExpectedRevision || s.installing[id] {
 		return Account{}, ErrConflict
 	}
 	r.Pending = &pending{Action: "delete", Target: "", Actor: actor, Reason: in.Reason}

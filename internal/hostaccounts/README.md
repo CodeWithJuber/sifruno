@@ -176,6 +176,40 @@ Limits for now:
 - A suspended account's site keeps serving; suspension still blocks new
   logins only.
 
+## WordPress
+
+`InstallWordPress` (`POST /v1/accounts/{id}/wordpress`) installs WordPress
+into an account whose site is live (`SetWeb` first; it needs `--web-user`).
+The caller sends the title, the admin user and email, and the database name
+and user, both with the account's `<username>_` prefix. The site address is
+the account's own domain, http or https. Both passwords travel in the request
+body and reach WP-CLI on stdin (`--prompt=dbpass`, `--prompt=admin_password`),
+never in a process argument.
+
+- WP-CLI 2.12.0 runs from `/usr/local/lib/sifruno/wp-cli.phar`, a root-owned
+  0644 file that the installer downloads; the broker checks its bytes
+  against the release's sha512, pinned in code, before every install.
+- It runs with the site's own LSPHP CLI, as the account's user: its UID and
+  GID, no supplementary groups, a clean environment, in public_html. Go's
+  exec drops to that user before it changes directory. So the install can
+  write only what the tenant can already write; a tenant's own files can
+  change what it does, not what it may touch.
+- Steps: `core download` (en_US), `config create` with database host
+  127.0.0.1 (sites run in a namespace container that does not see the
+  MariaDB socket), `wp-config.php` set to 0600, `core install` with
+  `--skip-email`, then `core version` for the result.
+- The checks run under the broker lock; the install does not, so a slow
+  download holds no other account. The account is marked busy meanwhile:
+  a second install and a delete get 409, because a user with running
+  processes cannot be removed. The install has its own ten-minute limit,
+  not the caller's.
+- Nothing is journaled: the install changes only the tenant's files, with
+  the tenant's rights, and the panel's job log records who asked. A failed
+  step answers 422 `install_failed` with the step and the end of its output
+  (printable ASCII, the passwords removed, at most 512 bytes). Whatever the
+  step left in public_html stays there; installing again over an existing
+  WordPress fails at the download step.
+
 ## Verification cost
 
 Every request checks every account's files: its passwd and group identity (from

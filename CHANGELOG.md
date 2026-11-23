@@ -21,6 +21,12 @@
 
 ### Added
 
+- WordPress install broker operation (needs human review): `InstallWordPress`
+  runs WP-CLI 2.12.0, checked against its pinned sha512, with the site's
+  LSPHP as the account's user, passwords on stdin. It runs outside the
+  broker lock and blocks only a delete of that account meanwhile.
+  `brokerdrive wordpress`, `dbdrive` and `proof.sh broker-wordpress` prove
+  it on the dev VM; provisioning installs WP-CLI.
 - Broker web operation (needs human review): `SetWeb` (`hostbroker
   --web-user`) gives OpenLiteSpeed read access to an account's site through
   an ACL written on no-follow directory handles, sets an XFS quota, renders
@@ -85,6 +91,9 @@
 
 ### Fixed
 
+- The database tools sent each SQL statement to the mysql client as an
+  argument, so a statement that sets a password exposed it to every local
+  user; the SQL now goes on stdin (needs human review).
 - Websites' saved ZIP restore now uses Backups' verified file comparison and
   explicit confirmation, retaining editor drafts and rejecting stale targets.
 - Websites can display saved binary-asset details when the first or only file

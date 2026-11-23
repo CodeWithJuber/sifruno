@@ -16,12 +16,16 @@ import (
 type client struct {
 	socket     string
 	http       *http.Client
+	slow       *http.Client // the WordPress install, which takes minutes
 	configured bool
 }
 
 func NewClient(socket string) Service {
 	c := &client{socket: socket, configured: runtime.GOOS == "linux" && validSocketName(socket)}
 	c.http = &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return connectBroker(ctx, c.socket) }}}
+	slow := *c.http
+	slow.Timeout = wordpressTimeout + 2*time.Minute
+	c.slow = &slow
 	return c
 }
 func validSocketName(s string) bool {
@@ -146,11 +150,29 @@ func (c *client) SetWeb(ctx context.Context, id string, in WebInput, actor strin
 	return out, err
 }
 
+// InstallWordPress asks the broker to install WordPress into the account's
+// live site. A failed WP-CLI step comes back as an *InstallError.
+func (c *client) InstallWordPress(ctx context.Context, id string, in WordPressInput, actor string) (WordPressResult, error) {
+	if !idPattern.MatchString(id) || in.ExpectedRevision == 0 || !validSecret(in.AdminPassword) || !validSecret(in.DBPassword) || !validText(actor, 120) {
+		return WordPressResult{}, ErrInvalid
+	}
+	var out WordPressResult
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/wordpress", struct {
+		Input WordPressInput `json:"input"`
+		Actor string         `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
 func (c *client) request(ctx context.Context, method, path string, input, output any) error {
 	return c.requestBounded(ctx, method, path, input, output, maxResponseBytes)
 }
 
 func (c *client) requestBounded(ctx context.Context, method, path string, input, output any, limit int64) error {
+	return c.send(ctx, c.http, method, path, input, output, limit)
+}
+
+func (c *client) send(ctx context.Context, h *http.Client, method, path string, input, output any, limit int64) error {
 	if ctx == nil {
 		return ErrInvalid
 	}
@@ -172,7 +194,7 @@ func (c *client) requestBounded(ctx context.Context, method, path string, input,
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	response, err := c.http.Do(req)
+	response, err := h.Do(req)
 	if err != nil {
 		return ErrUnavailable
 	}
@@ -183,7 +205,9 @@ func (c *client) requestBounded(ctx context.Context, method, path string, input,
 	}
 	if response.StatusCode != 200 {
 		var failure struct {
-			Error string `json:"error"`
+			Error  string `json:"error"`
+			Step   string `json:"step"`
+			Detail string `json:"detail"`
 		}
 		if json.Unmarshal(b, &failure) != nil {
 			return ErrUnavailable
@@ -199,6 +223,8 @@ func (c *client) requestBounded(ctx context.Context, method, path string, input,
 			return ErrRecovery
 		case "web_rejected":
 			return ErrWebRejected
+		case "install_failed":
+			return &InstallError{Step: failure.Step, Detail: installDetail([]byte(failure.Detail))}
 		default:
 			return ErrUnavailable
 		}

@@ -171,4 +171,22 @@ systemctl enable --now mariadb
 systemctl enable --now lsws
 systemctl is-active mariadb lsws | sed 's/^/service: /'
 
+log "MariaDB admin option file for the panel (--db-defaults-file)"
+# The panel runs as sifpanel and creates site databases through dbhost with
+# this option file. The password is made here, goes to MariaDB on stdin and
+# into the 0600 file, and is never a command argument. Kept once made.
+dbadmin_cnf=/var/lib/sifpanel/db-admin.cnf
+if [ ! -s "$dbadmin_cnf" ]; then
+  dbadmin_password="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
+  mysql --protocol=socket -uroot <<SQL
+CREATE USER IF NOT EXISTS 'sifpanel_dbadmin'@'localhost' IDENTIFIED BY '$dbadmin_password';
+ALTER USER 'sifpanel_dbadmin'@'localhost' IDENTIFIED BY '$dbadmin_password';
+GRANT ALL PRIVILEGES ON *.* TO 'sifpanel_dbadmin'@'localhost' WITH GRANT OPTION;
+SQL
+  install -o sifpanel -g sifpanel -m 0600 /dev/null "$dbadmin_cnf"
+  printf '[client]\nuser=sifpanel_dbadmin\npassword=%s\n' "$dbadmin_password" > "$dbadmin_cnf"
+  unset dbadmin_password
+fi
+stat -c 'panel database option file: %U %a %n' "$dbadmin_cnf"
+
 log "done"

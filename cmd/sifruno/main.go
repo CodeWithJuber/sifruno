@@ -364,10 +364,34 @@ func run() error {
 }
 
 // certificateInstaller joins the account broker's certificate operation to
-// the panel's acme.Installer. The broker client has no such operation in
-// this build (it comes with the broker's half of the SSL slice), so there is
-// nothing to join and website certificates stay off.
-func certificateInstaller(hostaccounts.Service) acme.Installer { return nil }
+// the panel's acme.Installer; nil (certificates off) when the client has no
+// such operation.
+func certificateInstaller(service hostaccounts.Service) acme.Installer {
+	certs, ok := service.(hostaccounts.CertificateService)
+	if !ok {
+		return nil
+	}
+	return brokerInstaller{certs}
+}
+
+// brokerInstaller installs an issued certificate through the broker's typed
+// SetCertificate operation, which validates it again before it goes live.
+type brokerInstaller struct {
+	hostaccounts.CertificateService
+}
+
+func (b brokerInstaller) Install(ctx context.Context, accountID string, revision uint64, certPEM, keyPEM []byte) (uint64, time.Time, error) {
+	res, err := b.SetCertificate(ctx, accountID, hostaccounts.CertificateInput{
+		ExpectedRevision: revision,
+		CertPEM:          string(certPEM),
+		KeyPEM:           string(keyPEM),
+		Reason:           "Let's Encrypt certificate",
+	}, "panel certificates")
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return res.Account.Revision, time.Unix(res.Certificate.NotAfter, 0), nil
+}
 
 // brokerSites lists the broker's accounts for the certificate renewal loop.
 type brokerSites struct{ hostaccounts.Service }
@@ -379,7 +403,11 @@ func (b brokerSites) Sites(ctx context.Context) ([]acme.Site, error) {
 	}
 	sites := make([]acme.Site, 0, len(accounts))
 	for _, a := range accounts {
-		sites = append(sites, acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: a.State == "active"})
+		site := acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: a.State == "active"}
+		if a.Certificate.NotAfter > 0 {
+			site.NotAfter = time.Unix(a.Certificate.NotAfter, 0)
+		}
+		sites = append(sites, site)
 	}
 	return sites, nil
 }

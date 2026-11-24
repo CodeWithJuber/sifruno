@@ -76,6 +76,9 @@ type fakeNative struct {
 	limitsLog       []string
 	failLimits      int
 	failLimitsAfter int
+	// cachesRemoved lists the IDs whose LSCache store RemoveSiteCache took
+	// away; failure "cache-remove" makes it fail instead.
+	cachesRemoved []string
 }
 
 func (f *fakeNative) EndProcesses(_ context.Context, r record) error {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -53,6 +54,16 @@ func (f *fakeNative) RemoveLimits(_ context.Context, uid int) error {
 	}
 	delete(f.dropIns, uid)
 	f.reloads++
+	return nil
+}
+func (f *fakeNative) RemoveSiteCache(_ context.Context, id string) error {
+	if !idPattern.MatchString(id) {
+		return ErrInvalid
+	}
+	if f.failure == "cache-remove" {
+		return ErrUnavailable
+	}
+	f.cachesRemoved = append(f.cachesRemoved, id)
 	return nil
 }
 func (f *fakeNative) SyncLimits(_ context.Context, want map[int]AccountLimits) error {
@@ -326,6 +337,38 @@ func TestDeleteRemovesLimits(t *testing.T) {
 	}
 	if _, ok := f.dropIns[b.UID]; ok || len(f.dropIns) != 0 {
 		t.Fatalf("drop-ins after the start: %+v", f.dropIns)
+	}
+}
+
+// A delete takes the site's LSCache store away with the web operation on,
+// after the user is gone; a removal that fails does not fail the delete.
+// Without the web operation there is no store to remove.
+func TestDeleteRemovesTheSiteCache(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	a := liveFixture(t, s)
+	if _, err := s.delete(ctx, a.Account.ID, DeleteInput{ExpectedRevision: a.Account.Revision, Reason: "Remove"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.cachesRemoved, []string{a.Account.ID}) {
+		t.Fatalf("stores removed: %q", f.cachesRemoved)
+	}
+	b := liveAccount(t, s, "secondacct", "second.test")
+	f.failure = "cache-remove"
+	if _, err := s.delete(ctx, b.Account.ID, DeleteInput{ExpectedRevision: b.Account.Revision, Reason: "Remove"}, "test operator"); err != nil {
+		t.Fatalf("delete with a failed store removal: %v", err)
+	}
+	if len(f.cachesRemoved) != 1 {
+		t.Fatalf("stores removed: %q", f.cachesRemoved)
+	}
+
+	plain, g, _ := setupStore(t)
+	c := createFixture(t, plain)
+	if _, err := plain.delete(ctx, c.ID, DeleteInput{ExpectedRevision: c.Revision, Reason: "Remove"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.cachesRemoved) != 0 {
+		t.Fatalf("a broker without the web operation removed a store: %q", g.cachesRemoved)
 	}
 }
 

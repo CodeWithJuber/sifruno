@@ -4,6 +4,7 @@ package hostaccounts
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -332,6 +333,64 @@ func TestRootOnlyChallengeDir(t *testing.T) {
 	}
 	if n.ensureChallengeDir(dir, nil) == nil {
 		t.Fatal("a missing controller user was accepted")
+	}
+}
+
+// A site's cache store goes with everything in it, and a link inside it,
+// or in the store's own place, is removed itself: what it points at stays.
+// A store that is not there is no error.
+func TestRemoveTreeAtFollowsNoLink(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	cache := filepath.Join(base, "cachedata")
+	for _, d := range []string{outside, filepath.Join(outside, "keep"), filepath.Join(cache, "sifruno-uone", "priv", "a", "b"), filepath.Join(cache, "sifruno-uone", "c")} {
+		if os.MkdirAll(d, 0755) != nil {
+			t.Fatal("fixture")
+		}
+	}
+	for _, f := range []string{filepath.Join(outside, "keep", "file"), filepath.Join(cache, "sifruno-uone", "priv", "a", "b", "page"), filepath.Join(cache, "sifruno-uone", "c", "page")} {
+		if os.WriteFile(f, []byte("x"), 0644) != nil {
+			t.Fatal("fixture")
+		}
+	}
+	for link, target := range map[string]string{
+		filepath.Join(cache, "sifruno-uone", "priv", "dir-link"):  filepath.Join(outside, "keep"),
+		filepath.Join(cache, "sifruno-uone", "c", "file-link"):    filepath.Join(outside, "keep", "file"),
+		filepath.Join(cache, "sifruno-utwo"):                      outside,
+		filepath.Join(cache, "sifruno-uone", "priv", "a", "loop"): ".",
+	} {
+		if os.Symlink(target, link) != nil {
+			t.Fatal("fixture")
+		}
+	}
+	root, e := openRootDir(cache)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer root.Close()
+	for _, name := range []string{"sifruno-uone", "sifruno-utwo", "sifruno-uthree"} {
+		if e := removeTreeAt(ctx, int(root.Fd()), name, 0); e != nil {
+			t.Fatalf("remove %s: %v", name, e)
+		}
+		if _, e := os.Lstat(filepath.Join(cache, name)); !os.IsNotExist(e) {
+			t.Fatalf("%s is still there: %v", name, e)
+		}
+	}
+	if b, e := os.ReadFile(filepath.Join(outside, "keep", "file")); e != nil || string(b) != "x" {
+		t.Fatalf("a file a link pointed at went too: %v", e)
+	}
+	for _, bad := range []string{"", ".", "..", "a/b"} {
+		if removeTreeAt(ctx, int(root.Fd()), bad, 0) == nil {
+			t.Fatalf("name %q accepted", bad)
+		}
+	}
+	deep := filepath.Join(cache, "deep")
+	if os.MkdirAll(filepath.Join(deep, strings.Repeat("d/", maxTreeDepth+1)), 0755) != nil {
+		t.Fatal("fixture")
+	}
+	if removeTreeAt(ctx, int(root.Fd()), "deep", 0) == nil {
+		t.Fatal("a tree deeper than the bound was removed")
 	}
 }
 

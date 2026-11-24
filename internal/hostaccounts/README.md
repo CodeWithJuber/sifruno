@@ -11,7 +11,9 @@ The broker requires an explicitly declared dedicated root-owned state directory
 exclusive0600 and controller-owned inside that root-owned parent. An existing
 socket is refused; only the broker's original socket inode is removed on normal
 shutdown. Broker SO_PEERCRED admission allows exactly one existing non-root
-controller UID, rejecting root and other identities. Clients validate socket
+controller UID, rejecting root and other identities. The controller UID must
+lie outside the account range, 20000 to 60000; the broker and hostsetup
+refuse one inside it. Clients validate socket
 ownership/mode, root parent authority and root server peer credentials. No remote
 network listener, passwords, free-form commands, deletion or rollback API exists.
 
@@ -275,13 +277,20 @@ Where they apply:
   reloads after each write; a reload rereads every unit file and reruns the
   generators, so it runs once per account change and once at start, not
   per request.
-- PHP. OpenLiteSpeed 1.9.4 can put lsphp in the user's slice: with
-  `cgroups` on at the server (the installer sets it to 1 in `CGIRLimit`)
-  and in the vhost (rendered as 2), lscgid writes the new process into
+- PHP. Read from the OpenLiteSpeed 1.9.4 source, not yet run (the
+  account-limits proof, section 6, checks it): OpenLiteSpeed can put lsphp
+  in the user's slice. The server's `cgroups` in `CGIRLimit` is 0
+  disallowed (its default), 1 allowed and off unless a vhost turns it on, 2
+  allowed and on (`src/http/serverprocessconfig.h:48-50`,
+  `src/extensions/cgi/cgidworker.cpp:409-416`); a vhost's `cgroups` is 1
+  off or 2 on, and counts only when the server's is not 0
+  (`src/http/httpvhost.cpp:3401-3405`). The installer sets the server's to
+  1 and the broker renders 2 in each live vhost. lscgid then writes the new
+  process into
   `/sys/fs/cgroup/user.slice/user-<uid>.slice/litespeed-exec.scope` and
-  runs `systemctl start user-<uid>.slice` (`cgroup_v2` in
-  `src/extensions/cgi/lscgid.cpp`), so the slice's limits cover the site's
-  PHP too. The lsphp app also gets `memSoftLimit`/`memHardLimit` (the plan's
+  runs `/bin/systemctl start user-<uid>.slice` (`cgroup_v2`,
+  `src/extensions/cgi/lscgid.cpp:471-529`, called at 620-622), so the
+  slice's limits cover the site's PHP too. The lsphp app also gets `memSoftLimit`/`memHardLimit` (the plan's
   memory, as each process's RLIMIT_AS) and `procSoftLimit`/`procHardLimit`
   (the plan's processes as RLIMIT_NPROC, raised to the floor OpenLiteSpeed
   keeps, 496 for 4 children and 8 workers, `olsweb.ProcessFloor`). Read
@@ -320,9 +329,10 @@ Limits for now (not yet run on the dev VM):
 - That `daemon-reload` applies a changed drop-in to an active slice at once
   is inferred, not documented: `systemctl set-property` is the documented
   runtime path. The dev VM proof reads `pids.max` after a change.
-- OpenLiteSpeed writes into the slice's cgroup directory itself, outside
-  systemd's knowledge; how systemd treats that scope when the slice stops
-  is not checked.
+- Read from the OpenLiteSpeed 1.9.4 source, not yet run: OpenLiteSpeed
+  writes into the slice's cgroup directory itself, outside systemd's
+  knowledge (`lscgid.cpp:479-509`); how systemd treats that scope when the
+  slice stops is not checked.
 - No IO limit: IOWeight stays at its default, 100, for every account.
 - systemctl is pinned at start like the other fixed utilities, so after a
   systemd package update creates and plan changes answer 503 until the
@@ -383,8 +393,13 @@ broker.
   site's response asks (the LiteSpeed Cache WordPress plugin does), and the
   module never caches a POST. A suspended site has `ls_enabled 0` and no
   store, because the module answers from its store when the request headers
-  arrive, before the 403 rule. Delete leaves the site's store, as it leaves
-  its logs.
+  arrive, before the 403 rule. Delete removes the site's store once the
+  site has left the config and its user is gone: the broker opens
+  `cachedata` (root's and writable by no one else along its whole path) and
+  removes each entry by name in its own directory handle, opened with
+  O_NOFOLLOW, so a link in the store is removed itself, never followed. If
+  that fails the delete still succeeds; what is left is cached pages under a
+  name no new account gets. The site's logs stay.
 - One invalid vhost at a restart: OpenLiteSpeed 1.9.4 configures each vhost
   on its own, at start and at a graceful restart, which starts a new
   instance (`configVHosts` in `src/main/httpserver.cpp`). A vhost whose

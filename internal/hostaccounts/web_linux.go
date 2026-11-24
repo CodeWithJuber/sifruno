@@ -145,6 +145,77 @@ func ensureEmptyRootDir(dir string) error {
 	return nil
 }
 
+// maxTreeDepth bounds how deep removeTreeAt goes. A site's LSCache store is
+// a few levels deep (its own directory, priv/, and the hash's directories).
+const maxTreeDepth = 16
+
+// RemoveSiteCache removes a deleted site's LSCache store,
+// CacheRoot/sifruno-u<id>, which OpenLiteSpeed made as root and gave to the
+// web user. CacheRoot must be root's and writable by no one else along its
+// whole path, so no tenant can put a link in place of the store's name.
+func (n *linuxSystem) RemoveSiteCache(ctx context.Context, id string) error {
+	if ctx == nil || ctx.Err() != nil {
+		return ErrUnavailable
+	}
+	if !idPattern.MatchString(id) {
+		return ErrInvalid
+	}
+	if authority(olsweb.CacheRoot) != nil {
+		return ErrUnavailable
+	}
+	root, e := openRootDir(olsweb.CacheRoot)
+	if e != nil {
+		return e
+	}
+	defer root.Close()
+	return removeTreeAt(ctx, int(root.Fd()), olsweb.NamePrefix+siteName(id), 0)
+}
+
+// removeTreeAt removes name in the directory parent and, when it is a
+// directory, everything in it. A file or a link is removed by name with
+// unlinkat; a directory (unlinkat answers EISDIR) is opened relative to its
+// parent's handle with O_NOFOLLOW|O_DIRECTORY and emptied the same way. So a
+// link anywhere in the tree is removed itself, never followed, and nothing
+// outside the tree is touched. A name that is not there is no error.
+func removeTreeAt(ctx context.Context, parent int, name string, depth int) error {
+	if ctx.Err() != nil || depth > maxTreeDepth || name == "" || name == "." || name == ".." || strings.ContainsRune(name, '/') {
+		return ErrUnavailable
+	}
+	switch e := unix.Unlinkat(parent, name, 0); {
+	case e == nil, errors.Is(e, unix.ENOENT):
+		return nil
+	case !errors.Is(e, unix.EISDIR):
+		return ErrUnavailable
+	}
+	fd, e := unix.Openat(parent, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if errors.Is(e, unix.ENOENT) {
+		return nil
+	}
+	if e != nil {
+		return ErrUnavailable
+	}
+	dir := os.NewFile(uintptr(fd), name)
+	defer dir.Close()
+	for {
+		names, e := dir.Readdirnames(1024)
+		for _, child := range names {
+			if e := removeTreeAt(ctx, fd, child, depth+1); e != nil {
+				return e
+			}
+		}
+		if errors.Is(e, io.EOF) {
+			break
+		}
+		if e != nil {
+			return ErrUnavailable
+		}
+	}
+	if e := unix.Unlinkat(parent, name, unix.AT_REMOVEDIR); e != nil && !errors.Is(e, unix.ENOENT) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 // ensureChallengeDir makes sure the directory every vhost maps
 // /.well-known/acme-challenge/ to exists and only the panel can write it.
 // OpenLiteSpeed refuses a context whose location is missing, and every web

@@ -84,8 +84,13 @@ func (l admittedListener) Accept() (net.Conn, error) {
 		return conn, nil
 	}
 }
+
+// validBrokerPaths also keeps the controller out of the account range
+// (firstAccountID to lastAccountID): the broker never gives the controller's
+// UID to an account, and the installer's pam_limits line and each UID's
+// slice limits are meant for accounts only.
 func validBrokerPaths(opts BrokerOptions) bool {
-	if opts.ControllerUID == 0 || !validSocketName(opts.SocketPath) {
+	if opts.ControllerUID == 0 || (opts.ControllerUID >= firstAccountID && opts.ControllerUID <= lastAccountID) || !validSocketName(opts.SocketPath) {
 		return false
 	}
 	for _, p := range []string{opts.StateDir, opts.HomesDir, filepath.Dir(opts.SocketPath)} {

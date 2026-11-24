@@ -143,6 +143,10 @@ type nativeSystem interface {
 	VerifyLimits(uid int, l AccountLimits) error
 	// RemoveLimits removes the account's drop-in and reloads systemd.
 	RemoveLimits(ctx context.Context, uid int) error
+	// RemoveSiteCache removes a deleted site's LSCache store and everything
+	// in it, without following a link. A store that is not there is no
+	// error.
+	RemoveSiteCache(ctx context.Context, id string) error
 	// SyncLimits makes the drop-ins match want, one per account UID, removes
 	// the broker's drop-in of every other account-range UID, and reloads
 	// systemd once if anything changed.
@@ -570,6 +574,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					continue
 				}
 				s.removeLimits(ctx, r.Account.UID)
+				s.removeSiteCache(ctx, r.Account.ID)
 				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
 					return ErrRecovery
 				}
@@ -1011,6 +1016,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		return Account{}, ErrRecovery
 	}
 	s.removeLimits(ctx, r.Account.UID)
+	s.removeSiteCache(ctx, r.Account.ID)
 	operation := *r.Pending
 	r.Pending = nil
 	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {
@@ -1031,6 +1037,20 @@ func (s *store) removeLimits(ctx context.Context, uid int) {
 	removeCtx, cancel := webContext(ctx)
 	defer cancel()
 	_ = s.native.RemoveLimits(removeCtx, uid)
+}
+
+// removeSiteCache takes a deleted site's LSCache store away, with the web
+// operation on, once the site has left OpenLiteSpeed's config and its user
+// is gone. Like removeLimits it cannot change the delete's answer: a store
+// left behind holds only cached pages of a site no config names, under a
+// name no new account gets, since account IDs are random.
+func (s *store) removeSiteCache(ctx context.Context, id string) {
+	if s.web == nil {
+		return
+	}
+	removeCtx, cancel := webContext(ctx)
+	defer cancel()
+	_ = s.native.RemoveSiteCache(removeCtx, id)
 }
 func (s *store) capability(ctx context.Context) (Capability, error) {
 	if snapshotReentry(ctx, s) {

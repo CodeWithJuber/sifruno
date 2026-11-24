@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | whmcs-module | panel-shell | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | whmcs-module | panel-shell | customer-login | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -104,6 +104,18 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 width, public preview), and over the HTTPS listener as
                 another machine would (admin-only, certificate fingerprint). Needs Node, the repo's npm packages and Playwright's
                 Chromium, or a Chrome binary in SIFRUNO_PROOF_CHROME.
+  customer-login
+                Customer logins end to end: the panel runs as sifpanel with
+                the broker and also serves HTTPS for panel.sifruno.test; a
+                browser on this host signs in as the admin, has the wizard
+                make two PHP sites, gives a customer a login for one, and the
+                customer, over HTTPS, finishes setup from the link with an
+                authenticator code, signs in, sees only its site, and is
+                refused the other by address and by API; the admin views the
+                panel as the customer (banner, customer's menu) and goes
+                back; turning the login off signs the customer out. Needs
+                Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the
+                web packages.
   installer-sshd
                 The installer's sshd pre-checks: on copies of the VM's sshd
                 configuration, someone must still be able to sign in with a
@@ -438,6 +450,52 @@ case "${1:-}" in
     "$HERE/vm.sh" ssh "/opt/sifruno-proof/whmcs-module.guest.sh $guest $domain" | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
+    ;;
+  customer-login)
+    stage="$(mktemp -d)"
+    tunnel_web=""
+    tunnel_tls=""
+    trap 'if [ -n "$tunnel_web" ]; then kill "$tunnel_web" 2>/dev/null; fi; if [ -n "$tunnel_tls" ]; then kill "$tunnel_tls" 2>/dev/null; fi; rm -rf -- "$stage"' EXIT
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    guest="/var/lib/sifpanel/customers-$stamp"
+    free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+    port="$(free_port)"
+    tls_port="$(free_port)"
+    build "$stage/sifruno" ./cmd/sifruno
+    build "$stage/hostbroker" ./cmd/hostbroker
+    (cd "$REPO" && npm run --silent panel:build >/dev/null)
+    # Seed the state here so the browser can read its operator key from a
+    # file; a few seconds is enough to create it.
+    timeout 5 "$stage/sifruno" --listen 127.0.0.1:0 --sites-listen "" --state "$stage/state" --ui "$REPO/web/dist" >/dev/null 2>&1 || true
+    test -s "$stage/state/operator/access.key"
+    tar -czf "$stage/dist.tgz" -C "$REPO/web" dist
+    tar -czf "$stage/state.tgz" -C "$stage" state
+    "$HERE/vm.sh" ssh "systemctl stop sifruno-broker-proof 2>/dev/null; pkill -x sifruno; install -d -m 0755 /opt/sifruno-proof; install -d -o sifpanel -g sifpanel -m 0700 $guest" || true
+    "$HERE/vm.sh" put "$stage/hostbroker" /opt/sifruno-proof/hostbroker
+    for file in sifruno dist.tgz state.tgz; do
+      "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/customer-login.guest.sh" /opt/sifruno-proof/customer-login.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/customer-login.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    run="$OUT/customer-login-$stamp"
+    transcript="$run.txt"
+    domain="cl$(date +%s | tail -c 6).proof.test"
+    # The panel binds the guest's loopback only; reach both listeners through
+    # SSH on the same port numbers, so Origins and the setup link match.
+    "$HERE/vm.sh" forward "$port" &
+    tunnel_web=$!
+    "$HERE/vm.sh" forward "$tls_port" &
+    tunnel_tls=$!
+    {
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/customer-login.guest.sh start $guest $port $tls_port" || touch "$stage/failed"
+      for _ in $(seq 30); do curl -fs -o /dev/null "http://127.0.0.1:$port/" && break; sleep 1; done
+      (cd "$REPO" && node scripts/devvm/proofs/customer-login.qa.mjs "http://127.0.0.1:$port" "$stage/state/operator/access.key" "$run" "make:$domain" \
+        "${SIFRUNO_PROOF_CHROME:-}" "https://panel.sifruno.test:$tls_port") || touch "$stage/failed"
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/customer-login.guest.sh check $guest" || touch "$stage/failed"
+    } 2>&1 | tee "$transcript"
+    echo "Transcript: $transcript (screenshots in $run/)"
+    [ ! -e "$stage/failed" ]
     ;;
   panel-shell)
     stage="$(mktemp -d)"

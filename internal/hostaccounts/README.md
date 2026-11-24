@@ -992,13 +992,21 @@ busy meanwhile, so a delete, suspend, web change or install gets 409):
    run the staged files still count against the user, so a site close to
    its quota can briefly hit it. The staged home gets mode 0750 and the
    staging folder becomes root:<site group> 0750: only the site user may
-   enter it. The copied files keep the added group read bit; the group is
-   the account's own, which no other user is in.
+   enter it. Each entry that lacked a bit added here is listed, by its path
+   relative to the staged home, in a root 0600 manifest per change
+   (`modes-g-r`, `modes-g-rx`, `modes-g-x`, NUL-separated) in the staging
+   folder; the staged home and public_html are not listed, the broker sets
+   their mode.
 4. `cp -R -P --preserve=mode,timestamps,links --remove-destination -T` runs
    as the site user (its UID and GID, no supplementary groups, a clean
    environment) and copies the staged home over the home. Files added since
-   the backup stay. Root writes nothing into a path the tenant controls; a
-   tenant's own files can harm only that tenant.
+   the backup stay. Then `xargs -0 -r -- chmod <change> --` runs as the site
+   user in its home with each manifest on stdin and takes back exactly the
+   bits step 3 added, so a 0600 wp-config.php comes back 0600 and a 0700
+   folder 0700. chmod follows a link it is given, but as the site user it
+   reaches only what that user may change anyway. Root writes nothing into
+   a path the tenant controls; a tenant's own files can harm only that
+   tenant.
 5. For each database: root makes a temporary user
    `sifruno_rst_<16 hex>` granted only `SELECT, INSERT, UPDATE, DELETE,
    CREATE, DROP, ALTER, INDEX, LOCK TABLES, REFERENCES` on exactly that
@@ -1268,8 +1276,9 @@ root step. The design, with the owner's choices recorded from Jev on
   the margin is crossed. The staged home and
   public_html get the modes the broker records (0750); a public_html that
   is a link is refused. Then the staging folder becomes root:<site group>
-  0750 and `cp` runs as the site's user, exactly as the restore's copy
-  does, and the web server's access is granted again. Root writes nothing
+  0750 and `cp` runs as the site's user, then the mode fix, exactly as the
+  restore's copy does, so files keep the old server's modes, and the web
+  server's access is granted again. Root writes nothing
   into a path the tenant controls, and the tenant never holds the key.
 - `POST /v1/accounts/{id}/migrate-database` (`migration`, `database`,
   `expected_revision`, `reason`): the database must exist here (the panel

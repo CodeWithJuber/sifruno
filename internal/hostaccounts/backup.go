@@ -32,6 +32,9 @@ const (
 	mariadbPath     = "/usr/bin/mariadb"
 	mariadbDumpPath = "/usr/bin/mariadb-dump"
 	cpPath          = "/usr/bin/cp"
+	// xargs runs chmod (wordpress_linux.go) as the site user to take back
+	// the group bits staging added (stagedModes).
+	xargsPath = "/usr/bin/xargs"
 	// mariadbSocket is the AlmaLinux MariaDB socket; root signs in over it
 	// with unix_socket authentication, as the installer does.
 	mariadbSocket = "/var/lib/mysql/mysql.sock"

@@ -44,7 +44,7 @@ func newMigrator(stateDir string, e *resticEngine) *migrator {
 // checkMigrateTools accepts ssh, ssh-keyscan, rsync, cp and the MariaDB
 // client only as root-owned regular executables.
 func checkMigrateTools() error {
-	for _, p := range []string{sshPath, sshKeyscanPath, rsyncPath, cpPath, mariadbPath} {
+	for _, p := range []string{sshPath, sshKeyscanPath, rsyncPath, cpPath, xargsPath, chmodPath, mariadbPath} {
 		if info, e := trustedFile(p, false); e != nil || info.Mode().Perm()&0001 == 0 {
 			return ErrUnavailable
 		}
@@ -340,7 +340,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	// does (groupStaged): nothing counts against the site's quota until its
 	// own copy. The copy gives the home and public_html the staged folders'
 	// modes: the ones the broker records for them.
-	err = m.e.groupStaged(stagePath+"/files", r.Account.GID)
+	err = m.e.groupStaged(stage, stagePath+"/files", r.Account.GID)
 	if err == nil {
 		err = files.Chmod(0750)
 	}
@@ -371,6 +371,10 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	out, code, err = m.e.run(ctx, backupCommand{path: cpPath, args: copyArgs(stagePath+"/files", r.Account.Home), env: siteEnv(r), dir: r.Account.Home, uid: r.Account.UID, gid: r.Account.GID, limit: backupTimeout})
 	if err != nil || code != 0 {
 		return MigrateFilesResult{}, migrationFailed("copy", out)
+	}
+	// The old server's modes come back: the group bits staging added go.
+	if out, err := m.e.stagedModes(ctx, stage, r); err != nil {
+		return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The files were copied, but some kept a group read bit the old server did not give them. " + installDetail(out)}
 	}
 	return MigrateFilesResult{WordPress: wordpress}, nil
 }

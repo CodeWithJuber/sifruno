@@ -31,6 +31,10 @@ type fakeSource struct {
 	dump     string
 	objects  string // what the source's object check finds
 	failCopy bool
+	// realCopy runs cp and the mode fix for real (realProgram); modes are
+	// the modes rsync writes entries with (default 0644 and 0755).
+	realCopy bool
+	modes    map[string]os.FileMode
 	counts   string // the copy's row counts (rootSQL), when they differ
 }
 
@@ -41,7 +45,7 @@ func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error
 		stdin = string(b)
 	}
 	f.mu.Lock()
-	f.ran = append(f.ran, ranCommand{path: c.path, args: slices.Clone(c.args), env: slices.Clone(c.env), uid: c.uid, gid: c.gid, stdin: stdin})
+	f.ran = append(f.ran, ranCommand{path: c.path, args: slices.Clone(c.args), env: slices.Clone(c.env), uid: c.uid, gid: c.gid, stdin: stdin, dir: c.dir})
 	f.mu.Unlock()
 	switch c.path {
 	case sshKeyscanPath:
@@ -62,10 +66,23 @@ func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error
 			}
 			os.WriteFile(p, []byte(content), 0644)
 		}
+		for name, mode := range f.modes {
+			if !htaccessOnly {
+				os.Chmod(filepath.Join(dest, name), mode)
+			}
+		}
 		return nil, 0, nil
 	case cpPath:
 		if f.failCopy {
 			return []byte("cp: Disk quota exceeded"), 1, nil
+		}
+		if f.realCopy {
+			return realProgram(c, stdin)
+		}
+		return nil, 0, nil
+	case xargsPath:
+		if f.realCopy {
+			return realProgram(c, stdin)
 		}
 		return nil, 0, nil
 	case mariadbPath:
@@ -315,6 +332,46 @@ func TestUnreadableSourceFilesStopTheCopy(t *testing.T) {
 	}
 	if slices.ContainsFunc(f.ran, func(c ranCommand) bool { return c.path == cpPath }) {
 		t.Fatal("cp ran into the home")
+	}
+}
+
+// A moved site keeps the old server's modes: a 0600 file and a 0700
+// folder are not left group-readable by the staging, a 0644 file stays.
+func TestMigrateFilesKeepsTheOldServersModes(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	rec := openedRecord(t, m)
+	r := engineRecord(filepath.Dir(m.e.dir))
+	if err := os.MkdirAll(r.Account.Home, 0750); err != nil {
+		t.Fatal(err)
+	}
+	f.realCopy = true
+	f.home = map[string]string{"public_html/wp-config.php": "<?php", "public_html/index.php": "<?php", "public_html/private/notes.txt": "n", "bin/run.sh": "#!/bin/sh"}
+	f.modes = map[string]os.FileMode{"public_html/wp-config.php": 0600, "public_html/private": 0700, "public_html/private/notes.txt": 0600, "bin/run.sh": 0700, "public_html": 0700}
+	if _, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 1, backupLeftover{Op: strings.Repeat("a", 31) + "b"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]os.FileMode{
+		"public_html/wp-config.php": 0600, "public_html/index.php": 0644, "public_html/private": 0700,
+		"public_html/private/notes.txt": 0600, "bin/run.sh": 0700, "public_html": 0750, ".": 0750,
+	} {
+		info, err := os.Lstat(filepath.Join(r.Account.Home, name))
+		if err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %o", name, info.Mode().Perm(), err, want)
+		}
+	}
+	var fixes []string
+	for _, c := range f.ran {
+		if c.path == xargsPath {
+			if c.uid != 20000 || c.dir != r.Account.Home || !slices.Equal(c.args[:3], []string{"-0", "-r", "--"}) {
+				t.Errorf("the mode fix ran as %d in %s with %q", c.uid, c.dir, c.args)
+			}
+			fixes = append(fixes, c.args[4]+":"+c.stdin)
+		}
+	}
+	slices.Sort(fixes)
+	want := []string{"g-r:bin/run.sh\x00public_html/private/notes.txt\x00public_html/wp-config.php\x00", "g-rx:public_html/private\x00"}
+	if !slices.Equal(fixes, want) {
+		t.Errorf("mode fixes %q, want %q", fixes, want)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -59,6 +60,7 @@ type ranCommand struct {
 	env      []string
 	uid, gid int
 	stdin    string
+	dir      string
 }
 
 // fakeTools stands in for restic, the MariaDB tools and cp.
@@ -71,11 +73,16 @@ type fakeTools struct {
 	failSQL   string // a statement prefix that fails
 	missingDB bool   // the database a restore names is gone
 	failCopy  bool
-	failLoad  bool
-	catConfig int
-	restored  map[string]string // file name -> content, written by restic restore
-	dump      string
-	lsNodes   []map[string]any
+	// realCopy runs cp and the mode fix (xargs, chmod) for real, as the
+	// test's own user, to see the modes a copy leaves; restoredModes are
+	// the modes restic restores entries with (default 0600 and 0700).
+	realCopy      bool
+	restoredModes map[string]os.FileMode
+	failLoad      bool
+	catConfig     int
+	restored      map[string]string // file name -> content, written by restic restore
+	dump          string
+	lsNodes       []map[string]any
 	// stats is what restic stats --mode restore-size prints.
 	stats     string
 	duringRun func(c backupCommand)
@@ -88,7 +95,7 @@ func (f *fakeTools) run(_ context.Context, c backupCommand) ([]byte, int, error)
 		stdin = string(b)
 	}
 	f.mu.Lock()
-	f.ran = append(f.ran, ranCommand{path: c.path, args: slices.Clone(c.args), env: slices.Clone(c.env), uid: c.uid, gid: c.gid, stdin: stdin})
+	f.ran = append(f.ran, ranCommand{path: c.path, args: slices.Clone(c.args), env: slices.Clone(c.env), uid: c.uid, gid: c.gid, stdin: stdin, dir: c.dir})
 	f.mu.Unlock()
 	if f.duringRun != nil {
 		f.duringRun(c)
@@ -118,6 +125,14 @@ func (f *fakeTools) run(_ context.Context, c backupCommand) ([]byte, int, error)
 	case cpPath:
 		if f.failCopy {
 			return []byte("cp: cannot create regular file"), 1, nil
+		}
+		if f.realCopy {
+			return realProgram(c, stdin)
+		}
+		return nil, 0, nil
+	case xargsPath:
+		if f.realCopy {
+			return realProgram(c, stdin)
 		}
 		return nil, 0, nil
 	case resticPath:
@@ -149,6 +164,9 @@ func (f *fakeTools) restic(c backupCommand) ([]byte, int, error) {
 			os.MkdirAll(filepath.Dir(p), 0700)
 			os.WriteFile(p, []byte(content), 0600)
 		}
+		for name, mode := range f.restoredModes {
+			os.Chmod(filepath.Join(target, name), mode)
+		}
 		return []byte(`{"message_type":"summary"}`), 0, nil
 	case "ls":
 		for _, node := range f.lsNodes {
@@ -168,6 +186,21 @@ func (f *fakeTools) restic(c backupCommand) ([]byte, int, error) {
 		return nil, 0, nil
 	}
 	return nil, 1, nil
+}
+
+// realProgram runs cp or xargs for real, as the test's own user, in the
+// command's folder with its input, for a test that checks the modes a copy
+// leaves behind.
+func realProgram(c backupCommand, stdin string) ([]byte, int, error) {
+	cmd := exec.Command(c.path, c.args...)
+	cmd.Dir = c.dir
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return out, exit.ExitCode(), nil
+	}
+	return out, 0, err
 }
 
 type chownCall struct {
@@ -397,10 +430,15 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 			asSite = append(asSite, c)
 		}
 	}
-	if len(asSite) != 2 {
+	if len(asSite) != 3 {
 		t.Fatalf("site-user commands: %+v", asSite)
 	}
-	cp, load := asSite[0], asSite[1]
+	cp, fix, load := asSite[0], asSite[1], asSite[2]
+	// The site user takes back the group read bit staging gave the 0600
+	// page, in its home, by relative path.
+	if fix.path != xargsPath || fix.uid != 20000 || fix.dir != r.Account.Home || !slices.Equal(fix.args, modeFixArgs("g-r")) || !strings.Contains(fix.stdin, "public_html/index.php\x00") {
+		t.Fatalf("mode fix: %+v", fix)
+	}
 	if cp.path != cpPath || cp.uid != 20000 || cp.gid != 20000 || !slices.Equal(cp.args, copyArgs(stagePath+"/files", r.Account.Home)) {
 		t.Fatalf("copy: %+v", cp)
 	}
@@ -451,6 +489,34 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 	}
 	if _, err := os.Lstat(stagePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("cleanup left the staging folder")
+	}
+}
+
+// A restore brings files back with the backup's modes: the group bits
+// staging adds so the site user can read the staged copy are taken back
+// after its copy, and only those.
+func TestRestoreKeepsTheSnapshotsModes(t *testing.T) {
+	e, tools, _ := testEngine(t)
+	r := engineRecord(filepath.Dir(e.dir))
+	if err := os.MkdirAll(r.Account.Home, 0750); err != nil {
+		t.Fatal(err)
+	}
+	tools.realCopy = true
+	tools.snapshots = restoreSnapshots(r, e.dir)
+	tools.restored = map[string]string{"public_html/wp-config.php": "<?php // secret", "public_html/style.css": "body{}", "public_html/private/notes.txt": "n", "public_html/assets/a.js": "a"}
+	tools.restoredModes = map[string]os.FileMode{"public_html": 0750, "public_html/style.css": 0644, "public_html/private": 0700, "public_html/assets": 0710}
+	in := RestoreInput{ExpectedRevision: 1, Snapshot: strings.Repeat("d", 64), Files: true, Reason: "Restore"}
+	if err := e.Restore(context.Background(), engineTarget(t), r, in, engineLeftover()); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]os.FileMode{
+		"public_html/wp-config.php": 0600, "public_html/style.css": 0644, "public_html/private": 0700,
+		"public_html/private/notes.txt": 0600, "public_html/assets": 0710, "public_html": 0750, ".": 0750,
+	} {
+		info, err := os.Lstat(filepath.Join(r.Account.Home, name))
+		if err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %o", name, info.Mode().Perm(), err, want)
+		}
 	}
 }
 

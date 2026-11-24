@@ -4,6 +4,7 @@ package hostaccounts
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -219,7 +220,7 @@ func checkBackupTools() error {
 	if checkRestic() != nil {
 		return ErrUnavailable
 	}
-	for _, p := range []string{sshPath, mariadbPath, mariadbDumpPath, cpPath} {
+	for _, p := range []string{sshPath, mariadbPath, mariadbDumpPath, cpPath, xargsPath, chmodPath} {
 		if info, e := trustedFile(p, false); e != nil || info.Mode().Perm()&0001 == 0 {
 			return ErrUnavailable
 		}
@@ -644,6 +645,20 @@ func (e *resticEngine) newStage(op string) (*os.File, error) {
 	return d, nil
 }
 
+// modeFixes are the group bits groupStaged may add, each with the manifest
+// in the staging folder that lists the entries it added them to, and the
+// chmod change that takes them back.
+var modeFixes = []struct{ manifest, change string }{
+	{"modes-g-r", "g-r"}, {"modes-g-rx", "g-rx"}, {"modes-g-x", "g-x"},
+}
+
+// modeFixArgs runs chmod on the NUL-separated relative paths xargs reads
+// from the manifest; "--" ends both programs' options, so no path is read
+// as one.
+func modeFixArgs(change string) []string {
+	return []string{"-0", "-r", "--", chmodPath, change, "--"}
+}
+
 // groupStaged gives every entry of a staged home to root and the site's
 // private group, readable by that group: folders gain g+rx, files g+r,
 // and setuid and setgid bits go. Staged files owned by the site's user
@@ -654,11 +669,22 @@ func (e *resticEngine) newStage(op string) (*os.File, error) {
 // folder is still root-only, so nothing changes the tree under it, and it
 // follows no link: WalkDir reads entries with lstat, links are changed with
 // lchown only, and other special files keep their mode.
-func (e *resticEngine) groupStaged(dir string, gid int) error {
+//
+// cp --preserve=mode would carry the added bits into the home, so a 0600
+// wp-config.php would land 0640. Every entry whose own mode lacked a bit
+// added here is listed, by its path relative to the staged home, in a
+// manifest per change (modeFixes): root 0600 files in the staging folder,
+// NUL-separated, which stagedModes reads back after the copy. The staged
+// home itself and public_html are not listed: the broker sets their mode.
+func (e *resticEngine) groupStaged(stage *os.File, dir string, gid int) error {
 	if gid <= 0 {
 		return ErrUnavailable
 	}
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	lists := map[string]*bytes.Buffer{}
+	for _, f := range modeFixes {
+		lists[f.change] = &bytes.Buffer{}
+	}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return ErrUnavailable
 		}
@@ -670,22 +696,70 @@ func (e *resticEngine) groupStaged(dir string, gid int) error {
 			return ErrUnavailable
 		}
 		perm := info.Mode().Perm()
+		var add os.FileMode
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			return nil
 		case info.IsDir():
-			perm |= 0050
+			add = 0050
 		case info.Mode().IsRegular():
-			perm |= 0040
+			add = 0040
 		default:
 			return nil
 		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil || strings.ContainsRune(rel, 0) {
+			return ErrUnavailable
+		}
+		if missing := add &^ perm; missing != 0 && rel != "." && rel != "public_html" {
+			change := map[os.FileMode]string{0040: "g-r", 0050: "g-rx", 0010: "g-x"}[missing]
+			lists[change].WriteString(rel)
+			lists[change].WriteByte(0)
+		}
 		// A FileMode of permission bits only: setuid, setgid and sticky go.
-		if e.chmod(p, perm) != nil {
+		if e.chmod(p, perm|add) != nil {
 			return ErrUnavailable
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	for _, f := range modeFixes {
+		if lists[f.change].Len() == 0 {
+			continue
+		}
+		if e.writePrivate(stage, f.manifest, lists[f.change].Bytes(), e.owner, e.owner, 0600) != nil {
+			return ErrUnavailable
+		}
+	}
+	return nil
+}
+
+// stagedModes takes back, after the copy into the home, the group bits
+// groupStaged added, so restored and moved files keep their own modes.
+// xargs and chmod run as the site user in its home, with the manifest
+// (root 0600, opened here) on standard input and the paths relative to the
+// home. chmod follows a link it is given: if the tenant swapped a listed
+// path for a link meanwhile, the change reaches only what the site user
+// may change itself, its own files, as its own chmod would.
+func (e *resticEngine) stagedModes(ctx context.Context, stage *os.File, r record) ([]byte, error) {
+	for _, f := range modeFixes {
+		fd, err := unix.Openat(int(stage.Fd()), f.manifest, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
+		if err != nil {
+			return nil, ErrUnavailable
+		}
+		list := os.NewFile(uintptr(fd), f.manifest)
+		out, code, err := e.run(ctx, backupCommand{path: xargsPath, args: modeFixArgs(f.change), env: siteEnv(r), dir: r.Account.Home, stdin: list, uid: r.Account.UID, gid: r.Account.GID, limit: backupTimeout})
+		list.Close()
+		if err != nil || code != 0 {
+			return out, ErrUnavailable
+		}
+	}
+	return nil, nil
 }
 
 // snapshotFor finds the account's own snapshot by its full ID.
@@ -762,7 +836,7 @@ func (e *resticEngine) Restore(ctx context.Context, t BackupTarget, r record, in
 		// go to root and the site's group (groupStaged). The copy gives the
 		// home the staged folder's mode, so it gets the mode the broker
 		// requires of a home.
-		err = e.groupStaged(stagePath+"/files", r.Account.GID)
+		err = e.groupStaged(stage, stagePath+"/files", r.Account.GID)
 		if err == nil {
 			err = files.Chmod(0750)
 		}
@@ -779,6 +853,9 @@ func (e *resticEngine) Restore(ctx context.Context, t BackupTarget, r record, in
 		out, code, err := e.run(ctx, backupCommand{path: cpPath, args: copyArgs(stagePath+"/files", r.Account.Home), env: siteEnv(r), dir: r.Account.Home, uid: r.Account.UID, gid: r.Account.GID, limit: backupTimeout})
 		if err != nil || code != 0 {
 			return backupFailed("copy", out)
+		}
+		if out, err := e.stagedModes(ctx, stage, r); err != nil {
+			return &BackupError{Step: "copy", Detail: "The files were restored, but some kept a group read bit the backup did not have. " + backupDetail(out)}
 		}
 	}
 	for _, db := range in.Databases {

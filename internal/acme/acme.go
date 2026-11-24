@@ -36,9 +36,19 @@ const (
 	firstCheck = 2 * time.Minute // the renewal loop's first look after start
 	checkEvery = 12 * time.Hour  // and every 12 hours after that
 	retryEvery = 6 * time.Hour   // at most one attempt per site in this time
+	// A site's domain change asks for a certificate at once (Refresh), but
+	// not within an hour of the site's last attempt. Let's Encrypt allows 5
+	// authorization failures per name per account an hour, 50 certificates
+	// per registered domain in 7 days (refilled one every 202 minutes) and
+	// 300 new orders per account in 3 hours
+	// (https://letsencrypt.org/docs/rate-limits/, updated 2026-08-05): an
+	// alias added and removed over and over, or one that never validates,
+	// costs at most one order an hour per site.
+	refreshEvery = time.Hour
 	// After the broker refused to install an issued certificate, wait a
-	// week: each refused install takes two rows of the account's journal,
-	// which holds 256, so retrying every 6 hours would fill it in a month.
+	// week, for the renewal loop and a domain change alike: whatever made
+	// the broker refuse it is not likely to change by itself, and each try
+	// costs an order and two rows of the account's journal.
 	installRetryEvery = 7 * 24 * time.Hour
 	renewBefore       = 30 * 24 * time.Hour // renew once less than this is left
 	minWait           = time.Minute         // the loop never spins faster than this
@@ -107,6 +117,9 @@ var (
 	ErrAuthority = errors.New("acme: the certificate authority did not issue a certificate")
 	// ErrInstall: a certificate was issued, but the broker did not install it.
 	ErrInstall = errors.New("acme: the certificate could not be installed")
+	// ErrTooSoon: Refresh asked for nothing because the site's last attempt
+	// was too recent; the renewal loop asks later.
+	ErrTooSoon = errors.New("acme: a certificate was asked for this site too recently")
 )
 
 // Manager gets, installs and renews certificates, one at a time, and keeps a
@@ -193,11 +206,14 @@ func (m *Manager) secure(ctx context.Context, accountID string, names []string, 
 
 // Refresh brings a live site's certificate up to date after its domains
 // changed: it asks for one naming the site's domain and those of its aliases
-// that reach this server now, unless the installed one names exactly those
-// and has more than 30 days left. The aliases that do not reach this server
-// are recorded (Waiting). A person changed the site, so it does not wait
-// for the 6-hour retry or the week after a refused install. It answers the
-// attempt's error, nil when nothing was needed.
+// that reach this server now, unless the installed one names all of those
+// (names only removed stay on it until the next renewal) and has more than
+// 30 days left. The aliases that do not reach this server are recorded
+// (Waiting). A person changed the site, so it does not wait for the renewal
+// loop's 6 hours, but it asks for nothing within an hour of the site's last
+// attempt, or a week after a refused install, and answers ErrTooSoon: the
+// renewal loop asks then. Otherwise it answers the attempt's error, nil
+// when nothing was needed.
 func (m *Manager) Refresh(ctx context.Context, s Site) error {
 	if s.AccountID == "" || s.Domain == "" {
 		return errors.New("acme: an account and a domain are needed")
@@ -210,7 +226,7 @@ func (m *Manager) Refresh(ctx context.Context, s Site) error {
 		r, _ := m.records.get(s.AccountID)
 		notAfter = r.NotAfter
 	}
-	return m.renew(ctx, s, due(notAfter, time.Time{}, m.now()))
+	return m.renew(ctx, s, due(notAfter, time.Time{}, m.now()), true)
 }
 
 // Waiting names the site's aliases its last certificate request left out
@@ -223,11 +239,15 @@ func (m *Manager) Waiting(accountID string) []string {
 
 // renew asks for a certificate naming the site's domain and its aliases
 // that reach this server, when the installed one is expiring (or missing)
-// or names other domains than those. A failed validation of an expiring
-// certificate with aliases is tried once more for the site's own domain
-// alone, so an alias the certificate authority cannot reach does not let the
-// site's certificate run out.
-func (m *Manager) renew(ctx context.Context, s Site, expiring bool) error {
+// or does not name one of those. A certificate that names more, an alias
+// since removed, stays: an extra name is harmless, the next renewal of an
+// expiring certificate drops it, and asking again on every removal would
+// let a site that adds and removes an alias spend an order each time. A
+// failed validation of an expiring certificate with aliases is tried once
+// more for the site's own domain alone, so an alias the certificate
+// authority cannot reach does not let the site's certificate run out. For
+// a refresh (Refresh) the site's last attempt must be refreshWait old.
+func (m *Manager) renew(ctx context.Context, s Site, expiring, refresh bool) error {
 	// The probes run before the manager is taken, all at once: a domain
 	// that answers slowly holds up neither another site's certificate nor
 	// its own for longer than one probe's limit.
@@ -239,8 +259,17 @@ func (m *Manager) renew(ctx context.Context, s Site, expiring bool) error {
 	}
 	defer func() { <-m.busy }()
 	m.records.waiting(s.AccountID, s.Domain, waiting)
-	if !expiring && sameNames(names, covered(s)) {
+	if !expiring && namesAll(covered(s), names) {
 		return nil
+	}
+	// Read while the manager is held, so two refreshes of one site at once
+	// make one order.
+	if refresh {
+		r, _ := m.records.get(s.AccountID)
+		if at := r.LastAttempt.Add(refreshWait(r)); m.now().Before(at) {
+			m.logf("acme: %s (account %s): no certificate asked for: the last attempt was at %s; the renewal check asks again from %s", strings.Join(names, ", "), s.AccountID, r.LastAttempt.UTC().Format(time.RFC3339), at.UTC().Format(time.RFC3339))
+			return ErrTooSoon
+		}
 	}
 	_, _, err := m.secure(ctx, s.AccountID, names, s.Revision)
 	if errors.Is(err, ErrValidation) && expiring && len(names) > 1 {
@@ -291,9 +320,14 @@ func covered(s Site) []string {
 	return nil
 }
 
-// sameNames compares two lists of domains as sets.
-func sameNames(a, b []string) bool {
-	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+// namesAll reports whether have names every domain of want.
+func namesAll(have, want []string) bool {
+	for _, name := range want {
+		if !slices.Contains(have, name) {
+			return false
+		}
+	}
+	return true
 }
 
 // mayChange reports whether the names a site's certificate should carry
@@ -361,12 +395,12 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 		}
 		retryAt := r.LastAttempt.Add(retryWait(r))
 		// A site with aliases is looked at too when its certificate is not
-		// due: an alias whose DNS now points here, or one removed, changes
-		// the names it should carry.
+		// due: an alias whose DNS now points here is a name it should
+		// carry. One removed waits for the renewal (renew).
 		expiring := due(notAfter, retryAt, now)
 		if expiring || (!now.Before(retryAt) && mayChange(s)) {
 			// secure logs the outcome; the error is already in the record.
-			_ = m.renew(ctx, s, expiring)
+			_ = m.renew(ctx, s, expiring, false)
 		}
 	}
 	return m.nextWait()
@@ -388,6 +422,16 @@ func retryWait(r record) time.Duration {
 		return installRetryEvery
 	}
 	return retryEvery
+}
+
+// refreshWait is how long a domain change waits after the site's last
+// attempt before it asks for a certificate: an hour, or a week after the
+// broker refused to install what was issued.
+func refreshWait(r record) time.Duration {
+	if r.LastResult == ErrInstall.Error() {
+		return installRetryEvery
+	}
+	return refreshEvery
 }
 
 // nextWait is the time to the next check: 12 hours, or sooner when a

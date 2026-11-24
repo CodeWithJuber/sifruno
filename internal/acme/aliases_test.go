@@ -44,17 +44,25 @@ func TestRefreshAsksForTheAliasesThatReachHere(t *testing.T) {
 		t.Fatalf("an up-to-date certificate was asked for again: %v %q", err, f.issuer.domains)
 	}
 	delete(f.issuer.unreachable, "nodns.example.com")
+	f.now = f.now.Add(2 * time.Hour)
 	if err := f.m.Refresh(context.Background(), site); err != nil || !slices.Equal(f.issuer.domains, []string{"example.com,shop.example.com,nodns.example.com,www.example.com"}) {
 		t.Fatalf("a newly reachable alias: %v %q", err, f.issuer.domains)
 	}
 	if got := f.m.Waiting(id); len(got) != 0 {
 		t.Fatalf("still waiting %q", got)
 	}
-	// An alias removed from the site leaves the certificate.
+	// An alias removed from the site stays on the certificate: an extra
+	// name is harmless, and nothing is asked for.
 	site.Aliases, site.Covered = []string{"www.example.com"}, []string{"example.com", "nodns.example.com", "shop.example.com", "www.example.com"}
 	f.issuer.domains = nil
-	if err := f.m.Refresh(context.Background(), site); err != nil || !slices.Equal(f.issuer.domains, []string{"example.com,www.example.com"}) {
+	f.now = f.now.Add(2 * time.Hour)
+	if err := f.m.Refresh(context.Background(), site); err != nil || len(f.issuer.domains) != 0 {
 		t.Fatalf("a removed alias: %v %q", err, f.issuer.domains)
+	}
+	// The renewal of the expiring certificate drops it.
+	site.NotAfter = f.now.Add(10 * 24 * time.Hour)
+	if err := f.m.Refresh(context.Background(), site); err != nil || !slices.Equal(f.issuer.domains, []string{"example.com,www.example.com"}) {
+		t.Fatalf("the renewal after a removed alias: %v %q", err, f.issuer.domains)
 	}
 	// A suspended site is left alone.
 	site.Active = false
@@ -64,17 +72,37 @@ func TestRefreshAsksForTheAliasesThatReachHere(t *testing.T) {
 	}
 }
 
-// TestRefreshIgnoresTheRetryWait: a person changed the site, so a refreshed
-// site is asked for even a day after a refused install.
-func TestRefreshIgnoresTheRetryWait(t *testing.T) {
+// TestRefreshWaitsForTheSitesLastAttempt: a person changed the site, so a
+// refresh does not wait for the renewal loop's 6 hours, but it asks for
+// nothing within an hour of the site's last attempt, or within a week of a
+// refused install.
+func TestRefreshWaitsForTheSitesLastAttempt(t *testing.T) {
 	f := newManagerFixture(t)
 	id := strings.Repeat("c", 32)
-	f.m.records.change(id, func(r *record) {
-		r.Domain, r.LastAttempt, r.LastResult = "example.com", f.now.Add(-24*time.Hour), ErrInstall.Error()
-	})
 	site := Site{AccountID: id, Domain: "example.com", Aliases: []string{"www.example.com"}, Covered: []string{"example.com"}, NotAfter: f.now.Add(60 * 24 * time.Hour), Revision: 2, Active: true}
-	if err := f.m.Refresh(context.Background(), site); err != nil || !slices.Equal(f.issuer.domains, []string{"example.com,www.example.com"}) {
-		t.Fatalf("refresh: %v %q", err, f.issuer.domains)
+	for _, c := range []struct {
+		name   string
+		ago    time.Duration
+		result string
+		asks   bool
+	}{
+		{"a failed validation half an hour ago", 30 * time.Minute, ErrValidation.Error(), false},
+		{"a failed validation two hours ago", 2 * time.Hour, ErrValidation.Error(), true},
+		{"a certificate installed half an hour ago", 30 * time.Minute, "installed", false},
+		{"a refused install a day ago", 24 * time.Hour, ErrInstall.Error(), false},
+		{"a refused install eight days ago", 8 * 24 * time.Hour, ErrInstall.Error(), true},
+	} {
+		f.issuer.domains = nil
+		f.m.records.change(id, func(r *record) {
+			r.Domain, r.LastAttempt, r.LastResult = "example.com", f.now.Add(-c.ago), c.result
+		})
+		err := f.m.Refresh(context.Background(), site)
+		if asked := len(f.issuer.domains) == 1; asked != c.asks || c.asks && err != nil || !c.asks && !errors.Is(err, ErrTooSoon) {
+			t.Errorf("%s: %v, asked %q", c.name, err, f.issuer.domains)
+		}
+	}
+	if !strings.Contains(f.log.String(), "no certificate asked for: the last attempt was at") {
+		t.Fatalf("a refresh asked for nothing without saying so:\n%s", f.log)
 	}
 	// The renewal loop still waits the week.
 	f.issuer.domains = nil
@@ -83,6 +111,60 @@ func TestRefreshIgnoresTheRetryWait(t *testing.T) {
 	f.m.check(context.Background())
 	if len(f.issuer.domains) != 0 {
 		t.Fatalf("the loop tried a refused install again after a day: %q", f.issuer.domains)
+	}
+}
+
+// TestAliasFlipsCostOneOrder: adding and removing an alias over and over
+// asks for one certificate, the first time; removing names asks for none;
+// new names are asked for at most once an hour; and two refreshes of one
+// site at once make one order.
+func TestAliasFlipsCostOneOrder(t *testing.T) {
+	f := newManagerFixture(t)
+	id := strings.Repeat("5", 32)
+	site := Site{AccountID: id, Domain: "example.com", Covered: []string{"example.com"}, NotAfter: f.now.Add(60 * 24 * time.Hour), Revision: 2, Active: true}
+	for i := range 10 {
+		f.now = f.now.Add(2 * time.Hour)
+		site.Aliases = []string{"flip.example.com"}
+		if err := f.m.Refresh(context.Background(), site); err != nil {
+			t.Fatalf("flip %d, alias added: %v", i, err)
+		}
+		if i == 0 {
+			// The broker now reports the certificate the panel installed.
+			site.Covered = []string{"example.com", "flip.example.com"}
+		}
+		site.Aliases = nil
+		if err := f.m.Refresh(context.Background(), site); err != nil {
+			t.Fatalf("flip %d, alias removed: %v", i, err)
+		}
+	}
+	if !slices.Equal(f.issuer.domains, []string{"example.com,flip.example.com"}) {
+		t.Fatalf("ten flips asked for %q", f.issuer.domains)
+	}
+	// A new alias every ten minutes: one order an hour.
+	f.issuer.domains = nil
+	f.now = f.now.Add(2 * time.Hour)
+	for i := range 12 {
+		site.Aliases = []string{fmt.Sprintf("new%d.example.com", i)}
+		err := f.m.Refresh(context.Background(), site)
+		if i%6 != 0 && !errors.Is(err, ErrTooSoon) {
+			t.Fatalf("alias %d: %v", i, err)
+		}
+		f.now = f.now.Add(10 * time.Minute)
+	}
+	if len(f.issuer.domains) != 2 {
+		t.Fatalf("two hours of new aliases asked for %q", f.issuer.domains)
+	}
+	// Two refreshes at once: one order.
+	f.issuer.domains = nil
+	f.now = f.now.Add(2 * time.Hour)
+	site.Aliases = []string{"together.example.com"}
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { errs <- f.m.Refresh(context.Background(), site) }()
+	}
+	first, second := <-errs, <-errs
+	if len(f.issuer.domains) != 1 || (first == nil) == (second == nil) {
+		t.Fatalf("two refreshes at once: %v, %v, asked %q", first, second, f.issuer.domains)
 	}
 }
 
@@ -134,6 +216,7 @@ func TestExpiringCertificateFallsBackToTheDomain(t *testing.T) {
 	}
 	// Not expiring: the old certificate stays, and nothing else is asked for.
 	f.issuer.domains, f.installer.calls = nil, nil
+	f.now = f.now.Add(2 * time.Hour)
 	site.NotAfter = f.now.Add(60 * 24 * time.Hour)
 	if err := f.m.Refresh(context.Background(), site); !errors.Is(err, ErrValidation) || len(f.issuer.domains) != 1 || len(f.installer.calls) != 0 {
 		t.Fatalf("%v, asked %q, installed %q", err, f.issuer.domains, f.installer.calls)

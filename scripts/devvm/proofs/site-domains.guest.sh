@@ -207,16 +207,20 @@ check "after the resume, $SHOP serves the site again" wait_serves "$SHOP"
 check "and the redirect answers again" wait_answer "$DOMAIN" /old-page "301 https://$DOMAIN/new-page"
 
 echo
-echo "## 8. Removing an alias takes it out, and the next certificate drops it"
+echo "## 8. Removing an alias takes it out; the certificate keeps the name until its renewal"
 smaller="{\"aliases\":[\"$WWW\",\"$OTHER\",\"$NODNS\"],\"redirects\":[{\"path\":\"/old-page\",\"target\":\"https://$DOMAIN/new-page\",\"status\":301},{\"domain\":\"$WWW\",\"target\":\"https://$DOMAIN\",\"status\":301}]}"
 changed="$(drive domains --id "$id" --revision "$rev" --input-file "$(domains_file smaller "$smaller")" --reason 'Remove the shop domain')" || fail "the broker removes the alias"
 rev="$(printf '%s' "$changed" | revision)"
 check "$SHOP no longer serves the site" bash -c "! curl -s -H 'Host: $SHOP' http://127.0.0.1/ | grep -q '$PROOF_TEXT'"
 check "the HTTPS listener no longer maps $SHOP" bash -c "! sed -n '/listener sifruno-https/,/^}/p' $LSWS/conf/sifruno.conf | grep -q ' $SHOP'"
-out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is renewed"
+removed_rev="$rev"
+out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is brought up to date"
 rev="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["account"]["revision"])' <<<"$out" 2>/dev/null || echo "$rev")"
-want="$(printf '%s\n' "$DOMAIN" "$WWW" "$OTHER" | sort | paste -sd ' ')"
-check "the renewed certificate names $DOMAIN, $WWW and $OTHER only" test "$(sans "$DOMAIN")" = "$want"
+# Only a name removed: no new order. The extra name is harmless, and the
+# renewal before the certificate expires drops it.
+want="$(printf '%s\n' "$DOMAIN" "$WWW" "$SHOP" "$OTHER" | sort | paste -sd ' ')"
+check "no certificate is asked for: the account's revision did not move" test "$rev" = "$removed_rev"
+check "the installed certificate still names $SHOP until its renewal" test "$(sans "$DOMAIN")" = "$want"
 
 echo
 echo "## 9. Delete"

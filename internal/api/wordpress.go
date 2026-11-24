@@ -57,6 +57,7 @@ var wizardFields = map[string][]wizardField{
 	"wordpress": {{name: "domain"}, {name: "title"}, {name: "admin_user"}, {name: "admin_email"}, {name: "admin_password"}, {name: "php_version"}},
 	"php":       {{name: "php_version"}, {name: "expected_revision", whole: true}},
 	"state":     {{name: "state"}, {name: "expected_revision", whole: true}},
+	"folder":    {{name: "expected_revision", whole: true}},
 	"delete":    {{name: "confirm_domain"}, {name: "expected_revision", whole: true}},
 }
 

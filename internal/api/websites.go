@@ -34,6 +34,8 @@ type Website struct {
 	AdminURL         string       `json:"admin_url"`
 	CreatedAt        string       `json:"created_at" doc:"When the wizard job started, RFC 3339."`
 	Revision         uint64       `json:"revision" doc:"The hosting account's revision, or for a partly deleted site the one its delete was asked at. A change sends it back as expected_revision."`
+	// SiteFolderChanged comes from the broker's account list.
+	SiteFolderChanged bool `json:"site_folder_changed" doc:"The hosting account itself renamed, replaced or removed public_html, or changed the permissions of its home or public_html. Until the folder is back or the current one is used (the folder action), the site's PHP version, HTTPS and WordPress cannot change. Other websites are not affected."`
 }
 
 // WebsiteHTTPS says whether the account has a certificate installed, and
@@ -62,6 +64,12 @@ type WebsiteStateBody struct {
 }
 type WebsiteDeleteBody struct {
 	ConfirmDomain    string `json:"confirm_domain" maxLength:"253" doc:"The site's domain, typed by the person to confirm."`
+	ExpectedRevision uint64 `json:"expected_revision" minimum:"1" doc:"The revision the site entry had."`
+}
+
+// WebsiteFolderBody asks the account service to use the hosting account's
+// current public_html as the site's folder.
+type WebsiteFolderBody struct {
 	ExpectedRevision uint64 `json:"expected_revision" minimum:"1" doc:"The revision the site entry had."`
 }
 
@@ -94,6 +102,10 @@ type websiteDeleteInput struct {
 	AccountID string `path:"account_id"`
 	Body      WebsiteDeleteBody
 }
+type websiteFolderInput struct {
+	AccountID string `path:"account_id"`
+	Body      WebsiteFolderBody
+}
 type websiteDeletedOutput struct{ Body WebsiteDeleted }
 
 const (
@@ -114,14 +126,23 @@ const (
 	partlyDeleted      = "partly_deleted"
 	websitePHPChanged  = "PHP version changed on the website's page"
 	websiteSuspended   = "Suspended on the website's page"
+	websiteResuspended = "Suspension applied again on the website's page"
 	websiteResumed     = "Resumed on the website's page"
+	websiteFolderUsed  = "Current public_html used on the website's page"
 	websiteChangeLimit = 6 * time.Minute  // the least a broker web change gets: its apply alone may take 4
 	websiteActionWait  = 11 * time.Minute // the response deadline of a site action: a delete may take 10
 )
 
+// What the folder action says when the account service did not use the
+// current public_html.
+const (
+	websiteFolderRefused    = "The account service did not use the folder, so nothing changed. public_html is missing, is a link or a file, or does not belong to the hosting account; or the account was busy with another change. Ask the site's owner to make public_html a normal folder in the account's home, or to put the old one back, then try again."
+	websiteFolderNeedsCheck = "The account service did not use the folder, so nothing changed. Either the hosting account itself changed outside Sifruno (its Linux user, group, home or sign-in lock), or the account service has another unfinished change. A new folder does not fix that. Ask whoever runs this server to check the hosting account."
+)
+
 var (
 	websiteAccountID  = regexp.MustCompile(websiteAccountForm)
-	websiteActionPath = regexp.MustCompile(`^/api/v1/websites/sites/[a-f0-9]{32}/(php|state|delete)$`)
+	websiteActionPath = regexp.MustCompile(`^/api/v1/websites/sites/[a-f0-9]{32}/(php|state|folder|delete)$`)
 	websitePHP        = []string{"8.1", "8.2", "8.3", "8.4"}
 	// phpRoot holds the lsphpNN packages; tests point it at a directory of
 	// their own.
@@ -129,7 +150,7 @@ var (
 )
 
 // websiteAction names the site action a path is for: "php", "state",
-// "delete", or "" for any other path.
+// "folder", "delete", or "" for any other path.
 func websiteAction(path string) string {
 	if m := websiteActionPath.FindStringSubmatch(path); m != nil {
 		return m[1]
@@ -151,7 +172,7 @@ func installedPHP() []string {
 	return out
 }
 
-// registerWebsites adds the Websites list's reads and the site page's three
+// registerWebsites adds the Websites list's reads and the site page's four
 // changes. They sit under /api/v1/websites/, so the wizard's admission
 // applies: an admin session, and for a change also Origin and CSRF.
 func registerWebsites(a huma.API, o Options) {
@@ -227,6 +248,10 @@ func registerWebsites(a huma.API, o Options) {
 			reason, rejected = websiteResumed, "The web server's configuration test failed with the site resumed, so the site stays suspended and nothing changed. Ask whoever runs this server to check the web server."
 		case in.Body.State != "suspended":
 			return nil, huma.Error422UnprocessableEntity("state must be active or suspended.")
+		case account.State == "suspended":
+			// A suspend of a suspended site installs its suspended web server
+			// settings again, journaled like any change.
+			reason, rejected = websiteResuspended, "The web server's configuration test failed, so the suspension was not applied again and nothing changed. The site stays suspended. Ask whoever runs this server to check the web server."
 		}
 		switch {
 		case in.Body.ExpectedRevision == 0:
@@ -241,6 +266,39 @@ func registerWebsites(a huma.API, o Options) {
 			return nil, websiteChangeError(err, rejected)
 		}
 		site.State, site.Revision = changed.State, changed.Revision
+		return detail(site), nil
+	})
+	huma.Register(a, change("use-website-folder", "folder"), func(ctx context.Context, in *websiteFolderInput) (*websiteOutput, error) {
+		site, account, err := findWebsite(ctx, o, in.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		if site.State == partlyDeleted {
+			return nil, huma.Error409Conflict(websitePartly)
+		}
+		folders, ok := o.Accounts.(hostaccounts.SiteFolderService)
+		switch {
+		case !ok:
+			return nil, huma.Error503ServiceUnavailable(websitesNotSetUp)
+		case in.Body.ExpectedRevision == 0:
+			return nil, huma.Error422UnprocessableEntity(websiteNoRevision)
+		case in.Body.ExpectedRevision != account.Revision:
+			return nil, huma.Error409Conflict(websiteStale)
+		}
+		ctx, cancel := context.WithTimeout(ctx, websiteChangeLimit)
+		defer cancel()
+		changed, err := folders.AdoptPublicHTML(ctx, account.ID, hostaccounts.AdoptInput{ExpectedRevision: in.Body.ExpectedRevision, Reason: websiteFolderUsed}, siteActor(ctx))
+		if err != nil {
+			technical := errors.New("account service: " + err.Error())
+			switch {
+			case errors.Is(err, hostaccounts.ErrConflict):
+				return nil, huma.Error409Conflict(websiteFolderRefused, technical)
+			case errors.Is(err, hostaccounts.ErrRecovery):
+				return nil, huma.Error503ServiceUnavailable(websiteFolderNeedsCheck, technical)
+			}
+			return nil, websiteChangeError(err, "")
+		}
+		site.State, site.Revision, site.SiteFolderChanged = changed.State, changed.Revision, changed.SiteFolderChanged
 		return detail(site), nil
 	})
 	huma.Register(a, change("delete-website", "delete"), func(ctx context.Context, in *websiteDeleteInput) (*websiteDeletedOutput, error) {
@@ -392,5 +450,6 @@ func website(a hostaccounts.Account, j wizard.Job) Website {
 	return Website{
 		AccountID: a.ID, Username: a.Username, Domain: a.Domain, State: a.State, HTTPS: https,
 		PHPVersion: a.Web.PHPVersion, WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: a.Revision,
+		SiteFolderChanged: a.SiteFolderChanged,
 	}
 }

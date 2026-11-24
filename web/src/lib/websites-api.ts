@@ -3,7 +3,8 @@ import { validSession } from "./sites-api";
 // Client for Websites: the WordPress sites the New website wizard made. The
 // server joins the account broker (domain, state, certificate, PHP version)
 // with the wizard's jobs (WordPress version, links, creation time). The site
-// page's three changes are here too: PHP version, suspend or resume, delete.
+// page's changes are here too: PHP version, suspend or resume (or suspend
+// again), using the account's current public_html, and delete.
 
 export interface WebsiteHttps {
   on: boolean;
@@ -28,6 +29,10 @@ export interface Website {
   // The hosting account's revision. A change sends it back, so the server
   // can refuse a change made from a page that is out of date.
   revision: number;
+  // The hosting account itself renamed, replaced or removed public_html, or
+  // changed the permissions of its home or public_html. It concerns this
+  // site only.
+  site_folder_changed: boolean;
 }
 // One site as its own page reads it: with the PHP versions installed on the
 // server, which are the ones it can change to.
@@ -71,12 +76,12 @@ export function parseWebsite(v: unknown): Website | undefined {
   const https = v.https;
   if (!object(https) || typeof https.on !== "boolean" || !(https.not_after === "" || date(https.not_after))) return undefined;
   if (!shortText(v.php_version, 10) || !shortText(v.wordpress_version, 40) || !webURL(v.url) || !webURL(v.admin_url) || !date(v.created_at)) return undefined;
-  if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 1) return undefined;
+  if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 1 || typeof v.site_folder_changed !== "boolean") return undefined;
   return {
     account_id: v.account_id, username: v.username, domain: v.domain, state: v.state,
     https: { on: https.on, not_after: https.not_after as string },
     php_version: v.php_version, wordpress_version: v.wordpress_version, url: v.url, admin_url: v.admin_url, created_at: v.created_at,
-    revision: v.revision as number,
+    revision: v.revision as number, site_folder_changed: v.site_folder_changed,
   };
 }
 
@@ -137,10 +142,37 @@ export function phpChange(site: WebsiteDetail): PhpChange {
   if (site.state === "suspended") return { kind: "blocked", why: "Resume the website to change its PHP version." };
   if (site.state === "partly_deleted") return { kind: "blocked", why: "The hosting account is already deleted, so the PHP version cannot change." };
   if (site.state !== "active") return { kind: "blocked", why: "The PHP version cannot change until the hosting account has been checked." };
+  if (site.site_folder_changed) return { kind: "blocked", why: "The PHP version cannot change while the site's folder is changed. Fix the folder first." };
   if (site.php_versions.length === 0) return { kind: "blocked", why: "The panel found no PHP versions installed on this server." };
   const versions = site.php_versions.filter((version) => version !== site.php_version);
   if (versions.length === 0) return { kind: "blocked", why: `PHP ${site.php_version} is the only version installed on this server.` };
   return { kind: "ready", versions };
+}
+
+// What the site page says about the site's folder, and whether it offers to
+// use the account's current public_html. "changed": the hosting account
+// changed its own public_html or permissions. "review": the account needs a
+// check; an earlier account service also marked an account that way when
+// only its public_html changed, and using the current folder ends that. If
+// the cause is something else, the account service refuses and nothing
+// changes.
+export type FolderNotice = { kind: "changed" | "review"; what: string; why: string; next: string };
+
+export function folderNotice(site: Website): FolderNotice | undefined {
+  if (site.state === "partly_deleted") return undefined;
+  if (site.site_folder_changed) return {
+    kind: "changed",
+    what: "The site's folder was changed from inside the hosting account.",
+    why: "public_html in the account's home was renamed, replaced or removed, or the permissions of the home or public_html changed. Sifruno only works on the folder it recorded, so the PHP version, HTTPS and WordPress of this site cannot change, and the site may not load. Other websites are not affected, and you can still suspend or delete this one.",
+    next: "Ask the site's owner to put the old public_html back. If it is gone, check that the new public_html holds the site, then use it.",
+  };
+  if (site.state === "recovery_required") return {
+    kind: "review",
+    what: "The hosting account needs a check.",
+    why: "The account service found a change it did not make, or has a change it did not finish, and refuses changes until it is checked. Earlier versions also marked an account this way when only its public_html folder changed.",
+    next: "If public_html was changed, use the account's current public_html. Otherwise ask whoever runs this server to check the hosting account.",
+  };
+  return undefined;
 }
 
 // A sentence for the end of a delete: what went, and what was left alone.
@@ -152,8 +184,8 @@ export function deletedSummary(done: WebsiteDeleted): string {
 
 // ---- Errors -----------------------------------------------------------------
 
-type Operation = "list" | "read" | "php" | "suspend" | "resume" | "delete";
-const changes: readonly Operation[] = ["php", "suspend", "resume", "delete"];
+type Operation = "list" | "read" | "php" | "suspend" | "resuspend" | "resume" | "folder" | "delete";
+const changes: readonly Operation[] = ["php", "suspend", "resuspend", "resume", "folder", "delete"];
 const isChange = (operation: Operation) => changes.includes(operation);
 
 const whatFailed: Record<Operation, string> = {
@@ -161,7 +193,9 @@ const whatFailed: Record<Operation, string> = {
   read: "This website could not be loaded.",
   php: "The PHP version was not changed.",
   suspend: "The website was not suspended.",
+  resuspend: "The suspension was not applied again.",
   resume: "The website was not resumed.",
+  folder: "The current public_html was not used.",
   delete: "The website was not deleted.",
 };
 const notConfirmed = "The panel could not confirm the change.";
@@ -189,6 +223,7 @@ function serverText(v: unknown, limit = 500): string {
 const rejectedNext: Partial<Record<Operation, string>> = {
   php: "Choose another PHP version, or ask whoever runs this server to check the web server.",
   suspend: "Try again after the web server has been checked.",
+  resuspend: "Try again after the web server has been checked.",
   resume: "Try again after the web server has been checked.",
   delete: "Type the website's domain exactly as it is shown, then try again.",
 };
@@ -305,7 +340,7 @@ async function csrfToken(operation: Operation, signal?: AbortSignal): Promise<st
 
 // One change to one site: the body's own field plus the revision the page
 // has. The revision is named under "Technical details" when it fails.
-async function change(operation: Operation, site: Website, action: "php" | "state" | "delete", field: Record<string, string>, signal?: AbortSignal): Promise<unknown> {
+async function change(operation: Operation, site: Website, action: "php" | "state" | "folder" | "delete", field: Record<string, string>, signal?: AbortSignal): Promise<unknown> {
   if (!validAccountId(site.account_id)) throw new WebsitesApiError(404, whatFailed[operation], "This page does not point to a website.", "Go back to Websites and choose the website there.", "account id is not 32 lowercase hex characters; nothing was sent");
   const csrf = await csrfToken(operation, signal);
   const url = `/api/v1/websites/sites/${site.account_id}/${action}`;
@@ -324,10 +359,17 @@ export async function changePhpVersion(site: Website, version: string, options: 
 }
 
 // Suspended, the site answers every visitor with an error page; active, it
-// serves again.
+// serves again. Suspending a suspended site installs its suspended web
+// server settings again.
 export async function setWebsiteState(site: Website, state: "active" | "suspended", options: { signal?: AbortSignal } = {}): Promise<WebsiteDetail> {
-  const operation = state === "suspended" ? "suspend" : "resume";
+  const operation = state === "active" ? "resume" : site.state === "suspended" ? "resuspend" : "suspend";
   return changedSite(operation, site, "state", await change(operation, site, "state", { state }, options.signal));
+}
+
+// Records the hosting account's current public_html as the site's folder,
+// after the account replaced the one Sifruno recorded.
+export async function adoptCurrentFolder(site: Website, options: { signal?: AbortSignal } = {}): Promise<WebsiteDetail> {
+  return changedSite("folder", site, "folder", await change("folder", site, "folder", {}, options.signal));
 }
 
 // Deletes the site: its database, its hosting account and its files. The

@@ -12,7 +12,7 @@ const accountId = "0123456789abcdef0123456789abcdef";
 const site = (change = {}) => ({
   account_id: accountId, username: "example", domain: "example.com", state: "active",
   https: { on: true, not_after: "2027-02-21T12:30:00Z" }, php_version: "8.3", wordpress_version: "7.1.5",
-  url: "https://example.com/", admin_url: "https://example.com/wp-admin/", created_at: "2026-11-23T10:00:00Z", revision: 7, ...change,
+  url: "https://example.com/", admin_url: "https://example.com/wp-admin/", created_at: "2026-11-23T10:00:00Z", revision: 7, site_folder_changed: false, ...change,
 });
 // One site as its page reads it, and a signed-in session for its changes.
 const detail = (change = {}) => site({ php_versions: ["8.2", "8.3"], ...change });
@@ -43,7 +43,9 @@ test("parsing refuses anything outside the contract", () => {
     site({ url: "javascript:alert(1)" }), site({ admin_url: "ftp://example.com/" }), site({ url: "not a url" }),
     site({ php_version: 8.3 }), site({ wordpress_version: undefined }), site({ created_at: "yesterday" }),
     site({ revision: 0 }), site({ revision: "7" }), site({ revision: 1.5 }), site({ revision: undefined }), site({ revision: 2 ** 60 }),
+    site({ site_folder_changed: undefined }), site({ site_folder_changed: "true" }), site({ site_folder_changed: 1 }),
   ]) assert.equal(api.parseWebsite(bad), undefined, JSON.stringify(bad));
+  assert.equal(api.parseWebsite(site({ site_folder_changed: true })).site_folder_changed, true);
   // One site also names the PHP versions installed on the server.
   assert.deepEqual(api.parseWebsiteDetail(detail()), detail());
   assert.deepEqual(api.parseWebsiteDetail(detail({ php_versions: [] })).php_versions, []);
@@ -150,6 +152,50 @@ test("the PHP action offers only other installed versions, and only for a live s
   assert.match(api.phpChange(detail({ state: "suspended" })).why, /Resume the website/);
   assert.match(api.phpChange(detail({ state: "recovery_required" })).why, /has been checked/);
   assert.match(api.phpChange(detail({ state: "partly_deleted" })).why, /already deleted/);
+  assert.match(api.phpChange(detail({ site_folder_changed: true })).why, /Fix the folder first/);
+});
+
+test("the folder notice shows for a changed folder or an account needing a check, never for a partly deleted site", () => {
+  assert.equal(api.folderNotice(site()), undefined);
+  assert.equal(api.folderNotice(site({ state: "suspended" })), undefined);
+  const changed = api.folderNotice(site({ site_folder_changed: true }));
+  assert.equal(changed.kind, "changed");
+  assert.match(changed.why, /renamed, replaced or removed/);
+  assert.match(changed.why, /Other websites are not affected/);
+  assert.match(changed.next, /put the old public_html back/);
+  assert.equal(api.folderNotice(site({ site_folder_changed: true, state: "suspended" })).kind, "changed");
+  const review = api.folderNotice(site({ state: "recovery_required" }));
+  assert.equal(review.kind, "review");
+  assert.match(review.next, /use the account's current public_html/);
+  assert.equal(api.folderNotice(site({ state: "partly_deleted", site_folder_changed: true })), undefined);
+});
+
+test("using the current folder and applying a suspension again post their own bodies", async () => {
+  const calls = [];
+  await withFetch(async (url, init) => {
+    calls.push({ url, init });
+    if (url === "/api/v1/session") return json(session);
+    return json(detail({ revision: 8, state: url.endsWith("/state") ? "suspended" : "active" }));
+  }, async () => {
+    const adopted = await api.adoptCurrentFolder(detail({ site_folder_changed: true }));
+    assert.equal(adopted.site_folder_changed, false); assert.equal(adopted.revision, 8);
+    assert.equal((await api.setWebsiteState(detail({ state: "suspended" }), "suspended")).state, "suspended");
+  });
+  const posts = calls.filter((call) => call.init.method === "POST");
+  assert.deepEqual(posts.map((call) => [call.url, JSON.parse(call.init.body)]), [
+    [`/api/v1/websites/sites/${accountId}/folder`, { expected_revision: 7 }],
+    [`/api/v1/websites/sites/${accountId}/state`, { state: "suspended", expected_revision: 7 }],
+  ]);
+  for (const post of posts) assert.equal(post.init.headers["X-CSRF-Token"], session.csrf_token);
+
+  const refused = "The account service did not use the folder, so nothing changed. public_html is missing, is a link or a file, or does not belong to the hosting account; or the account was busy with another change.";
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ title: "Conflict", status: 409, detail: refused, errors: [{ message: "account service: native account identity or revision conflict" }] }, 409), async () => {
+    await assert.rejects(api.adoptCurrentFolder(detail({ site_folder_changed: true })), (error) => error.status === 409 && error.message === "The current public_html was not used."
+      && error.why === refused && /Reload the page/.test(error.next) && /folder returned HTTP 409 \(Conflict\); account service: .*; expected revision 7$/.test(error.technical));
+  });
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ title: "Unprocessable Entity", status: 422, detail: "The web server's configuration test failed, so the suspension was not applied again and nothing changed." }, 422), async () => {
+    await assert.rejects(api.setWebsiteState(detail({ state: "suspended" }), "suspended"), (error) => error.status === 422 && error.message === "The suspension was not applied again." && /after the web server has been checked/.test(error.next));
+  });
 });
 
 const removedAll = ["the database example_wp", "the hosting account example with its files and its site on the web server"];

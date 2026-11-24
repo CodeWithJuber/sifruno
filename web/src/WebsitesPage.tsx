@@ -16,7 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateLabel } from "@/lib/api";
-import { changePhpVersion, dayLabel, deletedSummary, deleteWebsite, getWebsite, httpsState, listWebsites, phpChange, setWebsiteState, siteStatus, WebsitesApiError } from "@/lib/websites-api";
+import { adoptCurrentFolder, changePhpVersion, dayLabel, deletedSummary, deleteWebsite, folderNotice, getWebsite, httpsState, listWebsites, phpChange, setWebsiteState, siteStatus, WebsitesApiError } from "@/lib/websites-api";
 import type { Website, WebsiteDeleted, WebsiteDetail } from "@/lib/websites-api";
 import { useShell } from "@/shell/context";
 import type { PageId } from "@/shell/pages";
@@ -324,7 +324,7 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
 
 // ---- The site's actions -------------------------------------------------------
 
-type ActionName = "php" | "state" | "delete";
+type ActionName = "folder" | "php" | "state" | "resuspend" | "delete";
 
 // A button that says it is working and cannot be pressed twice. It stays
 // focusable while busy, so focus is not lost.
@@ -335,7 +335,7 @@ function ActionButton({ busy, busyLabel, children, className = "", disabled, ...
   </Button>;
 }
 
-// Three changes, one at a time: each sends the revision the page has, and the
+// The changes, one at a time: each sends the revision the page has, and the
 // server's answer becomes the page's newest read. The outcome is said in the
 // page's polite live region; a failure is an alert where the person is.
 function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
@@ -353,6 +353,10 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const php = phpChange(site);
+  const folder = folderNotice(site);
+  const folderRef = useRef<HTMLDivElement>(null);
+  // The button that was pressed is gone once the folder is used.
+  useEffect(() => { if (outcome?.action === "folder" && !folder) folderRef.current?.focus(); }, [outcome, folder]);
   const chosen = php.kind === "ready" ? (php.versions.includes(version) ? version : php.versions[0]) : "";
   const suspended = site.state === "suspended";
   const canChangeState = site.state === "active" || suspended;
@@ -381,6 +385,10 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
     (next) => { onChanged(next); return `${next.domain} now runs PHP ${next.php_version}.`; });
   const changeState = () => run("state", suspended ? "The website was not resumed." : "The website was not suspended.", () => setWebsiteState(site, suspended ? "active" : "suspended"),
     (next) => { onChanged(next); return next.state === "suspended" ? `${next.domain} is suspended. Visitors now get an error page.` : `${next.domain} is live again.`; });
+  const reapplySuspension = () => run("resuspend", "The suspension was not applied again.", () => setWebsiteState(site, "suspended"),
+    (next) => { onChanged(next); return `${next.domain} stays suspended. Its suspended web server settings were applied again.`; });
+  const adoptFolder = () => run("folder", "The current public_html was not used.", () => adoptCurrentFolder(site),
+    (next) => { onChanged(next); return `${next.domain} now uses the public_html that is in its hosting account.`; });
   const removeSite = (event: FormEvent) => {
     event.preventDefault();
     if (!matches) return;
@@ -404,6 +412,32 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
 
   return <section className={`${panel} flex flex-col gap-5 p-5 md:p-6`} data-testid="site-actions" data-busy={busy ?? ""}>
     <h3>Actions</h3>
+
+    {/* Part of the page from the start, so a named region rather than an alert that interrupts.
+        Once the folder is used the notice and its button go; the outcome stays and takes focus. */}
+    {(folder || outcome?.action === "folder") && <>
+      <div ref={folderRef} tabIndex={-1} className="flex flex-col gap-3 outline-none" data-testid="site-action-folder" data-kind={folder?.kind ?? "done"}>
+        {folder && <>
+          <Alert role="region" aria-labelledby={`${ids}-folder-title`} className="text-start" data-testid="site-folder-notice">
+            <TriangleAlert aria-hidden="true" />
+            <AlertTitle id={`${ids}-folder-title`}>{folder.what}</AlertTitle>
+            <AlertDescription className="flex flex-col gap-1.5 text-start text-sm">
+              <div className="text-foreground">{folder.why}</div>
+              <div className="text-muted-foreground"><span className="font-medium text-foreground">Next step:</span> {folder.next}</div>
+            </AlertDescription>
+          </Alert>
+          <div className="flex flex-col gap-2">
+            <ActionButton variant="outline" className="w-fit" busy={busy === "folder"} busyLabel="Using the folder…" disabled={Boolean(busy)} aria-describedby={`${ids}-folder-hint`} onClick={adoptFolder} data-testid="use-current-folder">
+              Use current public_html
+            </ActionButton>
+            <div className="text-sm text-muted-foreground" id={`${ids}-folder-hint`}>Records the public_html that is in the hosting account now as this site's folder, sets its permissions back and lets the web server read it.</div>
+          </div>
+        </>}
+        {succeeded("folder")}
+        {failed("folder")}
+      </div>
+      <Separator />
+    </>}
 
     <div className="flex flex-col gap-3" data-testid="site-action-php">
       <div className="flex flex-col gap-1">
@@ -440,11 +474,19 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
             : "The hosting account needs a check by whoever runs this server before it can be suspended or resumed."}
         </div>
       </div>
-      {canChangeState && <ActionButton variant="outline" className="w-fit" busy={busy === "state"} busyLabel={suspended ? "Resuming…" : "Suspending…"} disabled={Boolean(busy)} onClick={changeState} data-testid="change-state">
-        {suspended ? "Resume website" : "Suspend website"}
-      </ActionButton>}
+      {canChangeState && <div className="flex flex-wrap gap-2">
+        <ActionButton variant="outline" className="w-fit" busy={busy === "state"} busyLabel={suspended ? "Resuming…" : "Suspending…"} disabled={Boolean(busy)} onClick={changeState} data-testid="change-state">
+          {suspended ? "Resume website" : "Suspend website"}
+        </ActionButton>
+        {suspended && <ActionButton variant="ghost" className="w-fit" busy={busy === "resuspend"} busyLabel="Applying…" disabled={Boolean(busy)} aria-describedby={`${ids}-resuspend-hint`} onClick={reapplySuspension} data-testid="reapply-suspension">
+          Apply suspension again
+        </ActionButton>}
+      </div>}
+      {suspended && <div className="text-sm text-muted-foreground" id={`${ids}-resuspend-hint`}>Apply suspension again writes the suspended site's web server settings again, for a site that still answers visitors. It stays suspended.</div>}
       {succeeded("state")}
       {failed("state")}
+      {succeeded("resuspend")}
+      {failed("resuspend")}
     </div>
 
     <Separator />

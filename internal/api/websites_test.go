@@ -175,7 +175,7 @@ func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...st
 			}
 		}
 	})
-	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "created_at", "domain", "https", "php_version", "revision", "state", "url", "username", "wordpress_version"}, more...)))
+	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "created_at", "domain", "https", "php_version", "revision", "site_folder_changed", "state", "url", "username", "wordpress_version"}, more...)))
 	if !slices.Equal(keys, want) {
 		t.Fatalf("website keys %q", keys)
 	}

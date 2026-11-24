@@ -188,6 +188,14 @@ func testEngine(t *testing.T) (*resticEngine, *fakeTools, *[]chownCall) {
 			*calls = append(*calls, chownCall{filepath.Base(f.Name()), uid, gid})
 			return nil
 		},
+		// Not root: the owner change is recorded, the mode change is real.
+		lchown: func(p string, uid, gid int) error {
+			mu.Lock()
+			defer mu.Unlock()
+			*calls = append(*calls, chownCall{filepath.Base(p), uid, gid})
+			return nil
+		},
+		chmod: os.Chmod,
 		// A roomy disk unless a test says otherwise.
 		space: func(string) (uint64, uint64, uint64, error) { return 500 << 30, 1 << 40, 4096, nil }}
 	e.prepare = func() error {
@@ -356,7 +364,7 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 	tools.restored = map[string]string{"public_html/index.php": "<?php echo 'hi';", "fixtureacct_wp.sql": "CREATE TABLE t (a int);\n"}
 	l := engineLeftover()
 	stagePath := filepath.Join(e.stage, l.Op)
-	var stagedMode, filesMode os.FileMode
+	var stagedMode, filesMode, pageMode os.FileMode
 	var cnfMode os.FileMode
 	var cnfText string
 	tools.duringRun = func(c backupCommand) {
@@ -365,6 +373,8 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 			stagedMode = info.Mode().Perm()
 			info, _ = os.Lstat(stagePath + "/files")
 			filesMode = info.Mode().Perm()
+			info, _ = os.Lstat(stagePath + "/files/public_html/index.php")
+			pageMode = info.Mode().Perm()
 		}
 		if c.path == mariadbPath && c.uid != 0 {
 			cnf := strings.TrimPrefix(c.args[0], "--defaults-file=")
@@ -402,10 +412,13 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 			t.Fatalf("site-user environment %q", c.env)
 		}
 	}
-	if stagedMode != 0750 || filesMode != 0750 {
-		t.Fatalf("staging modes during the copy: %o %o", stagedMode, filesMode)
+	// restic wrote the page 0600; the site's group may read it now.
+	if stagedMode != 0750 || filesMode != 0750 || pageMode != 0640 {
+		t.Fatalf("staging modes during the copy: %o %o %o", stagedMode, filesMode, pageMode)
 	}
-	wantChown := []chownCall{{"files", 20000, 20000}, {l.Op, os.Getuid(), 20000}}
+	// The staged home and everything in it go to root and the site's
+	// group, never its user: staged files must not count against its quota.
+	wantChown := []chownCall{{"files", os.Getuid(), 20000}, {l.Op, os.Getuid(), 20000}}
 	var stageChowns []chownCall
 	for _, c := range *calls {
 		if c.name == "files" || c.name == l.Op {
@@ -414,6 +427,9 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 	}
 	if !slices.Equal(stageChowns[1:], wantChown) || stageChowns[0] != (chownCall{l.Op, os.Getuid(), os.Getuid()}) {
 		t.Fatalf("ownership changes: %+v", stageChowns)
+	}
+	if !slices.Contains(*calls, chownCall{"index.php", os.Getuid(), 20000}) || slices.ContainsFunc(*calls, func(c chownCall) bool { return c.uid == 20000 }) {
+		t.Fatalf("staged entries: %+v", *calls)
 	}
 	if cnfMode != 0440 || !strings.Contains(cnfText, "user=sifruno_rst_0123456789abcdef\n") {
 		t.Fatalf("option file during the import: %o %q", cnfMode, cnfText)

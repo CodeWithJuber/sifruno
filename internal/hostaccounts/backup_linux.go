@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
@@ -60,6 +61,10 @@ type resticEngine struct {
 	prepare func() error
 	owner   int
 	chown   func(f *os.File, uid, gid int) error
+	// lchown and chmod change one entry of a staged tree by path; they are
+	// fields for the same reason.
+	lchown func(path string, uid, gid int) error
+	chmod  func(path string, mode os.FileMode) error
 	// space reads the free and total bytes and the block size of the
 	// filesystem holding a folder.
 	space func(dir string) (avail, total, block uint64, err error)
@@ -67,7 +72,7 @@ type resticEngine struct {
 
 func newResticEngine(stateDir string) *resticEngine {
 	e := &resticEngine{dir: stateDir + "/backup", stage: restoreRoot, run: runBackupCommand, tools: checkBackupTools, owner: 0,
-		chown: func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }, space: diskSpace}
+		chown: func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }, lchown: os.Lchown, chmod: os.Chmod, space: diskSpace}
 	e.prepare = e.prepareDirs
 	return e
 }
@@ -639,6 +644,50 @@ func (e *resticEngine) newStage(op string) (*os.File, error) {
 	return d, nil
 }
 
+// groupStaged gives every entry of a staged home to root and the site's
+// private group, readable by that group: folders gain g+rx, files g+r,
+// and setuid and setgid bits go. Staged files owned by the site's user
+// would count against its XFS quota wherever the staging folder shares the
+// homes filesystem, and the user's own copy into the home would then need
+// twice the site's size (Jev 2026-11-24: root and the private group, 0.98,
+// over an ACL on each entry or a raised quota). It runs while the staging
+// folder is still root-only, so nothing changes the tree under it, and it
+// follows no link: WalkDir reads entries with lstat, links are changed with
+// lchown only, and other special files keep their mode.
+func (e *resticEngine) groupStaged(dir string, gid int) error {
+	if gid <= 0 {
+		return ErrUnavailable
+	}
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return ErrUnavailable
+		}
+		info, err := d.Info()
+		if err != nil {
+			return ErrUnavailable
+		}
+		if e.lchown(p, e.owner, gid) != nil {
+			return ErrUnavailable
+		}
+		perm := info.Mode().Perm()
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			return nil
+		case info.IsDir():
+			perm |= 0050
+		case info.Mode().IsRegular():
+			perm |= 0040
+		default:
+			return nil
+		}
+		// A FileMode of permission bits only: setuid, setgid and sticky go.
+		if e.chmod(p, perm) != nil {
+			return ErrUnavailable
+		}
+		return nil
+	})
+}
+
 // snapshotFor finds the account's own snapshot by its full ID.
 func (e *resticEngine) snapshotFor(ctx context.Context, t BackupTarget, r record, id string) (Snapshot, error) {
 	items, err := e.Snapshots(ctx, t, r)
@@ -709,9 +758,11 @@ func (e *resticEngine) Restore(ctx context.Context, t BackupTarget, r record, in
 		if err != nil {
 			return ErrUnavailable
 		}
-		// The copy gives the home the staged folder's mode, so it gets the
-		// owner and mode the broker requires of a home.
-		err = e.chown(files, r.Account.UID, r.Account.GID)
+		// restic gave the staged files their owner, the site's user; they
+		// go to root and the site's group (groupStaged). The copy gives the
+		// home the staged folder's mode, so it gets the mode the broker
+		// requires of a home.
+		err = e.groupStaged(stagePath+"/files", r.Account.GID)
 		if err == nil {
 			err = files.Chmod(0750)
 		}

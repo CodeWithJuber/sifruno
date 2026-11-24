@@ -222,7 +222,12 @@ func TestMigrateFilesStagesAsRootAndCopiesAsTheSiteUser(t *testing.T) {
 		t.Fatal("rsync did not run as root")
 	}
 	args := strings.Join(rsync.args, " ")
-	for _, want := range []string{"--chown=20000:20000", "--chmod=ug-s", "--exclude=/mail/", "--exclude=/.ssh/", "--exclude=/ssl/", "-- source.example.test:/home/fixtureacct/ " + m.e.stage + "/" + l.Op + "/files/"} {
+	if slices.ContainsFunc(rsync.args[1:], func(a string) bool {
+		return a == "-o" || a == "-a" || strings.HasPrefix(a, "--chown") || strings.HasPrefix(a, "--owner")
+	}) {
+		t.Errorf("rsync gives the staged files an owner: %s", args)
+	}
+	for _, want := range []string{"--chmod=ug-s", "--exclude=/mail/", "--exclude=/.ssh/", "--exclude=/ssl/", "-- source.example.test:/home/fixtureacct/ " + m.e.stage + "/" + l.Op + "/files/"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("rsync lacks %q: %s", want, args)
 		}
@@ -233,9 +238,24 @@ func TestMigrateFilesStagesAsRootAndCopiesAsTheSiteUser(t *testing.T) {
 	if cp == nil || cp.uid != 20000 || cp.gid != 20000 || !slices.Equal(cp.args, copyArgs(m.e.stage+"/"+l.Op+"/files", r.Account.Home)) {
 		t.Fatalf("cp: %+v", cp)
 	}
-	// The staging folder was handed to the site's group before cp ran.
-	if !slices.Contains(*calls, chownCall{l.Op, os.Getuid(), 20000}) || !slices.Contains(*calls, chownCall{"public_html", 20000, 20000}) {
+	// The staging folder was handed to the site's group before cp ran, and
+	// every staged entry is root's and that group's: none counts against
+	// the site's quota.
+	if !slices.Contains(*calls, chownCall{l.Op, os.Getuid(), 20000}) {
 		t.Fatalf("chowns %v", *calls)
+	}
+	for _, name := range []string{"files", "public_html", "index.php", "wp-config.php", ".htaccess"} {
+		if !slices.Contains(*calls, chownCall{name, os.Getuid(), 20000}) {
+			t.Errorf("%s was not given to root and the site's group: %v", name, *calls)
+		}
+	}
+	if slices.ContainsFunc(*calls, func(c chownCall) bool { return c.uid == 20000 }) {
+		t.Errorf("a staged entry was given to the site's user: %v", *calls)
+	}
+	for name, want := range map[string]os.FileMode{"files/public_html/index.php": 0644, "files/public_html": 0750} {
+		if info, err := os.Lstat(filepath.Join(m.e.stage, l.Op, name)); err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v", name, info.Mode().Perm(), err)
+		}
 	}
 }
 
@@ -259,7 +279,7 @@ func TestRsyncSenderRunsAsTheAccount(t *testing.T) {
 	}
 	for name, args := range map[string]func() ([]string, bool){
 		"copy": func() ([]string, bool) {
-			return fetchArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/files", 20000, 20000)
+			return fetchArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/files")
 		},
 		"htaccess": func() ([]string, bool) {
 			return htaccessArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/htaccess")
@@ -270,7 +290,7 @@ func TestRsyncSenderRunsAsTheAccount(t *testing.T) {
 			t.Errorf("%s: %q", name, list)
 		}
 	}
-	if _, ok := fetchArgs("/usr/bin/ssh", "source.example.test", "/home/root", "/stage/files", 20000, 20000); ok {
+	if _, ok := fetchArgs("/usr/bin/ssh", "source.example.test", "/home/root", "/stage/files"); ok {
 		t.Error("a copy as root was built")
 	}
 }

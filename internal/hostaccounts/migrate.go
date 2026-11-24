@@ -370,15 +370,16 @@ func senderPath(home string) (string, bool) {
 
 // fetchArgs copies the source user's home into dest: the sender runs as
 // the account (senderPath), the receiver as root; recursive, links as
-// links, modes without setuid or setgid bits, times, every file given to
-// the site's user and group, devices and special files left out, one
-// filesystem, the excludes above.
-func fetchArgs(rsh, host, home, dest string, uid, gid int) ([]string, bool) {
+// links, modes without setuid or setgid bits, times, devices and special
+// files left out, one filesystem, the excludes above. Owners are not
+// copied: the staged files are root's until groupStaged gives them the
+// site's group.
+func fetchArgs(rsh, host, home, dest string) ([]string, bool) {
 	sender, ok := senderPath(home)
 	if !ok {
 		return nil, false
 	}
-	args := []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlpt", "--sparse", "--chmod=ug-s", "--chown=" + strconv.Itoa(uid) + ":" + strconv.Itoa(gid), "--one-file-system", "--timeout=600"}
+	args := []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlpt", "--sparse", "--chmod=ug-s", "--one-file-system", "--timeout=600"}
 	for _, x := range migrateExcludes {
 		args = append(args, "--exclude="+x)
 	}

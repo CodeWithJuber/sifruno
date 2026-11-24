@@ -309,7 +309,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 		}
 	}()
 	out, code, err := m.rsync(copying, rec, func(rsh string) ([]string, bool) {
-		return fetchArgs(rsh, rec.Host, home, stagePath+"/files", r.Account.UID, r.Account.GID)
+		return fetchArgs(rsh, rec.Host, home, stagePath+"/files")
 	}, backupTimeout)
 	stop()
 	if <-full {
@@ -336,14 +336,13 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if err != nil {
 		return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The old site's public_html is not a folder (it may be a link), so it cannot be copied over this site's public_html."}
 	}
-	// The copy gives the home and public_html the staged folders' modes:
-	// the ones the broker records for them.
-	err = m.e.chown(files, r.Account.UID, r.Account.GID)
+	// Everything staged goes to root and the site's group, as a restore's
+	// does (groupStaged): nothing counts against the site's quota until its
+	// own copy. The copy gives the home and public_html the staged folders'
+	// modes: the ones the broker records for them.
+	err = m.e.groupStaged(stagePath+"/files", r.Account.GID)
 	if err == nil {
 		err = files.Chmod(0750)
-	}
-	if err == nil {
-		err = m.e.chown(public, r.Account.UID, r.Account.GID)
 	}
 	if err == nil {
 		err = public.Chmod(0750)

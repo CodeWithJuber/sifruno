@@ -980,9 +980,20 @@ busy meanwhile, so a delete, suspend, web change or install gets 409):
    files the home's. The folder is outside every home and
    outside the 0700 state, so the site user can be let in: the broker makes
    `/var/lib/sifruno-restore` root 0711 with `mkdirat`.
-3. The staged home is given the account's owner and mode 0750, and the
+3. restic gives the staged files the owner they had, the site's user.
+   While the staging folder is still root-only, every entry of the staged
+   home goes to root and the site's private group, readable by that group
+   (folders g+rx, files g+r, no setuid or setgid bit; links are changed
+   with lchown only and followed nowhere). Staged files owned by the site's
+   user would count against its XFS quota wherever the staging folder
+   shares the homes filesystem, and the user's own copy would then need
+   twice the site's size (Jev 2026-11-24: root and the private group, 0.98,
+   over an ACL on each entry or a raised quota). For the length of restic's
+   run the staged files still count against the user, so a site close to
+   its quota can briefly hit it. The staged home gets mode 0750 and the
    staging folder becomes root:<site group> 0750: only the site user may
-   enter it.
+   enter it. The copied files keep the added group read bit; the group is
+   the account's own, which no other user is in.
 4. `cp -R -P --preserve=mode,timestamps,links --remove-destination -T` runs
    as the site user (its UID and GID, no supplementary groups, a clean
    environment) and copies the staged home over the home. Files added since
@@ -1245,7 +1256,9 @@ root step. The design, with the owner's choices recorded from Jev on
   may not read stops the copy (rsync 23) with that reason. The `.htaccess`
   fetch for the tier runs the same way. Here rsync runs as root into a fresh
   staging folder under `/var/lib/sifruno-restore` (root 0700), with
-  `--chown` to the site's user, `--sparse`, setuid and setgid bits dropped, no device
+  no owner copied (the staged files are root's, then root's and the site's
+  group as a restore's are, so they never count against its quota),
+  `--sparse`, setuid and setgid bits dropped, no device
   or special files, one filesystem, and the mail, settings, logs, `.ssh`,
   `ssl` and cache folders of a cPanel home left out. The source's disk
   figure only decides whether the copy starts: the staging disk is read

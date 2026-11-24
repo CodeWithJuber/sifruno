@@ -23,7 +23,7 @@ import type { PageId } from "@/shell/pages";
 // The busy ring a working button shows, as on the wizard's screens.
 import "./new-website.css";
 
-// Websites: the WordPress sites the New website wizard made, and one site's
+// Websites: the WordPress and PHP sites the New website wizard made, and one site's
 // Overview with its actions. The base styles colour <p> and <a> outside
 // Tailwind's layers, so coloured text uses div or span and links drawn as
 // buttons mark their text colour important, as on the wizard's screens.
@@ -165,7 +165,7 @@ function NoWebsites() {
     <EmptyHeader>
       <EmptyMedia variant="icon"><Globe aria-hidden="true" /></EmptyMedia>
       <EmptyTitle><h2 className="text-sm font-medium">No websites yet</h2></EmptyTitle>
-      <EmptyDescription>Create a WordPress website. The panel sets up the hosting account, the database and WordPress, and the site is listed here.</EmptyDescription>
+      <EmptyDescription>Create a WordPress website or a PHP site. The panel sets up the hosting account and the site, and the site is listed here.</EmptyDescription>
     </EmptyHeader>
     <EmptyContent>
       <Link to="/websites/new" className={linkButton("default")} data-testid="empty-new-website"><Plus aria-hidden="true" />New website</Link>
@@ -182,19 +182,19 @@ const stackedCell = `${stacked} @max-[62rem]:grid @max-[62rem]:grid-cols-[7rem_m
 function SiteTable({ sites }: { sites: Website[] }) {
   return <div className={`${panel} @container`}>
     <div className="flex items-baseline justify-between gap-3 px-4 pt-4 pb-3">
-      <h2 id="websites-heading">WordPress websites</h2>
+      <h2 id="websites-heading">Your websites</h2>
     </div>
     {/* Focusable so a keyboard can scroll it if the table is ever wider than the panel. */}
     <div className="overflow-x-auto px-2 pb-2 @max-[62rem]:px-4 @max-[62rem]:pb-4" role="region" aria-labelledby="websites-heading" tabIndex={0}>
       <table className={`w-full caption-bottom text-sm ${stacked}`} data-testid="websites-table">
-        <caption className="sr-only">Your WordPress websites, newest first</caption>
+        <caption className="sr-only">Your websites, newest first</caption>
         <TableHeader className="@max-[62rem]:hidden">
           <TableRow className="hover:bg-transparent">
             <TableHead scope="col" className="text-start text-muted-foreground">Website</TableHead>
             <TableHead scope="col" className="text-start text-muted-foreground">Status</TableHead>
             <TableHead scope="col" className="text-start text-muted-foreground">HTTPS</TableHead>
             <TableHead scope="col" className="text-start text-muted-foreground">PHP</TableHead>
-            <TableHead scope="col" className="text-start text-muted-foreground">WordPress</TableHead>
+            <TableHead scope="col" className="text-start text-muted-foreground">Type</TableHead>
             <TableHead scope="col" className="text-end text-muted-foreground"><span className="sr-only">Actions</span></TableHead>
           </TableRow>
         </TableHeader>
@@ -207,12 +207,13 @@ function SiteTable({ sites }: { sites: Website[] }) {
             <TableCell data-label="Status" className={stackedCell}><StatusBadge state={site.state} /></TableCell>
             <TableCell data-label="HTTPS" className={`${stackedCell} whitespace-normal`}><HttpsBadge site={site} /></TableCell>
             <TableCell data-label="PHP" className={stackedCell} data-testid="website-php">{site.php_version || <span className="text-muted-foreground">Not reported</span>}</TableCell>
-            <TableCell data-label="WordPress" className={stackedCell} data-testid="website-wordpress">{site.wordpress_version}</TableCell>
+            <TableCell data-label="Type" className={stackedCell} data-testid="website-type">{site.kind === "php" ? "PHP site"
+              : <span>WordPress <span className="text-muted-foreground" data-testid="website-wordpress">{site.wordpress_version}</span></span>}</TableCell>
             <TableCell className={`text-end ${stacked} @max-[62rem]:px-0 @max-[62rem]:pt-3 @max-[62rem]:text-start`}>
               <div className="inline-flex flex-nowrap gap-2 @max-[62rem]:flex @max-[62rem]:flex-wrap">
                 {site.state !== "partly_deleted" && <>
                   <SiteLink href={site.url} label="Open site" domain={site.domain} variant="outline" testId="open-site" />
-                  <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />
+                  {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />}
                 </>}
                 <Link to="/websites/sites/$accountId" params={{ accountId: site.account_id }} className={linkButton("ghost")} data-testid="website-details-link">
                   Details<span className="sr-only"> for {site.domain}</span>
@@ -299,9 +300,11 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
               : https.kind === "expired" ? `The certificate expired on ${dayLabel(https.since)}. Visitors see a security warning.`
               : https.until ? `On. The certificate is valid until ${dateLabel(site.https.not_after)}.` : "On."}
           </dd>
+          <dt className="text-muted-foreground">Type</dt><dd className="text-foreground" data-testid="website-type">{site.kind === "php" ? "PHP site" : "WordPress"}</dd>
           <dt className="text-muted-foreground">PHP version</dt><dd className="text-foreground" data-testid="website-php">{site.php_version || "Not reported for this site"}</dd>
-          <dt className="text-muted-foreground">WordPress version</dt><dd className="text-foreground" data-testid="website-wordpress">{site.wordpress_version}</dd>
+          {site.kind === "wordpress" && <><dt className="text-muted-foreground">WordPress version</dt><dd className="text-foreground" data-testid="website-wordpress">{site.wordpress_version}</dd></>}
           <dt className="text-muted-foreground">Hosting account</dt><dd className="text-foreground" data-testid="website-username"><code>{site.username}</code></dd>
+          {site.kind === "php" && <><dt className="text-muted-foreground">Files</dt><dd className="text-foreground" data-testid="website-files">Upload with SFTP as <code>{site.username}</code>, into <code>public_html</code>. SFTP signs in with an SSH key.</dd></>}
           <dt className="text-muted-foreground">Created</dt><dd className="text-foreground">{dateLabel(site.created_at)}</dd>
         </dl>
       </div>
@@ -309,7 +312,7 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
       {site.state !== "partly_deleted" && <>
         <div className="flex flex-wrap gap-2">
           <SiteLink href={site.url} label="Open site" domain={site.domain} variant="default" testId="open-site" />
-          <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />
+          {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />}
           <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
           <Link to="/websites/sites/$accountId/databases" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-databases-link">Databases</Link>
           <Link to="/websites/sites/$accountId/backups" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-backups-link">Backups</Link>

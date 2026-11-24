@@ -1,6 +1,7 @@
 import { validSession } from "./sites-api";
 
-// Client for Websites: the WordPress sites the New website wizard made. The
+// Client for Websites: the WordPress and PHP sites the New website wizard
+// made. The
 // server joins the account broker (domain, state, certificate, PHP version)
 // with the wizard's jobs (WordPress version, links, creation time). The site
 // page's changes are here too: PHP version, suspend or resume (or suspend
@@ -15,6 +16,9 @@ export interface Website {
   account_id: string;
   username: string;
   domain: string;
+  // What the wizard made. A PHP site has no WordPress: its
+  // wordpress_version and admin_url are empty.
+  kind: "wordpress" | "php";
   // "active", "suspended", "recovery_required" or "partly_deleted" (a delete
   // removed the hosting account but not yet the database) today; any other
   // word is shown as unknown.
@@ -78,12 +82,14 @@ export function parseWebsite(v: unknown): Website | undefined {
   if (!shortText(v.domain, 253) || !v.domain || !text(v.state) || !/^[a-z_]{1,40}$/.test(v.state)) return undefined;
   const https = v.https;
   if (!object(https) || typeof https.on !== "boolean" || !(https.not_after === "" || date(https.not_after))) return undefined;
-  if (!shortText(v.php_version, 10) || !shortText(v.wordpress_version, 40) || !webURL(v.url) || !webURL(v.admin_url) || !date(v.created_at)) return undefined;
+  if (v.kind !== "wordpress" && v.kind !== "php") return undefined;
+  if (!shortText(v.php_version, 10) || !shortText(v.wordpress_version, 40) || !webURL(v.url) || !date(v.created_at)) return undefined;
+  if (v.kind === "wordpress" ? !webURL(v.admin_url) : v.admin_url !== "" || v.wordpress_version !== "") return undefined;
   if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 1 || typeof v.site_folder_changed !== "boolean") return undefined;
   return {
-    account_id: v.account_id, username: v.username, domain: v.domain, state: v.state,
+    account_id: v.account_id, username: v.username, domain: v.domain, kind: v.kind, state: v.state,
     https: { on: https.on, not_after: https.not_after as string },
-    php_version: v.php_version, wordpress_version: v.wordpress_version, url: v.url, admin_url: v.admin_url, created_at: v.created_at,
+    php_version: v.php_version, wordpress_version: v.wordpress_version, url: v.url, admin_url: v.admin_url as string, created_at: v.created_at,
     revision: v.revision as number, site_folder_changed: v.site_folder_changed,
   };
 }

@@ -10,7 +10,7 @@ const api = await import(moduleURL(readFileSync(new URL("./websites-api.ts", imp
 
 const accountId = "0123456789abcdef0123456789abcdef";
 const site = (change = {}) => ({
-  account_id: accountId, username: "example", domain: "example.com", state: "active",
+  account_id: accountId, username: "example", domain: "example.com", kind: "wordpress", state: "active",
   https: { on: true, not_after: "2027-02-21T12:30:00Z" }, php_version: "8.3", wordpress_version: "7.1.5",
   url: "https://example.com/", admin_url: "https://example.com/wp-admin/", created_at: "2026-11-23T10:00:00Z", revision: 7, site_folder_changed: false, ...change,
 });
@@ -301,4 +301,16 @@ test("a change is not sent without a session", async () => {
     await assert.rejects(api.setWebsiteState(detail(), "suspended"), (error) => error.message === "The website was not suspended." && error.why === "The panel could not reach its server.");
   });
   assert.deepEqual(urls, ["/api/v1/session", "/api/v1/session", "/api/v1/session"]);
+});
+
+test("a site's kind: WordPress links to its admin, a PHP site has no WordPress", () => {
+  const php = site({ kind: "php", wordpress_version: "", admin_url: "" });
+  assert.deepEqual(api.parseWebsite(php), php);
+  assert.equal(api.parseWebsite(site()).kind, "wordpress");
+  for (const bad of [
+    site({ kind: undefined }), site({ kind: "static" }), site({ kind: "PHP" }),
+    site({ admin_url: "" }), site({ kind: "php", admin_url: "https://example.com/wp-admin/", wordpress_version: "" }),
+    site({ kind: "php", admin_url: "", wordpress_version: "7.1.5" }), site({ kind: "php", admin_url: "javascript:alert(1)", wordpress_version: "" }),
+  ]) assert.equal(api.parseWebsite(bad), undefined, JSON.stringify(bad));
+  assert.deepEqual(api.parseWebsiteList({ sites: [site(), php] }).map((s) => s.kind), ["wordpress", "php"]);
 });

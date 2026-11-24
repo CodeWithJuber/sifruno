@@ -284,6 +284,76 @@ test("listing jobs returns newest-first records as given", async () => {
   });
 });
 
+// A PHP site: its own steps, a result with no WordPress, and the database's
+// name when it asked for one.
+const dbSecret = ["chosen", "db", "pass", "0123"].join(" ");
+const shortSecret = "short";
+const phpInput = (change = {}) => ({ domain: "example.com", php_version: "8.2", database: "create", database_password: dbSecret, ...change });
+const phpSteps = (states = ["done", "done", "skipped", "done", "done"]) => [
+  { name: "account", title: "Create the hosting account" }, { name: "web", title: "Put the site live with PHP" },
+  { name: "ssl", title: "Turn on https" }, { name: "database", title: "Create the database" }, { name: "placeholder", title: "Add a placeholder page" },
+].map((step, i) => ({ ...step, state: states[i], message: "", started_at: "2026-11-23T10:00:00Z", finished_at: "" }));
+const phpJob = (change = {}) => job({ kind: "php", php_version: "8.2", state: "succeeded", steps: phpSteps(), result: { url: "https://example.com/", admin_url: "", wordpress_version: "", account_id: "a".repeat(32), database: "example_wp" }, ...change });
+
+test("PHP site jobs parse with no WordPress and their database's name", () => {
+  const parsed = api.parseJob(phpJob());
+  assert.equal(parsed.kind, "php"); assert.equal(parsed.php_version, "8.2");
+  assert.deepEqual(parsed.result, { url: "https://example.com/", admin_url: "", wordpress_version: "", account_id: "a".repeat(32), database: "example_wp" });
+  assert.equal(api.usesHttps(parsed.result), true);
+  // Without a database the server leaves the key out.
+  assert.equal(api.parseJob(phpJob({ result: { url: "http://example.com/", admin_url: "", wordpress_version: "", account_id: "a".repeat(32) } })).result.database, "");
+  assert.equal(api.usesHttps(api.parseJob(phpJob({ result: { url: "http://example.com/", admin_url: "", wordpress_version: "", account_id: "a".repeat(32) } })).result), false);
+  // A WordPress job reads as before, its database empty.
+  assert.equal(api.parseJob(succeeded()).result.database, "");
+  for (const change of [
+    { result: { url: "https://example.com/", admin_url: "https://example.com/wp-admin/", wordpress_version: "", account_id: "a".repeat(32) } },
+    { result: { url: "https://example.com/", admin_url: "", wordpress_version: "7.1.5", account_id: "a".repeat(32) } },
+    { result: { url: "https://example.com/", admin_url: "", wordpress_version: "", account_id: "a".repeat(32), database: "Example DB" } },
+    { php_version: "latest" },
+  ]) assert.equal(api.parseJob(phpJob(change)), undefined, JSON.stringify(change));
+  // A WordPress job still needs its admin link.
+  assert.equal(api.parseJob(job({ state: "succeeded", steps: steps(["done", "done", "skipped", "done", "done"]), result: { url: "http://example.com/", admin_url: "", wordpress_version: "7.1.5", account_id: "a".repeat(32) } })), undefined);
+});
+
+test("PHP site checks: the database password only when a database is asked for", () => {
+  assert.deepEqual(api.checkPhpSiteInput(phpInput()), {});
+  assert.deepEqual(api.checkPhpSiteInput(phpInput({ database: "none", database_password: "" })), {});
+  assert.deepEqual(Object.keys(api.checkPhpSiteInput(phpInput({ database_password: "short" }))), ["database_password"]);
+  assert.deepEqual(Object.keys(api.checkPhpSiteInput(phpInput({ database_password: " leading space 12" }))), ["database_password"]);
+  assert.deepEqual(Object.keys(api.checkPhpSiteInput(phpInput({ database: "yes" }))), ["database"]);
+  assert.deepEqual(Object.keys(api.checkPhpSiteInput(phpInput({ domain: "Example.com", php_version: "7.4" }))), ["domain", "php_version"]);
+  // The database user's password follows the admin password's rule.
+  for (const value of ["", "short", "a\nb-0123456789", "x".repeat(129)]) assert.equal(api.checkDatabasePassword(value), api.checkAdminPassword(value));
+});
+
+test("create a PHP site posts exactly its four fields, the password only with a database", async () => {
+  const posts = [];
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    posts.push({ url, options }); return json({ job: phpJob({ state: "running", result: null, steps: phpSteps(["running", "pending", "pending", "pending", "pending"]) }) }, 202);
+  }, async () => {
+    const created = await api.createPhpSite({ ...phpInput(), title: "dropped", admin_password: dbSecret });
+    assert.equal(created.kind, "php");
+    await api.createPhpSite(phpInput({ database: "none", database_password: "typed then unchosen" }));
+  });
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].url, "/api/v1/websites/php"); assert.equal(posts[0].options.method, "POST");
+  assert.equal(posts[0].options.headers["X-CSRF-Token"], "fixture-csrf");
+  assert.deepEqual(JSON.parse(posts[0].options.body), phpInput());
+  assert.deepEqual(Object.keys(JSON.parse(posts[0].options.body)), ["domain", "php_version", "database", "database_password"]);
+  assert.deepEqual(JSON.parse(posts[1].options.body), { domain: "example.com", php_version: "8.2", database: "none", database_password: "" });
+  // Invalid input is refused before anything is sent.
+  await withFetch(async () => assert.fail("must not dispatch"), async () => {
+    for (const change of [{ domain: "Example.com" }, { database_password: shortSecret }, { php_version: "8.0" }]) {
+      await assert.rejects(api.createPhpSite(phpInput(change)), (error) => error instanceof api.WordPressApiError && error.status === 422 && !error.technical.includes("short"));
+    }
+  });
+  // A 202 that is not a PHP site job for this domain is not trusted.
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ job: job() }, 202), async () => {
+    await assert.rejects(api.createPhpSite(phpInput()), { status: 0 });
+  });
+});
+
 test("server text is kept to one short line", async () => {
   await withFetch(async () => json({ status: 503, detail: `line one\nline two\u0000${"x".repeat(900)}` }, 503), async () => {
     await assert.rejects(api.getWebsiteJob(jobId), (error) => !/[\n\u0000]/.test(error.detail) && error.detail.length <= 500);

@@ -7,21 +7,23 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { DnsHelp } from "@/components/dns-help";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { dateLabel } from "@/lib/api";
-import { createWordPressSite, defaultPhpVersion, fieldChecks, getWebsiteJob, httpReason, jobProgress, phpVersions, usesHttps, validJobId, WordPressApiError } from "@/lib/wordpress-api";
-import type { JobStep, StepState, WebsiteJob, WordPressField, WordPressInput } from "@/lib/wordpress-api";
+import { checkDatabasePassword, createPhpSite, createWordPressSite, defaultPhpVersion, fieldChecks, getWebsiteJob, httpReason, jobProgress, phpVersions, usesHttps, validJobId, websiteKinds, WordPressApiError } from "@/lib/wordpress-api";
+import type { JobResult, JobStep, StepState, WebsiteJob, WebsiteKind, WordPressField, WordPressInput } from "@/lib/wordpress-api";
 import { useShell } from "@/shell/context";
 import "./new-website.css";
 
-// The "New website" wizard: a form, then the setup progress at its own URL
-// (so a reload keeps it), then the result. The admin password lives only in
-// the form's state until the request is sent; it is never written to storage,
-// the URL or router state.
+// The "New website" wizard: a form for a WordPress site or a PHP site, then
+// the setup progress at its own URL (so a reload keeps it), then the result.
+// The passwords (WordPress admin, database user) live only in the form's
+// state until the request is sent; they are never written to storage, the
+// URL or router state.
 
 const panel = "rounded-lg border border-border bg-card p-5 md:p-6";
 const control = "h-10 pointer-coarse:h-12";
@@ -60,33 +62,41 @@ function Explanation({ problem }: { problem: Pick<Problem, "why" | "next"> }) {
 
 // ---- What the form keeps between the form and the job page -------------------
 
-type Draft = Omit<WordPressInput, "admin_password">;
+// What the form holds: the WordPress fields, the website type, and for a PHP
+// site whether it gets a database and that database user's password.
+type FormField = WordPressField | "database_password";
+interface FormValues extends WordPressInput { kind: WebsiteKind; database: "none" | "create"; database_password: string }
+type Draft = Omit<FormValues, "admin_password" | "database_password">;
 const draftKey = "sifruno-new-website-draft";
-const emptyDraft: Draft = { domain: "", title: "", admin_user: "", admin_email: "", php_version: defaultPhpVersion };
+const emptyDraft: Draft = { kind: "wordpress", domain: "", title: "", admin_user: "", admin_email: "", php_version: defaultPhpVersion, database: "none" };
 
 // Set by "Back to the form" on a failed setup, read once by the form. Never
-// holds the password.
+// holds a password.
 let retryDraft: Draft | undefined;
 
-function validDraft(value: unknown): value is Draft {
+// A draft saved before the website type existed has no kind or database.
+type StoredDraft = Omit<Draft, "kind" | "database"> & Partial<Pick<Draft, "kind" | "database">>;
+function validDraft(value: unknown): value is StoredDraft {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return (["domain", "title", "admin_user", "admin_email", "php_version"] as const).every((key) => typeof record[key] === "string" && (record[key] as string).length <= 1000);
+  return (["domain", "title", "admin_user", "admin_email", "php_version"] as const).every((key) => typeof record[key] === "string" && (record[key] as string).length <= 1000)
+    && (record.kind === undefined || (websiteKinds as readonly unknown[]).includes(record.kind))
+    && (record.database === undefined || record.database === "none" || record.database === "create");
 }
 
 // The non-secret fields are kept for this tab only, so "Back to the form"
 // still works after a reload of the progress page.
 function saveDraft(jobId: string, draft: Draft) {
-  const { domain, title, admin_user, admin_email, php_version } = draft;
-  try { sessionStorage.setItem(draftKey, JSON.stringify({ jobId, domain, title, admin_user, admin_email, php_version })); }
+  const { kind, domain, title, admin_user, admin_email, php_version, database } = draft;
+  try { sessionStorage.setItem(draftKey, JSON.stringify({ jobId, kind, domain, title, admin_user, admin_email, php_version, database })); }
   catch { /* Optional: private windows can refuse storage; the form then keeps only the domain. */ }
 }
 function loadDraft(jobId: string): Draft | undefined {
   try {
     const value: unknown = JSON.parse(sessionStorage.getItem(draftKey) ?? "null");
     if (!validDraft(value) || (value as { jobId?: unknown }).jobId !== jobId) return undefined;
-    const { domain, title, admin_user, admin_email, php_version } = value;
-    return { domain, title, admin_user, admin_email, php_version };
+    const { kind = "wordpress", domain, title, admin_user, admin_email, php_version, database = "none" } = value;
+    return { kind, domain, title, admin_user, admin_email, php_version, database };
   } catch { return undefined; /* Unreadable or refused storage: start from the job's domain. */ }
 }
 function forgetDraft() {
@@ -96,40 +106,69 @@ function forgetDraft() {
 
 // ---- Form -------------------------------------------------------------------
 
-const labels: Record<WordPressField, string> = {
+const labels: Record<FormField, string> = {
   domain: "Domain", title: "Site title", php_version: "PHP version",
   admin_user: "Username", admin_email: "Email address", admin_password: "Password",
+  database_password: "Database password",
 };
-const fieldId = (name: WordPressField) => `nw-${name.replace("_", "-")}`;
+const formChecks: Record<FormField, (value: string) => string | undefined> = { ...fieldChecks, database_password: checkDatabasePassword };
+const fieldId = (name: FormField) => `nw-${name.replace("_", "-")}`;
 type Control = HTMLInputElement | HTMLSelectElement;
+
+const kindChoices: { value: WebsiteKind; title: string; description: string }[] = [
+  { value: "wordpress", title: "WordPress", description: "A WordPress site with its database and page cache, ready to sign in to." },
+  { value: "php", title: "PHP site", description: "An empty site with its own PHP version, for your own code. You upload the files." },
+];
+const databaseChoices: { value: FormValues["database"]; title: string; description: string }[] = [
+  { value: "none", title: "No database", description: "You can add one later on the site's Databases page." },
+  { value: "create", title: "Create a database", description: "A database and its user, both named after the hosting account with _wp at the end, such as example_wp." },
+];
+
+// One choice of a radio group, drawn as a card: the radio first, then its
+// name and what it means. The whole card is the radio's label.
+function Choice({ id, value, title, description }: { id: string; value: string; title: string; description: string }) {
+  return <FieldLabel htmlFor={id}>
+    <Field orientation="horizontal">
+      <RadioGroupItem value={value} id={id} />
+      <FieldContent>
+        <FieldTitle>{title}</FieldTitle>
+        <FieldDescription className="text-start">{description}</FieldDescription>
+      </FieldContent>
+    </Field>
+  </FieldLabel>;
+}
 
 // Field feedback follows the browser's :user-invalid: nothing is marked until
 // the person has changed a field and left it, or tried to submit. aria-invalid
 // and the error link in aria-describedby follow the same state, and an error
 // that appears on leaving a field is read once through one polite live region.
-function useUserValidity(values: WordPressInput) {
-  const controls = useRef<Partial<Record<WordPressField, Control | null>>>({});
+function useUserValidity(values: FormValues) {
+  const controls = useRef<Partial<Record<FormField, Control | null>>>({});
   // Used where :user-invalid is missing, and after a submit attempt.
-  const edited = useRef(new Set<WordPressField>());
-  const interacted = useRef(new Set<WordPressField>());
-  const announced = useRef(new Set<WordPressField>());
-  const announcedField = useRef<WordPressField | undefined>(undefined);
+  const edited = useRef(new Set<FormField>());
+  const interacted = useRef(new Set<FormField>());
+  const announced = useRef(new Set<FormField>());
+  const announcedField = useRef<FormField | undefined>(undefined);
   const timer = useRef<number | undefined>(undefined);
-  const [errors, setErrors] = useState<Partial<Record<WordPressField, string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<FormField, string>>>({});
   const [announcement, setAnnouncement] = useState("");
 
-  const userInvalid = (name: WordPressField, el: Control) => {
+  const userInvalid = (name: FormField, el: Control) => {
     let native = false;
     try { native = el.matches(":user-invalid"); } catch { native = false; /* Older browser: rely on the interaction flags below. */ }
     return native || (interacted.current.has(name) && !el.validity.valid);
   };
 
-  const sync = useCallback((name: WordPressField, mode: "quiet" | "leave" | "submit") => {
+  const sync = useCallback((name: FormField, mode: "quiet" | "leave" | "submit") => {
     const el = controls.current[name];
-    if (!el) return;
+    if (!el) {
+      // The field left the form (the other website type): so does its error.
+      setErrors((current) => current[name] === undefined ? current : { ...current, [name]: undefined });
+      return;
+    }
     if (mode === "submit") interacted.current.add(name);
     const invalid = mode === "submit" || userInvalid(name, el);
-    const message = invalid ? (el.validationMessage || fieldChecks[name](el.value) || "Check this value.") : "";
+    const message = invalid ? (el.validationMessage || formChecks[name](el.value) || "Check this value.") : "";
     setErrors((current) => (current[name] ?? "") === message ? current : { ...current, [name]: message || undefined });
     if (invalid) {
       // After a submit the browser moves focus to the first invalid field,
@@ -151,17 +190,19 @@ function useUserValidity(values: WordPressInput) {
 
   // The contract's rules become the fields' custom validity, so the browser's
   // own validation (and :user-invalid) applies them.
+  // Only the fields on the form are checked: the other website type's are not
+  // rendered, so they have no control.
   useLayoutEffect(() => {
-    for (const name of Object.keys(fieldChecks) as WordPressField[]) {
+    for (const name of Object.keys(formChecks) as FormField[]) {
       const el = controls.current[name];
-      if (el) el.setCustomValidity(fieldChecks[name](values[name]) ?? "");
+      if (el) el.setCustomValidity(formChecks[name](values[name]) ?? "");
     }
-    for (const name of Object.keys(fieldChecks) as WordPressField[]) sync(name, "quiet");
+    for (const name of Object.keys(formChecks) as FormField[]) sync(name, "quiet");
   }, [values, sync]);
 
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
-  const bind = (name: WordPressField) => ({
+  const bind = (name: FormField) => ({
     id: fieldId(name),
     name,
     ref: (el: Control | null) => { controls.current[name] = el; },
@@ -170,11 +211,11 @@ function useUserValidity(values: WordPressInput) {
     "aria-invalid": errors[name] ? ("true" as const) : ("false" as const),
     "aria-describedby": [`${fieldId(name)}-hint`, errors[name] ? `${fieldId(name)}-error` : ""].filter(Boolean).join(" "),
   });
-  const markEdited = (name: WordPressField) => edited.current.add(name);
+  const markEdited = (name: FormField) => edited.current.add(name);
   return { errors, announcement, bind, markEdited };
 }
 
-function FieldProblem({ name, message }: { name: WordPressField; message?: string }) {
+function FieldProblem({ name, message }: { name: FormField; message?: string }) {
   if (!message) return null;
   return <div id={`${fieldId(name)}-error`} className="flex items-start gap-1.5 text-sm text-destructive">
     <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -182,7 +223,7 @@ function FieldProblem({ name, message }: { name: WordPressField; message?: strin
   </div>;
 }
 
-function Hint({ name, children }: { name: WordPressField; children: ReactNode }) {
+function Hint({ name, children }: { name: FormField; children: ReactNode }) {
   return <FieldDescription id={`${fieldId(name)}-hint`} className="text-start">{children}</FieldDescription>;
 }
 
@@ -191,20 +232,29 @@ export function NewWebsite() {
   // Read without side effects here (StrictMode calls initialisers twice);
   // the handoff is cleared in the effect below.
   const [restored] = useState(() => Boolean(retryDraft));
-  const [values, setValues] = useState<WordPressInput>(() => ({ ...emptyDraft, ...retryDraft, admin_password: "" }));
+  const [values, setValues] = useState<FormValues>(() => ({ ...emptyDraft, ...retryDraft, admin_password: "", database_password: "" }));
   const [showPassword, setShowPassword] = useState(false);
+  const [showDatabasePassword, setShowDatabasePassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<Problem>();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const { errors, announcement, bind, markEdited } = useUserValidity(values);
+  const wordpress = values.kind === "wordpress";
+  const withDatabase = !wordpress && values.database === "create";
 
   useEffect(() => { retryDraft = undefined; }, []);
   // The view changed (from the menu, or back from a failed setup): start at its heading.
   useEffect(() => { headingRef.current?.focus(); }, []);
 
-  const change = (name: WordPressField, value: string) => {
+  const change = (name: FormField, value: string) => {
     markEdited(name);
     setValues((current) => ({ ...current, [name]: value }));
+  };
+  // Choosing a type or the database keeps every entry, so switching back
+  // and forth loses nothing; only the fields of the chosen type are sent.
+  const choose = (name: "kind" | "database", value: unknown) => {
+    if (name === "kind" && (websiteKinds as readonly unknown[]).includes(value)) setValues((current) => ({ ...current, kind: value as WebsiteKind }));
+    if (name === "database" && (value === "none" || value === "create")) setValues((current) => ({ ...current, database: value }));
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -214,10 +264,12 @@ export function NewWebsite() {
     setProblem(undefined);
     const input = { ...values };
     try {
-      const job = await createWordPressSite(input);
-      // saveDraft copies the five non-secret fields only.
+      const job = input.kind === "php"
+        ? await createPhpSite({ domain: input.domain, php_version: input.php_version, database: input.database, database_password: input.database === "create" ? input.database_password : "" })
+        : await createWordPressSite(input);
+      // saveDraft copies the non-secret fields only.
       saveDraft(job.id, input);
-      setValues((current) => ({ ...current, admin_password: "" }));
+      setValues((current) => ({ ...current, admin_password: "", database_password: "" }));
       await navigate({ to: "/websites/jobs/$jobId", params: { jobId: job.id } });
     } catch (error) {
       setProblem(problemFrom(error, "The website was not created."));
@@ -228,22 +280,26 @@ export function NewWebsite() {
   return <div className="flex w-full max-w-2xl flex-col gap-4" data-testid="new-website">
     {restored && <Alert role={undefined} className="text-start">
       <Info aria-hidden="true" />
-      <AlertTitle>Your entries are back, except the password</AlertTitle>
+      <AlertTitle>Your entries are back, except the passwords</AlertTitle>
       <AlertDescription className="text-start">Enter the password again, fix what the setup reported, then press Create website.</AlertDescription>
     </Alert>}
     <section className={panel}>
       <div className="flex flex-col gap-1">
         <h2 id="nw-form-heading" ref={headingRef} tabIndex={-1} className="outline-none">Website details</h2>
-        <p className="text-sm">The panel creates the hosting account, the database and WordPress for you. All fields are required.</p>
+        <p className="text-sm" data-testid="new-website-intro">{wordpress
+          ? "The panel creates the hosting account, the database and WordPress for you. All fields are required."
+          : "The panel creates the hosting account and puts the site live with its own PHP version. Then you upload your files."}</p>
       </div>
       <form method="post" onSubmit={(event) => void submit(event)} className="mt-6" data-testid="new-website-form">
         <FieldGroup className="gap-6">
           <FieldSet>
             <FieldLegend>Website</FieldLegend>
-            <dl className="flex flex-col gap-1.5">
-              <dt className="text-sm font-medium">Website type</dt>
-              <dd className="text-sm text-foreground" data-testid="website-type">WordPress</dd>
-            </dl>
+            <FieldSet data-testid="website-type">
+              <FieldLegend id="nw-kind-legend" variant="label">Website type</FieldLegend>
+              <RadioGroup name="kind" aria-labelledby="nw-kind-legend" value={values.kind} onValueChange={(value) => choose("kind", value)} className="@md/field-group:grid-cols-2">
+                {kindChoices.map((choice) => <Choice key={choice.value} id={`nw-kind-${choice.value}`} {...choice} />)}
+              </RadioGroup>
+            </FieldSet>
             <Field data-invalid={errors.domain ? true : undefined}>
               <FieldLabel htmlFor={fieldId("domain")}>{labels.domain}</FieldLabel>
               <Hint name="domain">For example example.com. Lowercase, without http:// or a slash.</Hint>
@@ -251,16 +307,16 @@ export function NewWebsite() {
                 value={values.domain} onChange={(e) => change("domain", e.target.value.trim().toLowerCase())} />
               <FieldProblem name="domain" message={errors.domain} />
             </Field>
-            <Field data-invalid={errors.title ? true : undefined}>
+            {wordpress && <Field data-invalid={errors.title ? true : undefined}>
               <FieldLabel htmlFor={fieldId("title")}>{labels.title}</FieldLabel>
               <Hint name="title">Shown at the top of the site. Up to 200 bytes: a plain letter is 1, letters with accents or from other scripts are 2 to 4. You can change it later in WordPress.</Hint>
               <Input {...bind("title")} className={`${control} user-invalid:border-destructive`} type="text" autoComplete="off" required
                 value={values.title} onChange={(e) => change("title", e.target.value)} />
               <FieldProblem name="title" message={errors.title} />
-            </Field>
+            </Field>}
             <Field data-invalid={errors.php_version ? true : undefined}>
               <FieldLabel htmlFor={fieldId("php_version")}>{labels.php_version}</FieldLabel>
-              <Hint name="php_version">8.3 suits most WordPress sites.</Hint>
+              <Hint name="php_version">{wordpress ? "8.3 suits most WordPress sites." : "Choose the version your code needs. You can change it later on the site's page."}</Hint>
               <NativeSelect {...bind("php_version")} className={`max-w-40 [&>select]:h-10 pointer-coarse:[&>select]:h-12`} autoComplete="off" required
                 value={values.php_version} onChange={(e) => change("php_version", e.target.value)}>
                 {phpVersions.map((version) => <NativeSelectOption key={version} value={version}>PHP {version}</NativeSelectOption>)}
@@ -269,7 +325,26 @@ export function NewWebsite() {
             </Field>
           </FieldSet>
           <Separator />
-          <FieldSet>
+          {!wordpress && <FieldSet data-testid="database-choice">
+            <FieldLegend id="nw-database-legend">Database</FieldLegend>
+            <RadioGroup name="database" aria-labelledby="nw-database-legend" value={values.database} onValueChange={(value) => choose("database", value)}>
+              {databaseChoices.map((choice) => <Choice key={choice.value} id={`nw-database-${choice.value}`} {...choice} />)}
+            </RadioGroup>
+            {withDatabase && <Field data-invalid={errors.database_password ? true : undefined}>
+              <FieldLabel htmlFor={fieldId("database_password")}>{labels.database_password}</FieldLabel>
+              <Hint name="database_password">For the database user. 12 to 128 bytes, with no space at the start or end. Keep it: the panel does not store it. You can set a new one later on the site's Databases page.</Hint>
+              <div className="flex gap-2">
+                <Input {...bind("database_password")} className={`${control} min-w-0 flex-1 user-invalid:border-destructive`} type={showDatabasePassword ? "text" : "password"} autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} required
+                  value={values.database_password} onChange={(e) => change("database_password", e.target.value)} />
+                <Button type="button" variant="outline" className={`${control} shrink-0 px-3`} aria-pressed={showDatabasePassword} aria-controls={fieldId("database_password")} aria-describedby="nw-database-toggle-note" onClick={() => setShowDatabasePassword((value) => !value)}>
+                  {showDatabasePassword ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}Show password
+                </Button>
+              </div>
+              <span id="nw-database-toggle-note" className="sr-only">Shows the database password on the screen.</span>
+              <FieldProblem name="database_password" message={errors.database_password} />
+            </Field>}
+          </FieldSet>}
+          {wordpress && <FieldSet>
             <FieldLegend>WordPress admin account</FieldLegend>
             <FieldDescription className="text-start">You sign in to WordPress with these.</FieldDescription>
             <Field data-invalid={errors.admin_user ? true : undefined}>
@@ -299,7 +374,7 @@ export function NewWebsite() {
               <span id="nw-password-toggle-note" className="sr-only">Shows the password on the screen.</span>
               <FieldProblem name="admin_password" message={errors.admin_password} />
             </Field>
-          </FieldSet>
+          </FieldSet>}
           {problem && <Alert variant="destructive" className="text-start" data-testid="new-website-problem">
             <CircleAlert aria-hidden="true" />
             <AlertTitle>{problem.what}</AlertTitle>
@@ -362,13 +437,37 @@ function StepList({ steps, ended }: { steps: JobStep[]; ended: boolean }) {
   </div>;
 }
 
-function JobFacts({ job, version }: { job: WebsiteJob; version?: string }) {
+// The job's facts; with result, what the finished site has.
+function JobFacts({ job, result }: { job: WebsiteJob; result?: JobResult }) {
+  const fact = "text-muted-foreground", value = "text-foreground";
   return <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm" data-testid="job-facts">
-    <dt className="text-muted-foreground">Domain</dt><dd className="break-words text-foreground">{job.domain}</dd>
-    <dt className="text-muted-foreground">Hosting account</dt><dd className="text-foreground" data-testid="job-username">{job.username ? <code>{job.username}</code> : "Chosen in the first step"}</dd>
-    {version ? <><dt className="text-muted-foreground">WordPress version</dt><dd className="text-foreground" data-testid="job-wordpress-version">{version}</dd></>
-      : <><dt className="text-muted-foreground">Started</dt><dd className="text-foreground">{dateLabel(job.created_at)}</dd></>}
+    <dt className={fact}>Domain</dt><dd className={`break-words ${value}`}>{job.domain}</dd>
+    <dt className={fact}>Website type</dt><dd className={value} data-testid="job-kind">{job.kind === "php" ? "PHP site" : "WordPress"}</dd>
+    <dt className={fact}>Hosting account</dt><dd className={value} data-testid="job-username">{job.username ? <code>{job.username}</code> : "Chosen in the first step"}</dd>
+    {!result && <><dt className={fact}>Started</dt><dd className={value}>{dateLabel(job.created_at)}</dd></>}
+    {result && job.kind === "wordpress" && <><dt className={fact}>WordPress version</dt><dd className={value} data-testid="job-wordpress-version">{result.wordpress_version}</dd></>}
+    {result && job.kind === "php" && <>
+      {job.php_version && <><dt className={fact}>PHP version</dt><dd className={value} data-testid="job-php-version">{job.php_version}</dd></>}
+      <dt className={fact}>Database</dt>
+      <dd className={value} data-testid="job-database">{result.database ? <><code>{result.database}</code>, with the user <code>{result.database}</code> and the password you chose</> : "None"}</dd>
+    </>}
   </dl>;
+}
+
+// Where a PHP site's files go and how to put them there. SFTP signs in with
+// a key only: the account's password is locked.
+function UploadFiles({ job }: { job: WebsiteJob }) {
+  const placeholder = job.steps.find((step) => step.name === "placeholder");
+  return <div className="flex flex-col gap-3" data-testid="upload-files">
+    <h3>Upload your files</h3>
+    {placeholder?.message && <p className="text-sm" data-testid="placeholder-message">{placeholder.message}</p>}
+    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
+      <dt className="text-muted-foreground">With</dt><dd className="text-foreground">SFTP to this server, port 22</dd>
+      <dt className="text-muted-foreground">Username</dt><dd className="text-foreground" data-testid="sftp-username"><code>{job.username}</code></dd>
+      <dt className="text-muted-foreground">Folder</dt><dd className="text-foreground"><code>public_html</code>, in the account's home folder. <code>index.php</code> or <code>index.html</code> there is the start page.</dd>
+      <dt className="text-muted-foreground">Sign-in</dt><dd className="text-foreground">With an SSH key, not a password. Ask whoever runs this server to add your public key to the account <code>{job.username}</code>.</dd>
+    </dl>
+  </div>;
 }
 
 const notFound: Problem = { what: "This website setup was not found.", why: "The address does not point to a website setup.", next: "Check the address, or start again from New website.", technical: "job id in the address is not 32 lowercase hex characters; nothing was requested", status: 404 };
@@ -422,7 +521,7 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
 
   const backToForm = () => {
     if (!job) return;
-    retryDraft = loadDraft(job.id) ?? { ...emptyDraft, domain: job.domain };
+    retryDraft = loadDraft(job.id) ?? { ...emptyDraft, kind: job.kind, domain: job.domain };
     void navigate({ to: "/websites/new" });
   };
   const retry = () => setAttempt((value) => value + 1);
@@ -486,23 +585,27 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
     const secure = usesHttps(result);
     // Why the site has no certificate yet, as the "ssl" step said it.
     const reason = secure ? "" : httpReason(job);
-    return <section className={`${panel} flex w-full max-w-2xl flex-col gap-5`} data-testid="job-succeeded">
+    const php = job.kind === "php";
+    const what = php ? "The PHP site is live." : "WordPress is installed.";
+    return <section className={`${panel} flex w-full max-w-2xl flex-col gap-5`} data-testid="job-succeeded" data-kind={job.kind}>
       <div className="flex items-start gap-3">
         <CircleCheck className="mt-0.5 size-6 shrink-0 text-primary" aria-hidden="true" />
         <div className="flex min-w-0 flex-col gap-1">
           {heading(<>{job.domain} is ready</>)}
-          <p className="text-sm" data-testid="site-protocol">{secure ? "WordPress is installed. The site uses https with its own certificate." : "WordPress is installed. The site uses http for now."}</p>
+          <p className="text-sm" data-testid="site-protocol">{secure ? `${what} The site uses https with its own certificate.` : `${what} The site uses http for now.`}</p>
           {reason && <p className="text-sm text-muted-foreground" data-testid="http-reason">{reason}</p>}
         </div>
       </div>
-      <JobFacts job={job} version={result.wordpress_version} />
+      <JobFacts job={job} result={result} />
+      {php && <UploadFiles job={job} />}
       <div className="flex flex-wrap gap-2">
         <a href={result.url} target="_blank" rel="noopener noreferrer" className={linkButton("default")} data-testid="open-site">
           Open site<ExternalLink aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span>
         </a>
-        <a href={result.admin_url} target="_blank" rel="noopener noreferrer" className={linkButton("outline")} data-testid="open-admin">
+        {!php && <a href={result.admin_url} target="_blank" rel="noopener noreferrer" className={linkButton("outline")} data-testid="open-admin">
           Open WordPress admin<ExternalLink aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span>
-        </a>
+        </a>}
+        {php && result.database && result.account_id && <Link to="/websites/sites/$accountId/databases" params={{ accountId: result.account_id }} className={linkButton("outline")} data-testid="open-databases">Databases</Link>}
         <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
       </div>
       <DnsHelp id="dns-help" domain={job.domain} hidden={!dnsOpen} />

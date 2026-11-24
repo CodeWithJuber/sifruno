@@ -1,8 +1,9 @@
 import { validSession } from "./sites-api";
 
-// Client for the "New website" wizard (WordPress). The server is the
-// authority on every rule; the checks here mirror it so the form can say what
-// is wrong before anything is sent. The admin password is sent once, in the
+// Client for the "New website" wizard: a WordPress site, or a PHP site (an
+// empty site with its own PHP version and, if asked, a database). The server
+// is the authority on every rule; the checks here mirror it so the form can
+// say what is wrong before anything is sent. A password is sent once, in the
 // POST body, and is never logged, stored or put in an error.
 
 export const phpVersions = ["8.1", "8.2", "8.3", "8.4"] as const;
@@ -19,16 +20,33 @@ export interface WordPressInput {
 }
 export type WordPressField = keyof WordPressInput;
 
+export const websiteKinds = ["wordpress", "php"] as const;
+export type WebsiteKind = (typeof websiteKinds)[number];
+
+// A PHP site: database "create" also makes a database and its user, with the
+// password chosen here; with "none" the password stays empty.
+export interface PhpSiteInput {
+  domain: string;
+  php_version: string;
+  database: "none" | "create";
+  database_password: string;
+}
+export type PhpSiteField = keyof PhpSiteInput;
+
 export type JobState = "running" | "succeeded" | "failed";
 export type StepState = "pending" | "running" | "done" | "failed" | "undone" | "skipped";
 export interface JobStep { name: string; title: string; state: StepState; message: string; started_at: string; finished_at: string }
 export interface JobError { step: string; what: string; why: string; next: string; technical: string }
-export interface JobResult { url: string; admin_url: string; wordpress_version: string; account_id: string }
+// A PHP site has no admin_url or wordpress_version (both empty); database
+// names its database and user when it asked for one, and is empty otherwise.
+export interface JobResult { url: string; admin_url: string; wordpress_version: string; account_id: string; database: string }
 export interface WebsiteJob {
   id: string;
-  kind: "wordpress";
+  kind: WebsiteKind;
   domain: string;
   username: string;
+  // The PHP version asked for; empty in a job saved before it was recorded.
+  php_version: string;
   state: JobState;
   steps: JobStep[];
   error: JobError | null;
@@ -132,6 +150,28 @@ export const fieldChecks: Record<WordPressField, (value: string) => string | und
   php_version: checkPhpVersion,
 };
 
+// The server applies the WordPress admin password's rule to the database
+// user's password.
+export function checkDatabasePassword(value: string): string | undefined {
+  return checkAdminPassword(value);
+}
+
+export const phpSiteChecks: Record<PhpSiteField, (value: string, input: PhpSiteInput) => string | undefined> = {
+  domain: checkDomain,
+  php_version: checkPhpVersion,
+  database: (value) => (value === "none" || value === "create" ? undefined : "Choose whether the site gets a database."),
+  database_password: (value, input) => (input.database === "create" ? checkDatabasePassword(value) : undefined),
+};
+
+export function checkPhpSiteInput(input: PhpSiteInput): Partial<Record<PhpSiteField, string>> {
+  const problems: Partial<Record<PhpSiteField, string>> = {};
+  for (const field of Object.keys(phpSiteChecks) as PhpSiteField[]) {
+    const problem = phpSiteChecks[field](typeof input[field] === "string" ? input[field] : "", input);
+    if (problem) problems[field] = problem;
+  }
+  return problems;
+}
+
 export function checkWordPressInput(input: WordPressInput): Partial<Record<WordPressField, string>> {
   const problems: Partial<Record<WordPressField, string>> = {};
   for (const field of Object.keys(fieldChecks) as WordPressField[]) {
@@ -150,6 +190,7 @@ const optionalText = (v: unknown) => v === undefined || text(v);
 const date = (v: unknown): v is string => text(v) && Number.isFinite(Date.parse(v));
 const optionalDate = (v: unknown) => v === undefined || v === "" || date(v);
 export const validJobId = (v: unknown): v is string => text(v) && /^[a-f0-9]{32}$/.test(v);
+const phpVersion = (v: unknown) => text(v) && /^\d\.\d$/.test(v);
 const jobStates: readonly string[] = ["running", "succeeded", "failed"];
 const stepStates: readonly string[] = ["pending", "running", "done", "failed", "undone", "skipped"];
 
@@ -172,24 +213,30 @@ function parseError(v: unknown): JobError | null | undefined {
   return { step: field(v.step), what: field(v.what), why: field(v.why), next: field(v.next), technical: field(v.technical) };
 }
 
-function parseResult(v: unknown): JobResult | null | undefined {
+// A database name is <username>_<suffix>: [a-z0-9_], at most 64 characters.
+const databaseName = (v: unknown) => v === undefined || (text(v) && /^(?:[a-z][a-z0-9_]{0,63})?$/.test(v));
+
+function parseResult(v: unknown, kind: WebsiteKind): JobResult | null | undefined {
   if (v === null || v === undefined) return null;
-  if (!object(v) || !webURL(v.url) || !webURL(v.admin_url) || !text(v.wordpress_version) || !optionalText(v.account_id)) return undefined;
-  return { url: v.url, admin_url: v.admin_url, wordpress_version: v.wordpress_version, account_id: (v.account_id as string | undefined) ?? "" };
+  if (!object(v) || !webURL(v.url) || !text(v.wordpress_version) || !optionalText(v.account_id) || !databaseName(v.database)) return undefined;
+  // A WordPress site links to its admin; a PHP site has none.
+  if (kind === "wordpress" ? !webURL(v.admin_url) : v.admin_url !== "" || v.wordpress_version !== "") return undefined;
+  return { url: v.url, admin_url: v.admin_url as string, wordpress_version: v.wordpress_version, account_id: (v.account_id as string | undefined) ?? "", database: (v.database as string | undefined) ?? "" };
 }
 
 export function parseJob(v: unknown): WebsiteJob | undefined {
-  if (!object(v) || !validJobId(v.id) || v.kind !== "wordpress" || !text(v.domain) || !v.domain || v.domain.length > 253) return undefined;
+  if (!object(v) || !validJobId(v.id) || !(websiteKinds as readonly unknown[]).includes(v.kind) || !text(v.domain) || !v.domain || v.domain.length > 253) return undefined;
   if (!text(v.username) || !/^(?:[a-z][a-z0-9_]{2,31})?$/.test(v.username) || !jobStates.includes(String(v.state))) return undefined;
   if (!Array.isArray(v.steps) || v.steps.length < 1 || v.steps.length > 20) return undefined;
   const steps = v.steps.map(parseStep);
   if (steps.some((step) => !step)) return undefined;
-  const error = parseError(v.error), result = parseResult(v.result);
+  const kind = v.kind as WebsiteKind;
+  const error = parseError(v.error), result = parseResult(v.result, kind);
   if (error === undefined || result === undefined) return undefined;
-  if (!optionalText(v.actor) || !date(v.created_at) || !date(v.updated_at)) return undefined;
+  if (!optionalText(v.actor) || !date(v.created_at) || !date(v.updated_at) || !(v.php_version === undefined || v.php_version === "" || phpVersion(v.php_version))) return undefined;
   if (v.state === "succeeded" && !result) return undefined;
   return {
-    id: v.id, kind: "wordpress", domain: v.domain, username: v.username, state: v.state as JobState,
+    id: v.id, kind, domain: v.domain, username: v.username, php_version: (v.php_version as string | undefined) ?? "", state: v.state as JobState,
     steps: steps as JobStep[], error, result, actor: (v.actor as string | undefined) ?? "",
     created_at: v.created_at, updated_at: v.updated_at,
   };
@@ -331,7 +378,22 @@ export async function createWordPressSite(input: WordPressInput, options: { sign
   const body = { domain: input.domain, title: input.title.trim(), admin_user: input.admin_user, admin_email: input.admin_email, admin_password: input.admin_password, php_version: input.php_version };
   const url = "/api/v1/websites/wordpress";
   const job = parseJobResponse(await request("create", url, { method: "POST", body, csrf, timeoutMs: createTimeoutMs, signal: options.signal }));
-  if (!job || job.domain !== input.domain) throw unexpected("create", `POST ${url}`);
+  if (!job || job.domain !== input.domain || job.kind !== "wordpress") throw unexpected("create", `POST ${url}`);
+  return job;
+}
+
+export async function createPhpSite(input: PhpSiteInput, options: { signal?: AbortSignal } = {}): Promise<WebsiteJob> {
+  const problems = checkPhpSiteInput(input);
+  const fields = Object.keys(problems) as PhpSiteField[];
+  if (fields.length) throw new WordPressApiError(422, whatFailed.create, problems[fields[0]] ?? "", "Fix the marked fields, then press Create website again.", `not sent: ${fields.join(", ")} failed the panel's checks`);
+  const csrf = await csrfToken(options.signal);
+  // Exactly the four keys the server accepts; the password only with a
+  // database.
+  const database = input.database === "create" ? "create" : "none";
+  const body = { domain: input.domain, php_version: input.php_version, database, database_password: database === "create" ? input.database_password : "" };
+  const url = "/api/v1/websites/php";
+  const job = parseJobResponse(await request("create", url, { method: "POST", body, csrf, timeoutMs: createTimeoutMs, signal: options.signal }));
+  if (!job || job.domain !== input.domain || job.kind !== "php") throw unexpected("create", `POST ${url}`);
   return job;
 }
 
@@ -355,10 +417,11 @@ export function jobProgress(job: WebsiteJob): { done: number; total: number } {
   return { done: job.steps.filter((step) => step.state === "done" || step.state === "skipped").length, total: job.steps.length };
 }
 
-// The site uses https when the server installed WordPress with https links.
-// parseResult has already checked that both are http or https URLs.
+// The site uses https when the server made its links https (for WordPress,
+// the address it was installed with). parseResult has already checked that
+// each link is http or https; a PHP site has no admin link.
 export function usesHttps(result: JobResult): boolean {
-  return [result.url, result.admin_url].every((link) => new URL(link).protocol === "https:");
+  return [result.url, result.admin_url].filter(Boolean).every((link) => new URL(link).protocol === "https:");
 }
 
 // Why a finished site uses http: the "ssl" step's message when that step was

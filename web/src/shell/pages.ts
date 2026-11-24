@@ -30,7 +30,7 @@ export interface Page {
 export const pages: readonly Page[] = [
   { id: "home", path: "/", label: "Home", title: "Home", subtitle: "Your websites and this server at a glance.", icon: Home, testId: "nav-overview", audience: "both", group: "main" },
   { id: "tour", path: "/tour", label: "Panel tour", title: "Panel tour", subtitle: "Explore Websites, Files and Backups with sample content.", icon: Layers, testId: "nav-panel-preview", audience: "preview", group: "main" },
-  { id: "websites", path: "/websites", label: "Websites", title: "Websites", subtitle: "The WordPress websites on this server.", icon: Globe, testId: "nav-websites", audience: "private", group: "main" },
+  { id: "websites", path: "/websites", label: "Websites", title: "Websites", subtitle: "The WordPress and PHP websites on this server.", icon: Globe, testId: "nav-websites", audience: "private", group: "main" },
   { id: "new-website", path: "/websites/new", label: "New website", title: "New website", subtitle: "Create a WordPress website on this server.", icon: Plus, testId: "nav-new-website", audience: "private", group: "main", parent: "websites" },
   { id: "website-job", path: "/websites/jobs/$jobId", label: "Website setup", title: "Website setup", subtitle: "Follow each step while the panel creates the website.", icon: ListChecks, testId: "nav-website-job", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/jobs\/[^/]+$/ },
   { id: "website", path: "/websites/sites/$accountId", label: "Overview", title: "Website overview", subtitle: "One website: its status, versions and links.", icon: Globe, testId: "nav-website", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+$/ },

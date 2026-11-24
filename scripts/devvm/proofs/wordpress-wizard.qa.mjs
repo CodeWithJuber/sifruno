@@ -60,7 +60,9 @@ try {
   const secret = (await page.getByTestId("setup-secret").innerText()).replace(/\s+/g, "");
   await page.getByLabel("6-digit code from the app", { exact: true }).fill(totp(secret));
   await page.getByRole("button", { name: "Create admin account", exact: true }).click();
-  await page.getByTestId("signed-in-as").waitFor();
+  // Creating the admin hashes the password with Argon2id, which takes far
+  // longer under the VM's software emulation than on real hardware.
+  await page.getByTestId("signed-in-as").waitFor({ timeout: 180_000 });
   check("the admin signs in to the panel", true);
 
   await page.getByTestId("new-website-link").click();

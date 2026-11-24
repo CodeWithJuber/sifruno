@@ -482,7 +482,7 @@ function OpenPhpMyAdmin({ accountId, hasDatabases, announcer }: { accountId: str
       </Button>
     </div>
     <div id={hintId} className="text-sm text-muted-foreground" data-testid="open-phpmyadmin-hint">
-      {hasDatabases ? "Opens in a new tab, signed in to this website's databases only. It works while you are signed in to the panel, for up to an hour."
+      {hasDatabases ? "Opens in a new tab on phpMyAdmin's own address, signed in to this website's databases only, for up to an hour."
         : "Create a database first: phpMyAdmin shows this website's databases only."}
     </div>
     {blocked && <Alert role={undefined} className="text-start" data-testid="phpmyadmin-blocked">

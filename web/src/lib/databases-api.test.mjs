@@ -232,7 +232,7 @@ test("an ended session, a lost connection and a cancelled request are told apart
 });
 
 test("Open phpMyAdmin posts an empty object with the session token and takes only a sign-in link on the panel", async () => {
-  const link = `/api/v1/phpmyadmin/sifruno-signon.php?code=${"C".repeat(43)}`;
+  const link = `https://panel.example.test:8444/sifruno-signon.php?code=${"C".repeat(43)}`;
   const answer = { $schema: "x", url: link, link_expires_at: "2026-11-24T10:01:00Z", login_expires_at: "2026-11-24T11:00:00Z" };
   const { calls, mock } = server(() => json(answer, 201));
   await withFetch(mock, async () => {
@@ -244,10 +244,14 @@ test("Open phpMyAdmin posts an empty object with the session token and takes onl
   assert.deepEqual(calls.map((call) => [call.method, call.url, call.body]), [["POST", `${base}/phpmyadmin`, {}]]);
   assert.equal(calls[0].headers["X-CSRF-Token"], session.csrf_token);
 
-  // A link anywhere else, or without its code, is never opened.
-  for (const url of [`https://evil.example${link}`, "//evil.example/x", "/api/v1/phpmyadmin/index.php", `${link}&next=//evil.example`, "javascript:alert(1)", `/api/v1/phpmyadmin/sifruno-signon.php?code=${"C".repeat(42)}`]) {
+  // Only an https link to the sign-in script with its code, never on the
+  // panel's own origin, is opened.
+  for (const url of [`http://panel.example.test:8444/sifruno-signon.php?code=${"C".repeat(43)}`, "//evil.example/x", "https://panel.example.test:8444/index.php", `${link}&next=//evil.example`, "javascript:alert(1)",
+    `/sifruno-signon.php?code=${"C".repeat(43)}`, `https://panel.example.test:8444/sifruno-signon.php?code=${"C".repeat(42)}`, `https://user@evil.example/sifruno-signon.php?code=${"C".repeat(43)}`]) {
     assert.equal(api.parsePhpMyAdminLink({ ...answer, url }), undefined, url);
   }
+  assert.equal(api.parsePhpMyAdminLink(answer, "https://panel.example.test:8444"), undefined, "the panel's own origin");
+  assert.equal(api.parsePhpMyAdminLink(answer, "https://panel.example.test:8443")?.url, link);
   assert.equal(api.parsePhpMyAdminLink({ ...answer, login_expires_at: "soon" }), undefined);
   await withFetch(server(() => json({ ...answer, url: "https://evil.example/" }, 201)).mock, async () => {
     await assert.rejects(api.openPhpMyAdmin(accountId), (error) => error.status === 0 && error.message === "phpMyAdmin did not open." && /Reload the page/.test(error.next));

@@ -112,19 +112,24 @@ export function parseNamed(v: unknown, limit = databaseNameLimit): string | unde
   return object(v) && validName(v.name, limit) ? v.name : undefined;
 }
 
-// Opening phpMyAdmin answers a one-time link to its sign-in script, on the
-// panel's own address. The link signs in once, within a minute; the
+// Opening phpMyAdmin answers a one-time link to its sign-in script on
+// phpMyAdmin's own HTTPS address: the panel's host name on another port,
+// never the panel's own origin. The link signs in once, within a minute; the
 // temporary database user behind it lasts until loginExpiresAt.
 export interface PhpMyAdminLink { url: string; linkExpiresAt: Date; loginExpiresAt: Date }
-const phpMyAdminLink = /^\/api\/v1\/phpmyadmin\/sifruno-signon\.php\?code=[A-Za-z0-9_-]{43}$/;
+const phpMyAdminLink = /^https:\/\/[A-Za-z0-9.:[\]-]+\/sifruno-signon\.php\?code=[A-Za-z0-9_-]{43}$/;
 const time = (v: unknown): Date | undefined => {
   if (!text(v)) return undefined;
   const date = new Date(v);
   return Number.isNaN(date.getTime()) ? undefined : date;
 };
 
-export function parsePhpMyAdminLink(v: unknown): PhpMyAdminLink | undefined {
+// panelOrigin is the page's own origin, which phpMyAdmin may never share.
+export function parsePhpMyAdminLink(v: unknown, panelOrigin = globalThis.location?.origin): PhpMyAdminLink | undefined {
   if (!object(v) || !text(v.url) || !phpMyAdminLink.test(v.url)) return undefined;
+  let origin: string;
+  try { origin = new URL(v.url).origin; } catch { return undefined; }
+  if (origin === panelOrigin) return undefined;
   const linkExpiresAt = time(v.link_expires_at);
   const loginExpiresAt = time(v.login_expires_at);
   if (!linkExpiresAt || !loginExpiresAt) return undefined;

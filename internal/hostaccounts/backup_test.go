@@ -277,6 +277,8 @@ type fakeBackup struct {
 	started     chan struct{}
 	seen        []backupLeftover // leftovers recorded when Restore ran
 	initialized bool
+	sweeps      int
+	failSweep   bool
 }
 
 func (f *fakeBackup) Status(context.Context) (string, bool, error) {
@@ -326,6 +328,15 @@ func (f *fakeBackup) Cleanup(_ context.Context, l backupLeftover) error {
 		return ErrUnavailable
 	}
 	f.cleaned = append(f.cleaned, l.Op)
+	return nil
+}
+func (f *fakeBackup) SweepDumps() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sweeps++
+	if f.failSweep {
+		return ErrUnavailable
+	}
 	return nil
 }
 
@@ -598,6 +609,22 @@ func TestBrokerStartCleansBackupLeftovers(t *testing.T) {
 	if items, _ := s.leftovers(); len(items) != 0 || !slices.Equal(f.cleaned, []string{l.Op}) {
 		t.Fatalf("after a clean start: %+v cleaned %v", items, f.cleaned)
 	}
+	// Leftover dumps are swept at every start; a failed sweep is reported
+	// and does not keep the restore leftovers from being cleaned.
+	if f.sweeps != 2 {
+		t.Fatalf("dumps swept %d times over two starts", f.sweeps)
+	}
+	f.failSweep = true
+	if err := s.recordLeftover(l); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleanBackupLeftoversAtStart(ctx); err == nil {
+		t.Fatal("a failed dump sweep must be reported")
+	}
+	if items, _ := s.leftovers(); len(items) != 0 {
+		t.Fatalf("a failed sweep stopped the restore cleanup: %+v", items)
+	}
+	f.failSweep = false
 	s.backup = nil
 	if err := s.cleanBackupLeftoversAtStart(ctx); err != nil {
 		t.Fatalf("backups off: %v", err)

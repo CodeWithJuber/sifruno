@@ -45,6 +45,9 @@ type backupEngine interface {
 	// Cleanup drops the leftover's temporary MariaDB users and removes its
 	// staging folder; it must be safe to repeat.
 	Cleanup(ctx context.Context, l backupLeftover) error
+	// SweepDumps removes the database dumps an interrupted backup left in
+	// the broker's state. Called at start, before any backup runs.
+	SweepDumps() error
 }
 
 // storedTarget is the configured target and whether the admin confirmed
@@ -205,8 +208,14 @@ func (s *store) cleanBackupLeftoversAtStart(ctx context.Context) error {
 	}
 	s.backupMu.Lock()
 	defer s.backupMu.Unlock()
+	// A broker stopped mid-dump leaves up to the dump cap per database in its
+	// state, which otherwise stays until that account's next backup.
+	dumpsErr := s.backup.SweepDumps()
 	if err := s.cleanBackupLeftovers(ctx); err != nil {
 		return err
+	}
+	if dumpsErr != nil {
+		return dumpsErr
 	}
 	items, err := s.leftovers()
 	if err != nil {

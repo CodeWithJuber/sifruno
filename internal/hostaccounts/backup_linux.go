@@ -806,6 +806,32 @@ func (e *resticEngine) dropRestoreUser(user string) error {
 	return nil
 }
 
+// SweepDumps removes every account's dump folder under the broker's own
+// state (root 0700, which no tenant can reach). Each backup makes its folder
+// and removes it when it ends, so at start, before any backup runs, whatever
+// is there was left by a broker stopped mid-dump. RemoveAll does not follow
+// links.
+func (e *resticEngine) SweepDumps() error {
+	root := filepath.Join(e.dir, "dump")
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return ErrUnavailable
+	}
+	failed := false
+	for _, entry := range entries {
+		if os.RemoveAll(filepath.Join(root, entry.Name())) != nil {
+			failed = true
+		}
+	}
+	if failed {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 func (e *resticEngine) Cleanup(ctx context.Context, l backupLeftover) error {
 	if !l.valid() {
 		return ErrUnavailable

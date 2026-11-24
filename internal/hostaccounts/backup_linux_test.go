@@ -669,3 +669,38 @@ func TestCappedWriterStopsAtItsCap(t *testing.T) {
 		t.Fatalf("statfs of a folder: %v", err)
 	}
 }
+
+// A broker stopped mid-dump leaves an account's dump folder in its state; the
+// sweep at start removes every one, including a link left there, without
+// following it, and is a no-op when there is no dump folder at all.
+func TestSweepDumpsRemovesLeftDumps(t *testing.T) {
+	state := t.TempDir()
+	e := newResticEngine(state)
+	if err := e.SweepDumps(); err != nil {
+		t.Fatalf("no dump folder yet: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "keep.sql")
+	if err := os.WriteFile(outside, []byte("not a dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	left := filepath.Join(state, "backup", "dump", strings.Repeat("a", 32))
+	if err := os.MkdirAll(left, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(left, "acct_wp.sql"), bytes.Repeat([]byte("x"), 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(state, "backup", "dump", "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.SweepDumps(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(state, "backup", "dump"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("dump folder after the sweep: %v %v", entries, err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("the sweep followed a link: %v", err)
+	}
+}

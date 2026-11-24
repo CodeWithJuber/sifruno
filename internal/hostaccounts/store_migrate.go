@@ -242,8 +242,8 @@ func (s *store) openMigration(ctx context.Context, in MigrationOpenInput, actor 
 	if err != nil {
 		return Migration{}, err
 	}
-	// The record comes first: a folder no record names is removed by the
-	// next sweep, never left with a key in it.
+	// The folder comes first, then the record; a folder no record names
+	// (a broker stopped between the two) is removed by the next sweep.
 	m := migrationRecord{ID: id, Host: in.Host, Port: in.Port, HostKeys: keys, Actor: actor, Reason: in.Reason, CreatedAt: now}
 	public, err := s.migrate.Open(id)
 	if err != nil {
@@ -305,7 +305,10 @@ func (s *store) pinMigrationHostKey(ctx context.Context, id string, in Migration
 }
 
 // remote runs one fixed command on the source and reads exit 255, ssh's
-// own failure, as a connection that did not happen.
+// own failure, as a connection that did not happen. A failure's detail is
+// the command's error output only: what it printed on standard output so
+// far can hold credentials, such as the password hashes SHOW CREATE USER
+// prints.
 func (s *store) remote(ctx context.Context, m migrationRecord, command string, stdin io.Reader) ([]byte, error) {
 	stdout := &limitBuffer{max: cpsource.MaxOutput}
 	out, code, err := s.migrate.Remote(ctx, m, command, stdin, stdout, migrateRemoteTimeout)
@@ -315,7 +318,7 @@ func (s *store) remote(ctx context.Context, m migrationRecord, command string, s
 	case code == 255:
 		return nil, migrationFailed("connect", out)
 	case code != 0:
-		return nil, migrationFailed("source", append(stdout.b, out...))
+		return nil, migrationFailed("source", out)
 	}
 	return stdout.b, nil
 }
@@ -336,9 +339,7 @@ func (s *store) migrationAccounts(ctx context.Context, id string) ([]cpsource.Ac
 	if ctx == nil {
 		return nil, ErrInvalid
 	}
-	s.migrateMu.Lock()
-	defer s.migrateMu.Unlock()
-	m, err := s.migration(id, true)
+	m, err := s.lockedMigration(id)
 	if err != nil {
 		return nil, err
 	}
@@ -392,9 +393,10 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	if s.backup == nil {
 		return MigrationPlan{}, ErrUnavailable
 	}
-	s.migrateMu.Lock()
-	defer s.migrateMu.Unlock()
-	m, err := s.migration(id, true)
+	// The record is read under migrateMu, which is then let go: the reads
+	// and the staging scan below may wait for backupMu behind a long
+	// backup, and the admin's finish (the key's removal) must not wait.
+	m, err := s.lockedMigration(id)
 	if err != nil {
 		return MigrationPlan{}, err
 	}
@@ -663,9 +665,9 @@ func (s *store) lockedMigration(id string) (migrationRecord, error) {
 	return s.migration(id, true)
 }
 
+// lockedSourceSite reads the source without holding migrateMu, like every
+// remote read: a migration's folder removed meanwhile only makes it fail.
 func (s *store) lockedSourceSite(ctx context.Context, m migrationRecord, user, domain string) (cpsource.Account, cpsource.Site, error) {
-	s.migrateMu.Lock()
-	defer s.migrateMu.Unlock()
 	return s.sourceSite(ctx, m, user, domain)
 }
 
@@ -695,9 +697,7 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 	if err != nil {
 		return MigrateDatabaseResult{}, ErrInvalid
 	}
-	s.migrateMu.Lock()
 	out, err := s.remote(work, m, command, nil)
-	s.migrateMu.Unlock()
 	if err != nil {
 		return MigrateDatabaseResult{}, err
 	}

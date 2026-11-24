@@ -159,16 +159,17 @@ func KeyLine(publicKey, id string) string { return "restrict " + publicKey + " "
 // InstallKeyCommand is what the admin runs as root on the source to add the
 // key line. It only appends; Sifruno never sees a password of the source.
 func InstallKeyCommand(publicKey, id string) string {
-	return "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo '" + KeyLine(publicKey, id) + "' >> " + keysFile + " && chmod 600 " + keysFile
+	return "mkdir -p /root/.ssh && chmod 700 /root/.ssh && printf '\\n%s\\n' '" + KeyLine(publicKey, id) + "' >> " + keysFile + " && chmod 600 " + keysFile
 }
 
-// RemoveKeyCommand deletes exactly the lines that end with the migration's
-// comment from root's authorized_keys on the source.
+// RemoveKeyCommand deletes exactly the lines this migration's install added
+// (starting with "restrict ssh-ed25519 " and ending with its comment) from
+// root's authorized_keys on the source.
 func RemoveKeyCommand(id string) (string, error) {
 	if !idPattern.MatchString(id) {
 		return "", ErrOutput
 	}
-	return "/usr/bin/sed -i -e '/ " + KeyComment(id) + "$/d' " + keysFile, nil
+	return "/usr/bin/sed -i -e '/^restrict ssh-ed25519 [A-Za-z0-9+\\/=]* " + KeyComment(id) + "$/d' " + keysFile, nil
 }
 
 // Account is one cPanel account as listaccts shows it. Problem is why
@@ -648,7 +649,7 @@ func ParseTables(out []byte) ([]string, error) {
 		if line == "" {
 			continue
 		}
-		if len(line) > maxTableName || strings.ContainsFunc(line, unicode.IsControl) || len(tables) >= MaxTables {
+		if len(line) > maxTableName || strings.ContainsFunc(line, unicode.IsControl) || strings.ContainsAny(line, `'\`) || len(tables) >= MaxTables {
 			return nil, ErrOutput
 		}
 		tables = append(tables, line)

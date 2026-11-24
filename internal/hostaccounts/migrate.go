@@ -349,7 +349,7 @@ var migrateExcludes = []string{
 // given to the site's user and group, devices and special files left out,
 // one filesystem, the excludes above.
 func fetchArgs(rsh, host, home, dest string, uid, gid int) []string {
-	args := []string{"--rsh=" + rsh, "-rlpt", "--chmod=ug-s", "--chown=" + strconv.Itoa(uid) + ":" + strconv.Itoa(gid), "--one-file-system", "--timeout=600"}
+	args := []string{"--rsh=" + rsh, "-rlpt", "--sparse", "--chmod=ug-s", "--chown=" + strconv.Itoa(uid) + ":" + strconv.Itoa(gid), "--one-file-system", "--timeout=600"}
 	for _, x := range migrateExcludes {
 		args = append(args, "--exclude="+x)
 	}

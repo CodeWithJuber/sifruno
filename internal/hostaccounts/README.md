@@ -1194,8 +1194,9 @@ root step. The design, with the owner's choices recorded from Jev on
   (root 0700, key 0600), and reads the source's host keys with
   `ssh-keyscan`. Nothing is trusted yet. The panel shows each key's SHA-256
   fingerprint and a one-line command the admin runs as root on the old
-  server: it appends `restrict <key> sifruno-migration-<id>` to
-  `/root/.ssh/authorized_keys` (Jev: admin pastes the line, 0.88, over
+  server: it appends `restrict <key> sifruno-migration-<id>` on a line of
+  its own (`printf '\n%s\n'`, so a last line without a new line stays
+  whole) to `/root/.ssh/authorized_keys` (Jev: admin pastes the line, 0.88, over
   typing the root password once). Sifruno never sees a source password.
   `POST /v1/migrations/{id}/host-key` (`fingerprint`, `reason`) pins the
   offered key whose fingerprint the admin compared with the old server's
@@ -1237,9 +1238,12 @@ root step. The design, with the owner's choices recorded from Jev on
   be active, at its revision, and its name the source account's; the
   broker reads the source's home itself. rsync runs as root into a fresh
   staging folder under `/var/lib/sifruno-restore` (root 0700), with
-  `--chown` to the site's user, setuid and setgid bits dropped, no device
+  `--chown` to the site's user, `--sparse`, setuid and setgid bits dropped, no device
   or special files, one filesystem, and the mail, settings, logs, `.ssh`,
-  `ssl` and cache folders of a cPanel home left out. The staged home and
+  `ssl` and cache folders of a cPanel home left out. The source's disk
+  figure only decides whether the copy starts: the staging disk is read
+  every 2 seconds while rsync runs, and rsync is stopped (`space`) before
+  the margin is crossed. The staged home and
   public_html get the modes the broker records (0750); a public_html that
   is a link is refused. Then the staging folder becomes root:<site group>
   0750 and `cp` runs as the site's user, exactly as the restore's copy
@@ -1256,13 +1260,19 @@ root step. The design, with the owner's choices recorded from Jev on
   source after its dump); the answer lists them, and the panel reports a
   difference.
 - `POST /v1/migrations/{id}/finish` (`reason`) removes the key's line from
-  the source (`sed` on the line ending in `sifruno-migration-<id>`), proves
+  the source (`sed` on whole lines `restrict ssh-ed25519 <blob>
+  sifruno-migration-<id>`), proves
   it by a sign-in that is then refused with `Permission denied`, and
   removes the local folder and record whatever the source answered; the
   answer says when the line must be removed by hand.
+- Locks: `migrateMu` guards the records only; no source command runs
+  under it, so a plan waiting for `backupMu` behind a long backup never
+  holds up the admin's finish.
 - A failed step answers 422 `migration_failed` with the step (`connect`,
   `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `database`,
-  `dump`, `import`, `compare`, `remove_key`) and the end of its output.
+  `dump`, `import`, `compare`, `remove_key`) and the end of its error
+  output only: what a source command printed on standard output can hold
+  password hashes.
   Copies run one at a time with backups (they share the staging root and
   the temporary users), and their root-side leftovers go through the
   backup leftover list.
@@ -1270,6 +1280,22 @@ root step. The design, with the owner's choices recorded from Jev on
 Not in v1: IPv6 source addresses, the site's own certificate (the copy
 runs over http until DNS points here), parked and addon domains (listed,
 not added), and the Compat tier.
+
+Known gaps, found in review and not fixed in v1:
+
+- The plan's `.htaccess` fetch does not bring a folder reached through a
+  link, so such a site plans as Native; the copy's own scan then refuses
+  it (`tier`) and the panel's job removes the account it made. Fail-closed,
+  but later than the plan promises.
+- A finish, or an expiry, does not stop a copy already running with the
+  key (up to its two hours); an expired migration's line stays in the
+  source's `authorized_keys` until the admin removes it.
+- The source's rsync reads the tenant's tree as root on the old server; an
+  old rsync there could follow a link a tenant swaps in during the copy.
+  Reading as the account (`--rsync-path` with `runuser`) would fail on the
+  root-owned files a cPanel home holds and is not done.
+- WordPress's bundled Akismet plugin has an `.htaccess` with access rules,
+  so a WordPress site that keeps it scans as Compat and is refused.
 
 ## Verification cost
 

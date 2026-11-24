@@ -168,6 +168,7 @@ func (m *migrator) remoteSQL(ctx context.Context, rec migrationRecord, sql strin
 	case code == 255:
 		return nil, migrationFailed("connect", out)
 	case code != 0:
+		// Error output only: standard output may hold what was read so far.
 		return nil, migrationFailed("database", out)
 	}
 	return stdout.b, nil
@@ -210,7 +211,7 @@ func (m *migrator) Preflight(ctx context.Context, rec migrationRecord, home stri
 	if err != nil {
 		return htaccess.SiteResult{}, false, err
 	}
-	if code != 0 {
+	if code != 0 && code != 24 {
 		return htaccess.SiteResult{}, false, migrationFailed("fetch", out)
 	}
 	files, err := openDirectoryAt(int(stage.Fd()), "htaccess")
@@ -272,9 +273,34 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if unix.Mkdirat(int(stage.Fd()), "files", 0700) != nil {
 		return MigrateFilesResult{}, ErrUnavailable
 	}
-	out, code, err := m.rsync(ctx, rec, func(rsh string) []string {
+	// The old server's figure may be wrong, so the disk is watched while
+	// rsync writes, and rsync is stopped before the margin is crossed.
+	copying, stop := context.WithCancel(ctx)
+	full := make(chan bool, 1)
+	go func() {
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-copying.Done():
+				full <- false
+				return
+			case <-tick.C:
+				if avail, total, _, err := m.e.space(m.e.stage); err == nil && roomLeft(avail, total) == 0 {
+					stop()
+					full <- true
+					return
+				}
+			}
+		}
+	}()
+	out, code, err := m.rsync(copying, rec, func(rsh string) []string {
 		return fetchArgs(rsh, rec.Host, home, stagePath+"/files", r.Account.UID, r.Account.GID)
 	}, backupTimeout)
+	stop()
+	if <-full {
+		return MigrateFilesResult{}, &MigrationError{Step: "space", Detail: "The copy reached the free space this server keeps, so it was stopped. The old server's account holds more than it reported."}
+	}
 	if err != nil {
 		return MigrateFilesResult{}, err
 	}
@@ -423,11 +449,12 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 		return MigrateDatabaseResult{}, err
 	}
 	copied, copiedTables, err := m.count(ctx, db, func(sql string) ([]byte, error) {
-		out, code, err := m.e.rootSQL(ctx, sql)
+		stdout := &boundedBuffer{max: cpsource.MaxOutput}
+		out, code, err := m.e.run(ctx, backupCommand{path: mariadbPath, args: rootSQLArgs(), env: []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + m.e.dir}, dir: m.e.dir, stdin: strings.NewReader(sql), stdout: stdout, limit: 10 * time.Minute})
 		if err != nil || code != 0 {
 			return nil, migrationFailed("compare", out)
 		}
-		return out, nil
+		return stdout.b, nil
 	})
 	if err != nil {
 		return MigrateDatabaseResult{}, err

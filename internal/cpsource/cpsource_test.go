@@ -68,7 +68,7 @@ func TestCommandsTakeOnlyPlainNames(t *testing.T) {
 		t.Errorf("command: %q %v", got, err)
 	}
 	remove, _ := RemoveKeyCommand(strings.Repeat("a", 32))
-	if remove != "/usr/bin/sed -i -e '/ sifruno-migration-"+strings.Repeat("a", 32)+"$/d' /root/.ssh/authorized_keys" {
+	if remove != `/usr/bin/sed -i -e '/^restrict ssh-ed25519 [A-Za-z0-9+\/=]* sifruno-migration-`+strings.Repeat("a", 32)+`$/d' /root/.ssh/authorized_keys` {
 		t.Errorf("remove: %q", remove)
 	}
 }
@@ -176,8 +176,10 @@ func TestCounts(t *testing.T) {
 	if err != nil || len(tables) != 2 {
 		t.Fatal(tables, err)
 	}
-	if _, err := ParseTables([]byte("bad\x01name\n")); err == nil {
-		t.Error("a control character in a table name was read")
+	for _, bad := range []string{"bad\x01name\n", "it's\n", "back\\slash\n"} {
+		if _, err := ParseTables([]byte(bad)); err == nil {
+			t.Errorf("%q was read as a table name", bad)
+		}
 	}
 	sql, err := CountsSQL("shopone_wp", []string{"wp_options", "we`ird"})
 	if err != nil || !strings.Contains(sql, "FROM `shopone_wp`.`we``ird`") {
@@ -215,7 +217,9 @@ func TestParseCrontab(t *testing.T) {
 func TestInstallKeyCommand(t *testing.T) {
 	id := strings.Repeat("b", 32)
 	got := InstallKeyCommand("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample", id)
-	want := "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo 'restrict ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample sifruno-migration-" + id + "' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys"
+	// printf starts the line on a new line of its own, so a file whose
+	// last line has no new line keeps that line whole.
+	want := `mkdir -p /root/.ssh && chmod 700 /root/.ssh && printf '\n%s\n' 'restrict ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample sifruno-migration-` + id + `' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys`
 	if got != want {
 		t.Errorf("got %q", got)
 	}

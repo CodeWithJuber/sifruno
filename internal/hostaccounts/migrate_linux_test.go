@@ -71,16 +71,25 @@ func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error
 		if c.uid != 0 {
 			return nil, 0, nil
 		}
+		// Answers go to standard output when the caller reads it apart;
+		// a warning on standard error must then not count as an answer.
+		answer := func(s string) ([]byte, int, error) {
+			if c.stdout != nil {
+				io.WriteString(c.stdout, s)
+				return []byte("Warning: a note on standard error\n"), 0, nil
+			}
+			return []byte(s), 0, nil
+		}
 		switch {
 		case strings.HasPrefix(stdin, "SELECT COUNT(*) FROM information_schema.SCHEMATA"):
-			return []byte("1\n"), 0, nil
+			return answer("1\n")
 		case strings.HasPrefix(stdin, "SELECT TABLE_NAME"):
-			return []byte("wp_options\nwp_posts\n"), 0, nil
+			return answer("wp_options\nwp_posts\n")
 		case strings.HasPrefix(stdin, "SELECT 'wp_options'"):
 			if f.counts != "" {
-				return []byte(f.counts), 0, nil
+				return answer(f.counts)
 			}
-			return []byte("wp_options\t120\nwp_posts\t3\n"), 0, nil
+			return answer("wp_options\t120\nwp_posts\t3\n")
 		}
 		return nil, 0, nil
 	case sshPath:

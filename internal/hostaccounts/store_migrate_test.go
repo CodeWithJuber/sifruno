@@ -66,7 +66,7 @@ func (f *fakeMigrate) Remote(_ context.Context, m migrationRecord, command strin
 	if f.removed || !f.folders[m.ID] || f.pinned[m.ID] == "" {
 		return []byte("root@source: Permission denied (publickey)."), 255, nil
 	}
-	if strings.HasPrefix(command, "/usr/bin/sed -i -e '/ sifruno-migration-"+m.ID+"$/d'") {
+	if remove, _ := cpsource.RemoveKeyCommand(m.ID); command == remove {
 		f.removed = true
 		return nil, 0, nil
 	}

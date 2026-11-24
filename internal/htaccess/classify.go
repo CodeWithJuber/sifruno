@@ -140,6 +140,9 @@ type FileResult struct {
 	Problems    []Problem    `json:"problems,omitempty"`
 	Findings    []Finding    `json:"findings"`
 	AccessRules []AccessRule `json:"access_rules,omitempty"`
+	// Conversion is the converter's answer for a file that is compat for
+	// access control alone (convert.go); nil for every other file.
+	Conversion *Conversion `json:"conversion,omitempty"`
 }
 
 // ClassifyFile parses and classifies one .htaccess. name is recorded in each
@@ -191,6 +194,9 @@ func Classify(f *File, name, urlPath string) FileResult {
 	if len(causes) > 0 {
 		r.Verdict = VerdictCompat
 		r.Causes = sortedCauses(causes)
+	}
+	if convertible(r) {
+		r.Conversion = Convert(f, urlPath)
 	}
 	return r
 }

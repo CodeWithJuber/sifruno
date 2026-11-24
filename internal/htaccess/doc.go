@@ -3,11 +3,13 @@
 // behaviour on OLS (native), which need a converter to move directives into
 // virtual host configuration (convertible), and which must stay on Apache with
 // PHP-FPM (compat). Access-control directives and anything unrecognised send a
-// site to compat: OLS silently ignoring a password or deny rule would open a
-// closed directory.
+// file to compat: OLS silently ignoring a password or deny rule would open a
+// closed directory. ConvertSite then decides whether a site whose only compat
+// files hold a listed access pattern is Native after all, with those rules
+// moved into the vhost (convert.go).
 //
-// The package is read-only. It parses and classifies files; it does not
-// convert, rewrite or serve anything, and a verdict here is a pre-flight
+// The package is read-only. It parses, classifies and converts files; it
+// does not rewrite or serve anything, and a verdict here is a pre-flight
 // estimate, not proof of behaviour on a running server. A later migration
 // verify step must still request the recorded access-rule URLs and compare
 // responses.
@@ -82,4 +84,99 @@
 //   - Third-party add-ons that extend OLS .htaccess handling (for example
 //     CyberPanel's paid .htaccess module) are not part of OLS and are not
 //     assumed.
+//
+// # Converting access rules
+//
+// convert.go turns the access rules of one .htaccess into a FolderRule that
+// internal/olsweb renders as OpenLiteSpeed vhost config, or refuses. It
+// recognises the patterns in its table and nothing else. Where Apache and
+// OpenLiteSpeed differ it keeps the stricter result or refuses. Sources were
+// read on 2026-11-24.
+//
+// Apache httpd 2.4, what the converter relies on:
+//
+//   - Order, Allow, Deny (https://httpd.apache.org/docs/2.4/mod/mod_access_compat.html):
+//     Deny,Allow is the default and admits a client unless a Deny matches
+//     and no Allow does; Allow,Deny admits only a client an Allow matches and
+//     no Deny does; Mutual-failure is refused. "When any directive provided
+//     by this module is used in a new configuration section, no directives
+//     provided by this module are inherited from previous configuration
+//     sections": the module has no merger (modules/aaa/mod_access_compat.c,
+//     "dir merger --- default is to override"), and server/config.c
+//     (ap_set_config_vectors) creates a section's config only when the
+//     section uses one of the module's directives. So a <Files> section with
+//     "Allow from all" has its own Deny,Allow config with no Deny and admits
+//     everyone, whatever the folder said. Allow from takes all, full,
+//     partial ("10.1") and CIDR IPv4, and IPv6; host names, netmasks and
+//     env= are refused here.
+//   - Require (https://httpd.apache.org/docs/2.4/mod/mod_authz_core.html,
+//     https://httpd.apache.org/docs/2.4/mod/mod_authz_host.html,
+//     https://httpd.apache.org/docs/2.4/mod/mod_authz_user.html): several
+//     Require lines in one section "are implicitly contained within a
+//     <RequireAny>"; with the default AuthMerging Off a section with its own
+//     Require lines overrides earlier ones. Only all granted, all denied, ip,
+//     valid-user and user convert, one kind per section; containers, not,
+//     host, env, expr and group refuse.
+//   - Both modules together: "Mixing old directives like Order, Allow or Deny
+//     with new ones like Require is technically possible but discouraged";
+//     with the default Satisfy All a client must pass both (request.c runs
+//     the access checker, then authorization). Any Satisfy line refuses.
+//   - AuthType, AuthName (https://httpd.apache.org/docs/2.4/mod/mod_authn_core.html),
+//     AuthBasicProvider (https://httpd.apache.org/docs/2.4/mod/mod_auth_basic.html),
+//     AuthUserFile (https://httpd.apache.org/docs/2.4/mod/mod_authn_file.html):
+//     Basic with the file provider and an absolute user file only. The user
+//     file formats are in https://httpd.apache.org/docs/2.4/misc/password_encryptions.html;
+//     userfile.go keeps the shapes both servers check alike.
+//   - <Files>, <FilesMatch>, <IfModule>, Options
+//     (https://httpd.apache.org/docs/2.4/mod/core.html): sections merge as
+//     <Directory> and .htaccess, then <Files> and <FilesMatch>
+//     (https://httpd.apache.org/docs/2.4/sections.html#merging), and a
+//     <Files> section in a folder applies to "any other instance" of the
+//     name "found under" it. <IfModule [!]mod_authz_core.c> (or
+//     authz_core_module) is evaluated for Apache 2.4 and 2.2 alike, and both
+//     must give the same rule. Options -Indexes converts to nothing: every
+//     Sifruno vhost has autoIndex 0.
+//
+// OpenLiteSpeed 1.9.4, what the rule is rendered to (source tag v1.9.4, and
+// https://docs.openlitespeed.org/security/access/ and
+// https://docs.openlitespeed.org/security/realms/, both dated 2026-04-28):
+//
+//   - A context's accessControl allow and deny lists (src/main/configctx.cpp
+//     configSecurity) are matched most specific first
+//     (src/util/accesscontrol.cpp hasAccess); ALL or * set the default.
+//     A single address is written without a prefix length, because
+//     parseNetmask refuses /32 and /128.
+//   - A realm's userDB file (src/http/httpvhost.cpp configRealm) is read when
+//     a request needs it, by the server process after it dropped root
+//     (src/util/hashdatacache.cpp FileStore::open), so it must be readable by
+//     the web server user; the docs say the same.
+//   - processContextAuth (src/http/httpsession.cpp) answers 403 when the
+//     address check fails, then 401 until a user in the realm signs in.
+//     The order of the request stages is vhost rewrite, context match,
+//     context rewrite, file map, then this check; a rewrite that changes the
+//     URI sends the request back to context matching, and a changed context
+//     is checked again (src/http/httpreq.cpp postRewriteProcess).
+//   - A plain context whose location does not exist when the config loads
+//     is dropped with an error (src/http/httpvhost.cpp configContext,
+//     "path is not accessible"), which would open the folder once it came
+//     back. An "exp:" regex context is not checked that way, and
+//     HttpReq::processContext tries the regex contexts before any other.
+//     Every converted folder is therefore one regex context.
+//   - A context found by bestMatch is extended per subfolder with contexts
+//     that inherit its access control and load that subfolder's .htaccess
+//     rewrite rules (src/http/httpvhost.cpp bestMatch); a regex context takes
+//     the whole subtree instead, with rewriting off. Hence ConvertSite's
+//     refusal of any .htaccess below a converted folder.
+//   - <Files> names map to a negative lookahead in the folder's regex, so
+//     only the exact names, below folders whose names have no dot, fall
+//     through to the normal handling. A name is opened only with a static
+//     file suffix: OpenLiteSpeed refuses a static file with a path after it
+//     (src/http/httpreq.cpp setMimeBySuffix, "Path info is not allowed for
+//     static file"), and a folder name without a dot cannot be a script, so
+//     "/folder/script.php/allowed.css" stays closed.
+//
+// Unverified until the dev VM proof runs it: that OpenLiteSpeed loads the
+// rendered regex contexts and realms without warnings, serves index files
+// and PHP through them, and answers the statuses above for paths spelled
+// with %-escapes or double slashes.
 package htaccess

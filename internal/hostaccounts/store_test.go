@@ -51,6 +51,8 @@ type fakeNative struct {
 	wpInstalls int
 	wpStarted  chan struct{}
 	wpGate     chan struct{}
+	// placeholders counts InstallPlaceholder calls (placeholder_test.go).
+	placeholders int
 	// staged and live model each site's TLS directory by username: the
 	// staged chain and key, and the installed leaf. certApply counts
 	// installs; tlsGoneWhileServed records a delete that removed a TLS

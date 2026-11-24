@@ -12,7 +12,7 @@ func (s *store) installWordPress(ctx context.Context, id string, in WordPressInp
 	if snapshotReentry(ctx, s) {
 		return WordPressResult{}, ErrConflict
 	}
-	r, err := s.beginInstall(ctx, id, in, actor)
+	r, err := s.beginSiteRun(ctx, id, in.ExpectedRevision, actor, func(r record) bool { return validWordPress(in, r.Account.Username) })
 	if err != nil {
 		return WordPressResult{}, err
 	}
@@ -22,7 +22,11 @@ func (s *store) installWordPress(ctx context.Context, id string, in WordPressInp
 	return s.native.InstallWordPress(installCtx, r, in)
 }
 
-func (s *store) beginInstall(ctx context.Context, id string, in WordPressInput, actor string) (record, error) {
+// beginSiteRun checks, under the broker lock, that a program may run as the
+// account's user in its live site (the WordPress install, the placeholder
+// page), and marks the account busy until endInstall. valid checks the
+// caller's input against the account's record.
+func (s *store) beginSiteRun(ctx context.Context, id string, revision uint64, actor string, valid func(record) bool) (record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !idPattern.MatchString(id) || !validText(actor, 120) {
@@ -39,11 +43,11 @@ func (s *store) beginInstall(ctx context.Context, id string, in WordPressInput, 
 		if r.Account.ID != id {
 			continue
 		}
-		if !validWordPress(in, r.Account.Username) {
+		if revision == 0 || !valid(r) {
 			return record{}, ErrInvalid
 		}
-		// The site must be live first: the install runs the site's PHP.
-		if r.Account.Revision != in.ExpectedRevision || r.Account.State != "active" || !r.Web.enabled() || s.installing[id] {
+		// The site must be live first: the program is the site's PHP.
+		if r.Account.Revision != revision || r.Account.State != "active" || !r.Web.enabled() || s.installing[id] {
 			return record{}, ErrConflict
 		}
 		if s.native.Verify(ctx, r) != nil {

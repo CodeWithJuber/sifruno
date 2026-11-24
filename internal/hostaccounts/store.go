@@ -94,6 +94,11 @@ type nativeSystem interface {
 	// public_html is missing, a link, not a directory, not the account's,
 	// or on another filesystem; nothing changed.
 	AdoptPublicHTML(context.Context, record) (fileIdentity, error)
+	// InstallPlaceholder writes the placeholder index.php into the live
+	// site's public_html as the account's user, only if the folder is
+	// empty, and reports whether it wrote it; it changes only the tenant's
+	// files.
+	InstallPlaceholder(context.Context, record) (bool, error)
 	// ApplyWeb sets the account's quota and installs the full site list:
 	// written, tested, reloaded. A failed test restores the old files and
 	// the previous quota and returns ErrWebRejected. It must be safe to

@@ -504,7 +504,18 @@ database would not.
 - Steps: `core download` (en_US), `config create` with database host
   127.0.0.1 (sites run in a namespace container that does not see the
   MariaDB socket), `wp-config.php` set to 0600, `core install` with
-  `--skip-email`, then `core version` for the result.
+  `--skip-email`, then the LiteSpeed Cache plugin (step `cache plugin`),
+  then `core version` for the result.
+- LiteSpeed Cache is how WordPress asks OpenLiteSpeed's cache module to keep
+  a page (see Websites). WP-CLI installs version 7.9.3, pinned in code, from
+  wordpress.org as the site's user (`plugin install litespeed-cache
+  --version=7.9.3`), checks every file against wordpress.org's published
+  checksums for that version (`plugin verify-checksums`, which must print
+  `Verified 1 of 1 plugins.`, because WP-CLI also answers success when it
+  could not fetch the checksums), activates it, and turns its "Cache
+  Logged-in Users" off (`litespeed-option set cache-priv 0`), so a
+  signed-in visitor's pages are never cached. The broker itself fetches
+  nothing.
 - The checks run under the broker lock; the install does not, so a slow
   download holds no other account. The account is marked busy meanwhile:
   a second install, a suspend, a web change and a delete get 409, because
@@ -517,6 +528,27 @@ database would not.
   (printable ASCII, the passwords removed, at most 512 bytes). Whatever the
   step left in public_html stays there; installing again over an existing
   WordPress fails at the download step.
+
+## Placeholder page
+
+`InstallPlaceholder` (`POST /v1/accounts/{id}/placeholder`, input
+`expected_revision` only) puts a small `index.php` into a live site's
+public_html when the folder is empty, so a new PHP site shows that it is
+ready and that its PHP runs. The page is fixed in code; the caller cannot
+send text or a path.
+
+- It runs the site's own LSPHP CLI as the account's user, exactly as the
+  WordPress install runs WP-CLI: `php -n -r <fixed script>` in public_html,
+  the page on stdin. Root writes nothing into the home.
+- The script writes only into an empty folder (one hidden file is enough
+  to leave it alone) and only as a new file (`fopen` mode `x`, which is
+  `O_CREAT|O_EXCL` and never follows a link), then sets it to 0644. It
+  answers `{"written": true}`, or `false` when the folder held something.
+- The same checks as the WordPress install, under the broker lock: the
+  revision, an active live site, its folders verified, no install running.
+  The account is busy meanwhile, the run has its own one-minute limit, and
+  nothing is journaled. A failed run answers 422 `install_failed` with step
+  `placeholder` and the end of what PHP printed.
 
 ## Backups
 

@@ -211,6 +211,21 @@ func (c *client) InstallWordPress(ctx context.Context, id string, in WordPressIn
 	return out, err
 }
 
+// InstallPlaceholder asks the broker to put the placeholder page into the
+// account's live site if its public_html is empty. A failed PHP run comes
+// back as an *InstallError for the "placeholder" step.
+func (c *client) InstallPlaceholder(ctx context.Context, id string, in PlaceholderInput, actor string) (PlaceholderResult, error) {
+	if !idPattern.MatchString(id) || in.ExpectedRevision == 0 || !validText(actor, 120) {
+		return PlaceholderResult{}, ErrInvalid
+	}
+	var out PlaceholderResult
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/placeholder", struct {
+		Input PlaceholderInput `json:"input"`
+		Actor string           `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
 // BackupStatus reads the broker's backup key, readiness and target. The
 // first call makes the key pair and the repository password.
 func (c *client) BackupStatus(ctx context.Context) (BackupStatus, error) {

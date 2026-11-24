@@ -141,20 +141,31 @@ func (n *linuxSystem) InstallWordPress(ctx context.Context, r record, in WordPre
 	failed := func(step string, out []byte) error {
 		return &InstallError{Step: step, Detail: installDetail(out, secrets...)}
 	}
+	// WP-CLI answers a skipped check (checksums it could not fetch) with
+	// success too, so the cache plugin's check must say it verified it.
+	verified := []byte("Success: Verified 1 of 1 plugins.")
 	steps := []struct {
 		name, path, stdin string
 		args              []string
+		want              []byte // output the step must print, if any
 	}{
-		{"download", php, "", wp("core", "download", "--locale="+wpLocale)},
-		{"config", php, in.DBPassword + "\n", wp("config", "create", "--dbname="+in.DBName, "--dbuser="+in.DBUser, "--dbhost="+wpDBHost, "--prompt=dbpass")},
+		{"download", php, "", wp("core", "download", "--locale="+wpLocale), nil},
+		{"config", php, in.DBPassword + "\n", wp("config", "create", "--dbname="+in.DBName, "--dbuser="+in.DBUser, "--dbhost="+wpDBHost, "--prompt=dbpass"), nil},
 		// wp-config.php holds the database password and PHP runs as the site
 		// user, so no one else needs to read it.
-		{"config", chmodPath, "", []string{"0600", r.Account.PublicHTML + "/wp-config.php"}},
-		{"install", php, in.AdminPassword + "\n", wp("core", "install", "--url="+scheme+"://"+r.Account.Domain, "--title="+in.Title, "--admin_user="+in.AdminUser, "--admin_email="+in.AdminEmail, "--skip-email", "--prompt=admin_password")},
+		{"config", chmodPath, "", []string{"0600", r.Account.PublicHTML + "/wp-config.php"}, nil},
+		{"install", php, in.AdminPassword + "\n", wp("core", "install", "--url="+scheme+"://"+r.Account.Domain, "--title="+in.Title, "--admin_user="+in.AdminUser, "--admin_email="+in.AdminEmail, "--skip-email", "--prompt=admin_password"), nil},
+		// LiteSpeed Cache, pinned, checked against wordpress.org's checksums
+		// before it is activated. "Cache Logged-in Users" is on by default;
+		// off, a signed-in visitor's pages are never cached.
+		{"cache plugin", php, "", wp("plugin", "install", LSCachePlugin, "--version="+LSCachePluginVersion), nil},
+		{"cache plugin", php, "", wp("plugin", "verify-checksums", LSCachePlugin, "--version="+LSCachePluginVersion), verified},
+		{"cache plugin", php, "", wp("plugin", "activate", LSCachePlugin), nil},
+		{"cache plugin", php, "", wp("litespeed-option", "set", "cache-priv", "0"), nil},
 	}
 	for _, st := range steps {
 		out, code, e := n.runAsSite(ctx, r, st.path, st.stdin, st.args...)
-		if e != nil || code != 0 {
+		if e != nil || code != 0 || (st.want != nil && !bytes.Contains(out, st.want)) {
 			return WordPressResult{}, failed(st.name, out)
 		}
 	}

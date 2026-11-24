@@ -262,6 +262,36 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(result)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/placeholder"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/placeholder")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input PlaceholderInput `json:"input"`
+				Actor string           `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"expected_revision"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			result, err := s.installPlaceholder(ctx, id, in.Input, in.Actor)
+			var failed *InstallError
+			if errors.As(err, &failed) {
+				w.WriteHeader(422)
+				json.NewEncoder(w).Encode(struct {
+					Error  string `json:"error"`
+					Step   string `json:"step"`
+					Detail string `json:"detail"`
+				}{"install_failed", failed.Step, failed.Detail})
+				return
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/public-html"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/public-html")
 			if !idPattern.MatchString(id) {

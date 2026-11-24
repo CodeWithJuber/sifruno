@@ -14,14 +14,16 @@ import (
 // step left in public_html are the tenant's own.
 var ErrInstallFailed = errors.New("WordPress install failed")
 
-// InstallError says which WP-CLI step failed, with the end of what it
-// printed (printable ASCII only, secrets removed, at most 512 bytes).
+// InstallError says which step the broker ran as the site's user failed (a
+// WP-CLI step of the WordPress install, or the placeholder page), with the
+// end of what it printed (printable ASCII only, secrets removed, at most 512
+// bytes).
 type InstallError struct {
 	Step   string `json:"step"`
 	Detail string `json:"detail"`
 }
 
-func (e *InstallError) Error() string        { return "WordPress " + e.Step + " failed" }
+func (e *InstallError) Error() string        { return "site " + e.Step + " step failed" }
 func (e *InstallError) Is(target error) bool { return target == ErrInstallFailed }
 
 // WordPressInput installs WordPress into a live site. The passwords reach
@@ -52,6 +54,18 @@ type WordPressService interface {
 // wordpressTimeout bounds a whole install, download included. It does not
 // follow the caller, so a client that gives up does not cut a step in half.
 const wordpressTimeout = 10 * time.Minute
+
+// The install adds the LiteSpeed Cache plugin, which is how WordPress asks
+// OpenLiteSpeed's cache module to keep a page. WP-CLI fetches this exact
+// version from wordpress.org as the site's user, then checks every file
+// against wordpress.org's published checksums for it
+// (downloads.wordpress.org/plugin-checksums/litespeed-cache/7.9.3.json)
+// before it activates the plugin. 7.9.3 is the version the wordpress.org
+// plugin API named on 2026-11-24 (released 2026-11-03).
+const (
+	LSCachePlugin        = "litespeed-cache"
+	LSCachePluginVersion = "7.9.3"
+)
 
 var (
 	wpAdminPattern   = regexp.MustCompile(`^[A-Za-z0-9_.@][A-Za-z0-9_.@-]{0,59}$`)

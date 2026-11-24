@@ -68,6 +68,7 @@ func run() error {
 	acmeDirectory := flag.String("acme-directory", acme.LetsEncrypt, "ACME v2 directory URL for website certificates; the WHM AutoSSL surface uses it only when this flag is given")
 	acmeEmail := flag.String("acme-email", "", "Contact email for the ACME account; with --accounts-socket it turns on website certificates (HTTP-01) and accepts the certificate authority's terms of service")
 	acmeCAFile := flag.String("acme-ca-file", "", "Optional PEM bundle trusted for the ACME server only, instead of the system roots (a test CA such as Pebble)")
+	acmeTestProbeLoopback := flag.Bool("acme-test-probe-loopback", false, "Test only: let the website aliases' reachability probe connect to loopback addresses, for a test CA such as Pebble whose DNS answers 127.0.0.1; refused unless --acme-directory names a loopback address. Never set in production")
 	acmeInsecure := flag.Bool("acme-insecure-skip-verify", false, "Skip ACME directory TLS verification (test rigs with a private CA only; never in production)")
 	acmeResolver := flag.String("acme-dns-resolver", "127.0.0.1:53", "Resolver used to confirm _acme-challenge TXT propagation before ACME validation")
 	backupRoot := flag.String("backup-root", "", "Backup archive root; empty disables the backup surface")
@@ -273,7 +274,7 @@ func run() error {
 			if installer := certificateInstaller(broker); installer == nil {
 				fmt.Fprintln(os.Stderr, "Website certificates are off: the account broker client has no certificate operation, so new websites use http")
 			} else {
-				m, aerr := acme.New(acme.Config{Email: *acmeEmail, Directory: *acmeDirectory, CAFile: *acmeCAFile, StateDir: filepath.Join(dir, "acme")}, installer, brokerSites{broker})
+				m, aerr := acme.New(acme.Config{Email: *acmeEmail, Directory: *acmeDirectory, CAFile: *acmeCAFile, StateDir: filepath.Join(dir, "acme"), TestProbeLoopback: *acmeTestProbeLoopback}, installer, brokerSites{broker})
 				if aerr != nil {
 					return aerr
 				}

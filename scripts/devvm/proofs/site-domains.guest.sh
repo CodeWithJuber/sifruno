@@ -12,6 +12,9 @@
 # any name. The panel's reachability probe uses this VM's resolver, so this
 # script puts the names that "point here" in /etc/hosts (one marked line,
 # removed at the end) and leaves nodns.<domain> out: that one stays http.
+# The probe connects to public addresses only; --acme-test-probe-loopback,
+# a test switch refused for any directory not on this machine, lets it
+# reach 127.0.0.1 here.
 # shellcheck disable=SC2317 # the helpers are called through check
 set -uo pipefail
 # Byte order for every sort, as the broker sorts a certificate's names.
@@ -167,7 +170,7 @@ check "the account's revision did not move" listed "$id" "a[0]['revision'] == $r
 
 echo
 echo "## 6. One certificate from Pebble for every domain that points here"
-out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is asked for and installed"
+out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-test-probe-loopback --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is asked for and installed"
 waiting="$(python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["waiting"]))' <<<"$out" 2>/dev/null)"
 names="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["account"]["certificate"]["names"])' <<<"$out" 2>/dev/null)"
 rev="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["account"]["revision"])' <<<"$out" 2>/dev/null || echo "$rev")"
@@ -214,7 +217,7 @@ rev="$(printf '%s' "$changed" | revision)"
 check "$SHOP no longer serves the site" bash -c "! curl -s -H 'Host: $SHOP' http://127.0.0.1/ | grep -q '$PROOF_TEXT'"
 check "the HTTPS listener no longer maps $SHOP" bash -c "! sed -n '/listener sifruno-https/,/^}/p' $LSWS/conf/sifruno.conf | grep -q ' $SHOP'"
 removed_rev="$rev"
-out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is brought up to date"
+out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-test-probe-loopback --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is brought up to date"
 rev="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["account"]["revision"])' <<<"$out" 2>/dev/null || echo "$rev")"
 # Only a name removed: no new order. The extra name is harmless, and the
 # renewal before the certificate expires drops it.

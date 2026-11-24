@@ -48,6 +48,12 @@ type Config struct {
 	CAFile       string // optional PEM bundle trusted for the ACME server only
 	StateDir     string // the panel's private <state>/acme
 	ChallengeDir string // ChallengeDir when empty; tests use their own
+	// TestProbeLoopback lets the alias probe connect to loopback addresses
+	// (--acme-test-probe-loopback), for a test certificate authority on
+	// this machine whose DNS answers 127.0.0.1 for every name, as on the
+	// dev VM. It is refused unless Directory names a loopback address; the
+	// installer never sets it.
+	TestProbeLoopback bool
 }
 
 // New sets up the lego client from cfg and returns a Manager over it. It
@@ -103,8 +109,12 @@ func newLegoIssuer(cfg Config) (*legoIssuer, error) {
 	if a, err := mail.ParseAddress(cfg.Email); err != nil || a.Address != cfg.Email || a.Name != "" {
 		return nil, errors.New("acme: --acme-email must be a plain email address such as admin@example.com")
 	}
-	if u, err := url.Parse(cfg.Directory); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+	u, err := url.Parse(cfg.Directory)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
 		return nil, errors.New("acme: --acme-directory must be an https:// URL")
+	}
+	if cfg.TestProbeLoopback && !loopbackHost(u.Hostname()) {
+		return nil, errors.New("acme: --acme-test-probe-loopback is for a test certificate authority on this machine only, and --acme-directory names " + u.Hostname() + "; leave it out, or name the test server by a loopback address such as https://127.0.0.1:14000/dir")
 	}
 	if !filepath.IsAbs(cfg.ChallengeDir) {
 		return nil, errors.New("acme: the challenge directory must be an absolute path")

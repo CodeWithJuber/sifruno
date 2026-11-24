@@ -98,6 +98,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	inputFile := command.String("input-file", "", "JSON file with exactly aliases and redirects, as the broker takes them (domains)")
 	acmeDirectory := command.String("acme-directory", "", "ACME directory URL (secure)")
 	acmeCAFile := command.String("acme-ca-file", "", "PEM bundle trusted for the ACME server only (secure)")
+	acmeTestProbeLoopback := command.Bool("acme-test-probe-loopback", false, "Let the alias probe connect to loopback addresses, for Pebble on this machine (secure)")
 	acmeState := command.String("acme-state", "", "Private folder for the ACME account key (secure)")
 	acmeEmail := command.String("acme-email", "", "ACME account contact (secure)")
 	var keyFiles multiFlag
@@ -232,7 +233,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "this client has no certificate surface")
 			return 1
 		}
-		result, err = secure(ctx, service, certs, *id, acme.Config{Email: *acmeEmail, Directory: *acmeDirectory, CAFile: *acmeCAFile, StateDir: *acmeState}, *actor)
+		result, err = secure(ctx, service, certs, *id, acme.Config{Email: *acmeEmail, Directory: *acmeDirectory, CAFile: *acmeCAFile, StateDir: *acmeState, TestProbeLoopback: *acmeTestProbeLoopback}, *actor)
 	case "wordpress":
 		wp, ok := service.(hostaccounts.WordPressService)
 		if !ok {

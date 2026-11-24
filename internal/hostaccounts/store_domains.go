@@ -108,9 +108,9 @@ func (s *store) setSiteDomains(ctx context.Context, id string, in SiteDomainsInp
 	if r.Account.Revision == ^uint64(0) {
 		return SiteDomainsResult{}, ErrRecovery
 	}
-	// Two history rows, with room left as beginOperation leaves it, so the
-	// result can always be journaled.
-	if r.HistorySequence > MaxHistoryRows-3 {
+	// Two history rows, with room left as historyRoom leaves it for the
+	// operations a tenant can reach, so the result can always be journaled.
+	if !historyRoom(r, operationRows, false) {
 		return SiteDomainsResult{}, ErrConflict
 	}
 	if s.native.Verify(ctx, r) != nil {

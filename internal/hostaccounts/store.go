@@ -43,6 +43,11 @@ type record struct {
 	Actor           string    `json:"actor"`
 	Reason          string    `json:"reason"`
 	HistorySequence uint64    `json:"history_sequence"`
+	// HistoryStart is the sequence of the checkpoint a compacted history
+	// starts at (journal.go); 0 for a history never compacted, which starts
+	// at the create, sequence 1. Left out when 0, so a record written before
+	// compaction existed reads the same.
+	HistoryStart uint64 `json:"history_start,omitempty"`
 	// SSHKeys is the installed canonical key set, one key per line. SSHKeysNext
 	// is the set an unfinished ssh_keys operation is installing; it is durable
 	// before the key file is touched so a restart can finish the same write.
@@ -199,6 +204,10 @@ type store struct {
 	// reached. Keying the rotation on an ID, not a position, keeps it fair
 	// while accounts are created and deleted between requests.
 	auditAfter string
+	// compactAt is the number of rows at which a settled account's history
+	// is compacted: historyCompactAt; 0 (tests only) turns compaction off
+	// to exercise the limits behind it.
+	compactAt uint64
 }
 
 // auditBatch is how many accounts each refresh verifies in full (identity
@@ -249,7 +258,7 @@ func openStore(ctx context.Context, opts BrokerOptions, system nativeSystem) (*s
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	s := &store{db: db, opts: opts, native: system}
+	s := &store{db: db, opts: opts, native: system, compactAt: historyCompactAt}
 	ok := false
 	defer func() {
 		if !ok {
@@ -811,6 +820,11 @@ func (s *store) setSSHKeys(ctx context.Context, id string, in SSHKeysInput, acto
 	if r.Account.Revision == ^uint64(0) {
 		return SSHKeysResult{}, ErrRecovery
 	}
+	// Two history rows, with room left as historyRoom leaves it for the
+	// operations a tenant can reach, so the result can always be journaled.
+	if !historyRoom(r, operationRows, false) {
+		return SSHKeysResult{}, ErrConflict
+	}
 	current := r
 	r.Pending = &pending{Action: "ssh_keys", Target: sshKeysDigest(canonical), Actor: actor, Reason: in.Reason}
 	r.SSHKeysNext = joinSSHKeys(canonical)
@@ -916,12 +930,13 @@ func (s *store) setPlan(ctx context.Context, id string, in PlanInput, actor stri
 	// New limits reach a live site's PHP through the site list, which needs
 	// the web operation, and would restart PHP under a running WordPress
 	// install: both are refused before anything is journaled. Two history
-	// rows, with room left as beginOperation leaves it.
+	// rows, with room left as historyRoom leaves it for the operations a
+	// tenant can reach.
 	render := r.Web.enabled() && next != old
 	if render && s.web == nil {
 		return Account{}, ErrUnavailable
 	}
-	if (render && s.installing[id]) || r.HistorySequence > MaxHistoryRows-3 {
+	if (render && s.installing[id]) || !historyRoom(r, operationRows, false) {
 		return Account{}, ErrConflict
 	}
 	r.Pending = &pending{Action: "plan", Target: in.Plan, Actor: actor, Reason: in.Reason}
@@ -1002,6 +1017,12 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	// A running WordPress install keeps the user's processes alive, and
 	// userdel refuses a user with running processes.
 	if r.Account.Revision != in.ExpectedRevision || s.installing[id] {
+		return Account{}, ErrConflict
+	}
+	// The delete's rows come out of the operator's room, which the
+	// operations a tenant can reach leave free, so its result can always be
+	// journaled.
+	if !historyRoom(r, operationRows, true) {
 		return Account{}, ErrConflict
 	}
 	r.Pending = &pending{Action: "delete", Target: "", Actor: actor, Reason: in.Reason}
@@ -1205,7 +1226,9 @@ func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 			return nil, ErrRecovery
 		}
 	}
-	return items, nil
+	// Every account is settled: a long history is compacted before the
+	// operation adds to it (journal.go).
+	return s.compactHistories(items), nil
 }
 func planOrDefault(plan string) string {
 	if plan == "" {

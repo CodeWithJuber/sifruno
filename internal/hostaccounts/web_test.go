@@ -286,8 +286,11 @@ func TestInterruptedDeleteCanEndRejected(t *testing.T) {
 	}
 }
 
+// TestWebLeavesRoomInTheHistory: with compaction off, the web operation
+// stops where the operations a tenant can reach stop, before journaling.
 func TestWebLeavesRoomInTheHistory(t *testing.T) {
 	s, _ := webStore(t)
+	s.compactAt = 0
 	ctx := context.Background()
 	a := createFixture(t, s)
 	revision := a.Revision
@@ -301,7 +304,7 @@ func TestWebLeavesRoomInTheHistory(t *testing.T) {
 		revision = got.Account.Revision
 	}
 	r := recordFor(t, s, a.ID)
-	if !errors.Is(err, ErrConflict) || r.Pending != nil || r.HistorySequence > MaxHistoryRows-1 || r.HistorySequence <= MaxHistoryRows-3 {
+	if limit := uint64(MaxHistoryRows - operatorRows); !errors.Is(err, ErrConflict) || r.Pending != nil || historyLength(r) > limit-1 || historyLength(r) <= limit-operationRows {
 		t.Fatalf("a full history must refuse before journaling: %v, sequence %d, pending %v", err, r.HistorySequence, r.Pending)
 	}
 }

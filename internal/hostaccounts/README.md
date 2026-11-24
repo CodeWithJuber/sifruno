@@ -57,8 +57,9 @@ these are native foundation limits, not cPanel username rules. Domain must be a
 lowercase ASCII multi-label DNS name and remains metadata. Actor is1–120bytes;
 reason is1–500UTF8bytes, with controls and outer whitespace refused. Requests are
 strict JSON≤16KiB (a certificate request up to 160 KiB, a domains request up to 96 KiB), including duplicate/unknown/case-alias/null/invalidUTF8 guards.
-There are at most 2000 managed accounts (`MaxAccounts`) and 256 immutable audit event
-rows per account, so one account takes about 127 operations before its journal is full.
+There are at most 2000 managed accounts (`MaxAccounts`) and 256 audit event rows
+per account at a time (`MaxHistoryRows`); compaction (below) keeps an account in
+use far below that.
 
 UID/GID pairs in20000–60000 are reserved in durable private bbolt metadata before
 OS changes. Controller UID, existing local users/groups/homes and metadata
@@ -74,6 +75,47 @@ sequence, before/after account metadata, actor/reason, status and timestamps.
 Replay validates identity, revision and terminal-state consistency. These are OS
 operation records, not file checkpoints that can undo native accounts. No private
 password, key, shell output or credential content enters the journal or errors.
+
+Every journaled change takes two rows (three when it needs recovery), so the
+history is compacted. At the start of an operation, when no account has an
+unfinished operation (an adopt may find a conflict on its own account, which
+is left as it is), the history of each account that holds 192 rows or more is
+compacted in one bbolt transaction:
+
+- The last 32 rows are kept, from the first intent among them, for audit.
+- Every row before them is removed, and one checkpoint row takes the sequence
+  just before the kept rows. It records the account exactly as the last
+  removed row left it (status and action `checkpoint`, actor
+  `broker-compaction`, no before, the account as its after), so it stands for
+  every row up to its own sequence.
+- The record names the checkpoint's sequence (`history_start`). Sequences only
+  grow: the next row follows the last kept one.
+- The new history is checked as replay checks it before the transaction
+  commits. A crash leaves the old history or the new one, never a mix, and a
+  compaction that fails leaves the old one; the next operation tries again.
+
+Replay accepts a checkpoint only as the first row, at the sequence the record
+names, for a settled account (active or suspended) with the identity of the
+record; the next intent's before must equal its after, as it must equal the
+after of the operation before it in a history never compacted. A history whose
+record names no start must still begin with the create at sequence 1, as
+every history written before compaction does. Like the rest of the journal
+this is a consistency check, not a signature: whoever can write the broker's
+database can rewrite both consistently.
+
+Compaction runs at the start of an operation, not only when the broker starts:
+a broker may run for years between restarts, and every journaled operation of
+the panel starts there, under the broker lock, with every account settled. It
+does not run while the account list or a snapshot is read, so a snapshot
+lease never sees a record change under it.
+
+The operations a tenant can reach (web, domains, cron, certificate, adopt, SFTP
+keys, plan) are refused (409) before anything is journaled once fewer than 19
+rows are free: their two rows and a spare, plus 16 that stay for the
+operator's suspend, resume and delete and the broker's own conflict record,
+which are refused only when fewer than 3 rows are free (an adopt that ends a
+conflict, which holds up every account, counts as the operator's). With compaction these
+limits are a backstop for an account whose history could not be compacted.
 
 Interrupted operations retain their ID, UID/GID, username/domain and pending
 journal. List exposes recovery_required and all further mutations stop. Restart
@@ -881,8 +923,9 @@ busy meanwhile, so a delete, suspend, web change or install gets 409):
    routine privileges, nothing in a dump can name another `DEFINER`. The
    user is dropped afterwards, also when the load fails.
 
-Nothing is written to the accounts' journal: it holds 256 rows per account,
-and a nightly backup would fill it in four months. A backup and a drill
+Nothing is written to the accounts' journal: a nightly backup would take two
+rows a night, and soon the last rows compaction keeps would hold nothing but
+backups. A backup and a drill
 change no account; a restore changes only the tenant's own files and
 databases with the tenant's rights, as a WordPress install does, and the
 panel's job log records who asked. What a restore or drill leaves as root,
@@ -997,7 +1040,7 @@ runs the jobs as the account's user.
   start writes the stored set. An unchanged set is a
   no-op only while the installed file still holds it; a file edited outside
   the broker is rewritten through the journaled path. Each change takes two
-  of the account's 256 history rows.
+  of the account's history rows.
 - How crond runs them, read from source, not yet run (proof
   `site-tools.guest.sh`): for each job crond calls PAM service `crond`
   (`security.c`: `pam_acct_mgmt`, `pam_setcred`, `pam_open_session`), then

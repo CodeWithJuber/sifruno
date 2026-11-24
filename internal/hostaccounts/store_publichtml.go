@@ -59,12 +59,14 @@ func (s *store) adoptPublicHTML(ctx context.Context, id string, in AdoptInput, a
 		return withWeb(r), nil
 	}
 	// Room for the adopt's two rows, the conflict's end when there is one,
-	// and a spare, as beginOperation leaves it.
-	room := uint64(3)
+	// and a spare. An adopt is an operation a tenant can reach and stops
+	// where historyRoom stops those; one that ends a conflict, which holds
+	// up every account, may use the operator's room.
+	room := uint64(operationRows)
 	if conflict {
-		room = 4
+		room++
 	}
-	if r.Account.Revision == ^uint64(0) || r.HistorySequence > MaxHistoryRows-room {
+	if r.Account.Revision == ^uint64(0) || !historyRoom(r, room, conflict) {
 		return Account{}, ErrConflict
 	}
 	// A live site's folder gets the web server's access, which needs the web
@@ -151,7 +153,7 @@ func (s *store) adoptReady(ctx context.Context, id string) ([]record, error) {
 			return nil, ErrRecovery
 		}
 	}
-	return items, nil
+	return s.compactHistories(items), nil
 }
 
 // finishAdopt completes an adopt interrupted between its intent and its

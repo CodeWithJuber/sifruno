@@ -235,8 +235,9 @@ func (s *store) setCron(ctx context.Context, id string, in CronInput, actor stri
 	if r.Account.Revision == ^uint64(0) {
 		return CronResult{}, ErrRecovery
 	}
-	// Two history rows, with room left as beginOperation leaves it.
-	if r.HistorySequence > MaxHistoryRows-3 {
+	// Two history rows, with room left as historyRoom leaves it for the
+	// operations a tenant can reach.
+	if !historyRoom(r, operationRows, false) {
 		return CronResult{}, ErrConflict
 	}
 	if s.native.VerifyAccount(ctx, r) != nil {

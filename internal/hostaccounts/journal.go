@@ -11,7 +11,38 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// MaxHistoryRows bounds the rows one account's history holds; every request
+// reads and checks them all (verifyHistory).
 const MaxHistoryRows = 256
+
+// The history is compacted so an account in use never runs out of rows. At
+// the start of an operation, with no operation of any account unfinished,
+// the history of every account that holds historyCompactAt rows or more is
+// replaced, up to its last historyKeep rows, by one checkpoint row
+// (compactHistory). The operations a tenant can reach stop operatorRows
+// short of MaxHistoryRows; those rows stay for the operator's suspend,
+// resume and delete and the broker's own conflict record. Compaction keeps
+// every account far below both limits: they are the backstop for an
+// account whose history could not be compacted.
+const (
+	historyCompactAt = 192
+	historyKeep      = 32
+	// operationRows is the room one operation needs: its intent, its
+	// result, and a recovery_required row before a later result.
+	operationRows = 3
+	operatorRows  = 16
+)
+
+// A checkpoint row stands for the rows it replaced, the one at its own
+// sequence included: its after is the account exactly as the last of them
+// left it, settled. Only the first row of a compacted history is one, at the
+// sequence the record names (HistoryStart), and the next intent's before
+// must equal its after.
+const (
+	checkpointStatus = "checkpoint"
+	checkpointActor  = "broker-compaction"
+	checkpointReason = "Earlier history compacted into this row"
+)
 
 var historyBucket = []byte("hostaccount-operation-events-v1")
 
@@ -43,8 +74,32 @@ func sameAccount(a, b Account) bool { return a == b }
 func sameIdentity(a, b Account) bool {
 	return a.ID == b.ID && a.Username == b.Username && a.Domain == b.Domain && a.Home == b.Home && a.PublicHTML == b.PublicHTML && a.UID == b.UID && a.GID == b.GID && a.CreatedAt.Equal(b.CreatedAt)
 }
+
+// firstHistorySequence is the sequence of an account's first kept row: its
+// checkpoint's, or 1 (the create) for a history never compacted.
+func firstHistorySequence(r record) uint64 {
+	if r.HistoryStart == 0 {
+		return 1
+	}
+	return r.HistoryStart
+}
+
+// historyLength is how many rows an account's history holds.
+func historyLength(r record) uint64 { return r.HistorySequence + 1 - firstHistorySequence(r) }
+
+// historyRoom reports whether an account's history has room for rows more:
+// up to MaxHistoryRows for the operator's operations, and operatorRows
+// fewer for those a tenant can reach.
+func historyRoom(r record, rows uint64, operator bool) bool {
+	limit := uint64(MaxHistoryRows)
+	if !operator {
+		limit -= operatorRows
+	}
+	return historyLength(r)+rows <= limit
+}
+
 func (s *store) appendEvent(r record, e operationEvent) (record, error) {
-	if r.HistorySequence >= MaxHistoryRows {
+	if historyLength(r) >= MaxHistoryRows {
 		return r, ErrRecovery
 	}
 	r.HistorySequence++
@@ -71,7 +126,7 @@ func (s *store) appendEvent(r record, e operationEvent) (record, error) {
 	return r, nil
 }
 func (s *store) beginOperation(r record, before *Account) (record, error) {
-	if r.Pending == nil || r.HistorySequence > MaxHistoryRows-3 {
+	if r.Pending == nil || !historyRoom(r, operationRows, true) {
 		return r, ErrConflict
 	}
 	id, e := randomID()
@@ -121,24 +176,152 @@ func (s *store) resultEvent(r record, p pending, status string) (record, error) 
 	event := operationEvent{OperationID: p.OperationID, Action: p.Action, Status: status, Actor: p.Actor, Reason: p.Reason, Before: intent.Before, After: after}
 	return s.appendEvent(r, event)
 }
+
+// compactHistories compacts the history of every settled account that holds
+// s.compactAt rows or more, and answers the records as they are afterwards.
+// The caller holds mu and has refreshed: no operation of any account is
+// unfinished but a conflict adoptReady admits, whose account is skipped. A
+// compaction that fails changes nothing (compactHistory runs in one
+// transaction): the account keeps its history, which records() has just
+// accepted, and the next operation tries again. Until then the account's
+// own operations stop at the limits historyRoom sets, and no other
+// account's do.
+func (s *store) compactHistories(items []record) []record {
+	if s.compactAt == 0 {
+		return items
+	}
+	for i, r := range items {
+		if r.Pending != nil || historyLength(r) < s.compactAt {
+			continue
+		}
+		operationID, err := randomID()
+		if err != nil {
+			continue
+		}
+		var compacted record
+		err = s.db.Update(func(tx *bolt.Tx) error {
+			var e error
+			compacted, e = compactHistory(tx, r, operationID, time.Now().UTC())
+			return e
+		})
+		if err == nil {
+			items[i] = compacted
+		}
+	}
+	return items
+}
+
+// compactHistory replaces a settled account's rows before its last
+// historyKeep with one checkpoint row, in tx, and answers the record with
+// its new HistoryStart. The kept rows start at an intent, so the checkpoint
+// takes the sequence just before it, and its after is that intent's before:
+// the account as every earlier row left it, which verifyHistory has
+// matched. The checkpoint, the removal of the rows it replaces and the
+// record that names it are written in the one transaction, and they are
+// verified before it commits, so a crash leaves the old history or the new
+// one and never a mix. Sequences only grow: the next row follows the last
+// kept one, as before.
+func compactHistory(tx *bolt.Tx, r record, operationID string, now time.Time) (record, error) {
+	accounts, history := tx.Bucket(accountBucket), tx.Bucket(historyBucket)
+	if accounts == nil || history == nil || r.Pending != nil || !idPattern.MatchString(operationID) || now.IsZero() {
+		return r, ErrRecovery
+	}
+	// The record compacted is the stored one, with a history records()
+	// accepts.
+	var stored record
+	if raw := accounts.Get([]byte(r.Account.ID)); raw == nil || json.Unmarshal(raw, &stored) != nil || stored != r || verifyHistory(tx, r) != nil {
+		return r, ErrRecovery
+	}
+	prefix := []byte(r.Account.ID + "/")
+	var keys [][]byte
+	var rows []operationEvent
+	cursor := history.Cursor()
+	for key, value := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
+		var row operationEvent
+		if json.Unmarshal(value, &row) != nil {
+			return r, ErrRecovery
+		}
+		keys, rows = append(keys, bytes.Clone(key)), append(rows, row)
+	}
+	cut := 0
+	for i := max(1, len(rows)-historyKeep); i < len(rows); i++ {
+		if rows[i].Status == "intended" {
+			cut = i
+			break
+		}
+	}
+	if cut == 0 || rows[cut].Before == nil {
+		return r, ErrRecovery
+	}
+	sequence := rows[cut].Sequence - 1
+	if sequence <= r.HistoryStart {
+		// Nothing before the kept rows but the checkpoint already there.
+		return r, ErrConflict
+	}
+	checkpoint := operationEvent{Version: 1, Sequence: sequence, OperationID: operationID, AccountID: r.Account.ID, Action: checkpointStatus, Status: checkpointStatus, Actor: checkpointActor, Reason: checkpointReason, After: *rows[cut].Before, RecordedAt: now}
+	raw, err := json.Marshal(checkpoint)
+	if err != nil {
+		return r, ErrRecovery
+	}
+	for _, key := range keys[:cut] {
+		if err := history.Delete(key); err != nil {
+			return r, err
+		}
+	}
+	if err := history.Put(eventKey(r.Account.ID, sequence), raw); err != nil {
+		return r, err
+	}
+	next := r
+	next.HistoryStart = sequence
+	state, err := json.Marshal(next)
+	if err != nil || len(state) > maxRecordBytes {
+		return r, ErrRecovery
+	}
+	if err := accounts.Put([]byte(r.Account.ID), state); err != nil {
+		return r, err
+	}
+	if verifyHistory(tx, next) != nil {
+		return r, ErrRecovery
+	}
+	return next, nil
+}
+
 func verifyHistory(tx *bolt.Tx, r record) error {
 	b := tx.Bucket(historyBucket)
-	if b == nil || r.HistorySequence == 0 || r.HistorySequence > MaxHistoryRows {
+	first := firstHistorySequence(r)
+	if b == nil || r.HistorySequence == 0 || r.HistorySequence < first || historyLength(r) > MaxHistoryRows {
 		return ErrRecovery
 	}
 	cursor := b.Cursor()
 	prefix := []byte(r.Account.ID + "/")
-	sequence := uint64(0)
+	sequence := first - 1
 	var intent, lastSuccess operationEvent
 	status := ""
 	operations := map[string]bool{}
 	for key, value := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
 		sequence++
+		if sequence > r.HistorySequence {
+			return ErrRecovery
+		}
 		var e operationEvent
 		if json.Unmarshal(value, &e) != nil || e.Version != 1 || e.Sequence != sequence || !bytes.Equal(key, eventKey(r.Account.ID, sequence)) || e.AccountID != r.Account.ID || !idPattern.MatchString(e.OperationID) || !validText(e.Actor, 120) || !validText(e.Reason, 500) || e.RecordedAt.IsZero() || !sameIdentity(e.After, r.Account) || (e.Before != nil && !sameIdentity(*e.Before, r.Account)) {
 			return ErrRecovery
 		}
+		// A compacted history starts at its checkpoint, the sequence its
+		// record names, and has no other; one never compacted has none.
+		if (e.Status == checkpointStatus) != (r.HistoryStart != 0 && sequence == r.HistoryStart) {
+			return ErrRecovery
+		}
 		switch e.Status {
+		case checkpointStatus:
+			// It replaced the create's two rows at least, and stands for a
+			// settled account.
+			if sequence < 2 || e.Action != checkpointStatus || e.Actor != checkpointActor || e.Reason != checkpointReason || e.Before != nil || e.After.Revision == 0 || e.After.State != "active" && e.After.State != "suspended" {
+				return ErrRecovery
+			}
+			operations[e.OperationID] = true
+			lastSuccess = e
+			status = e.Status
 		case "intended":
 			if operations[e.OperationID] || status == "intended" || status == "recovery_required" {
 				return ErrRecovery
@@ -209,7 +392,7 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 		return ErrRecovery
 	}
 	if r.Pending == nil {
-		if status != "succeeded" && status != "reconciled" && status != "rejected" || !sameAccount(lastSuccess.After, r.Account) {
+		if status != "succeeded" && status != "reconciled" && status != "rejected" && status != checkpointStatus || !sameAccount(lastSuccess.After, r.Account) {
 			return ErrRecovery
 		}
 	} else {

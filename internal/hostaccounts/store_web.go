@@ -69,9 +69,9 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 	if r.Account.Revision == ^uint64(0) {
 		return WebResult{}, ErrRecovery
 	}
-	// Two history rows, with room left as beginOperation leaves it, so the
-	// result can always be journaled.
-	if r.HistorySequence > MaxHistoryRows-3 {
+	// Two history rows, with room left as historyRoom leaves it for the
+	// operations a tenant can reach, so the result can always be journaled.
+	if !historyRoom(r, operationRows, false) {
 		return WebResult{}, ErrConflict
 	}
 	if s.native.Verify(ctx, r) != nil || s.native.GrantWebAccess(ctx, r) != nil {

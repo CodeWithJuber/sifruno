@@ -42,7 +42,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch global.Arg(0) {
 	case "wordpress":
 		timeout = 12 * time.Minute
-	case "web", "certificate", "delete":
+	case "web", "certificate", "delete", "state":
+		// A state change of a live site re-applies the site list too.
 		timeout = 6 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

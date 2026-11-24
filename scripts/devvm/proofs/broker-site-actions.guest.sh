@@ -90,7 +90,16 @@ suspended="$(drive state --id "$id" --revision "$rev" --state suspended --reason
 rev="$(printf '%s' "$suspended" | revision)"
 check "the home page answers 403" wait_for / 403
 check "a PHP file answers 403" test "$(code /index.php)" = 403
-check "the ACME challenge path answers 403 too (renewal pauses while suspended)" test "$(code /.well-known/acme-challenge/proof)" = 403
+# The challenge path maps to the panel's own folder, not the site's. Show what
+# it answers while suspended, and that nothing of the site's own is served
+# there: a file the tenant puts in its .well-known folder stays unreachable.
+challenge="proof-${RUNID}"
+printf 'challenge %s\n' "$RUNID" > "/var/lib/sifruno-acme/$challenge"
+chmod 0644 "/var/lib/sifruno-acme/$challenge"
+echo "  the ACME challenge path answers $(code "/.well-known/acme-challenge/$challenge") for a challenge in the panel's folder while suspended"
+rm -f "/var/lib/sifruno-acme/$challenge"
+runuser -u "$SITE_USER" -- sh -c "mkdir -p /home/$SITE_USER/public_html/.well-known/acme-challenge && printf 'tenant decoy\n' > /home/$SITE_USER/public_html/.well-known/acme-challenge/decoy"
+check "a file the tenant put under .well-known is not served" bash -c "! curl -s -H 'Host: $DOMAIN' http://127.0.0.1/.well-known/acme-challenge/decoy | grep -q 'tenant decoy'"
 check "the account list shows it suspended" listed "a[0]['state'] == 'suspended'"
 echo "  $SUSPENDED: $(stat -c '%U:%G %a' "$SUSPENDED" 2>&1), SELinux $(stat -c %C "$SUSPENDED" 2>&1), entries: $(find "$SUSPENDED" -mindepth 1 | wc -l)"
 check "$SUSPENDED is root's, mode 0755, and empty" bash -c "[ \"\$(stat -c '%U:%G %a' $SUSPENDED)\" = 'root:root 755' ] && [ -z \"\$(find $SUSPENDED -mindepth 1 -print -quit)\" ]"

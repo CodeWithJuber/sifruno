@@ -125,7 +125,7 @@ The installer ends by printing the first-run steps and the rollback steps for th
 | sshd | Writes `/etc/ssh/sshd_config.d/40-sifruno.conf`: password sign-in off, and every user except root and members of `wheel` is SFTP-only with keys the broker manages in `/etc/sifruno/ssh/authorized_keys`. Checked with `sshd -t`, then sshd is reloaded. |
 | OpenLiteSpeed | Adds one `include` line and turns on namespace isolation in `/usr/local/lsws/conf/httpd_config.conf`. A backup is kept beside the file. |
 | MariaDB | Creates the admin user `sifpanel_dbadmin`; its password is only in `/var/lib/sifpanel/db-admin.cnf` (0600, `sifpanel`). |
-| Files | Programs in `/usr/local/lib/sifruno/bin`, the panel UI in `/usr/local/lib/sifruno/ui`, WP-CLI (pinned checksum) in `/usr/local/lib/sifruno/wp-cli.phar`. |
+| Files | Programs in `/usr/local/lib/sifruno/bin`, the panel UI in `/usr/local/lib/sifruno/ui`, WP-CLI (pinned checksum) in `/usr/local/lib/sifruno/wp-cli.phar`, restic 0.20.0 for backups (pinned checksum) in `/usr/local/lib/sifruno/restic`. |
 | Folders | `/var/lib/sifpanel` and the panel's state in it, `/var/lib/sifruno-broker`, `/var/lib/sifruno-acme`, `/etc/sifruno`, `/run/sifruno-broker`. |
 | Services | `sifruno-broker.service` (root; the only part that changes the host) and `sifruno.service` (the panel, as `sifpanel`), enabled and started. |
 

@@ -39,11 +39,17 @@ readonly UNIT_DIR=/etc/systemd/system
 readonly PACKAGES=(openlitespeed
   lsphp83 lsphp83-common lsphp83-mysqlnd lsphp83-gd lsphp83-mbstring lsphp83-xml
   lsphp83-opcache lsphp83-intl lsphp83-zip lsphp83-process lsphp83-bcmath lsphp83-pdo
-  mariadb-server podman openssh-clients rsync tar unzip policycoreutils-python-utils xfsprogs quota
+  mariadb-server podman openssh-clients rsync tar unzip bzip2 policycoreutils-python-utils xfsprogs quota
   httpd httpd-tools)
 # The broker runs this file only while its bytes match the sha512 pinned in
 # internal/hostaccounts/wordpress_linux.go (WP-CLI 2.12.0's published one).
 readonly WPCLI_VERSION=2.12.0
+# restic for website backups. The download is checked against the sha256 in
+# the release's SHA256SUMS; the decompressed binary against the one pinned in
+# internal/hostaccounts/backup.go, which the broker checks before every run.
+readonly RESTIC_VERSION=0.20.0
+readonly RESTIC_BZ2_SHA256=0ccd9fa7885074a24603b051e01bf9bd8b5e45d6a1791e9d9887e9e9372107f7
+readonly RESTIC_SHA256=c109579d3a1a4d26094bef5400ac5645fceb1043414c05f51b8fb48272001c72
 readonly WPCLI_SHA512=be928f6b8ca1e8dfb9d2f4b75a13aa4aee0896f8a9a0a1c45cd5d2c98605e6172e6d014dda2e27f88c98befc16c040cbb2bd1bfa121510ea5cdf5f6a30fe8832
 STAMP="$(date +%Y%m%d-%H%M)"
 readonly STAMP
@@ -775,6 +781,34 @@ step_wpcli() {
   changed "WP-CLI ${WPCLI_VERSION} installed at $target"
 }
 
+step_restic() {
+  local target="$PREFIX/restic" work
+  ensure_dir root root 0755 "$PREFIX"
+  if [ "$(sha256sum "$target" 2>/dev/null | cut -d' ' -f1)" = "$RESTIC_SHA256" ] &&
+    [ "$(stat -c '%U:%G %a' "$target")" = "root:root 755" ]; then
+    return 0
+  fi
+  work="$(mktemp -d)"
+  curl -fsSL -o "$work/restic.bz2" \
+    "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2"
+  if [ "$(sha256sum "$work/restic.bz2" | cut -d' ' -f1)" != "$RESTIC_BZ2_SHA256" ]; then
+    rm -rf -- "$work"
+    die "The restic ${RESTIC_VERSION} download does not match the sha256 its release publishes." \
+      "Backups run only the exact restic the panel was built for, so a different file is never installed." \
+      "Check the server's connection to github.com and run this again."
+  fi
+  bunzip2 -c -- "$work/restic.bz2" > "$work/restic"
+  if [ "$(sha256sum "$work/restic" | cut -d' ' -f1)" != "$RESTIC_SHA256" ]; then
+    rm -rf -- "$work"
+    die "The decompressed restic ${RESTIC_VERSION} does not match its pinned sha256." \
+      "The broker runs only the exact restic binary it was built for." \
+      "Run this again; if it fails the same way, report it with the installer's output."
+  fi
+  install -o root -g root -m 0755 "$work/restic" "$target"
+  rm -rf -- "$work"
+  changed "restic ${RESTIC_VERSION} installed at $target"
+}
+
 step_services() {
   local unit
   for unit in mariadb lsws; do
@@ -1175,6 +1209,7 @@ main() {
   step "Write the sshd policy $SSHD_DROPIN (backup, sshd -t, automatic rollback, reload)" step_sshd
   step "Add Sifruno's include and namespace isolation to OpenLiteSpeed's config (backup)" step_openlitespeed
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
+  step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
   step "Enable and start MariaDB and OpenLiteSpeed" step_services
   step "Create the panel's MariaDB admin user and its 0600 option file $DB_ADMIN_CNF" step_db_admin
   step "Create the ACME challenge folder $ACME_DIR" step_acme

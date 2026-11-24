@@ -2,10 +2,10 @@
 # Runs inside the dev VM as root (proof.sh account-limits copies it in).
 # Proves the per-account process, memory and CPU limits: the installer's
 # pam_limits file and OpenLiteSpeed cgroups setting, the broker's slice
-# drop-in at create and plan change, a tenant's fork loop stopping at the
-# limit, a runuser session in the user slice with TasksMax set, the site's
-# lsphp process and its limits, the delete of an active site while a fork
-# loop runs, and a WordPress install step whose tenant wp-cli.yml starts a
+# drop-in at create and plan change, a login session (pam_systemd, as for
+# SFTP and cron) in the user slice, a tenant's fork loop stopping at the
+# limit, the site's lsphp process held by the slice, the delete of an
+# active site while a fork loop runs, and a WordPress install step whose tenant wp-cli.yml starts a
 # fork loop: held in its own unit in the account's slice, the broker still
 # answering, nothing left after the step. Prints PASS/FAIL per check, and
 # what it read.
@@ -58,17 +58,32 @@ as_tenant() { # as_tenant USER COMMAND
   uid="$(id -u "$1")"
   setpriv --reuid="$uid" --regid="$uid" --clear-groups -- sh -c "cd /home/$1 && $2"
 }
-# A PAM session of the tenant, started from a transient system service so it
-# is not inside this script's own (root's) login session: pam_systemd then
-# registers it under user-<uid>.slice, and pam_limits applies limits.d, as
-# for an SFTP login or a cron job. runuser -u runs the command without the
-# tenant's nologin shell.
+# A login session of the tenant, as sshd (SFTP) and crond start one: their
+# PAM stacks include password-auth, whose pam_systemd registers the session
+# under user-<uid>.slice, and pam_limits applies limits.d (section 3 checks
+# both stacks). runuser -l uses the runuser-l stack, which has pam_systemd
+# too; plain runuser -u has not, and its process stays in the unit that
+# started it. Started from a transient system service so it is not inside
+# this script's own (root's) login session; --shell because the tenant's
+# shell is nologin.
 tenant_session() { # tenant_session USER COMMAND...
-  systemd-run --quiet --wait --pipe --collect -- /usr/sbin/runuser -u "$1" -- "${@:2}"
+  systemd-run --quiet --wait --pipe --collect -- \
+    /usr/sbin/runuser -l "$1" --shell=/bin/bash --command="$(printf '%q ' "${@:2}")"
 }
 # The same, left running in the background as unit NAME.
 tenant_session_bg() { # tenant_session_bg NAME USER COMMAND...
-  systemd-run --quiet --collect --unit "$1" -- /usr/sbin/runuser -u "$2" -- "${@:3}"
+  systemd-run --quiet --collect --unit "$1" -- \
+    /usr/sbin/runuser -l "$2" --shell=/bin/bash --command="$(printf '%q ' "${@:3}")"
+}
+# pam_systemd is in a PAM service's session stack, directly or through an
+# include or substack of password-auth or system-auth.
+pam_has_systemd() { # pam_has_systemd SERVICE
+  grep -qE '^-?session\s+\S+\s+pam_systemd\.so' "/etc/pam.d/$1" && return 0
+  local inc
+  while read -r inc; do
+    grep -qE '^-?session\s+\S+\s+pam_systemd\.so' "/etc/pam.d/$inc" && return 0
+  done < <(awk '$1 ~ /^-?session$/ && ($2 == "include" || $2 == "substack") {print $3}' "/etc/pam.d/$1")
+  return 1
 }
 slice_dir() { printf '/sys/fs/cgroup/user.slice/user-%s.slice' "$1"; }
 show() { systemctl show -P "$2" "user-$1.slice"; }
@@ -158,13 +173,18 @@ check "A's drop-in is root's, 0644" test "$(stat -c '%U:%G %a' "$dropin")" = "ro
 check "systemd loaded it: TasksMax 100, MemoryMax 1 GiB, CPUQuota 100%" slice_has "$a_uid" 100 1073741824 1s
 
 echo
-echo "## 3. A runuser session lands in the user slice with TasksMax set"
+echo "## 3. A login session lands in the user slice with TasksMax set"
+for svc in sshd crond runuser-l; do
+  check "the $svc PAM stack registers a session with pam_systemd" pam_has_systemd "$svc"
+done
 session="$(tenant_session "$A_USER" /usr/bin/cat /proc/self/cgroup /proc/self/limits)"
 printf '%s\n' "$session" | grep -E '^0::|Max processes|Max address space' | sed 's/^/  /'
 check "the session runs in user-$a_uid.slice" grep -q "^0::/user.slice/user-$a_uid.slice/" <<<"$session"
 check "the session's RLIMIT_NPROC is the backstop 4096 (limits.d)" grep -qE '^Max processes +4096 +4096 ' <<<"$session"
 tenant_session_bg "limits-proof-hold-$RUNID" "$A_USER" /usr/bin/sleep 600
-sleep 2
+# pam_systemd starts the user manager before the session runs; on a
+# slow machine that takes a while.
+for _ in $(seq 1 90); do [ -e "$(slice_dir "$a_uid")/pids.max" ] && pgrep -u "$a_uid" -x sleep >/dev/null && break; sleep 1; done
 echo "  pids.max $(cat "$(slice_dir "$a_uid")/pids.max" 2>&1), memory.max $(cat "$(slice_dir "$a_uid")/memory.max" 2>&1), cpu.max $(cat "$(slice_dir "$a_uid")/cpu.max" 2>&1)"
 check "the active slice's pids.max is 100" test "$(cat "$(slice_dir "$a_uid")/pids.max")" = 100
 
@@ -212,11 +232,13 @@ if [ -n "$lsphp" ]; then
   echo "  lsphp $lsphp: $(cat "/proc/$lsphp/cgroup")"
   grep -E 'Max processes|Max address space' "/proc/$lsphp/limits" | sed 's/^/  /'
   check "lsphp runs in user-$a_uid.slice/litespeed-exec.scope (OpenLiteSpeed cgroups)" grep -q "^0::/user.slice/user-$a_uid.slice/litespeed-exec.scope" "/proc/$lsphp/cgroup"
-  # Read from OpenLiteSpeed 1.9.4's source: the vhost's rlimits are set on
-  # the path without the namespace container and not in it (ns.c), so these
-  # two may fail with namespace on; the slice above is then the bound.
-  check "lsphp's RLIMIT_NPROC is the vhost's procHardLimit, 496" grep -qE '^Max processes +496 +496 ' "/proc/$lsphp/limits"
-  check "lsphp's RLIMIT_AS is the vhost's memHardLimit, 1 GiB" grep -qE '^Max address space +1073741824 +1073741824 ' "/proc/$lsphp/limits"
+  # OpenLiteSpeed sets the vhost's procHardLimit and memHardLimit as
+  # rlimits only outside its namespace container (ns.c in 1.9.4; the
+  # rlimits printed above are the system defaults), so with namespace on
+  # the account's slice is lsphp's bound.
+  echo "  slice: pids.max $(cat "$(slice_dir "$a_uid")/pids.max" 2>&1), memory.max $(cat "$(slice_dir "$a_uid")/memory.max" 2>&1)"
+  check "lsphp's slice holds it to A's plan: pids.max 100" test "$(cat "$(slice_dir "$a_uid")/pids.max")" = 100
+  check "and memory.max 1 GiB" test "$(cat "$(slice_dir "$a_uid")/memory.max")" = 1073741824
 else
   fail "an lsphp process runs as A"
 fi
@@ -224,7 +246,8 @@ fi
 echo
 echo "## 7. Delete of the active site while a fork loop runs"
 tenant_session_bg "limits-proof-loop-$RUNID" "$A_USER" /usr/bin/python3 -c "$FORK_LOOP"
-sleep 5
+for _ in $(seq 1 90); do [ "$(pgrep -u "$a_uid" -c)" -ge 20 ] && break; sleep 1; done
+sleep 3
 running="$(pgrep -u "$a_uid" -c)"
 echo "  A's processes with the loop running: $running; slice pids.current $(cat "$(slice_dir "$a_uid")/pids.current" 2>&1)"
 check "the loop runs, held at or under the limit" between "$running" 20 100

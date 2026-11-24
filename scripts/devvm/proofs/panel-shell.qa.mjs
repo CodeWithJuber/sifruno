@@ -141,17 +141,22 @@ try {
   const siteId = await page.getByTestId("website-details").getAttribute("data-site-id");
   await page.screenshot({ path: join(outDir, "1440-light-websites.png") });
 
+  // A static site's files open in the old static file screen; Files in the
+  // menu is each website's real home folder now.
   await page.getByRole("button", { name: "Open File Manager", exact: true }).click();
   await page.getByTestId("file-manager-inventory").waitFor();
-  check("Open File Manager goes to /websites/files", path(page) === "/websites/files", path(page));
+  check("Open File Manager goes to /websites/static/files", path(page) === "/websites/static/files", path(page));
   check("Files opens the same website", (await page.getByTestId("file-manager-inventory").getAttribute("data-site-id")) === siteId);
-  const current = await page.locator('nav[aria-label="Panel sections"] [aria-current="page"]').count();
-  check("exactly one menu link is the current page", current === 1, "found " + current);
-  check("breadcrumb shows Websites › Files", (await page.locator('[data-slot="breadcrumb"]').innerText()).replace(/\s+/g, " ").includes("Websites"));
+  check("breadcrumb shows Websites › Static site files (old)", (await page.locator('[data-slot="breadcrumb"]').innerText()).replace(/\s+/g, " ").includes("Websites"));
 
   await page.goBack();
   await page.getByTestId("website-details").waitFor();
   check("back button returns to /websites/static with the site still open", path(page) === "/websites/static" && (await page.getByTestId("website-details").getAttribute("data-site-id")) === siteId, path(page));
+
+  await page.getByTestId("nav-files").click();
+  await page.getByTestId("files-sites").waitFor();
+  const current = await page.locator('nav[aria-label="Panel sections"] [aria-current="page"]').count();
+  check("Files in the menu opens the website picker, the one current menu link", path(page) === "/websites/files" && current === 1, `${path(page)}, ${current} current`);
 
   await page.goto(origin + "/websites/backups");
   await page.getByRole("heading", { name: "Backups", level: 1 }).waitFor();

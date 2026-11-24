@@ -24,6 +24,7 @@ const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.W
 const WebsitesList = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsitesList })));
 const WebsiteOverview = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsiteOverview })));
 const BackupStorage = lazy(() => import("@/BackupStorage").then((m) => ({ default: m.BackupStorage })));
+const FilesSitePicker = lazy(() => import("@/SiteFiles").then((m) => ({ default: m.FilesSitePicker })));
 
 export function LoadingState({ label }: { label: string }) {
   return <div className="flex flex-col gap-4" role="status" aria-label={label}><Skeleton className="h-28 w-full" /><Skeleton className="h-64 w-full" /><span className="sr-only">{label}</span></div>;
@@ -146,7 +147,12 @@ export function WebsiteView({ accountId }: { accountId: string }) {
   return <WebsiteOverview key={accountId} accountId={accountId} />;
 }
 
-// Kept-alive screens (Static sites, Files, Backups, Customers) are rendered by the
+// Websites → Files: choose a website, then its Files page opens.
+export function FilesView() {
+  return <FilesSitePicker />;
+}
+
+// Kept-alive screens (Static sites and their files, Backups, Customers) are rendered by the
 // shell itself so their unsaved state survives navigation; their routes only
 // claim the URL.
 export function ShellRendered() {

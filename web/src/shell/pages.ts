@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 // Change trail and AI budget screens live under Customers, Security,
 // Activity and Settings. testId keeps the ids the browser QA scripts click.
 
-export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "site-backups" | "site-domains" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
+export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "site-backups" | "site-domains" | "site-files" | "static-sites" | "static-files" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
 
 export interface Page {
   id: PageId;
@@ -37,8 +37,11 @@ export const pages: readonly Page[] = [
   { id: "site-databases", path: "/websites/sites/$accountId/databases", label: "Databases", title: "Databases", subtitle: "One website's databases and database users.", icon: Database, testId: "nav-site-databases", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/databases$/ },
   { id: "site-backups", path: "/websites/sites/$accountId/backups", label: "Backups", title: "Backups", subtitle: "One website's backups: back up now, restore, and the last restore drill.", icon: ArchiveRestore, testId: "nav-site-backups", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/backups$/ },
   { id: "site-domains", path: "/websites/sites/$accountId/domains", label: "Domains", title: "Domains", subtitle: "One website's other domains and its redirects.", icon: Globe, testId: "nav-site-domains", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/domains$/ },
+  { id: "site-files", path: "/websites/sites/$accountId/files", label: "Files", title: "Files", subtitle: "One website's home folder: browse, upload, edit and download its files.", icon: Folder, testId: "nav-site-files", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/files$/ },
   { id: "static-sites", path: "/websites/static", label: "Static sites (old)", title: "Static sites (old)", subtitle: "Websites made with the old static-file model.", icon: Globe, testId: "nav-static-sites", audience: "private", group: "main", parent: "websites" },
   { id: "files", path: "/websites/files", label: "Files", title: "Files", subtitle: "View and edit your website's files.", icon: Folder, testId: "nav-files", audience: "private", group: "main", parent: "websites" },
+  // The old static sites' file screen, opened from Static sites (old) only.
+  { id: "static-files", path: "/websites/static/files", label: "Static site files (old)", title: "Static site files (old)", subtitle: "Files of the websites made with the old static-file model.", icon: Folder, testId: "nav-static-files", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/static\/files$/ },
   { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },
   { id: "activity", path: "/activity", label: "Activity", title: "Activity", subtitle: "Recent changes to website files, and how to recover them.", icon: History, testId: "nav-trail", audience: "private", group: "main" },
   { id: "customers", path: "/customers", label: "Customers", title: "Customers", subtitle: "Customer accounts on this server and their home folders.", icon: Users, testId: "nav-accounts", audience: "private", group: "admin" },

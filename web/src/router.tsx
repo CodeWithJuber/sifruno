@@ -2,7 +2,7 @@ import { lazy } from "react";
 import type { ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { AppShell, isPublicPreview } from "@/shell/AppShell";
-import { ActivityView, ApiTokensView, BackupStorageView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
+import { ActivityView, ApiTokensView, BackupStorageView, FilesView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
 
 // Every page has its own URL, so back, reload and shared links work. The Go
 // server already answers unknown extension-less paths with index.html.
@@ -54,6 +54,18 @@ function SiteDomainsRoute() {
   const { accountId } = siteDomainsRoute.useParams();
   return <SiteDomains key={accountId} accountId={accountId} />;
 }
+// One website's Files page. The folder is in the address (?path=), so back,
+// reload and shared links open the same folder.
+const SiteFiles = lazy(() => import("@/SiteFiles").then((m) => ({ default: m.SiteFiles })));
+const siteFilesRoute = createRoute({
+  getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/files", component: SiteFilesRoute, beforeLoad: privateOnly,
+  validateSearch: (search: Record<string, unknown>): { path?: string } => typeof search.path === "string" && search.path ? { path: search.path } : {},
+});
+function SiteFilesRoute() {
+  const { accountId } = siteFilesRoute.useParams();
+  const { path } = siteFilesRoute.useSearch();
+  return <SiteFiles key={accountId} accountId={accountId} path={path ?? ""} />;
+}
 
 const routeTree = rootRoute.addChildren([
   route("/", HomeView),
@@ -65,8 +77,10 @@ const routeTree = rootRoute.addChildren([
   siteDatabasesRoute,
   siteBackupsRoute,
   siteDomainsRoute,
+  siteFilesRoute,
   route("/websites/static", ShellRendered, privateOnly),
-  route("/websites/files", ShellRendered, privateOnly),
+  route("/websites/static/files", ShellRendered, privateOnly),
+  route("/websites/files", FilesView, privateOnly),
   route("/websites/backups", ShellRendered, privateOnly),
   route("/activity", ActivityView, privateOnly),
   route("/customers", ShellRendered, privateOnly),

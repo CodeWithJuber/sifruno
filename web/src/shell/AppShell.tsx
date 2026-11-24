@@ -30,8 +30,10 @@ const FileManager = lazy(() => import("@/FileManager"));
 
 // These screens hold work in progress (uploads, unsaved edits), so once opened
 // they stay mounted and are hidden instead of unmounted on navigation.
-// "static-sites" is the old Websites screen for static-file sites.
-const keptAlive = ["static-sites", "files", "backups", "customers"] as const;
+// "static-sites" is the old Websites screen for static-file sites, and
+// "static-files" its file screen; Files in the menu is each website's
+// own home folder now (SiteFiles).
+const keptAlive = ["static-sites", "static-files", "backups", "customers"] as const;
 type KeptAlive = (typeof keptAlive)[number];
 
 const screenPages: Record<ScreenTarget, PageId> = { websites: "websites", accounts: "customers", backups: "backups", files: "files", access: "security" };
@@ -100,7 +102,7 @@ export function AppShell() {
   const openSiteTool = useCallback((destination: "files" | "backups", siteId: string, siteName: string, restore?: RestoreHandoff) => {
     const request = { requestId: ++handoffSequence.current, siteId, siteName, ...(destination === "backups" && restore ? { restore } : {}) };
     if (destination === "files") setFilesHandoff(request); else setBackupsHandoff(request);
-    navigate({ to: pageById(destination).path });
+    navigate({ to: pageById(destination === "files" ? "static-files" : destination).path });
   }, [navigate]);
   const openZIPImport = useCallback((snapshot?: BackupCopySelection) => {
     setImportRequest({ requestId: ++handoffSequence.current, snapshot });
@@ -231,7 +233,7 @@ export function AppShell() {
                 {!publicPreview && visited.has("static-sites") && <div hidden={pageId !== "static-sites"}><Websites revision={revision} active={pageId === "static-sites"} onStatus={reporters["static-sites"]} onOpenSiteTool={openSiteTool} importRequest={importRequest} onImportRequestConsumed={consumeImportRequest} /></div>}
                 {!publicPreview && visited.has("customers") && <div hidden={pageId !== "customers"}><Accounts revision={revision} active={pageId === "customers"} onStatus={reporters.customers} /></div>}
                 {!publicPreview && visited.has("backups") && <div hidden={pageId !== "backups"}><Backups revision={revision} active={pageId === "backups"} onStatus={reporters.backups} siteHandoff={backupsHandoff} onHandoffConsumed={consumeBackupsHandoff} onImportZIP={openZIPImport} /></div>}
-                {!publicPreview && visited.has("files") && <div hidden={pageId !== "files"}><FileManager revision={revision} active={pageId === "files"} onStatus={reporters.files} siteHandoff={filesHandoff} onHandoffConsumed={consumeFilesHandoff} /></div>}
+                {!publicPreview && visited.has("static-files") && <div hidden={pageId !== "static-files"}><FileManager revision={revision} active={pageId === "static-files"} onStatus={reporters["static-files"]} siteHandoff={filesHandoff} onHandoffConsumed={consumeFilesHandoff} /></div>}
                 </div>
               </Suspense>
             </Theme>

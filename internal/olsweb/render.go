@@ -143,7 +143,12 @@ func renderVhost(v site) []byte {
 	kv0(&b, "docRoot", docRoot)
 	if !v.Suspended {
 		// 2 enables the feature for this vhost; it applies only when the
-		// server-level value is not 0 (httpvhost.cpp, httpserver.cpp).
+		// server-level value is not 0. Read from the OpenLiteSpeed 1.9.4
+		// source, not yet run: a vhost's cgroups is 1 off or 2 on, and counts
+		// only when CGIRLimit's is not 0 (src/http/httpvhost.cpp:3401-3405);
+		// CGIRLimit's is 0 disallowed, 1 off by default, 2 on by default
+		// (src/http/serverprocessconfig.h:48-50,
+		// src/extensions/cgi/cgidworker.cpp:409-416).
 		if v.Isolation.Namespace {
 			kv0(&b, "namespace", "2")
 		}

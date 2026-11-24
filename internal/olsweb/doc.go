@@ -136,8 +136,13 @@
 //     capped at 8.
 //   - src/http/httpserverconfig.h, src/http/serverprocessconfig.h,
 //     src/extensions/cgi/cgidworker.cpp: namespace 0/1/2 = disabled/off/on;
-//     cgroups 0/1/2 = disallow/default off/default on, read from CGIRLimit;
-//     the vhost value is 1 off or 2 on.
+//     cgroups 0/1/2 = disallow/default off/default on, read from CGIRLimit
+//     (serverprocessconfig.h:48-50, cgidworker.cpp:409-416); the vhost
+//     value is 1 off or 2 on, and counts only when CGIRLimit's is not 0
+//     (httpvhost.cpp:3401-3405). With it on, lscgid writes the new process
+//     into user-<uid>.slice/litespeed-exec.scope and starts the slice
+//     (src/extensions/cgi/lscgid.cpp:471-529, called at 620-622). Read, not
+//     yet run.
 //   - src/extensions/extworkerconfig.h, registry/extappregistry.cpp:
 //     autoStart 0 off, 1 by the server, 2 through the CGI daemon (lscgid).
 //   - src/extensions/localworkerconfig.cpp: PHP_LSAPI_CHILDREN or

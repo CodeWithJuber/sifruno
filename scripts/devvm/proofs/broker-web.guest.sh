@@ -123,11 +123,16 @@ ols_code=0
 runuser -u "$BROKEN_USER" -- sh -c "cd /home/$BROKEN_USER && mv public_gone public_html"
 echo "  openlitespeed -t exited $ols_code; new lines after the tenant moved public_html:"
 comm -13 <(printf '%s\n' "$baseline") <(norm <"$raw") | grep -v '^$' | sed 's/^/    /'
-# The broker's own rule (olsTestPasses) on that saved output.
+# The broker's own rule (olsTestPasses) on that saved output. The third
+# argument names the broken vhost as rewritten by another account's change,
+# with the document root its config names.
 # shellcheck disable=SC2317 # called through check
 judge() { SIFRUNO_OLS_TEST_OUTPUT="$raw" SIFRUNO_OLS_TEST_CODE="$ols_code" SIFRUNO_OLS_TEST_CHANGED="$1" SIFRUNO_OLS_TEST_WANT="$2" \
+  SIFRUNO_OLS_TEST_DOCROOT_GONE="${3:-}" \
   "$BIN/hostaccounts.test" -test.run '^TestOLSOutputOnThisHost$' -test.v 2>&1 | grep -q -- '--- PASS: TestOLSOutputOnThisHost'; }
 check "the broker's config test passes this output for another account's change" judge "" pass
+check "it passes it when that change rewrote the broken vhost: only the missing document root is excused" \
+  judge "" pass "$bvhost=/home/$BROKEN_USER/public_html/"
 check "it fails the same output for a change to the broken site itself" judge "$bvhost" fail
 fi
 

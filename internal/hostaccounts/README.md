@@ -244,17 +244,32 @@ broker.
   an error, and a broker vhost the change did not touch is skipped, because
   what it reports comes from its own tenant's files. A served vhost of
   another account whose tenant changed its folder (`site_folder_changed`)
-  is skipped even when this change rewrote it: a render rewrites every
-  vhost once after an upgrade changes the rendered form, and that tenant's
-  warning would otherwise reject every change of every account until the
-  folder was back. The site the change is about, and a suspended site,
-  are judged as above. If the test fails, the
+  that this change rewrote is excused one thing only: OpenLiteSpeed's
+  missing-document-root pair, `configuration failed!` in that vhost's
+  context together with `Path for document root is not accessible: <its
+  public_html>/` (the broker-web proof, section 6). Its errors and every
+  other warning still fail the change. A render rewrites every vhost once
+  after an upgrade changes the rendered form, and that tenant's warning
+  would otherwise reject every change of every account until the folder was
+  back. The site the change is about, and a suspended site, are judged in
+  full. If the test fails, the
   old files go back with their owner and mode. Then `systemctl reload
   lsws` restarts OpenLiteSpeed gracefully (its unit reloads with
   `lswsctrl restart`). The broker never edits `httpd_config.conf`: the
   installer adds `include /usr/local/lsws/conf/sifruno.conf` and
   server-level `namespace 1` once. New files take their SELinux label from
   the directory they are written in.
+- One invalid vhost at a restart: OpenLiteSpeed 1.9.4 configures each vhost
+  on its own, at start and at a graceful restart, which starts a new
+  instance (`configVHosts` in `src/main/httpserver.cpp`). A vhost whose
+  config fails is left out with the warning `configuration failed!` and the
+  server starts with the others; the listener maps no domain to it, because
+  `addVirtualHostMapping` finds no vhost by that name. It stops reading a
+  vhost at the first failure, and the document root comes first
+  (`HttpVHost::config` in `src/http/httpvhost.cpp`), so while a tenant's
+  public_html is missing the rest of that vhost's config is not checked.
+  This is read from the 1.9.4 source, not run: what a request for the
+  left-out vhost's domain then gets was not checked.
 
 The step that depends on the tenant's own files, the access grant, runs
 first and is idempotent: if the tenant swapped or changed those directories
@@ -334,6 +349,12 @@ Limits for now:
   such an account ends `rejected` and the site stays suspended until the
   directory is back. A suspend does not depend on it (not yet run on the dev
   VM).
+- A tenant can make OpenLiteSpeed report an error, not the missing-folder
+  warning, for its own vhost: for example a public_html that links into a
+  directory OpenLiteSpeed denies. Errors stay fatal, so a change that
+  rewrites that vhost (once after an upgrade changes the rendered form) is
+  rejected until the link is gone, and a delete of that account that userdel
+  refused cannot put its site back and stays pending.
 - The process check reads each process's own user IDs. userdel also counts
   a thread with the account's UID inside another user's process, and a
   process under the account's subordinate IDs in a namespace someone else

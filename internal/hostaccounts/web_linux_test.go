@@ -91,7 +91,7 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 		{"this change's missing docroot", stock + docrootGone(mine), 1, false},
 	}
 	for _, c := range cases {
-		if got := olsTestPasses([]byte(c.out), c.code, changed); got != c.ok {
+		if got := olsTestPasses([]byte(c.out), c.code, changed, nil); got != c.ok {
 			t.Errorf("%s: passes %v, want %v", c.name, got, c.ok)
 		}
 	}
@@ -108,31 +108,74 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 }
 
 // A render that rewrites every vhost (once after an upgrade changes the
-// rendered form) still does not let a tenant who broke its own folder
+// rendered form) still does not let a tenant who moved its own folder away
 // reject another account's change: the store names that vhost, and the test
-// does not judge it. The change's own vhost is always judged.
-func TestJudgedVhostsLeaveOutBrokenTenants(t *testing.T) {
+// excuses OpenLiteSpeed's missing-document-root warning for exactly its
+// document root. Its errors and every other warning still fail the change.
+// The change's own vhost is always judged in full.
+func TestJudgedVhostsExcuseOnlyABrokenTenantsDocRoot(t *testing.T) {
 	mine, other, broken := olsweb.NamePrefix+"uaaaa", olsweb.NamePrefix+"ubbbb", olsweb.NamePrefix+"ucccc"
+	sites := []olsweb.Site{
+		{Name: "uaaaa", DocRoot: "/home/mineacct/public_html"},
+		{Name: "ubbbb", DocRoot: "/home/otheracct/public_html"},
+		{Name: "ucccc", DocRoot: "/home/brk55596/public_html"},
+	}
 	everything := map[string]bool{mine: true, other: true, broken: true}
-	judged := judgedVhosts(everything, "", map[string]bool{broken: true})
-	if len(judged) != 2 || !judged[mine] || !judged[other] || judged[broken] {
-		t.Fatalf("judged %v", judged)
+	strict, gone := judgedVhosts(everything, "", map[string]bool{broken: true}, sites)
+	if len(strict) != 2 || !strict[mine] || !strict[other] || strict[broken] || len(gone) != 1 || gone[broken] != "/home/brk55596/public_html/" {
+		t.Fatalf("strict %v, docroot gone %v", strict, gone)
 	}
-	if got := judgedVhosts(map[string]bool{mine: false, other: true}, mine, nil); len(got) != 2 || !got[mine] || !got[other] {
-		t.Fatalf("a touched certificate is judged, an unwritten vhost is not: %v", got)
+	if strict, gone := judgedVhosts(map[string]bool{mine: false, other: true}, mine, nil, sites); len(strict) != 2 || !strict[mine] || !strict[other] || len(gone) != 0 {
+		t.Fatalf("a touched certificate is judged, an unwritten vhost is not: %v %v", strict, gone)
 	}
+	if strict, gone := judgedVhosts(everything, broken, map[string]bool{broken: true}, sites); !strict[broken] || len(gone) != 0 {
+		t.Fatalf("the change's own site is judged in full: %v %v", strict, gone)
+	}
+	if strict, gone := judgedVhosts(everything, "", map[string]bool{broken: true}, sites[:2]); !strict[broken] || len(gone) != 0 {
+		t.Fatalf("a broken vhost with no site to name its document root is judged in full: %v %v", strict, gone)
+	}
+
 	// The messages OpenLiteSpeed 1.9.4 printed on the dev VM after a tenant
-	// moved public_html away (time and process ID are placeholders).
-	out := "2026-11-23 00:00:00.000000 [WARN] [1] [config:server:vhosts:vhost:" + broken + "] configuration failed!\n" +
-		"2026-11-23 00:00:00.000000 [WARN] [1] Path for document root is not accessible: /home/brk55596/public_html/\n"
-	if olsTestPasses([]byte(out), 1, everything) {
-		t.Fatal("judged as rewritten, the broken tenant's vhost should fail the test")
+	// moved public_html away (broker-web proof, section 6; time and process
+	// ID are placeholders).
+	line := func(level, context, text string) string {
+		if context != "" {
+			context = "[config:server:vhosts:vhost:" + context + "] "
+		}
+		return "2026-11-23 00:00:00.000000 [" + level + "] [1] " + context + text + "\n"
 	}
-	if !olsTestPasses([]byte(out), 1, judged) {
-		t.Fatal("the broken tenant's vhost failed another account's change")
+	stock := line("WARN", "Example", "Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!")
+	failed := line("WARN", broken, "configuration failed!")
+	missing := line("WARN", "", "Path for document root is not accessible: /home/brk55596/public_html/")
+	cases := []struct {
+		name string
+		out  string
+		code int
+		ok   bool
+	}{
+		{"its document root is missing", stock + failed + missing, 1, true},
+		{"the same lines in the other order", missing + stock + failed, 1, true},
+		{"another account's document root is missing", failed + line("WARN", "", "Path for document root is not accessible: /home/otheracct/public_html/"), 1, false},
+		{"configuration failed for another reason", failed, 1, false},
+		{"another warning in its context", line("WARN", broken, "Path for vhost root is invalid: /home/brk55596/"), 1, false},
+		{"an error in its context", line("ERROR", broken, "Path is in the access denied list:/etc/") + failed + missing, 2, false},
+		{"its rendered certificate fails", line("ERROR", broken, "[SSL] Config SSL Context: failed to load certificate file") + failed + missing, 2, false},
+		{"the missing-document-root text as an error", failed + line("ERROR", "", "Path for document root is not accessible: /home/brk55596/public_html/"), 2, false},
+		{"a rewritten healthy vhost's warning", failed + missing + line("WARN", other, "path /home/otheracct/public_html/ does not exist"), 1, false},
 	}
-	if olsTestPasses([]byte(out), 1, judgedVhosts(everything, "", nil)) {
-		t.Fatal("without the store naming it, the broken vhost is judged")
+	for _, c := range cases {
+		if got := olsTestPasses([]byte(c.out), c.code, strict, gone); got != c.ok {
+			t.Errorf("%s: passes %v, want %v", c.name, got, c.ok)
+		}
+	}
+	// Judged as rewritten in full, or without the store naming it, the
+	// missing document root fails the change.
+	ok := stock + failed + missing
+	if olsTestPasses([]byte(ok), 1, everything, nil) {
+		t.Fatal("judged in full, the broken tenant's vhost passed")
+	}
+	if strict, gone := judgedVhosts(everything, "", nil, sites); olsTestPasses([]byte(ok), 1, strict, gone) {
+		t.Fatal("without the store naming it, the broken vhost passed")
 	}
 }
 
@@ -236,9 +279,19 @@ func TestOLSOutputOnThisHost(t *testing.T) {
 	if vhost := os.Getenv("SIFRUNO_OLS_TEST_CHANGED"); vhost != "" {
 		changed[vhost] = true
 	}
+	// _DOCROOT_GONE is VHOST=PATH: a rewritten vhost of another account
+	// whose tenant moved its folder, and the document root its config names.
+	docRootGone := map[string]string{}
+	if v := os.Getenv("SIFRUNO_OLS_TEST_DOCROOT_GONE"); v != "" {
+		vhost, path, ok := strings.Cut(v, "=")
+		if !ok {
+			t.Fatalf("SIFRUNO_OLS_TEST_DOCROOT_GONE=%q is not VHOST=PATH", v)
+		}
+		docRootGone[vhost] = path
+	}
 	want := os.Getenv("SIFRUNO_OLS_TEST_WANT") == "pass"
-	if got := olsTestPasses(out, code, changed); got != want {
-		t.Fatalf("exit %d, rewritten vhosts %v: passes %v, want %v", code, changed, got, want)
+	if got := olsTestPasses(out, code, changed, docRootGone); got != want {
+		t.Fatalf("exit %d, rewritten vhosts %v, document roots gone %v: passes %v, want %v", code, changed, docRootGone, got, want)
 	}
 }
 

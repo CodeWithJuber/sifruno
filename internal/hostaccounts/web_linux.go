@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -599,57 +600,95 @@ func (n *linuxSystem) writeSites(t *configTxn, sites []olsweb.Site) (map[string]
 }
 
 // configTest runs `openlitespeed -t` and judges it with olsTestPasses.
-func (n *linuxSystem) configTest(ctx context.Context, changed map[string]bool) error {
+func (n *linuxSystem) configTest(ctx context.Context, changed map[string]bool, docRootGone map[string]string) error {
 	out, code, e := n.commandStatus(ctx, olsTestTimeout, olsBinary, "-t")
-	if e != nil || !olsTestPasses(out, code, changed) {
+	if e != nil || !olsTestPasses(out, code, changed, docRootGone) {
 		return ErrWebRejected
 	}
 	return nil
 }
 
-// olsTestPasses reads `openlitespeed -t`, which exits 2 after an [ERROR] and
-// 1 after any other message (the stock Example vhost always warns). Lines
-// look like "DATE TIME [WARN] [PID] [config:server:vhosts:vhost:NAME] text";
-// the bracketed context comes from the server, not from a tenant's files.
-//
-// A broker vhost whose config this change did not rewrite is skipped: what
-// it reports comes from its tenant's own files (a public_html removed or
-// swapped), and one tenant must not block another account's change. A
-// rewritten broker vhost fails on an error or a warning, anything else on
-// an error, and an exit status the lines do not explain fails too.
-func olsTestPasses(out []byte, code int, changed map[string]bool) bool {
-	if code < 0 || code > 2 {
-		return false
-	}
-	errorLines := 0
+// What OpenLiteSpeed 1.9.4 prints when a vhost's document root is missing:
+// configVHost's warning in the vhost's context, and getValidPath's without
+// a context, naming the path (src/http/httpvhost.cpp, src/main/configctx.cpp;
+// the broker-web proof, section 6, shows both). It stops reading that vhost
+// at its document root.
+const (
+	olsVhostFailed  = "configuration failed!"
+	olsDocRootGone  = "Path for document root is not accessible: "
+	olsLevelError   = "[ERROR]"
+	olsLevelWarning = "[WARN]"
+)
+
+// olsLine is one [ERROR] or [WARN] line of `openlitespeed -t`. Lines look
+// like "DATE TIME [WARN] [PID] [config:server:vhosts:vhost:NAME] text", or
+// without the bracketed context, which comes from the server, not from a
+// tenant's files.
+type olsLine struct {
+	isError bool
+	context string
+	text    string
+}
+
+func olsLines(out []byte) []olsLine {
+	var lines []olsLine
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
-		level := -1
-		for i, f := range fields {
-			if f == "[ERROR]" || f == "[WARN]" {
-				level = i
-				break
-			}
-		}
+		level := slices.IndexFunc(fields, func(f string) bool { return f == olsLevelError || f == olsLevelWarning })
 		if level < 0 {
 			continue
 		}
-		isError := fields[level] == "[ERROR]"
-		if isError {
+		line := olsLine{isError: fields[level] == olsLevelError}
+		rest := fields[min(level+2, len(fields)):]
+		if len(rest) > 0 && strings.HasPrefix(rest[0], "[") && strings.HasSuffix(rest[0], "]") {
+			line.context, rest = rest[0], rest[1:]
+		}
+		line.text = strings.Join(rest, " ")
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+// olsTestPasses reads `openlitespeed -t`, which exits 2 after an [ERROR] and
+// 1 after any other message (the stock Example vhost always warns).
+//
+// A broker vhost in changed fails on an error or a warning. A broker vhost
+// in docRootGone (a rewritten vhost of another account whose tenant changed
+// its folders, mapped to its document root as OpenLiteSpeed prints it)
+// fails on an error, and on every warning but configVHost's, and that one
+// only together with the missing-document-root warning for exactly that
+// path. Any other broker vhost is skipped: its config did not change, and
+// what it reports comes from its tenant's own files. Anything else fails on
+// an error, and an exit status the lines do not explain fails too.
+func olsTestPasses(out []byte, code int, changed map[string]bool, docRootGone map[string]string) bool {
+	if code < 0 || code > 2 {
+		return false
+	}
+	lines := olsLines(out)
+	missing := map[string]bool{}
+	for _, line := range lines {
+		if path, ok := strings.CutPrefix(line.text, olsDocRootGone); ok && !line.isError && line.context == "" {
+			missing[path] = true
+		}
+	}
+	errorLines := 0
+	for _, line := range lines {
+		if line.isError {
 			errorLines++
 		}
-		vhost := ""
-		if level+2 < len(fields) {
-			vhost = olsContextVhost(fields[level+2])
-		}
+		vhost := olsContextVhost(line.context)
 		switch {
-		case strings.HasPrefix(vhost, olsweb.NamePrefix):
-			if changed[vhost] {
+		case !strings.HasPrefix(vhost, olsweb.NamePrefix):
+			if line.isError {
 				return false
 			}
-		case isError:
+		case changed[vhost]:
 			return false
+		case docRootGone[vhost] != "":
+			if line.isError || line.text != olsVhostFailed || !missing[docRootGone[vhost]] {
+				return false
+			}
 		}
 	}
 	return code != 2 || errorLines > 0
@@ -687,7 +726,8 @@ func (n *linuxSystem) installWith(ctx context.Context, t *configTxn, sites []ols
 	defer t.close()
 	changed, e := n.writeSites(t, sites)
 	if e == nil {
-		e = n.configTest(ctx, judgedVhosts(changed, touched, tenantBroken))
+		strict, docRootGone := judgedVhosts(changed, touched, tenantBroken, sites)
+		e = n.configTest(ctx, strict, docRootGone)
 	}
 	if e != nil {
 		if r := t.restore(); r != nil {
@@ -701,24 +741,39 @@ func (n *linuxSystem) installWith(ctx context.Context, t *configTxn, sites []ols
 	return nil
 }
 
-// judgedVhosts is the set of broker vhosts the config test holds to errors
-// and warnings: those whose config this change rewrote, and touched, less
-// tenantBroken. The store names there the served sites of other accounts
-// whose tenant changed its home or public_html: what OpenLiteSpeed reports
-// for them comes from their tenant's files even when a render rewrote their
-// config, and must not reject another account's change. The site a change
-// is about is never among them.
-func judgedVhosts(changed map[string]bool, touched string, tenantBroken map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(changed)+1)
+// judgedVhosts sorts the broker vhosts whose config this change rewrote,
+// and touched, for the config test (olsTestPasses). strict: held to errors
+// and warnings. docRootGone: those in tenantBroken, mapped to the document
+// root their config names. The store names there the served sites of other
+// accounts whose tenant changed its home or public_html: OpenLiteSpeed's
+// missing-document-root warning for them comes from their tenant's files
+// even when a render rewrote their config, and must not reject another
+// account's change; their errors and any other warning still do. touched,
+// the site a change is about, and a tenantBroken vhost not in sites are
+// strict.
+func judgedVhosts(changed map[string]bool, touched string, tenantBroken map[string]bool, sites []olsweb.Site) (map[string]bool, map[string]string) {
+	docRoots := make(map[string]string, len(sites))
+	for _, s := range sites {
+		if !s.Suspended {
+			// The rendered docRoot, as OpenLiteSpeed prints it back.
+			docRoots[olsweb.NamePrefix+s.Name] = s.DocRoot + "/"
+		}
+	}
+	strict := make(map[string]bool, len(changed)+1)
+	docRootGone := map[string]string{}
 	for name, wrote := range changed {
-		if wrote && !tenantBroken[name] {
-			out[name] = true
+		switch {
+		case !wrote:
+		case tenantBroken[name] && name != touched && docRoots[name] != "":
+			docRootGone[name] = docRoots[name]
+		default:
+			strict[name] = true
 		}
 	}
 	if touched != "" {
-		out[touched] = true
+		strict[touched] = true
 	}
-	return out
+	return strict, docRootGone
 }
 
 func (n *linuxSystem) ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site, tenantBroken map[string]bool) error {

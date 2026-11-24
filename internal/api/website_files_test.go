@@ -181,7 +181,7 @@ func filesFixture(t *testing.T) (siteFixture, *filesBroker, Website) {
 	broker.mu.Lock()
 	account := broker.accounts[0]
 	broker.mu.Unlock()
-	return f, broker, website(account, job)
+	return f, broker, website(account, job, nil)
 }
 
 func filesURL(site Website, rest string) string {

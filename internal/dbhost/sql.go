@@ -119,6 +119,15 @@ func sqlCreateUserStrict(user, host, password string) string {
 	return fmt.Sprintf("CREATE USER %s@%s IDENTIFIED BY %s", quoteString(user), quoteString(host), quoteString(password))
 }
 
+// sqlCreateUserWithHashStrict makes a user whose password is a
+// mysql_native_password hash copied from another server, so a site's
+// configuration keeps working without the password itself; it fails with
+// error 1396 if the user exists on that host. The caller checks the hash's
+// form (NativePasswordHash).
+func sqlCreateUserWithHashStrict(user, host, hash string) string {
+	return fmt.Sprintf("CREATE USER %s@%s IDENTIFIED VIA mysql_native_password USING %s", quoteString(user), quoteString(host), quoteString(hash))
+}
+
 func sqlDropUser(user, host string) string {
 	return fmt.Sprintf("DROP USER IF EXISTS %s@%s", quoteString(user), quoteString(host))
 }

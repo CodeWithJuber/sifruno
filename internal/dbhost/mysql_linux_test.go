@@ -292,3 +292,36 @@ func TestServerHas(t *testing.T) {
 		t.Fatalf("server down: %v", err)
 	}
 }
+
+// A user moved from another server keeps its password as the hash: the
+// statement names only the hash, the registry lists the user, and an error
+// never quotes the hash.
+func TestCreateUserWithHashStrict(t *testing.T) {
+	ctx := context.Background()
+	svc, f := newTestService(t)
+	hash := "*" + strings.Repeat("0A", 20)
+	if err := svc.CreateUserWithHashStrict(ctx, "acct", "acct_wpu", hash); err != nil {
+		t.Fatal(err)
+	}
+	want := "CREATE USER 'acct_wpu'@'localhost' IDENTIFIED VIA mysql_native_password USING '" + hash + "'"
+	if !slices.Contains(f.stmts, want) {
+		t.Fatalf("missing %q in %q", want, f.stmts)
+	}
+	if users, _ := svc.ListUsers(ctx, "acct"); len(users) != 1 || users[0].Name != "acct_wpu" {
+		t.Fatalf("registry %+v", users)
+	}
+	for _, bad := range []string{"", "plain-password", "*" + strings.Repeat("0a", 20), "'; DROP USER root; --", "$2y$10$abc"} {
+		if err := svc.CreateUserWithHashStrict(ctx, "acct", "acct_other", bad); err == nil {
+			t.Errorf("%q accepted as a hash", bad)
+		}
+	}
+	if err := svc.CreateUserWithHashStrict(ctx, "acct", "acct_wpu", hash); !errors.Is(err, ErrExists) {
+		t.Fatalf("a registered user: %v", err)
+	}
+	other := "*" + strings.Repeat("1B", 20)
+	f.errs = map[string]error{sqlCreateUserWithHashStrict("acct_ro", "localhost", other): errors.New("ERROR 1064 near 'USING '" + other + "''")}
+	err := svc.CreateUserWithHashStrict(ctx, "acct", "acct_ro", other)
+	if err == nil || strings.Contains(err.Error(), other) {
+		t.Fatalf("an error quoted the hash: %v", err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -224,6 +225,41 @@ func (s *LocalService) CreateUserStrict(ctx context.Context, owner, name, passwo
 			return fmt.Errorf("%w: %v", ErrExists, err)
 		}
 		return err
+	}
+	if err := s.Registry.putUser(User{Name: name, Owner: owner, Hosts: []string{s.host()}}); err != nil {
+		return fmt.Errorf("%w: user %s: %v", ErrNotRegistered, name, err)
+	}
+	return nil
+}
+
+// NativePasswordHash is the form of a mysql_native_password hash: "*" and
+// 40 upper-case hex digits, as MariaDB and MySQL store it.
+var NativePasswordHash = regexp.MustCompile(`^\*[0-9A-F]{40}$`)
+
+// CreateUserWithHashStrict is CreateUserStrict for a user moved from
+// another server: it takes the user's mysql_native_password hash instead of
+// a password, so the site's configuration keeps working unchanged. The hash
+// is a credential: it travels inside the statement on the client's standard
+// input, as a password does, and is never registered or returned in an
+// error.
+func (s *LocalService) CreateUserWithHashStrict(ctx context.Context, owner, name, hash string) error {
+	if err := ValidateIdentifier("user", name, MaxUserLen); err != nil {
+		return err
+	}
+	if !NativePasswordHash.MatchString(hash) {
+		return errors.New("the password hash is not a mysql_native_password hash")
+	}
+	if slices.ContainsFunc(s.Registry.users(""), func(u User) bool { return u.Name == name }) {
+		return fmt.Errorf("%w: the registry already lists the user %s", ErrExists, name)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return err
+	}
+	if _, err := s.Run.Run(ctx, sqlCreateUserWithHashStrict(name, s.host(), hash)); err != nil {
+		if isServerError(err, 1396) {
+			return fmt.Errorf("%w: %v", ErrExists, strings.ReplaceAll(err.Error(), hash, "[hash]"))
+		}
+		return errors.New(strings.ReplaceAll(err.Error(), hash, "[hash]"))
 	}
 	if err := s.Registry.putUser(User{Name: name, Owner: owner, Hosts: []string{s.host()}}); err != nil {
 		return fmt.Errorf("%w: user %s: %v", ErrNotRegistered, name, err)

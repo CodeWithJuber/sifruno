@@ -60,13 +60,81 @@ type resticEngine struct {
 	prepare func() error
 	owner   int
 	chown   func(f *os.File, uid, gid int) error
+	// space reads the free and total bytes and the block size of the
+	// filesystem holding a folder.
+	space func(dir string) (avail, total, block uint64, err error)
 }
 
 func newResticEngine(stateDir string) *resticEngine {
 	e := &resticEngine{dir: stateDir + "/backup", stage: restoreRoot, run: runBackupCommand, tools: checkBackupTools, owner: 0,
-		chown: func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }}
+		chown: func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }, space: diskSpace}
 	e.prepare = e.prepareDirs
 	return e
+}
+
+// diskSpace is statfs: the bytes an unprivileged writer may still use, so
+// root's reserve on ext4 is not counted as free.
+func diskSpace(dir string) (avail, total, block uint64, err error) {
+	var st unix.Statfs_t
+	if unix.Statfs(dir, &st) != nil || st.Bsize <= 0 {
+		return 0, 0, 0, ErrUnavailable
+	}
+	unit := uint64(st.Bsize)
+	if st.Frsize > 0 {
+		unit = uint64(st.Frsize)
+	}
+	return st.Bavail * unit, st.Blocks * unit, unit, nil
+}
+
+// room is how much may still be written to dir's filesystem before its
+// margin is reached.
+func (e *resticEngine) room(dir string) (uint64, uint64, error) {
+	avail, total, _, err := e.space(dir)
+	if err != nil {
+		return 0, 0, ErrUnavailable
+	}
+	return roomLeft(avail, total), freeMargin(total), nil
+}
+
+// fitsStage refuses a restore or drill of the snapshot that would not leave
+// the margin free where it is staged. restic's restore size counts each
+// file at its full length, so a tenant's sparse file counts whole although
+// --sparse writes only its data: such a site may be refused a restore it
+// would have fitted, but the server's disk never fills.
+func (e *resticEngine) fitsStage(ctx context.Context, t BackupTarget, snapshot string) error {
+	stdout := &boundedBuffer{max: 64 << 10}
+	out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, stdout, restoreSizeArgs(snapshot)...)
+	if err != nil || code != 0 {
+		return backupFailed("restore", append(stdout.b, out...))
+	}
+	size, entries, ok := parseRestoreSize(stdout.b)
+	if !ok {
+		return &BackupError{Step: "restore", Detail: "restic's size of the backup could not be read"}
+	}
+	avail, total, block, err := e.space(e.stage)
+	if err != nil {
+		return ErrUnavailable
+	}
+	return spaceForRestore(restoreNeed(size, entries, block), avail, total)
+}
+
+// cappedWriter passes at most max bytes on and fails the write that would
+// go past them. The program writing into it then gets a broken pipe and
+// stops, so a dump never grows past its cap.
+type cappedWriter struct {
+	w      io.Writer
+	n, max uint64
+	over   bool
+}
+
+func (c *cappedWriter) Write(p []byte) (int, error) {
+	if c.n+uint64(len(p)) > c.max {
+		c.over = true
+		return 0, ErrUnavailable
+	}
+	n, err := c.w.Write(p)
+	c.n += uint64(n)
+	return n, err
 }
 
 // runBackupCommand runs one fixed program, as root or as a site user. Go's
@@ -478,18 +546,41 @@ func (e *resticEngine) Backup(ctx context.Context, t BackupTarget, r record, dbs
 	// restic has them.
 	defer os.RemoveAll(dumpDir(e.dir, r.Account.ID))
 	for _, db := range dbs {
+		// Each dump may use what is free beyond the margin, measured after
+		// the dumps before it, and at most maxDumpBytes.
+		room, margin, err := e.room(dumpDir(e.dir, r.Account.ID))
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if room == 0 {
+			return Snapshot{}, &BackupError{Step: "space", Detail: "The server has less than " + byteSize(margin) + " of disk free, which must stay free for the server itself, so the database " + db + " was not dumped. Free up disk space on the server, then try again."}
+		}
+		limit := min(room, maxDumpBytes)
 		fd, err := unix.Openat(int(dumps.Fd()), db+".sql", unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 		if err != nil {
 			return Snapshot{}, ErrUnavailable
 		}
 		f := os.NewFile(uintptr(fd), db+".sql")
-		out, code, err := e.run(ctx, backupCommand{path: mariadbDumpPath, args: dumpArgs(db), env: []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + e.dir}, dir: e.dir, stdout: f, limit: backupTimeout})
+		capped := &cappedWriter{w: f, max: limit}
+		out, code, err := e.run(ctx, backupCommand{path: mariadbDumpPath, args: dumpArgs(db), env: []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + e.dir}, dir: e.dir, stdout: capped, limit: backupTimeout})
 		if closeErr := f.Close(); err == nil && closeErr != nil {
 			err = closeErr
 		}
-		if err != nil || code != 0 {
+		switch {
+		case capped.over && limit == maxDumpBytes:
+			return Snapshot{}, &BackupError{Step: "dump", Detail: "The dump of the database " + db + " grew past " + byteSize(maxDumpBytes) + ", the most a backup takes of one database, so it was stopped and nothing was backed up."}
+		case capped.over:
+			return Snapshot{}, &BackupError{Step: "space", Detail: "The dump of the database " + db + " would have left less than " + byteSize(margin) + " of disk free on the server, so it was stopped and nothing was backed up. Free up disk space on the server, then try again."}
+		case err != nil || code != 0:
 			return Snapshot{}, backupFailed("dump", out)
 		}
+	}
+	// restic keeps its cache and the packs it is about to upload in the
+	// broker's folder too: it starts only with room beyond the margin.
+	if room, margin, err := e.room(e.dir); err != nil {
+		return Snapshot{}, err
+	} else if room == 0 {
+		return Snapshot{}, &BackupError{Step: "space", Detail: "The server has less than " + byteSize(margin) + " of disk free, which must stay free for the server itself, so nothing was backed up. Free up disk space on the server, then try again."}
 	}
 	out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, nil, backupArgs(r.Account.Home, dumpDir(e.dir, r.Account.ID), r.Account.ID, dbs)...)
 	if err != nil || code != 0 {
@@ -583,6 +674,9 @@ func (e *resticEngine) Restore(ctx context.Context, t BackupTarget, r record, in
 		if !contains(snap.Databases, db) {
 			return &BackupError{Step: "snapshot", Detail: "That backup has no copy of the database " + db + "."}
 		}
+	}
+	if err := e.fitsStage(ctx, t, in.Snapshot); err != nil {
+		return err
 	}
 	stage, err := e.newStage(l.Op)
 	if err != nil {
@@ -743,6 +837,9 @@ func (e *resticEngine) Drill(ctx context.Context, t BackupTarget, r record, l ba
 		return DrillResult{}, &BackupError{Step: "snapshot", Detail: "This site has no backup yet."}
 	}
 	latest := items[0]
+	if err := e.fitsStage(ctx, t, latest.ID); err != nil {
+		return DrillResult{}, err
+	}
 	stage, err := e.newStage(l.Op)
 	if err != nil {
 		return DrillResult{}, err

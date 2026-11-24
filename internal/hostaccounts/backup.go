@@ -60,6 +60,21 @@ const (
 	maxBackupDatabases = 16
 	maxHostKeys        = 8
 	maxSnapshots       = 512
+
+	// Disk space. A restore's or drill's staging folder and the database
+	// dumps are written to the server's own disk, usually the filesystem
+	// that also holds the broker's state and MariaDB, and restic's cache and
+	// temporary packs live beside the dumps. Each write must leave this
+	// much free: 5% of the filesystem, which XFS (unlike ext4) does not
+	// reserve for root, and never less than 2 GiB, room for MariaDB's
+	// temporary tables and logs and for the broker's and panel's state on a
+	// small disk.
+	minFreeBytes   = 2 << 30
+	freeMarginPart = 20
+	// maxDumpBytes stops one database's dump at 32 GiB, far above a
+	// WordPress or shop database, so one tenant's database cannot take the
+	// server's free space even when it has more than that.
+	maxDumpBytes = 32 << 30
 )
 
 // Timeouts do not follow the caller, so a client that gives up does not
@@ -86,7 +101,7 @@ func (e *BackupError) Error() string        { return "backup " + e.Step + " fail
 func (e *BackupError) Is(target error) bool { return target == ErrBackupFailed }
 
 // The steps a BackupError can name. The panel explains each one.
-var backupSteps = []string{"target", "connect", "password", "repository", "database", "dump", "backup", "snapshot", "restore", "copy", "import", "compare", "check", "prune"}
+var backupSteps = []string{"target", "connect", "password", "repository", "database", "space", "dump", "backup", "snapshot", "restore", "copy", "import", "compare", "check", "prune"}
 
 // BackupTargetInput names the SFTP storage server. KnownHosts is the
 // server's host key as ssh-keyscan prints it: one or more lines of
@@ -500,12 +515,82 @@ func dbObjectsSQL(db string) string {
 // restoreArgs restores a snapshot, or one folder of it, into target. The
 // SELinux label of each file is not restored: the staged files take the
 // staging folder's, and the copy gives the home's files the home's.
+// --sparse writes runs of zeros as holes: a tenant's sparse file costs
+// almost nothing under its quota and in the repository, and without it the
+// restore would write it out in full on the server's own disk.
 func restoreArgs(source, target string, verify bool) []string {
-	args := []string{"restore", "--json", "--exclude-xattr", "security.selinux"}
+	args := []string{"restore", "--json", "--sparse", "--exclude-xattr", "security.selinux"}
 	if verify {
 		args = append(args, "--verify")
 	}
 	return append(args, source, "--target", target)
+}
+
+// restoreSizeArgs asks restic how much a whole snapshot restores to: every
+// file at its full length and how many entries it holds.
+func restoreSizeArgs(snapshot string) []string {
+	return []string{"stats", "--json", "--mode", "restore-size", snapshot}
+}
+
+// parseRestoreSize reads restic stats --json. In this mode restic counts
+// every file, folder and link as an entry, and leaves the count out when
+// it is zero.
+func parseRestoreSize(out []byte) (size, entries uint64, ok bool) {
+	var s struct {
+		TotalSize      *uint64 `json:"total_size"`
+		TotalFileCount uint64  `json:"total_file_count"`
+	}
+	if json.Unmarshal(out, &s) != nil || s.TotalSize == nil {
+		return 0, 0, false
+	}
+	return *s.TotalSize, s.TotalFileCount, true
+}
+
+// freeMargin is what must stay free on a filesystem of total bytes.
+func freeMargin(total uint64) uint64 { return max(minFreeBytes, total/freeMarginPart) }
+
+// roomLeft is how much may still be written to a filesystem with avail
+// bytes free before its margin is reached.
+func roomLeft(avail, total uint64) uint64 {
+	if margin := freeMargin(total); avail > margin {
+		return avail - margin
+	}
+	return 0
+}
+
+// restoreNeed is the disk a restore of size bytes in entries entries may
+// take: every file at its full length, though --sparse writes only a sparse
+// file's data, and one block more per entry for rounding up, so the
+// estimate errs on the side of refusing.
+func restoreNeed(size, entries, block uint64) uint64 {
+	extra := entries * block
+	if block != 0 && extra/block != entries || size+extra < size {
+		return ^uint64(0)
+	}
+	return size + extra
+}
+
+// spaceForRestore refuses a restore or drill that would not leave the
+// margin free on the staging filesystem.
+func spaceForRestore(need, avail, total uint64) error {
+	if need <= roomLeft(avail, total) {
+		return nil
+	}
+	return &BackupError{Step: "space", Detail: "The backup needs up to " + byteSize(need) + " of disk to restore, and the server has " + byteSize(avail) + " free, of which " + byteSize(freeMargin(total)) + " must stay free for the server itself. Free up disk space on the server, then try again."}
+}
+
+// byteSize writes a size for a person: 1.5 GiB, 300 MiB, 12 KiB.
+func byteSize(n uint64) string {
+	units := []string{"bytes", "KiB", "MiB", "GiB", "TiB", "PiB"}
+	value, unit := float64(n), 0
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return strconv.FormatUint(n, 10) + " bytes"
+	}
+	return strconv.FormatFloat(value, 'f', 1, 64) + " " + units[unit]
 }
 
 // restorePrivileges are what a table-and-rows dump needs: no TRIGGER, no

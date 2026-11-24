@@ -499,7 +499,7 @@ never waits for a running operation, and a target change during one is
 refused (409) rather than queued.
 
 A failed step answers 422 `backup_failed` with the step (`target`,
-`connect`, `password`, `repository`, `database`, `dump`, `backup`,
+`connect`, `password`, `repository`, `database`, `space`, `dump`, `backup`,
 `snapshot`, `restore`, `copy`, `import`, `compare`, `check`, `prune`) and the
 end of its output (printable ASCII, secrets removed, at most 512 bytes).
 
@@ -541,8 +541,10 @@ busy meanwhile, so a delete, suspend, web change or install gets 409):
 
 1. The snapshot must be the account's own (host, tag and paths), holding
    each database asked for.
-2. restic restores, as root, into a fresh staging folder
-   `/var/lib/sifruno-restore/<op>` (0700), without the files' SELinux
+2. The snapshot must fit on the staging disk (see Disk space). restic
+   restores, as root, into a fresh staging folder
+   `/var/lib/sifruno-restore/<op>` (0700), with `--sparse`, so a tenant's
+   sparse file stays sparse, and without the files' SELinux
    labels (`--exclude-xattr security.selinux`): the copy gives the home's
    files the home's. The folder is outside every home and
    outside the 0700 state, so the site user can be let in: the broker makes
@@ -574,6 +576,32 @@ panel's job log records who asked. What a restore or drill leaves as root,
 its staging folder and its temporary users, is listed in the broker's
 database before it is made and removed afterwards; an interrupted one is
 removed before the next backup operation starts.
+
+Disk space. The dumps, the staging folders and restic's cache sit on the
+server's own disk, usually the filesystem that also holds the broker's
+state and MariaDB. Every write leaves a margin free: 5% of the filesystem
+(XFS reserves nothing for root) and never less than 2 GiB. Free space is
+statfs's `f_bavail`, so ext4's root reserve is not counted.
+
+- Before a restore or drill stages anything, `restic stats --mode
+  restore-size` gives the whole snapshot's size; with one block more per
+  entry it must fit in the staging filesystem's free space less the margin,
+  or the operation is refused (`space`). restic counts a sparse file at its
+  full length, so a site holding a huge sparse file may be refused a
+  restore that `--sparse` would have fitted; the disk never fills.
+- Each database dump may use the free space beyond the margin, measured
+  before it starts, and at most 32 GiB. The dump goes through a counting
+  writer that fails past that, so `mariadb-dump` gets a broken pipe and
+  stops; the dumps are removed and nothing is backed up (`space`, or `dump`
+  at 32 GiB). restic backup starts only with room beyond the margin.
+- restic's cache is `<state>/backup/cache` and its temporary folder
+  `<state>/backup/tmp`. The cache holds the repository's index and folder
+  data for every site, so it grows with the repository and restic does not
+  bound it; the drill's `restic check` makes a second, temporary cache
+  inside it and removes it afterwards. A backup or prune keeps a few packs
+  (restic's default pack size is 16 MiB) in the temporary folder while
+  they upload. Both are covered by the margin, and a backup does not start
+  without it.
 
 Drill: the latest snapshot is restored with `--verify` into a root-only
 staging folder (never opened to the site user), every file, folder and link

@@ -75,6 +75,8 @@ type fakeTools struct {
 	restored  map[string]string // file name -> content, written by restic restore
 	dump      string
 	lsNodes   []map[string]any
+	// stats is what restic stats --mode restore-size prints.
+	stats     string
 	duringRun func(c backupCommand)
 }
 
@@ -147,6 +149,9 @@ func (f *fakeTools) restic(c backupCommand) ([]byte, int, error) {
 			c.stdout.Write(append(b, '\n'))
 		}
 		return nil, 0, nil
+	case "stats":
+		io.WriteString(c.stdout, f.stats)
+		return nil, 0, nil
 	case "check":
 		return []byte(`{"message_type":"summary","num_errors":0}`), 0, nil
 	case "unlock":
@@ -166,7 +171,7 @@ type chownCall struct {
 func testEngine(t *testing.T) (*resticEngine, *fakeTools, *[]chownCall) {
 	t.Helper()
 	base := t.TempDir()
-	tools := &fakeTools{t: t, catConfig: 10, restored: map[string]string{}}
+	tools := &fakeTools{t: t, catConfig: 10, restored: map[string]string{}, stats: `{"total_size":1048576,"total_file_count":100,"snapshots_count":1}`}
 	calls := &[]chownCall{}
 	var mu sync.Mutex
 	e := &resticEngine{dir: base + "/backup", stage: base + "/restore", run: tools.run, tools: func() error { return nil }, owner: os.Getuid(),
@@ -175,7 +180,9 @@ func testEngine(t *testing.T) (*resticEngine, *fakeTools, *[]chownCall) {
 			defer mu.Unlock()
 			*calls = append(*calls, chownCall{filepath.Base(f.Name()), uid, gid})
 			return nil
-		}}
+		},
+		// A roomy disk unless a test says otherwise.
+		space: func(string) (uint64, uint64, uint64, error) { return 500 << 30, 1 << 40, 4096, nil }}
 	e.prepare = func() error {
 		for _, d := range []string{e.dir, e.dir + "/cache", e.dir + "/tmp", e.dir + "/dump"} {
 			if err := os.MkdirAll(d, 0700); err != nil {
@@ -524,5 +531,107 @@ func TestRunBackupCommand(t *testing.T) {
 	}
 	if _, _, err := runBackupCommand(context.Background(), backupCommand{path: "/bin/true", uid: 20000, limit: time.Second}); err == nil {
 		t.Fatal("a site user without its group must be refused")
+	}
+}
+
+// A restore or drill whose snapshot would not leave the margin free on the
+// staging disk is refused before anything is staged.
+func TestRestoreAndDrillRefuseWhatTheDiskCannotHold(t *testing.T) {
+	e, tools, _ := testEngine(t)
+	r := engineRecord(filepath.Dir(e.dir))
+	tools.snapshots = restoreSnapshots(r, e.dir)
+	tools.restored = map[string]string{"public_html/index.php": "<?php"}
+	// A 500 GiB sparse file: restic counts it whole.
+	tools.stats = `{"total_size":536870912000,"total_file_count":3,"snapshots_count":1}`
+	var asked []string
+	e.space = func(dir string) (uint64, uint64, uint64, error) {
+		asked = append(asked, dir)
+		return 40 << 30, 100 << 30, 4096, nil
+	}
+	in := RestoreInput{ExpectedRevision: 1, Snapshot: strings.Repeat("d", 64), Files: true, Reason: "Restore"}
+	err := e.Restore(context.Background(), engineTarget(t), r, in, engineLeftover())
+	var failed *BackupError
+	if !errors.As(err, &failed) || failed.Step != "space" || !strings.Contains(failed.Detail, "500.0 GiB") || !strings.Contains(failed.Detail, "5.0 GiB must stay free") {
+		t.Fatalf("a restore larger than the disk: %v", err)
+	}
+	if !slices.Equal(asked, []string{e.stage}) {
+		t.Fatalf("free space was read for %q, not the staging folder", asked)
+	}
+	_, err = e.Drill(context.Background(), engineTarget(t), r, backupLeftover{Op: strings.Repeat("c", 32)}, time.Now())
+	if !errors.As(err, &failed) || failed.Step != "space" {
+		t.Fatalf("a drill larger than the disk: %v", err)
+	}
+	if entries, _ := os.ReadDir(e.stage); len(entries) != 0 {
+		t.Fatalf("a refused restore staged %v", entries)
+	}
+	for _, c := range tools.ran {
+		if c.path != resticPath || c.args[8] != "snapshots" && c.args[8] != "stats" {
+			t.Fatalf("ran %s %q after the size check refused", c.path, c.args)
+		}
+	}
+	if !slices.ContainsFunc(tools.ran, func(c ranCommand) bool { return slices.Equal(c.args[8:], restoreSizeArgs(strings.Repeat("d", 64))) }) {
+		t.Fatal("restic was not asked for the snapshot's restore size")
+	}
+	// The same snapshot fits once it is small enough, and restic restores
+	// it sparse.
+	tools.stats = `{"total_size":1048576,"total_file_count":3,"snapshots_count":1}`
+	if err := e.Restore(context.Background(), engineTarget(t), r, in, engineLeftover()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(tools.ran, func(c ranCommand) bool { return c.args[8] == "restore" && slices.Contains(c.args, "--sparse") }) {
+		t.Fatal("the restore did not write sparse files as sparse")
+	}
+	// A size restic did not give is refused too.
+	tools.stats = `{"snapshots_count":1}`
+	err = e.Restore(context.Background(), engineTarget(t), r, in, backupLeftover{Op: strings.Repeat("e", 32)})
+	if !errors.As(err, &failed) || failed.Step != "restore" {
+		t.Fatalf("an unreadable size: %v", err)
+	}
+}
+
+// Each dump may use the free space beyond the margin and is stopped past it;
+// with no room left, nothing is dumped at all.
+func TestDumpsStopAtTheDiskMargin(t *testing.T) {
+	e, tools, _ := testEngine(t)
+	r := engineRecord(filepath.Dir(e.dir))
+	tools.dump = strings.Repeat("INSERT INTO t VALUES (1);\n", 100)
+	// A 100 GiB disk: the margin is 5 GiB, and 1 KiB is left beyond it.
+	e.space = func(string) (uint64, uint64, uint64, error) { return 5<<30 + 1024, 100 << 30, 4096, nil }
+	_, err := e.Backup(context.Background(), engineTarget(t), r, []string{"fixtureacct_wp"})
+	var failed *BackupError
+	if !errors.As(err, &failed) || failed.Step != "space" || !strings.Contains(failed.Detail, "fixtureacct_wp") || !strings.Contains(failed.Detail, "5.0 GiB") {
+		t.Fatalf("a dump past the margin: %v", err)
+	}
+	if _, err := os.Lstat(dumpDir(e.dir, r.Account.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the stopped dump was left on the disk")
+	}
+	if slices.ContainsFunc(tools.ran, func(c ranCommand) bool { return c.path == resticPath }) {
+		t.Fatal("restic ran after a dump was stopped")
+	}
+	tools.ran = nil
+	e.space = func(string) (uint64, uint64, uint64, error) { return 4 << 30, 100 << 30, 4096, nil }
+	_, err = e.Backup(context.Background(), engineTarget(t), r, []string{"fixtureacct_wp"})
+	if !errors.As(err, &failed) || failed.Step != "space" || slices.ContainsFunc(tools.ran, func(c ranCommand) bool { return c.path == mariadbDumpPath || c.path == resticPath }) {
+		t.Fatalf("no room at all: %v %+v", err, tools.ran)
+	}
+	// A files-only backup with no room is refused before restic too.
+	tools.ran = nil
+	_, err = e.Backup(context.Background(), engineTarget(t), r, nil)
+	if !errors.As(err, &failed) || failed.Step != "space" || len(tools.ran) != 0 {
+		t.Fatalf("files only, no room: %v %+v", err, tools.ran)
+	}
+}
+
+func TestCappedWriterStopsAtItsCap(t *testing.T) {
+	var b bytes.Buffer
+	w := &cappedWriter{w: &b, max: 10}
+	if n, err := w.Write([]byte("12345")); n != 5 || err != nil || w.over {
+		t.Fatal("a write under the cap failed")
+	}
+	if _, err := w.Write([]byte("678901")); err == nil || !w.over || b.String() != "12345" {
+		t.Fatalf("a write past the cap went through: %q", b.String())
+	}
+	if _, _, _, err := diskSpace(t.TempDir()); err != nil {
+		t.Fatalf("statfs of a folder: %v", err)
 	}
 }

@@ -396,11 +396,53 @@ func TestBackupStatusAndTargetDoNotWaitForABackup(t *testing.T) {
 }
 
 func TestRestoreArgumentsLeaveSELinuxLabels(t *testing.T) {
-	if got := restoreArgs("abc:/home/fixtureacct", "/var/lib/sifruno-restore/op/files", false); !slices.Equal(got, []string{"restore", "--json", "--exclude-xattr", "security.selinux", "abc:/home/fixtureacct", "--target", "/var/lib/sifruno-restore/op/files"}) {
+	if got := restoreArgs("abc:/home/fixtureacct", "/var/lib/sifruno-restore/op/files", false); !slices.Equal(got, []string{"restore", "--json", "--sparse", "--exclude-xattr", "security.selinux", "abc:/home/fixtureacct", "--target", "/var/lib/sifruno-restore/op/files"}) {
 		t.Fatalf("restore arguments %q", got)
 	}
-	if got := restoreArgs("abc", "/x/all", true); !slices.Contains(got, "--verify") {
+	if got := restoreArgs("abc", "/x/all", true); !slices.Contains(got, "--verify") || !slices.Contains(got, "--sparse") {
 		t.Fatalf("drill restore arguments %q", got)
+	}
+}
+
+func TestDiskSpaceRules(t *testing.T) {
+	const gib = 1 << 30
+	for _, c := range []struct{ total, margin uint64 }{{10 * gib, 2 * gib}, {40 * gib, 2 * gib}, {100 * gib, 5 * gib}, {2000 * gib, 100 * gib}} {
+		if got := freeMargin(c.total); got != c.margin {
+			t.Errorf("margin of %d GiB: %d", c.total/gib, got/gib)
+		}
+	}
+	if roomLeft(1*gib, 100*gib) != 0 || roomLeft(6*gib, 100*gib) != gib {
+		t.Fatal("room beyond the margin")
+	}
+	if got := restoreNeed(1000, 10, 4096); got != 1000+40960 {
+		t.Fatalf("need %d", got)
+	}
+	if restoreNeed(^uint64(0)-5, 1, 4096) != ^uint64(0) || restoreNeed(1, ^uint64(0)/2, 4096) != ^uint64(0) {
+		t.Fatal("an estimate that overflows must not fit")
+	}
+	if spaceForRestore(gib, 7*gib, 100*gib) != nil {
+		t.Fatal("1 GiB with 2 GiB beyond the margin must fit")
+	}
+	err := spaceForRestore(3*gib, 7*gib, 100*gib)
+	var failed *BackupError
+	if !errors.As(err, &failed) || failed.Step != "space" || failed.Detail != "The backup needs up to 3.0 GiB of disk to restore, and the server has 7.0 GiB free, of which 5.0 GiB must stay free for the server itself. Free up disk space on the server, then try again." {
+		t.Fatalf("refusal %v", err)
+	}
+	if size, entries, ok := parseRestoreSize([]byte(`{"total_size":1234,"total_file_count":7,"snapshots_count":1}`)); !ok || size != 1234 || entries != 7 {
+		t.Fatalf("stats %d %d %v", size, entries, ok)
+	}
+	if size, entries, ok := parseRestoreSize([]byte(`{"total_size":0,"snapshots_count":1}`)); !ok || size != 0 || entries != 0 {
+		t.Fatal("restic leaves out a zero count")
+	}
+	for _, bad := range []string{`{"snapshots_count":1}`, `{"total_size":-1,"total_file_count":1}`, `not json`} {
+		if _, _, ok := parseRestoreSize([]byte(bad)); ok {
+			t.Errorf("%s: accepted", bad)
+		}
+	}
+	for n, want := range map[uint64]string{0: "0 bytes", 1023: "1023 bytes", 1536: "1.5 KiB", 300 << 20: "300.0 MiB", maxDumpBytes: "32.0 GiB"} {
+		if got := byteSize(n); got != want {
+			t.Errorf("%d: %q", n, got)
+		}
 	}
 }
 

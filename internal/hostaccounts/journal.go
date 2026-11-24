@@ -335,7 +335,9 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" && e.Action != "ssh_keys" && e.Action != "web" && e.Action != "certificate" && e.Action != "adopt" && e.Action != "cron" && e.Action != "domains" {
 					return ErrRecovery
 				}
-				if e.Action == "cron" && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) {
+				// Neither a cron nor a domains change moves the account's
+				// state: a domains change is made only for an active site.
+				if (e.Action == "cron" || e.Action == "domains") && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) {
 					return ErrRecovery
 				}
 				if e.Action == "state" && e.After.Revision != e.Before.Revision+1 || e.Action == "plan" && e.After.Revision != e.Before.Revision+1 || e.Action == "ssh_keys" && e.After.Revision != e.Before.Revision+1 || e.Action == "web" && e.After.Revision != e.Before.Revision+1 || e.Action == "certificate" && e.After.Revision != e.Before.Revision+1 || e.Action == "domains" && e.After.Revision != e.Before.Revision+1 || e.Action == "adopt" && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) || e.Action == "conflict" && e.After.Revision != e.Before.Revision || e.Action == "delete" && e.After.Revision != e.Before.Revision {

@@ -386,3 +386,42 @@ func TestOperatorKeepsRoomWhenCompactionCannotRun(t *testing.T) {
 		t.Fatalf("delete at the tenant limit: %v", err)
 	}
 }
+
+// TestDomainsIntentKeepsTheState: a domains intent whose after moves the
+// account's state is refused, as a cron intent's is, even when its result
+// says it was rejected and so does not repeat that after.
+func TestDomainsIntentKeepsTheState(t *testing.T) {
+	s, _, _ := setupStore(t)
+	s.web = &WebOptions{ServerUser: "nobody"}
+	a := webChanges(t, s, createFixture(t, s), 1)
+	r := recordFor(t, s, a.ID)
+	rows := historyRows(t, s, a.ID)
+	intent, result := rows[len(rows)-2], rows[len(rows)-1]
+	errRollback := errors.New("roll back")
+	for _, c := range []struct {
+		action, state string
+		accepted      bool
+	}{{"domains", "active", true}, {"domains", "suspended", false}, {"cron", "suspended", false}} {
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			i, res := intent, result
+			i.Action, res.Action = c.action, c.action
+			i.After.State = c.state
+			res.Status, res.After = "rejected", *res.Before
+			for _, row := range []operationEvent{i, res} {
+				raw, _ := json.Marshal(row)
+				if err := tx.Bucket(historyBucket).Put(eventKey(a.ID, row.Sequence), raw); err != nil {
+					return err
+				}
+			}
+			forged := r
+			forged.Account = *res.Before
+			if accepted := verifyHistory(tx, forged) == nil; accepted != c.accepted {
+				t.Errorf("a %s intent to %s: accepted %v", c.action, c.state, accepted)
+			}
+			return errRollback
+		})
+		if !errors.Is(err, errRollback) {
+			t.Fatal(err)
+		}
+	}
+}

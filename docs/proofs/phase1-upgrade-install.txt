@@ -1,0 +1,91 @@
+# Upgrade install on the dev VM, 20261124T104149Z, source 1871199
+release built: cb22bb2cbd5ec0fcbbdaf95426e470cafc25ff57b2b29a112c48912e6956b244
+ok: the tarball matches its sha256
+== before: restic absent, units disabled disabled
+== 2026-11-24T10:44:06Z Preflight: nothing is changed until every check passes
+ok: running as root
+ok: AlmaLinux 9.9 (Chartreuse Bobcat)
+ok: x86_64
+ok: /home is XFS with user quota enforced
+SELinux is Enforcing; the installer leaves the SELinux mode as it is
+== 2026-11-24T10:44:08Z Checking the release in /root/sifruno-upgrade-20261124T104149Z/sifruno-linux-amd64 against its SHA256SUMS
+ok: every file in the release matches SHA256SUMS
+== 2026-11-24T10:44:11Z Add the LiteSpeed, EPEL, CRB and Remi repositories
+== 2026-11-24T10:44:42Z Install OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman and Apache (for the Compat tier; left off)
+
+Installed:
+  bzip2-1.0.8-11.el9.x86_64                                                     
+
+installed: openlitespeed-1.9.4-3.el9.x86_64
+installed: lsphp83-8.3.37-1.el9.x86_64
+installed: mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+installed: podman-5.8.5-3.el9_9.x86_64
+installed: httpd-2.4.62-13.el9_8.9.x86_64
+== 2026-11-24T10:47:33Z Label /home, create the system user sifpanel and Sifruno's folders in /etc and /var/lib
+== 2026-11-24T10:47:35Z Set passwd, group and shadow in /etc/nsswitch.conf to files (backup, check, automatic rollback)
+== 2026-11-24T10:47:35Z Write the sshd policy /etc/ssh/sshd_config.d/40-sifruno.conf (backup, sshd -t, automatic rollback, reload)
+== 2026-11-24T10:47:36Z Add Sifruno's include and namespace isolation to OpenLiteSpeed's config (backup)
+== 2026-11-24T10:47:36Z Install WP-CLI 2.12.0 in /usr/local/lib/sifruno, checked against its pinned sha512
+== 2026-11-24T10:47:37Z Install restic 0.20.0 in /usr/local/lib/sifruno for backups, checked against its pinned sha256
+== 2026-11-24T10:48:19Z Enable and start MariaDB and OpenLiteSpeed
+service: active
+service: active
+== 2026-11-24T10:48:25Z Create the panel's MariaDB admin user and its 0600 option file /var/lib/sifpanel/db-admin.cnf
+panel database option file: sifpanel 600 /var/lib/sifpanel/db-admin.cnf
+== 2026-11-24T10:48:25Z Create the ACME challenge folder /var/lib/sifruno-acme
+ACME challenge folder: sifpanel 755 /var/lib/sifruno-acme
+== 2026-11-24T10:48:26Z Install the programs in /usr/local/lib/sifruno/bin and the panel UI in /usr/local/lib/sifruno/ui
+== 2026-11-24T10:48:34Z Check the host policy with hostbroker --check-host
+host policy: supported
+== 2026-11-24T10:48:35Z Prepare the broker's and the panel's folders with hostsetup --apply
+The broker or the panel already has state; hostsetup prepares a fresh layout only, so the folders are left as they are.
+== 2026-11-24T10:48:35Z Write sifruno-broker.service and sifruno.service in /etc/systemd/system
+== 2026-11-24T10:48:38Z Sifruno is installed
+Changed in this run:
+  - packages installed: bzip2
+  - restic 0.20.0 installed at /usr/local/lib/sifruno/restic
+  - program /usr/local/lib/sifruno/bin/sifruno installed
+  - program /usr/local/lib/sifruno/bin/hostbroker installed
+  - program /usr/local/lib/sifruno/bin/hostsetup installed
+  - program /usr/local/lib/sifruno/bin/panelctl installed
+  - panel UI installed in /usr/local/lib/sifruno/ui
+
+First run
+  1. The panel answers on this server only, at http://127.0.0.1:8080/
+     To reach it from your own computer, forward the port over SSH and open
+     that same address there:
+       ssh -L 8080:127.0.0.1:8080 root@THIS_SERVER
+  2. Open Websites. The panel asks for the operator access key, then for a
+     username, a password and an authenticator app. The key is in this file,
+     which only root and sifpanel can read. Open it on the server; do not
+     paste it into chat, tickets or screenshots:
+       /var/lib/sifpanel/state/operator/access.key
+  3. Websites need TCP 80 and 443 open in your firewall. The installer does
+     not change firewall rules. To sign in to the panel from other machines
+     without an SSH forward, run this again with --panel-host NAME.
+
+The two units are installed but not enabled or started (--no-start). Start
+them with:
+  systemctl enable --now sifruno-broker.service sifruno.service
+
+Rollback
+  Before you close this SSH session, open a second one and check that you
+  can still sign in.
+  1. Sifruno's units, first: the broker does not run without the nsswitch
+     change.
+       systemctl disable --now sifruno.service sifruno-broker.service
+       rm /etc/systemd/system/sifruno.service /etc/systemd/system/sifruno-broker.service
+       systemctl daemon-reload
+  2. sshd policy: /etc/ssh/sshd_config.d/40-sifruno.conf (unchanged in this run)
+       rm /etc/ssh/sshd_config.d/40-sifruno.conf
+       sshd -t && systemctl reload sshd
+  3. nsswitch: /etc/nsswitch.conf
+       cp -a /etc/nsswitch.conf.bak-20261124-0447 /etc/nsswitch.conf
+  4. OpenLiteSpeed: /usr/local/lsws/conf/httpd_config.conf
+       cp -a /usr/local/lsws/conf/httpd_config.conf.bak-20261124-0447 /usr/local/lsws/conf/httpd_config.conf && systemctl restart lsws
+  Packages, the sifpanel user, websites and databases stay. Remove them by
+  hand if you want them gone.
+installer exit 0
+== after: restic restic 0.20.0 compiled with go1.27.4 on linux/amd64, sha256 c109579d3a1a4d26…, units disabled disabled
+Changed in this run: nothing
+second run exit 0

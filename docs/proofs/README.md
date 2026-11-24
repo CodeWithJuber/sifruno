@@ -99,7 +99,17 @@ Run on 2026-11-24 with `scripts/devvm/fresh-install-test.sh --destroy-vm`, from 
 
 The test drives the VM over SSH as root with a key throughout. Every command after the sshd step reached the VM through a new key sign-in under the new policy, which is the "second sign-in" the installer asks the operator to check. The installer took 61 minutes under software emulation, mostly package installation.
 
-What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins), the nightly schedule the plan asks for (not set up; it needs a runner the owner chooses), and an upgrade from an older release.
+What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins) and the nightly schedule the plan asks for (not set up; it needs a runner the owner chooses). An upgrade is the next section.
+
+## Phase 1: upgrading an installed server
+
+Run on 2026-11-24 on the same dev VM, which the fresh-install test had installed from `10cd1ad`. The release built from `1871199` was copied in, checked against its `.sha256`, unpacked into a new folder, and its `install.sh --no-start` run over the existing installation, then run once more.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Upgrade in place: the tarball and every file match their checksums, preflight passes on the installed server, and the run adds only what the newer release brings (bzip2 and restic 0.20.0 at its pinned sha256 `c109579d…`), replaces the four programs and the panel UI, and leaves the units as they were (disabled, as `--no-start` asks); the run after it reports `Changed in this run: nothing` | [phase1-upgrade-install.txt](phase1-upgrade-install.txt) | installer exit 0, second run 0 |
+
+What this run does not show: an upgrade with the units running (the panel and broker restarting under live sites), a downgrade, and an upgrade across a change to the broker's journal format.
 
 ## Phase 1: the site page's changes at the broker
 

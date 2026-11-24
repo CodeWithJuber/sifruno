@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -287,8 +288,24 @@ var tokenAreas = []string{"/api/v1/accounts", "/api/v1/server", "/api/v1/service
 
 // tokenRefused are routes inside those areas that set up credentials: backup
 // storage holds the storage server's details and shows the repository
-// password once. They are for a signed-in admin only.
+// password until it is saved. They are for a signed-in admin only.
 var tokenRefused = []string{"/api/v1/websites/backup-storage"}
+
+// tokenRefusedSiteBackups are a website's backup routes a token may not
+// use: a restore overwrites the site's files and database, and a drill
+// stages a whole copy of the site. Backing up now and the backup list stay
+// open to tokens. The site's id sits in the middle of the path, so these
+// cannot be prefixes in tokenRefused.
+var tokenRefusedSiteBackups = []string{"restore", "drill"}
+
+func tokenRefusedSiteBackup(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/websites/sites/")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	return len(parts) >= 3 && parts[1] == "backups" && slices.Contains(tokenRefusedSiteBackups, parts[2])
+}
 
 func tokenArea(p string) bool {
 	if path.Clean(p) != p {
@@ -301,6 +318,9 @@ func tokenArea(p string) bool {
 		if p == refused || strings.HasPrefix(p, refused+"/") {
 			return false
 		}
+	}
+	if tokenRefusedSiteBackup(p) {
+		return false
 	}
 	for _, area := range tokenAreas {
 		if p == area || strings.HasPrefix(p, area+"/") {

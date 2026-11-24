@@ -99,9 +99,25 @@ func TestAPITokenThroughThePanelAPI(t *testing.T) {
 			{"GET", "/api/v1/sites/../session"}, {"GET", "/api/v1/sitesx"},
 			// Credential set-up inside an allowed area.
 			{"GET", "/api/v1/websites/backup-storage"}, {"POST", "/api/v1/websites/backup-storage"},
+			// A site's restore, which overwrites it, and its drill.
+			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/restore"},
+			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/drill"},
+			{"GET", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/restore/x"},
 		} {
 			w := clientRequest(h, network, route.method, route.path, created.Token, map[string]string{})
 			if w.Code != 403 || problemError(t, w) != "token_not_allowed" {
+				t.Fatalf("network=%v %s %s with a token: %d %s", network, route.method, route.path, w.Code, w.Body.String())
+			}
+		}
+		// Backing up now and the backup list stay open to a token: the
+		// answer comes from the route (no backups on this fixture), not
+		// from the token fence.
+		for _, route := range []struct{ method, path string }{
+			{"GET", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups"},
+			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups"},
+		} {
+			w := clientRequest(h, network, route.method, route.path, created.Token, map[string]string{})
+			if w.Code == 403 || w.Code == 401 || strings.Contains(w.Body.String(), "token_not_allowed") {
 				t.Fatalf("network=%v %s %s with a token: %d %s", network, route.method, route.path, w.Code, w.Body.String())
 			}
 		}

@@ -917,7 +917,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		if errors.Is(e, errAccountBusy) {
 			return Account{}, ErrDeleteBusy
 		}
-		return Account{}, ErrUnavailable
+		return Account{}, ErrDeleteStopped
 	}
 	if e != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")

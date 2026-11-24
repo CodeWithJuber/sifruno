@@ -32,6 +32,12 @@ const DeleteAttempts = 3
 // ErrConflict) holds.
 var ErrDeleteBusy = fmt.Errorf("%w: account processes still running", ErrConflict)
 
+// ErrDeleteStopped is a delete the broker stopped before anything was
+// removed for another reason than a busy user: ending the account's
+// processes failed or ran out of time. The account is as it was. It is an
+// unavailable answer too: errors.Is(err, ErrUnavailable) holds.
+var ErrDeleteStopped = fmt.Errorf("%w: delete stopped before anything was removed", ErrUnavailable)
+
 // MaxAccounts bounds one broker's inventory. Every request reads all records
 // and checks each account's files, so the bound is a cost limit, not a
 // product limit: BenchmarkStoreScale records what a list and a create cost at

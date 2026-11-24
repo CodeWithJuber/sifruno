@@ -401,6 +401,8 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			return ErrConflict
 		case "delete_busy":
 			return ErrDeleteBusy
+		case "delete_stopped":
+			return ErrDeleteStopped
 		case "not_found":
 			return ErrNotFound
 		case "recovery":

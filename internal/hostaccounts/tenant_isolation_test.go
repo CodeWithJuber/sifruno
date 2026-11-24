@@ -327,7 +327,9 @@ func TestBusyDeleteBlocksNoOtherAccount(t *testing.T) {
 
 // The busy refusal reaches the panel as its own answer: 409 delete_busy on
 // the socket, and ErrDeleteBusy from the client, which is still a conflict.
-// A delete stopped for another reason answers 503.
+// A delete stopped for another reason answers 503 delete_stopped, which the
+// client maps to ErrDeleteStopped, still an unavailable answer, so the panel
+// can say nothing was removed rather than that it cannot tell.
 func TestBusyDeleteAnswersDeleteBusyThroughTheClient(t *testing.T) {
 	s, f := webStore(t)
 	tenant := liveFixture(t, s)
@@ -349,7 +351,7 @@ func TestBusyDeleteAnswersDeleteBusyThroughTheClient(t *testing.T) {
 		t.Fatalf("busy delete through the client: %v, broker answered %q", err, answers)
 	}
 	f.failure = "stopped"
-	if err := remove(); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrDeleteBusy) || answers[1] != `{"error":"unavailable"}` {
+	if err := remove(); !errors.Is(err, ErrDeleteStopped) || !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrDeleteBusy) || answers[1] != `{"error":"delete_stopped"}` {
 		t.Fatalf("stopped delete through the client: %v, broker answered %q", err, answers)
 	}
 	f.failure = ""

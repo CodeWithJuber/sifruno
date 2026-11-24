@@ -942,6 +942,13 @@ func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
 			return code, e
 		},
 		putBack: func(ctx context.Context) error {
+			// When the lock step itself failed (the shadow file busy, say),
+			// the account is often unchanged, and a usermod now could fail the
+			// same way and leave the delete pending for everyone. Check first,
+			// and undo only what the lock changed.
+			if n.VerifyAccount(ctx, r) == nil {
+				return nil
+			}
 			if active {
 				if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "", "--lock", "--", r.Account.Username); e != nil {
 					return e

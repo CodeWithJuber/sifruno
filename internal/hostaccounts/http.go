@@ -479,6 +479,8 @@ func writeError(w http.ResponseWriter, err error) {
 		code, status = "certificate_rejected", 422
 	case errors.Is(err, ErrRecovery):
 		code, status = "recovery", 503
+	case errors.Is(err, ErrDeleteStopped):
+		code, status = "delete_stopped", 503
 	}
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(struct {

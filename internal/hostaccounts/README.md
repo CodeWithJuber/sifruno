@@ -161,7 +161,12 @@ old files and the recorded quota go back (none for a first enable: the
 broker owns its accounts' quotas, so one set by hand is removed), the
 operation is journaled as `rejected` with the account unchanged, and the
 request answers 422 `web_rejected`. Any other failure leaves the operation
-pending; it is finished, or ends rejected, on the next start. A web
+pending; it is finished, or ends rejected, on the next start. That includes
+a reload that fails after the test passed: the new files stay in place, the
+operation is journaled `recovery_required`, and every mutation of every
+account is refused (503 `recovery`) until the broker restarts and its
+reconcile installs the config again. This holds for every operation that
+installs the config: web, certificate, state and delete. A web
 operation needs two history rows and is refused (409) when they are not
 free. Delete takes the site out of the config before the user and home go;
 if that config fails its test, the delete ends `rejected` with the account

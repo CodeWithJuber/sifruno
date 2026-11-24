@@ -293,6 +293,13 @@ listed=$?
 echo "  the broker answered a list in $(($(date +%s) - started)) s while the loop ran"
 check "the broker answers while the loop runs" bash -c "[ $listed -eq 0 ] && [ $(($(date +%s) - started)) -le 10 ]"
 check "WP-CLI's HOME is the broker's empty root-owned folder" bash -c "tr '\\0' '\\n' < /proc/${php_pid:-0}/environ | grep -qx HOME=/var/lib/sifruno-site-home"
+# The step runs with the account's own group only, and its unit's
+# description, which any local user can read, holds no site details.
+groups_line="$(grep '^Groups:' "/proc/${php_pid:-0}/status" 2>/dev/null)"
+echo "  WP-CLI's supplementary groups: ${groups_line:-none read}"
+check "WP-CLI has no supplementary group but the account's own" bash -c "[ -n '$groups_line' ] && for g in \$(cut -f2- <<<'$groups_line'); do [ \"\$g\" = $b_uid ] || exit 1; done"
+check "the unit's description is the fixed 'sifruno site step'" test "$(systemctl show -P Description "$unit" 2>/dev/null)" = "sifruno site step"
+check "the unit cannot gain privileges (NoNewPrivileges)" test "$(systemctl show -P NoNewPrivileges "$unit" 2>/dev/null)" = yes
 wait "$install_pid"
 echo "  install answer: $(cat "$WORK/install.err" "$WORK/install.out" | tr '\n' ' ')"
 sleep 2

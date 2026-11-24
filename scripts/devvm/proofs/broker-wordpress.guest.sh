@@ -87,7 +87,11 @@ echo "## 4. The broker installs WordPress as the site user"
 ( while :; do ps -eo args >> "$WORK/ps-samples.txt"; echo '--' >> "$WORK/ps-samples.txt"; sleep 0.5; done ) &
 sampler=$!
 start=$(date +%s)
-installed="$(drive wordpress --id "$id" --revision "$rev" --title 'Sifruno WordPress proof' --admin-user proofadmin \
+# The title carries what systemd would expand in a unit's command line ($
+# and % specifiers): it must reach WordPress exactly as given.
+# shellcheck disable=SC2016 # the $ is meant literally
+TITLE='Sifruno WordPress proof 100% $HOME %h %n'
+installed="$(drive wordpress --id "$id" --revision "$rev" --title "$TITLE" --admin-user proofadmin \
   --admin-email "admin@$DOMAIN" --admin-password-file "$PANEL/admin-password" \
   --db-name "$DB" --db-user "$DB" --db-password-file "$PANEL/db-password" 2>"$WORK/install.err")"
 status=$?
@@ -110,6 +114,11 @@ check "WordPress's tables are in the site's database" \
   bash -c "mysql --defaults-extra-file=$WORK/site.cnf -h 127.0.0.1 -N -e 'SHOW TABLES' $DB | grep -qx wp_options"
 check "the admin user exists" \
   bash -c "mysql --defaults-extra-file=$WORK/site.cnf -h 127.0.0.1 -N -e 'SELECT user_login FROM wp_users' $DB | grep -qx proofadmin"
+stored="$(mysql --defaults-extra-file="$WORK/site.cnf" -h 127.0.0.1 -N -B -e "SELECT option_value FROM wp_options WHERE option_name = 'blogname'" "$DB" 2>&1)"
+echo "  stored title: $stored"
+check "the title reached WordPress exactly, \$ and % untouched" test "$stored" = "$TITLE"
+plugins="$(mysql --defaults-extra-file="$WORK/site.cnf" -h 127.0.0.1 -N -B -e "SELECT option_value FROM wp_options WHERE option_name = 'active_plugins'" "$DB" 2>&1)"
+check "the LiteSpeed Cache plugin is active" grep -q 'litespeed-cache/litespeed-cache.php' <<<"$plugins"
 
 echo
 echo "## 5. The site serves WordPress"

@@ -21,6 +21,7 @@ type backupBroker struct {
 	bmu        sync.Mutex
 	configured bool
 	password   string
+	saved      bool
 	targetErr  error
 	targets    []hostaccounts.BackupTargetInput
 	snapshots  []hostaccounts.Snapshot
@@ -36,6 +37,7 @@ func (b *backupBroker) BackupStatus(context.Context) (hostaccounts.BackupStatus,
 	if b.configured {
 		s.Target = &hostaccounts.BackupTarget{Host: "backup.example.test", Port: 22, User: "sifbackup", Path: "/srv/restic", HostKeys: []string{"ssh-ed25519 AAAA"}}
 	}
+	s.PasswordSaved = b.saved
 	return s, nil
 }
 func (b *backupBroker) SetBackupTarget(_ context.Context, in hostaccounts.BackupTargetInput, _ string) (hostaccounts.BackupTargetResult, error) {
@@ -46,14 +48,33 @@ func (b *backupBroker) SetBackupTarget(_ context.Context, in hostaccounts.Backup
 		return hostaccounts.BackupTargetResult{}, b.targetErr
 	}
 	b.configured = true
-	res := hostaccounts.BackupTargetResult{Initialized: true, Password: b.password, Status: hostaccounts.BackupStatus{Ready: true, Configured: true, Target: &hostaccounts.BackupTarget{Host: in.Host, Port: in.Port, User: in.User, Path: in.Path, HostKeys: []string{"ssh-ed25519 AAAA"}}}}
-	b.password = ""
+	res := hostaccounts.BackupTargetResult{Initialized: true, Status: hostaccounts.BackupStatus{Ready: true, Configured: true, PasswordSaved: b.saved, Target: &hostaccounts.BackupTarget{Host: in.Host, Port: in.Port, User: in.User, Path: in.Path, HostKeys: []string{"ssh-ed25519 AAAA"}}}}
+	if !b.saved {
+		res.Password = b.password
+	}
 	return res, nil
 }
+
+// The broker's two steps: the password until the admin confirms saving it.
 func (b *backupBroker) ShowBackupPassword(context.Context, hostaccounts.BackupPasswordInput, string) (hostaccounts.BackupPassword, error) {
-	return hostaccounts.BackupPassword{}, hostaccounts.ErrConflict
+	b.bmu.Lock()
+	defer b.bmu.Unlock()
+	switch {
+	case !b.configured:
+		return hostaccounts.BackupPassword{}, &hostaccounts.BackupError{Step: "target", Detail: "no backup storage is set up"}
+	case b.saved:
+		return hostaccounts.BackupPassword{}, hostaccounts.ErrConflict
+	}
+	return hostaccounts.BackupPassword{Password: b.password}, nil
 }
 func (b *backupBroker) ConfirmBackupPassword(context.Context, hostaccounts.BackupPasswordInput, string) (hostaccounts.BackupStatus, error) {
+	b.bmu.Lock()
+	if !b.configured {
+		b.bmu.Unlock()
+		return hostaccounts.BackupStatus{}, &hostaccounts.BackupError{Step: "target", Detail: "no backup storage is set up"}
+	}
+	b.saved = true
+	b.bmu.Unlock()
 	return b.BackupStatus(context.Background())
 }
 func (b *backupBroker) BackupAccount(_ context.Context, _ string, in hostaccounts.BackupInput, _ string) (hostaccounts.Snapshot, error) {
@@ -109,7 +130,7 @@ func storageBody() map[string]any {
 	return map[string]any{"host": "backup.example.test", "port": 22, "user": "sifbackup", "path": "/srv/restic", "known_hosts": "# backup.example.test:22 SSH-2.0-OpenSSH_8.7\nbackup.example.test ssh-ed25519 AAAA\n"}
 }
 
-func TestBackupStorageShowsThePasswordOnce(t *testing.T) {
+func TestBackupStorageKeepsThePasswordUntilSaved(t *testing.T) {
 	f, b, _, _ := backupsFixture(t)
 	cookie, csrf := websiteSignIn(t, f)
 	w := websiteRequest(f.handler, "GET", "/api/v1/websites/backup-storage", nil, cookie, "")
@@ -138,12 +159,37 @@ func TestBackupStorageShowsThePasswordOnce(t *testing.T) {
 	if got := b.targets[0]; got.Port != 22 || !strings.Contains(got.KnownHosts, "\n") || got.Reason == "" {
 		t.Fatalf("target sent %+v", got)
 	}
+	// Not confirmed yet: a second save shows it again, the page read never
+	// carries it, and a signed-in admin can show it again.
 	w = websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage", storageBody(), cookie, csrf)
-	if w.Code != 200 || strings.Contains(w.Body.String(), "repository-password") {
-		t.Fatalf("second save %d: %s", w.Code, w.Body)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "repository-password-shown-once") {
+		t.Fatalf("second save before the confirmation %d: %s", w.Code, w.Body)
 	}
-	if w := websiteRequest(f.handler, "GET", "/api/v1/websites/backup-storage", nil, cookie, ""); strings.Contains(w.Body.String(), "password") {
+	if w := websiteRequest(f.handler, "GET", "/api/v1/websites/backup-storage", nil, cookie, ""); strings.Contains(w.Body.String(), "repository-password") || !strings.Contains(w.Body.String(), `"password_saved":false`) {
 		t.Fatalf("the page read carries a password: %s", w.Body)
+	}
+	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage/password", map[string]any{}, cookie, ""); w.Code != 403 {
+		t.Fatalf("the password without CSRF: %d", w.Code)
+	}
+	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage/password", map[string]any{"show": true}, cookie, csrf); w.Code != 422 {
+		t.Fatalf("the password with a body: %d %s", w.Code, w.Body)
+	}
+	w = websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage/password", map[string]any{}, cookie, csrf)
+	var shown BackupStoragePassword
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &shown) != nil || shown.Password != "repository-password-shown-once-0123456789ab" {
+		t.Fatalf("the password again %d: %s", w.Code, w.Body)
+	}
+	w = websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage/password-saved", map[string]any{}, cookie, csrf)
+	var confirmed BackupStorage
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &confirmed) != nil || !confirmed.PasswordSaved || strings.Contains(w.Body.String(), "repository-password") {
+		t.Fatalf("confirm %d: %s", w.Code, w.Body)
+	}
+	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage/password", map[string]any{}, cookie, csrf); w.Code != 409 || problemDetail(t, w) != backupPasswordGone {
+		t.Fatalf("the password after the confirmation %d: %s", w.Code, w.Body)
+	}
+	w = websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage", storageBody(), cookie, csrf)
+	if w.Code != 200 || strings.Contains(w.Body.String(), "repository-password") || !strings.Contains(w.Body.String(), `"password_saved":true`) {
+		t.Fatalf("a save after the confirmation %d: %s", w.Code, w.Body)
 	}
 	b.targetErr = &hostaccounts.BackupError{Step: "connect", Detail: "Host key verification failed."}
 	w = websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage", storageBody(), cookie, csrf)

@@ -9,7 +9,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { canClosePassword, formFromTarget, getBackupStorage, passwordFrom, saveBackupStorage, scheduleLine, targetChecks } from "@/lib/site-backups-api";
+import { canClosePassword, confirmBackupPasswordSaved, formFromTarget, getBackupStorage, passwordFrom, saveBackupStorage, scheduleLine, showBackupPassword, targetChecks } from "@/lib/site-backups-api";
 import type { BackupStorage as Storage, TargetField, TargetForm } from "@/lib/site-backups-api";
 import { control, CopyButton, DrillSummary, panel, ProblemAlert, problemFrom, PruneSummary } from "@/BackupParts";
 import type { Problem } from "@/BackupParts";
@@ -17,9 +17,10 @@ import { useShell } from "@/shell/context";
 
 // The Backup storage page: where every website's backups go (an SFTP
 // server outside this one), the key this server signs in there with, and
-// the last restore drill. The repository password arrives once, in the
-// answer to the first save, and is shown in a dialog that stays until the
-// person says it is saved; it is kept nowhere else.
+// the last restore drill. The repository password arrives in the answer to
+// a save, and can be shown again, until the person confirms it is saved:
+// the dialog stays until the server has recorded that. The page keeps the
+// password only while the dialog is open.
 
 const fieldLabels: Record<TargetField, string> = { host: "Storage server", port: "SSH port", user: "User", path: "Folder", known_hosts: "Host key" };
 const order: TargetField[] = ["host", "port", "user", "path", "known_hosts"];
@@ -135,17 +136,33 @@ function TargetFormView({ storage, onSaved }: { storage: Storage; onSaved: (save
   </form>;
 }
 
-// Shown once. It closes only after the person says the password is saved:
-// not by a click outside, and not by Esc before that.
-function PasswordDialog({ password, onClosed, afterClose }: { password: string; onClosed: () => void; afterClose: () => HTMLElement | null }) {
+// It closes only after the person says the password is saved and the
+// server has recorded that: not by a click outside, and not by Esc before
+// that. Esc once the box is ticked confirms, as the button does.
+function PasswordDialog({ password, onConfirmed, onClosed, afterClose }: { password: string; onConfirmed: (storage: Storage) => void; onClosed: () => void; afterClose: () => HTMLElement | null }) {
   const [saved, setSaved] = useState(false);
   const [open, setOpen] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<Problem>();
+  const confirm = async () => {
+    if (busy || !canClosePassword(saved)) return;
+    setBusy(true);
+    setProblem(undefined);
+    try {
+      onConfirmed(await confirmBackupPasswordSaved());
+      setOpen(false);
+    } catch (error) {
+      setProblem(problemFrom(error, "The backup password was not marked as saved."));
+    } finally {
+      setBusy(false);
+    }
+  };
   // The password leaves the page once the dialog has finished closing.
-  return <Dialog open={open} disablePointerDismissal onOpenChange={(next) => { if (!next && canClosePassword(saved)) setOpen(false); }} onOpenChangeComplete={(next) => { if (!next) onClosed(); }}>
+  return <Dialog open={open} disablePointerDismissal onOpenChange={(next) => { if (!next) void confirm(); }} onOpenChangeComplete={(next) => { if (!next) onClosed(); }}>
     <DialogContent showCloseButton={false} className="sm:max-w-lg" data-testid="password-dialog" initialFocus={() => document.getElementById("backup-password-value") ?? true} finalFocus={() => afterClose() ?? true}>
       <DialogHeader>
         <DialogTitle render={<h1 />} className="leading-snug">Save the backup password</DialogTitle>
-        <DialogDescription className="text-start text-foreground">Save this password now. Without it the backups cannot be restored on another server. It will not be shown again.</DialogDescription>
+        <DialogDescription className="text-start text-foreground">Save this password now. Without it the backups cannot be restored on another server. Once you confirm it is saved, the panel does not show it again.</DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-2">
         <label htmlFor="backup-password-value" className="text-sm font-medium">Backup password</label>
@@ -160,9 +177,12 @@ function PasswordDialog({ password, onClosed, afterClose }: { password: string; 
         <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={saved} onChange={(e) => setSaved(e.target.checked)} data-testid="password-saved" />
         <span>I saved the password somewhere safe.</span>
       </label>
+      {problem && <ProblemAlert problem={problem} testId="password-confirm-problem" />}
       <DialogFooter>
-        <Button type="button" className={`${control} aria-disabled:opacity-60`} disabled={!saved} focusableWhenDisabled aria-describedby="backup-password-close-note" onClick={() => setOpen(false)} data-testid="close-password">Close</Button>
-        <span id="backup-password-close-note" className="sr-only">Available once the box above is ticked.</span>
+        <Button type="button" className={`${control} aria-disabled:opacity-60`} disabled={!saved || busy} focusableWhenDisabled aria-describedby="backup-password-close-note" onClick={() => void confirm()} data-testid="close-password">
+          {busy && <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />}{busy ? "Recording…" : "I saved it"}
+        </Button>
+        <span id="backup-password-close-note" className="sr-only">Available once the box above is ticked. The panel then stops showing the password.</span>
       </DialogFooter>
     </DialogContent>
   </Dialog>;
@@ -177,8 +197,23 @@ export function BackupStorage() {
   const [attempt, setAttempt] = useState(0);
   const [notice, setNotice] = useState("");
   const [password, setPassword] = useState<string>();
+  const [revealing, setRevealing] = useState(false);
+  const [revealProblem, setRevealProblem] = useState<Problem>();
   const [formRound, setFormRound] = useState(0);
   const noticeRef = useRef<HTMLDivElement>(null);
+
+  const reveal = async () => {
+    if (revealing) return;
+    setRevealing(true);
+    setRevealProblem(undefined);
+    try {
+      setPassword(await showBackupPassword());
+    } catch (error) {
+      setRevealProblem(problemFrom(error, "The backup password could not be shown."));
+    } finally {
+      setRevealing(false);
+    }
+  };
 
   useEffect(() => {
     let live = true;
@@ -229,6 +264,17 @@ export function BackupStorage() {
         <CircleCheck className="text-primary" aria-hidden="true" />
         <AlertTitle>{notice}</AlertTitle>
       </Alert>}
+      {storage.configured && !storage.password_saved && !password && <Alert role={undefined} className="text-start" data-testid="password-not-saved">
+        <TriangleAlert aria-hidden="true" />
+        <AlertTitle>The backup password is not marked as saved</AlertTitle>
+        <AlertDescription className="flex flex-col gap-3 text-start text-foreground">
+          <div>Without it the backups cannot be restored on another server. Show it, keep it in a password manager away from this server, then confirm it is saved.</div>
+          <Button type="button" variant="outline" className={`${control} w-fit aria-disabled:opacity-70`} disabled={revealing} focusableWhenDisabled onClick={() => void reveal()} data-testid="show-password">
+            {revealing ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <KeyRound aria-hidden="true" />}{revealing ? "Getting the password…" : "Show the password"}
+          </Button>
+        </AlertDescription>
+      </Alert>}
+      {revealProblem && <ProblemAlert problem={revealProblem} onRetry={() => void reveal()} testId="show-password-problem" />}
     </section>
 
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="backup-key-heading">
@@ -256,6 +302,10 @@ export function BackupStorage() {
       <PruneSummary prune={storage.last_prune} timezone={storage.timezone} />
     </section>
 
-    {password && <PasswordDialog password={password} onClosed={() => setPassword(undefined)} afterClose={() => noticeRef.current} />}
+    {password && <PasswordDialog password={password} onConfirmed={(confirmed) => {
+      setStorage(confirmed);
+      setRevealProblem(undefined);
+      setNotice("The backup password is marked as saved. The panel does not show it again.");
+    }} onClosed={() => setPassword(undefined)} afterClose={() => noticeRef.current} />}
   </div>;
 }

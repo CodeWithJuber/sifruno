@@ -3,8 +3,9 @@ import { validSession } from "./sites-api";
 // Client for website backups: the Backup storage page and a website's
 // Backups page. The broker does the work and the server is the authority on
 // every rule; the checks here mirror it so a form can say what is wrong
-// before anything is sent. The repository password arrives once, in the
-// answer to the first save, and is never stored, logged or put in an error.
+// before anything is sent. The repository password arrives in the answer
+// to a save, or when the admin asks to see it again, until they confirm it
+// is saved; it is never stored, logged or put in an error.
 
 export type JobKind = "backup" | "restore" | "drill";
 export type RestoreWhat = "files" | "database" | "both";
@@ -17,7 +18,7 @@ export interface DrillRecord {
 }
 export interface PruneRecord { at: string; passed: boolean; removed: number; message: string; step?: string; detail?: string }
 export interface BackupStorage {
-  ready: boolean; public_key: string; configured: boolean; target: BackupTarget | null;
+  ready: boolean; public_key: string; configured: boolean; target: BackupTarget | null; password_saved: boolean;
   nightly_at: string; timezone: string; last_drill: DrillRecord | null; last_prune: PruneRecord | null;
 }
 export interface BackupStorageSaved extends BackupStorage { initialized: boolean; password?: string }
@@ -155,8 +156,9 @@ export function restoreEffect(what: RestoreWhat): string {
 // The page asks again every 5 s while a job runs, and stops when it ends.
 export const shouldPoll = (site: Pick<SiteBackups, "running"> | undefined) => Boolean(site?.running);
 
-// The password is shown once: only the answer that carries it opens the
-// dialog, and the dialog closes only after the person says it is saved.
+// Only an answer that carries the password opens the dialog, and the
+// dialog closes only after the person says it is saved and the server has
+// recorded that.
 export const passwordFrom = (saved: BackupStorageSaved): string | undefined => text(saved.password) && saved.password.length > 0 ? saved.password : undefined;
 export const canClosePassword = (confirmed: boolean) => confirmed;
 
@@ -238,8 +240,14 @@ export function parseBackupStorage(v: unknown): BackupStorage | undefined {
   const target = parseTarget(v.target);
   const drill = parseDrill(v.last_drill);
   const prune = parsePrune(v.last_prune);
-  if (target === undefined || drill === undefined || prune === undefined) return undefined;
-  return { ready: v.ready, public_key: v.public_key, configured: v.configured, target, nightly_at: v.nightly_at, timezone: v.timezone, last_drill: drill, last_prune: prune };
+  if (target === undefined || drill === undefined || prune === undefined || !bool(v.password_saved)) return undefined;
+  return { ready: v.ready, public_key: v.public_key, configured: v.configured, target, password_saved: v.password_saved, nightly_at: v.nightly_at, timezone: v.timezone, last_drill: drill, last_prune: prune };
+}
+
+// The password shown again: exactly the field, 43 base64url characters.
+export function parseShownPassword(v: unknown): string | undefined {
+  if (!object(v) || !text(v.password) || !/^[A-Za-z0-9_-]{43}$/.test(v.password)) return undefined;
+  return v.password;
 }
 
 export function parseBackupStorageSaved(v: unknown): BackupStorageSaved | undefined {
@@ -288,11 +296,13 @@ export function parseStarted(v: unknown): RunningJob | undefined {
 
 // ---- Errors -----------------------------------------------------------------
 
-export type Operation = "storage" | "saveStorage" | "list" | "backup" | "drill" | "restore";
+export type Operation = "storage" | "saveStorage" | "showPassword" | "confirmPassword" | "list" | "backup" | "drill" | "restore";
 
 export const whatFailed: Record<Operation, string> = {
   storage: "The backup storage settings could not be loaded.",
   saveStorage: "The backup storage was not saved.",
+  showPassword: "The backup password could not be shown.",
+  confirmPassword: "The backup password was not marked as saved.",
   list: "The backups could not be loaded.",
   backup: "The backup did not start.",
   drill: "The restore drill did not start.",
@@ -330,7 +340,9 @@ function explain(operation: Operation, status: number, detail: string): { why: s
     case 401: return { why: "Your sign-in has ended.", next: "Sign in again, then try again." };
     case 403: return { why: detail || "The panel refused the request because the session or page origin did not match.", next: "Reload the page, sign in if asked, and try again." };
     case 404: return { why: detail || "The website or backup was not found.", next: "Go back to Websites and open the website again." };
-    case 409: return { why: detail || "Something else is running for this site.", next: "Wait for it to finish, reload the page, then try again." };
+    case 409:
+      if (operation === "showPassword") return { why: detail || "The backup password was already marked as saved.", next: "Use the copy you saved, and reload the page." };
+      return { why: detail || "Something else is running for this site.", next: "Wait for it to finish, reload the page, then try again." };
     case 422: return { why: detail || "The server did not accept one of the values.", next: "Fix the value the message names, then try again." };
     case 429: return { why: detail || "Too many requests in a short time.", next: "Wait a minute, then try again." };
     case 503: return { why: detail || "The account service is not available right now.", next: read ? "Reload the page in a minute." : "Try again in a minute. If it keeps failing, check the Sifruno services on this server." };
@@ -419,14 +431,34 @@ export async function getBackupStorage(options: { signal?: AbortSignal } = {}): 
   return value;
 }
 
-// The answer to the first save carries the repository password; it is
-// handed to the caller once and kept nowhere here.
+// The answer to a save carries the repository password until the admin
+// confirms it is saved; it is handed to the caller and kept nowhere here.
 export async function saveBackupStorage(form: TargetForm, options: { signal?: AbortSignal } = {}): Promise<BackupStorageSaved> {
   const checked = targetBody(form);
   if ("problem" in checked) throw notSent("saveStorage", checked.problem, `the ${checked.field} field failed the panel's checks`);
   const csrf = await csrfToken("saveStorage", options.signal);
   const value = parseBackupStorageSaved(await request("saveStorage", storageURL, { method: "POST", body: checked.body, csrf, timeoutMs: saveTimeoutMs, signal: options.signal }));
   if (!value) throw unexpected("saveStorage", `POST ${storageURL}`);
+  return value;
+}
+
+// The password again, until the admin confirms it is saved. A POST, so the
+// server checks the session's CSRF token; the answer is kept nowhere here.
+export async function showBackupPassword(options: { signal?: AbortSignal } = {}): Promise<string> {
+  const url = `${storageURL}/password`;
+  const csrf = await csrfToken("showPassword", options.signal);
+  const value = parseShownPassword(await request("showPassword", url, { method: "POST", body: {}, csrf, timeoutMs: 30000, signal: options.signal }));
+  if (!value) throw unexpected("showPassword", `POST ${url}`);
+  return value;
+}
+
+// Records that the admin saved the password; the server then never shows
+// it again. Answers the page's settings.
+export async function confirmBackupPasswordSaved(options: { signal?: AbortSignal } = {}): Promise<BackupStorage> {
+  const url = `${storageURL}/password-saved`;
+  const csrf = await csrfToken("confirmPassword", options.signal);
+  const value = parseBackupStorage(await request("confirmPassword", url, { method: "POST", body: {}, csrf, timeoutMs: 30000, signal: options.signal }));
+  if (!value) throw unexpected("confirmPassword", `POST ${url}`);
   return value;
 }
 

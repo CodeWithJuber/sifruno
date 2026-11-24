@@ -17,7 +17,7 @@ const problem = (status, detail, errors) => json({ title: "Problem", status, det
 
 const storage = (extra = {}) => ({
   $schema: "http://127.0.0.1/schemas/BackupStorage.json", ready: true, public_key: "ssh-ed25519 AAAA sifruno-backup", configured: true,
-  target: { host: "backup.example.test", port: 22, user: "sifbackup", path: "/srv/backups/web1", host_keys: [hostKey] },
+  target: { host: "backup.example.test", port: 22, user: "sifbackup", path: "/srv/backups/web1", host_keys: [hostKey] }, password_saved: false,
   nightly_at: "02:30", timezone: "Asia/Dubai",
   last_drill: { account_id: accountId, domain: "example.test", passed: true, checked_at: "2026-11-23T23:10:00Z", snapshot: snapshotId, snapshot_time: "2026-11-23T22:31:00Z", files: 1830, subset: "1/8", message: "The latest backup restored completely." },
   last_prune: null, ...extra,
@@ -109,6 +109,10 @@ test("answers are read strictly", () => {
   assert.equal(api.parseBackupStorage(storage({ target: null, configured: false })).target, null);
   assert.equal(api.parseBackupStorage(storage({ ready: "yes" })), undefined);
   assert.equal(api.parseBackupStorage(storage({ last_drill: { passed: true } })), undefined);
+  assert.equal(api.parseBackupStorage(storage()).password_saved, false);
+  assert.equal(api.parseBackupStorage(storage({ password_saved: undefined })), undefined);
+  assert.equal(api.parseShownPassword({ password: "p".repeat(43) }), "p".repeat(43));
+  for (const bad of [{}, { password: "" }, { password: "p".repeat(44) }, { password: `${"p".repeat(42)}<` }, null]) assert.equal(api.parseShownPassword(bad), undefined, JSON.stringify(bad));
   const parsed = api.parseSiteBackups(site());
   assert.equal(parsed.snapshots[0].bytes, 52428800);
   assert.equal(parsed.last_backup.status, "succeeded");
@@ -131,6 +135,28 @@ test("saving the target sends the CSRF token and the exact body, and returns the
   assert.equal(calls[0].method, "POST");
   assert.equal(calls[0].headers["X-CSRF-Token"], session.csrf_token);
   assert.deepEqual(calls[0].body, { host: "backup.example.test", port: 2222, user: "sifbackup", path: "/srv/backups/web1", known_hosts: hostKey });
+});
+
+test("the password is shown again and confirmed saved with the CSRF token and an empty body", async () => {
+  const { calls, mock } = server((url) => url.endsWith("/password") ? json({ password: "p".repeat(43) }) : json(storage({ password_saved: true })));
+  await withFetch(mock, async () => {
+    assert.equal(await api.showBackupPassword(), "p".repeat(43));
+    assert.equal((await api.confirmBackupPasswordSaved()).password_saved, true);
+  });
+  assert.deepEqual(calls.map((c) => [c.method, c.url, c.headers["X-CSRF-Token"], JSON.stringify(c.body)]), [
+    ["POST", "/api/v1/websites/backup-storage/password", session.csrf_token, "{}"],
+    ["POST", "/api/v1/websites/backup-storage/password-saved", session.csrf_token, "{}"],
+  ]);
+  const gone = server(() => problem(409, "The backup password was already marked as saved, so the panel no longer shows it. Use the copy you saved. Nothing changed."));
+  await withFetch(gone.mock, async () => {
+    await assert.rejects(api.showBackupPassword(), (error) => {
+      assert.equal(error.message, "The backup password could not be shown.");
+      assert.match(error.why, /already marked as saved/);
+      assert.match(error.next, /Use the copy you saved/);
+      assert.doesNotMatch(`${error.why} ${error.technical}`, /p{43}/);
+      return true;
+    });
+  });
 });
 
 test("a bad target is not sent, and a refused one says why with technical details", async () => {

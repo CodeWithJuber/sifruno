@@ -202,6 +202,18 @@ func (m *Manager) SetTarget(ctx context.Context, in hostaccounts.BackupTargetInp
 	return m.broker.SetBackupTarget(ctx, in, actor)
 }
 
+// ShowPassword reads the repository password again. The broker gives it
+// only until the admin confirms it is saved; the panel keeps no copy.
+func (m *Manager) ShowPassword(ctx context.Context, actor string) (hostaccounts.BackupPassword, error) {
+	return m.broker.ShowBackupPassword(ctx, hostaccounts.BackupPasswordInput{Reason: "Shown again on the Backup storage page"}, actor)
+}
+
+// ConfirmPasswordSaved records that the admin saved the repository
+// password; the broker does not give it again.
+func (m *Manager) ConfirmPasswordSaved(ctx context.Context, actor string) (hostaccounts.BackupStatus, error) {
+	return m.broker.ConfirmBackupPassword(ctx, hostaccounts.BackupPasswordInput{Reason: "Confirmed saved on the Backup storage page"}, actor)
+}
+
 // Snapshots lists one site's backups, newest first.
 func (m *Manager) Snapshots(ctx context.Context, id string) ([]hostaccounts.Snapshot, error) {
 	return m.broker.ListBackups(ctx, id)

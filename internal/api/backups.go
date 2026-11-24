@@ -17,14 +17,15 @@ import (
 // the storage server, the target, the schedule and the last drill and
 // prune. It never carries the repository password.
 type BackupStorage struct {
-	Ready      bool                      `json:"ready" doc:"restic is installed and is the version the panel was built for."`
-	PublicKey  string                    `json:"public_key" doc:"This server's backup key. Install it for the storage user on the storage server."`
-	Configured bool                      `json:"configured"`
-	Target     *BackupStorageTarget      `json:"target"`
-	NightlyAt  string                    `json:"nightly_at" doc:"When the nightly backup of every site starts, HH:MM in the server's timezone."`
-	Timezone   string                    `json:"timezone"`
-	LastDrill  *sitebackups.RestoreDrill `json:"last_drill"`
-	LastPrune  *sitebackups.BackupPrune  `json:"last_prune"`
+	Ready         bool                      `json:"ready" doc:"restic is installed and is the version the panel was built for."`
+	PublicKey     string                    `json:"public_key" doc:"This server's backup key. Install it for the storage user on the storage server."`
+	Configured    bool                      `json:"configured"`
+	Target        *BackupStorageTarget      `json:"target"`
+	PasswordSaved bool                      `json:"password_saved" doc:"The admin confirmed saving the repository password. Until then a signed-in admin can show it again."`
+	NightlyAt     string                    `json:"nightly_at" doc:"When the nightly backup of every site starts, HH:MM in the server's timezone."`
+	Timezone      string                    `json:"timezone"`
+	LastDrill     *sitebackups.RestoreDrill `json:"last_drill"`
+	LastPrune     *sitebackups.BackupPrune  `json:"last_prune"`
 }
 
 // BackupStorageTarget is the configured SFTP storage server.
@@ -48,12 +49,17 @@ type BackupStorageBody struct {
 }
 
 // BackupStorageSaved answers a saved target. Password is the repository
-// password, filled in only the first time a repository is made or opened:
-// it is never shown again.
+// password, filled in until the admin confirms saving it.
 type BackupStorageSaved struct {
 	BackupStorage
 	Initialized bool   `json:"initialized" doc:"A new repository was made; false when an existing one was opened."`
-	Password    string `json:"password,omitempty" doc:"Shown once. Without it the backups cannot be restored on another server."`
+	Password    string `json:"password,omitempty" doc:"Given until the admin confirms saving it. Without it the backups cannot be restored on another server."`
+}
+
+// BackupStoragePassword is the repository password, shown again to a
+// signed-in admin until they confirm saving it.
+type BackupStoragePassword struct {
+	Password string `json:"password" doc:"The repository password. Keep it in a password manager, away from this server."`
 }
 
 // SiteBackups is a site's Backups section.
@@ -79,6 +85,7 @@ type SiteBackupRestoreBody struct {
 
 type backupStorageOutput struct{ Body BackupStorage }
 type backupStorageSavedOutput struct{ Body BackupStorageSaved }
+type backupStoragePasswordOutput struct{ Body BackupStoragePassword }
 type backupStorageInput struct{ Body BackupStorageBody }
 type websiteBackupsInput struct {
 	AccountID string `path:"account_id"`
@@ -105,6 +112,12 @@ const (
 	backupListWait    = 2 * time.Minute
 )
 
+// What the Backup storage page's password routes answer.
+const (
+	backupPasswordRefused = "The account service refused the request as invalid, so nothing changed. Reload the page and try again."
+	backupPasswordGone    = "The backup password was already marked as saved, so the panel no longer shows it. Use the copy you saved. Nothing changed."
+)
+
 var backupSnapshotID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // backupMutationKeys answers the fields a backup POST's body takes; ok is
@@ -113,8 +126,11 @@ func backupMutationKeys(r *http.Request) (fields []wizardField, ok bool) {
 	if r.Method != http.MethodPost {
 		return nil, false
 	}
-	if r.URL.Path == "/api/v1/websites/backup-storage" {
+	switch r.URL.Path {
+	case "/api/v1/websites/backup-storage":
 		return []wizardField{{name: "host"}, {name: "port", whole: true}, {name: "user"}, {name: "path"}, {name: "known_hosts"}}, true
+	case "/api/v1/websites/backup-storage/password", "/api/v1/websites/backup-storage/password-saved":
+		return []wizardField{}, true
 	}
 	rest, found := strings.CutPrefix(r.URL.Path, "/api/v1/websites/sites/")
 	if !found {
@@ -170,7 +186,7 @@ func registerSiteBackups(a huma.API, o Options) {
 			return BackupStorage{}, huma.Error503ServiceUnavailable(backupsNoAnswer, errors.New("account service: "+err.Error()))
 		}
 		server := o.Backups.Server()
-		out := BackupStorage{Ready: status.Ready, PublicKey: status.PublicKey, Configured: status.Configured, NightlyAt: server.NightlyAt, Timezone: server.Timezone, LastDrill: server.LastDrill, LastPrune: server.LastPrune}
+		out := BackupStorage{Ready: status.Ready, PublicKey: status.PublicKey, Configured: status.Configured, PasswordSaved: status.PasswordSaved, NightlyAt: server.NightlyAt, Timezone: server.Timezone, LastDrill: server.LastDrill, LastPrune: server.LastPrune}
 		if t := status.Target; t != nil {
 			out.Target = &BackupStorageTarget{Host: t.Host, Port: t.Port, User: t.User, Path: t.Path, HostKeys: t.HostKeys}
 		}
@@ -203,12 +219,41 @@ func registerSiteBackups(a huma.API, o Options) {
 		out, err := storage(ctx)
 		if err != nil {
 			// The target is saved; show what the broker answered.
-			out = BackupStorage{Ready: res.Status.Ready, PublicKey: res.Status.PublicKey, Configured: true}
+			out = BackupStorage{Ready: res.Status.Ready, PublicKey: res.Status.PublicKey, Configured: true, PasswordSaved: res.Status.PasswordSaved}
 		}
 		if t := res.Status.Target; t != nil {
 			out.Target = &BackupStorageTarget{Host: t.Host, Port: t.Port, User: t.User, Path: t.Path, HostKeys: t.HostKeys}
 		}
 		return &backupStorageSavedOutput{Body: BackupStorageSaved{BackupStorage: out, Initialized: res.Initialized, Password: res.Password}}, nil
+	})
+	// The password again, for a signed-in admin only (the token fence
+	// refuses everything under backup-storage), until they confirm saving
+	// it. A POST, so Origin and CSRF are checked and nothing caches it.
+	huma.Register(a, op("show-backup-password", http.MethodPost, "/api/v1/websites/backup-storage/password", http.StatusOK), func(ctx context.Context, _ *struct{}) (*backupStoragePasswordOutput, error) {
+		if o.Backups == nil {
+			return nil, huma.Error503ServiceUnavailable(backupsNotSetUp)
+		}
+		got, err := o.Backups.ShowPassword(ctx, siteActor(ctx))
+		if errors.Is(err, hostaccounts.ErrConflict) {
+			return nil, huma.Error409Conflict(backupPasswordGone)
+		}
+		if err != nil {
+			return nil, backupError(err, "password", backupPasswordRefused)
+		}
+		return &backupStoragePasswordOutput{Body: BackupStoragePassword{Password: got.Password}}, nil
+	})
+	huma.Register(a, op("confirm-backup-password-saved", http.MethodPost, "/api/v1/websites/backup-storage/password-saved", http.StatusOK), func(ctx context.Context, _ *struct{}) (*backupStorageOutput, error) {
+		if o.Backups == nil {
+			return nil, huma.Error503ServiceUnavailable(backupsNotSetUp)
+		}
+		if _, err := o.Backups.ConfirmPasswordSaved(ctx, siteActor(ctx)); err != nil {
+			return nil, backupError(err, "password", backupPasswordRefused)
+		}
+		out, err := storage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &backupStorageOutput{Body: out}, nil
 	})
 	huma.Register(a, op("get-website-backups", http.MethodGet, "/api/v1/websites/sites/{account_id}/backups", http.StatusOK), func(ctx context.Context, in *websiteBackupsInput) (*websiteBackupsOutput, error) {
 		site, account, err := backupSite(ctx, o, in.AccountID)

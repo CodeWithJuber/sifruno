@@ -104,6 +104,12 @@ func TestAPITokenThroughThePanelAPI(t *testing.T) {
 			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/restore"},
 			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/drill"},
 			{"GET", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/restore/x"},
+			// The older ZIP backups: restores and their previews, removal,
+			// and a download, which hands out the site's contents.
+			{"POST", "/api/v1/sites/site-1/restore"}, {"POST", "/api/v1/sites/site-1/restore-preview"},
+			{"POST", "/api/v1/sites/site-1/restore-file"}, {"POST", "/api/v1/sites/site-1/restore-file-preview"},
+			{"POST", "/api/v1/sites/site-1/archive-restore"}, {"POST", "/api/v1/sites/site-1/remove-backup"},
+			{"GET", "/api/v1/sites/site-1/backups/backup-1/download"},
 		} {
 			w := clientRequest(h, network, route.method, route.path, created.Token, map[string]string{})
 			if w.Code != 403 || problemError(t, w) != "token_not_allowed" {

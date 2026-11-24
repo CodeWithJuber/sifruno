@@ -307,6 +307,24 @@ func tokenRefusedSiteBackup(p string) bool {
 	return len(parts) >= 3 && parts[1] == "backups" && slices.Contains(tokenRefusedSiteBackups, parts[2])
 }
 
+// tokenRefusedOldSiteBackups are the older ZIP backup routes under
+// /api/v1/sites/{id} that overwrite a site, remove a backup or hand out its
+// contents. Taking a backup and listing them stay open to tokens.
+var tokenRefusedOldSiteBackups = []string{"restore", "restore-preview", "restore-file", "restore-file-preview", "archive-restore", "remove-backup"}
+
+func tokenRefusedOldSiteBackup(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/sites/")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) >= 2 && slices.Contains(tokenRefusedOldSiteBackups, parts[1]) {
+		return true
+	}
+	// /api/v1/sites/{id}/backups/{backupID}/download
+	return len(parts) >= 4 && parts[1] == "backups" && parts[3] == "download"
+}
+
 func tokenArea(p string) bool {
 	if path.Clean(p) != p {
 		return false
@@ -319,7 +337,7 @@ func tokenArea(p string) bool {
 			return false
 		}
 	}
-	if tokenRefusedSiteBackup(p) {
+	if tokenRefusedSiteBackup(p) || tokenRefusedOldSiteBackup(p) {
 		return false
 	}
 	for _, area := range tokenAreas {

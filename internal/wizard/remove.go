@@ -48,22 +48,32 @@ func (e *RemoveFailure) Error() string { return e.Why }
 func (e *RemoveFailure) Unwrap() error { return e.Reason }
 
 // removal is one thing a site delete removes. failed explains an error from
-// remove; unsure means the panel cannot tell whether the thing went.
+// remove; unsure means the panel cannot tell whether the thing went. account
+// marks the hosting account's removal.
 type removal struct {
-	label  string
-	remove func(context.Context) error
-	failed func(error) (why string, unsure bool, reason error)
+	label   string
+	remove  func(context.Context) error
+	failed  func(error) (why string, unsure bool, reason error)
+	account bool
 }
 
-// RemoveSite deletes a site the wizard made: its database user and database,
-// if the registry lists them for the site's account, then the hosting account
-// with its files and its site on the web server, each through dbhost or one of
-// the broker's typed operations. Then the site's job is marked, so the site
+// RemoveSite deletes a site the wizard made: the hosting account with its
+// files and its site on the web server, through the broker's typed delete,
+// then its database user and database, if the registry lists them for the
+// site's account, through dbhost. Then the site's job is marked, so the site
 // leaves Websites.
 //
+// The account goes first: while the broker can still refuse it (a changed
+// revision, a running install, a config that fails its test), the site is
+// whole and its database is still there. Before the broker is asked, the
+// site's job records the revision it is asked at. If the account is gone
+// and a database step then fails, the job still names the site: Websites
+// lists it as partly deleted with that revision, and asking again removes
+// what is left.
+//
 // The typed domain must be the site's, and revision the account's current
-// one. Everything that can be checked is checked before the first removal,
-// because a removed database does not come back. The delete then runs to its
+// one, or the recorded one once the account is gone. Everything that can be
+// checked is checked before the first removal. The delete then runs to its
 // end on its own limit, detached from ctx: closing the page does not stop it
 // half-way. It stops at the first removal that fails, and the failure says
 // what went and what is left; asking again carries on from there. One delete
@@ -84,31 +94,51 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 	r.removing.Lock()
 	defer r.removing.Unlock()
 
-	if !slices.ContainsFunc(r.Succeeded(), func(j Job) bool { return j.Result.AccountID == accountID }) {
+	sites := r.Succeeded()
+	k := slices.IndexFunc(sites, func(j Job) bool { return j.Result.AccountID == accountID })
+	if k < 0 {
 		return nothing(ErrNotFound, "That website was not found. It may have been removed already, or it was not made with New website.", nil)
 	}
+	job := sites[k]
 	accounts, err := r.accounts.List(ctx)
 	if err != nil {
 		return nothing(ErrUnavailable, "The account service did not answer.", err)
 	}
 	i := slices.IndexFunc(accounts, func(a hostaccounts.Account) bool { return a.ID == accountID })
-	if i < 0 {
-		return nothing(ErrNotFound, "That website's hosting account is no longer on this server.", nil)
-	}
-	a := accounts[i]
-	if confirmDomain != a.Domain {
-		return nothing(ErrInvalid, "The domain you typed is not this website's domain, "+a.Domain+".", nil)
-	}
-	if a.Revision != revision {
-		return nothing(ErrConflict, "This website changed after the page loaded it.", nil)
-	}
-	// The broker refuses every change while any account has an unfinished
-	// one, and the list shows that account as needing recovery.
-	if stuck := slices.IndexFunc(accounts, func(a hostaccounts.Account) bool { return a.State == "recovery_required" }); stuck >= 0 {
-		return nothing(ErrUnavailable, "The account service has an unfinished change on the hosting account "+accounts[stuck].Username+" and refuses every other change until someone has checked it.", nil)
+	owner, domain := job.Username, job.Domain
+	// taken: the account is gone and a later one has its user name, so the
+	// databases registered under that name are the later account's now.
+	taken := false
+	if i >= 0 {
+		a := accounts[i]
+		owner, domain = a.Username, a.Domain
+		if confirmDomain != a.Domain {
+			return nothing(ErrInvalid, "The domain you typed is not this website's domain, "+a.Domain+".", nil)
+		}
+		if a.Revision != revision {
+			return nothing(ErrConflict, "This website changed after the page loaded it.", nil)
+		}
+		// The broker refuses every change while any account has an
+		// unfinished one, and the list shows that account as needing recovery.
+		if stuck := slices.IndexFunc(accounts, func(a hostaccounts.Account) bool { return a.State == "recovery_required" }); stuck >= 0 {
+			return nothing(ErrUnavailable, "The account service has an unfinished change on the hosting account "+accounts[stuck].Username+" and refuses every other change until someone has checked it.", nil)
+		}
+	} else {
+		// Only a delete from this page that got as far as asking the broker
+		// leaves a site whose account is gone; anything else is not a site
+		// this page can finish.
+		if job.DeleteRevision == 0 || owner == "" {
+			return nothing(ErrNotFound, "That website's hosting account is no longer on this server.", nil)
+		}
+		if confirmDomain != job.Domain {
+			return nothing(ErrInvalid, "The domain you typed is not this website's domain, "+job.Domain+".", nil)
+		}
+		if job.DeleteRevision != revision {
+			return nothing(ErrConflict, "This website changed after the page loaded it.", nil)
+		}
+		taken = slices.ContainsFunc(accounts, func(a hostaccounts.Account) bool { return a.Username == owner })
 	}
 
-	owner := a.Username
 	name := dbhost.PrefixedName(owner, strings.TrimPrefix(dbSuffix, "_"))
 	users, err := r.databases.AllUsers(ctx)
 	if err != nil {
@@ -118,39 +148,50 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 	if err != nil {
 		return nothing(ErrUnavailable, "The panel could not read its list of databases.", err)
 	}
-	out := Removal{Domain: a.Domain, Username: owner}
+	out := Removal{Domain: domain, Username: owner}
 	notDropped := func(what string) func(error) (string, bool, error) {
 		return func(error) (string, bool, error) {
 			return "The database server did not remove " + what + ".", false, ErrUnavailable
 		}
 	}
 	var plan []removal
+	if i >= 0 {
+		plan = append(plan, removal{"the hosting account " + owner + " with its files and its site on the web server", func(ctx context.Context) error {
+			_, err := r.accounts.Delete(ctx, accountID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: removeReason}, actor)
+			if errors.Is(err, hostaccounts.ErrNotFound) {
+				return nil // already gone
+			}
+			return err
+		}, accountNotDeleted, true})
+	}
 	// Only what the registry lists under this account's name for this
 	// account: the wizard registered exactly that. Anything else with the
 	// name is someone else's and stays.
 	user, database := "the database user "+name, "the database "+name
-	if slices.ContainsFunc(users, func(u dbhost.User) bool { return u.Name == name && u.Owner == owner }) {
-		plan = append(plan, removal{user, func(ctx context.Context) error { return r.databases.DropUser(ctx, owner, name) }, notDropped(user)})
+	if !taken && slices.ContainsFunc(users, func(u dbhost.User) bool { return u.Name == name && u.Owner == owner }) {
+		plan = append(plan, removal{user, func(ctx context.Context) error { return r.databases.DropUser(ctx, owner, name) }, notDropped(user), false})
 	} else if has, err := r.databases.ServerHas(ctx, "user", name); err == nil && has {
 		out.Kept = append(out.Kept, user)
 	}
-	if slices.ContainsFunc(databases, func(d dbhost.Database) bool { return d.Name == name && d.Owner == owner }) {
-		plan = append(plan, removal{database, func(ctx context.Context) error { return r.databases.DropDatabase(ctx, owner, name) }, notDropped(database)})
+	if !taken && slices.ContainsFunc(databases, func(d dbhost.Database) bool { return d.Name == name && d.Owner == owner }) {
+		plan = append(plan, removal{database, func(ctx context.Context) error { return r.databases.DropDatabase(ctx, owner, name) }, notDropped(database), false})
 	} else if has, err := r.databases.ServerHas(ctx, "database", name); err == nil && has {
 		out.Kept = append(out.Kept, database)
 	}
-	plan = append(plan, removal{"the hosting account " + owner + " with its files and its site on the web server", func(ctx context.Context) error {
-		_, err := r.accounts.Delete(ctx, a.ID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: removeReason}, actor)
-		if errors.Is(err, hostaccounts.ErrNotFound) {
-			return nil // already gone
+	// Recorded before the broker is asked, so a site whose account goes
+	// stays listed until its database is gone too.
+	if i >= 0 {
+		if err := r.store.markDeleting(accountID, revision, timestamp(time.Now())); err != nil {
+			return nothing(ErrUnavailable, "The panel could not save its record of this delete, so it did not start. Check that the panel's state directory can be written, then try again.", err)
 		}
-		return err
-	}, accountNotDeleted})
+	}
 
-	for i, step := range plan {
+	accountGone := i < 0
+	for n, step := range plan {
 		err := step.remove(ctx)
 		if err == nil {
 			out.Removed = append(out.Removed, step.label)
+			accountGone = accountGone || step.account
 			continue
 		}
 		f := &RemoveFailure{Removed: out.Removed, Technical: scrub(err.Error())}
@@ -161,7 +202,7 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 		} else {
 			why += " Removed before that: " + strings.Join(f.Removed, ", ") + "."
 		}
-		rest := plan[i:]
+		rest := plan[n:]
 		for _, left := range rest {
 			f.Left = append(f.Left, left.label)
 		}
@@ -176,13 +217,17 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 			}
 			why += " Still on the server: " + strings.Join(labels, ", ") + "."
 		}
+		if accountGone {
+			why += " The hosting account is gone, so Websites lists this website as partly deleted. Delete it again to remove the rest."
+		}
 		f.Why = why
 		return Removal{}, f
 	}
-	// The site is gone whether or not this is saved: the broker no longer has
-	// the account, so Websites does not list it. Memory is marked either way.
-	if err := r.store.markRemoved(a.ID, timestamp(time.Now())); err != nil {
-		fmt.Fprintf(logOutput, "website %s: marking its job as removed could not be saved: %v\n", a.Domain, err)
+	// Memory is marked whether or not this is saved. If the file keeps the
+	// job unmarked, Websites lists the site as partly deleted after a restart,
+	// and a second delete, with nothing left to remove, marks it.
+	if err := r.store.markRemoved(accountID, timestamp(time.Now())); err != nil {
+		fmt.Fprintf(logOutput, "website %s: marking its job as removed could not be saved: %v\n", domain, err)
 	}
 	return out, nil
 }

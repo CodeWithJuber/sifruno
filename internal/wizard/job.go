@@ -41,6 +41,11 @@ type Job struct {
 	// RemovedAt is when the site this job made was deleted from its page,
 	// RFC 3339. Such a job is kept as a record but no longer names a site.
 	RemovedAt string `json:"removed_at,omitempty"`
+	// DeleteRevision is the hosting account's revision when a delete from
+	// the site's page last asked the account service to delete it; 0 if none
+	// has. Once that account is gone, Websites lists the site as partly
+	// deleted with this revision until a second delete removes the rest.
+	DeleteRevision uint64 `json:"delete_revision,omitempty"`
 }
 
 // namesSite reports whether the job stands for a site Websites lists: it
@@ -405,6 +410,25 @@ func (s *Store) markRemoved(accountID, at string) error {
 		return nil
 	}
 	s.trimLocked()
+	return s.writeLocked()
+}
+
+// markDeleting records, before the account service is asked to delete the
+// site of this account, the revision it is asked at: every job that names
+// the site gets DeleteRevision, and the store is saved.
+func (s *Store) markDeleting(accountID string, revision uint64, at string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for i := range s.jobs {
+		if j := &s.jobs[i]; j.namesSite() && j.Result != nil && j.Result.AccountID == accountID && j.DeleteRevision != revision {
+			j.DeleteRevision, j.UpdatedAt = revision, at
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
 	return s.writeLocked()
 }
 

@@ -30,6 +30,7 @@ import (
 	"sifruno/internal/mailhost"
 	"sifruno/internal/operator"
 	"sifruno/internal/panelcert"
+	"sifruno/internal/phpmyadmin"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
 	"sifruno/internal/sitebackups"
@@ -77,6 +78,9 @@ func run() error {
 	tlsCert := flag.String("tls-cert", "", "Certificate chain for --https-listen; without it a self-signed certificate is kept in the state directory")
 	tlsKey := flag.String("tls-key", "", "Private key for --tls-cert")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
+	pmaUpstream := flag.String("phpmyadmin-upstream", "", "Loopback IP:PORT of OpenLiteSpeed's phpMyAdmin listener (the installer's is 127.0.0.1:8090); with --accounts-socket it turns on Open phpMyAdmin on each website's Databases page. Empty turns it off")
+	pmaSocket := flag.String("phpmyadmin-socket", "/run/sifruno-panel/phpmyadmin.sock", "Unix socket on which phpMyAdmin's sign-in script redeems a one-time code; its folder must exist")
+	pmaUID := flag.Int("phpmyadmin-uid", -1, "User ID phpMyAdmin's PHP runs as (the installer's sifpma); the socket answers that user only")
 	flag.Parse()
 	given := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { given[f.Name] = true })
@@ -331,6 +335,40 @@ func run() error {
 		servers = append(servers, ingressServer)
 		listeners = append(listeners, ingressListener)
 	}
+	// phpMyAdmin: temporary database users for one website, handed to
+	// phpMyAdmin's sign-in script through a one-time code on a Unix socket
+	// only its PHP user is answered on, and the proxy to its listener.
+	var pma *phpmyadmin.Service
+	var pmaProxy *phpmyadmin.Proxy
+	var pmaListener net.Listener
+	if *pmaUpstream != "" {
+		if dbSvc == nil {
+			return errors.New("--phpmyadmin-upstream needs --accounts-socket: phpMyAdmin opens a website's databases")
+		}
+		if *pmaUID < 1 || *pmaUID == os.Getuid() || (*pmaUID >= 20000 && *pmaUID <= 60000) {
+			return errors.New("--phpmyadmin-uid must be the user ID phpMyAdmin's PHP runs as: not root, not the panel's own, and outside the hosting accounts' 20000 to 60000")
+		}
+		if !filepath.IsAbs(*pmaSocket) {
+			return errors.New("--phpmyadmin-socket must be an absolute path")
+		}
+		if pmaProxy, err = phpmyadmin.NewProxy(*pmaUpstream); err != nil {
+			return err
+		}
+		if pma, err = phpmyadmin.New(phpmyadmin.Config{StateDir: filepath.Join(dir, "phpmyadmin"), Database: dbSvc, LoginTTL: phpMyAdminLoginTTL()}); err != nil {
+			return err
+		}
+		if pmaListener, err = phpmyadmin.ListenRedeem(*pmaSocket); err != nil {
+			return fmt.Errorf("phpMyAdmin's sign-in socket %s: %w", *pmaSocket, err)
+		}
+		defer pmaListener.Close()
+	}
+	// A nil interface, not a nil *phpmyadmin.Service: the API reads nil as
+	// "phpMyAdmin is not set up".
+	var sitePhpMyAdmin api.PhpMyAdmin
+	var sitePhpMyAdminProxy http.Handler
+	if pma != nil {
+		sitePhpMyAdmin, sitePhpMyAdminProxy = pma, pmaProxy
+	}
 	// A nil interface, not a nil *dbhost.LocalService: the API reads nil as
 	// "databases are not set up".
 	var siteDatabases api.Databases
@@ -342,7 +380,7 @@ func run() error {
 	if certificates != nil {
 		siteCertificates = certificates
 	}
-	server.Handler = api.New(api.Options{Certificates: siteCertificates, PanelHosts: splitHosts(*panelHosts), Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	server.Handler = api.New(api.Options{Certificates: siteCertificates, PanelHosts: splitHosts(*panelHosts), Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, PhpMyAdmin: sitePhpMyAdmin, PhpMyAdminProxy: sitePhpMyAdminProxy, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	if remoteServer != nil {
 		// The same API, behind operator.Remote: only the panel's host names,
 		// only TLS, and only admin sessions.
@@ -364,6 +402,22 @@ func run() error {
 		go func() { defer close(renewDone); certificates.Run(ctx) }()
 		defer func() { stop(); <-renewDone }()
 	}
+	if pma != nil {
+		// The sweeper drops expired temporary users now and every minute;
+		// the socket hands out each login once.
+		sweepDone, redeemDone := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(sweepDone)
+			pma.Run(ctx, func(err error) { fmt.Fprintln(os.Stderr, "phpMyAdmin sign-ins:", err) })
+		}()
+		go func() {
+			defer close(redeemDone)
+			if err := pma.ServeRedeem(ctx, pmaListener, *pmaUID); err != nil {
+				fmt.Fprintln(os.Stderr, "phpMyAdmin's sign-in socket stopped:", err)
+			}
+		}()
+		defer func() { stop(); <-sweepDone; <-redeemDone }()
+	}
 	if siteBackups != nil {
 		backupsDone := make(chan struct{})
 		go func() { defer close(backupsDone); siteBackups.Run(ctx) }()
@@ -378,6 +432,9 @@ func run() error {
 		fmt.Printf("Local static website listener http://%s\n", *sitesListen)
 	}
 	fmt.Print(httpsNote)
+	if pma != nil {
+		fmt.Printf("phpMyAdmin through the panel at %s (OpenLiteSpeed listener %s, sign-ins last %s)\n", phpmyadmin.BasePath, *pmaUpstream, pma.LoginTTL())
+	}
 	select {
 	case err = <-done:
 		if errors.Is(err, http.ErrServerClosed) {

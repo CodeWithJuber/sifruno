@@ -142,9 +142,11 @@ func (c *client) AdoptPublicHTML(ctx context.Context, id string, in AdoptInput, 
 }
 
 // maxResponseBytes bounds every broker answer except the account list, whose
-// size grows with the inventory: one account is well under 8 KiB of JSON.
+// size grows with the inventory: one account is well under 16 KiB of JSON,
+// with its site's aliases and its certificate's domains (up to 16 names of
+// 253 bytes each).
 const maxResponseBytes = 256 << 10
-const maxListResponseBytes = MaxAccounts * (8 << 10)
+const maxListResponseBytes = MaxAccounts * (16 << 10)
 
 func (c *client) SSHKeys(ctx context.Context, id string) (SSHKeysResult, error) {
 	if !idPattern.MatchString(id) {
@@ -424,6 +426,8 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			return ErrConflict
 		case "delete_busy":
 			return ErrDeleteBusy
+		case "domain_taken":
+			return ErrDomainTaken
 		case "delete_stopped":
 			return ErrDeleteStopped
 		case "not_found":

@@ -56,7 +56,7 @@ Usernames are3–32ASCIIbytes, `[a-z][a-z0-9_]*`, with reserved service names re
 these are native foundation limits, not cPanel username rules. Domain must be a
 lowercase ASCII multi-label DNS name and remains metadata. Actor is1–120bytes;
 reason is1–500UTF8bytes, with controls and outer whitespace refused. Requests are
-strict JSON≤16KiB (a certificate request up to 160 KiB), including duplicate/unknown/case-alias/null/invalidUTF8 guards.
+strict JSON≤16KiB (a certificate request up to 160 KiB, a domains request up to 96 KiB), including duplicate/unknown/case-alias/null/invalidUTF8 guards.
 There are at most 2000 managed accounts (`MaxAccounts`) and 256 immutable audit event
 rows per account, so one account takes about 127 operations before its journal is full.
 
@@ -516,6 +516,74 @@ Limits for now:
   process under the account's subordinate IDs in a namespace someone else
   made; kill as the account cannot end those, so such a delete ends
   rejected.
+
+## Domains and redirects
+
+`SetSiteDomains` (`POST /v1/accounts/{id}/domains`) replaces a live site's
+other domains (aliases) and its redirects; `GET` on the same path reads
+them. The input is exactly `aliases` (a list of domains), `redirects` (a
+list of objects with `domain` or `path`, `target` and `status`, each key
+once and in this case), `expected_revision` and `reason`; both lists are
+required, each possibly empty, and the request may be up to 96 KiB. It
+needs the web operation on. The broker sorts both lists; the answer and the
+record hold them in that order.
+
+Checked before anything is journaled:
+
+- Form (400 `invalid`): at most 15 aliases (with the account's own domain,
+  olsweb's 16 per site), each a lowercase DNS name with at least two labels
+  that OpenLiteSpeed can map (not `www.www.*` or `www.<one label>`), not the
+  account's own domain, listed once. At most 100 redirects, checked with
+  olsweb's own rules (`CheckRedirects`): a status of 301 or 302; a domain
+  redirect names one of the site's domains, once, and a target of
+  `http://` or `https://`, a host and an optional port, with no path, that
+  is not the domain itself or another redirected domain; a path redirect
+  names `/` and then up to 128 bytes of letters, digits and `- . _ ~ /`,
+  with no empty part or part starting with a dot (so neither the ACME
+  challenge path nor a hidden file), once, and a target of up to 256 bytes
+  of `http://` or `https://`, a host that is a DNS name (no IP address or
+  user name), an optional port, and a path and query of letters, digits and
+  `- . _ ~ / ? & = + , : ; @`, that is not the same path on one of the
+  site's domains. None of these alphabets holds a rewrite metacharacter
+  (`$`, `%`, `\`) or one of the config file's (whitespace, `#`, braces,
+  `<`), so no value can end a rule, add a flag or rule, read a variable or
+  leave the rules block. The set as the record holds it is at most 60 KiB.
+- Another account (409 `domain_taken`): no alias is another account's
+  domain or alias, recorded or being installed, compared as OpenLiteSpeed
+  maps names, with one leading `www.` removed. A create is refused (409
+  `conflict`) for such a domain too.
+- Account (409 `conflict`): the revision matches, the account is active,
+  its site is live, no WordPress install is running, and its identity and
+  folders verify.
+
+The intent is journaled (action `domains`, target the SHA-256 of the new
+set, the record's `domains_next` holding it), then the site list is
+rendered, tested and reloaded as for a web change, under the same rules for
+other tenants' vhosts. olsweb puts the aliases after the account's domain
+in the plain listener's `map` line, and in the HTTPS listener's only those
+the certificate covers (see Certificates). A domain redirect is two
+`RewriteCond` lines (the Host header, with or without a port, and not the
+ACME challenge path, so a redirected domain still renews) and a
+`RewriteRule` that keeps the path and query; a path redirect is one
+`RewriteRule`; each ends `[R=301,L]` or `[R=302,L]`. They come after the
+deny rules in the vhost's own rewrite block, which the broker writes,
+never in the tenant's `.htaccess`. A suspended site keeps its suspended
+rendering: its aliases stay mapped to it and answer 403, and it redirects
+nothing. A failed test restores the old files and ends the change
+`rejected` with the account unchanged (422 `web_rejected`); any other
+failure leaves it pending, and the next start finishes it or ends it
+rejected, as for a web change. An unchanged set changes nothing. The
+account list shows `site_domains` (`aliases` and the number of
+`redirects`) for a site that has any; the stored account and the journal's
+rows never carry it.
+
+Limits for now:
+
+- The panel's own `--panel-host` names are refused by the panel, not the
+  broker, which does not know them.
+- A suspended site's domains and redirects do not change; resume it first.
+- That OpenLiteSpeed 1.9.4 applies the `RewriteCond` lines as Apache does
+  is read from its documentation; the site-domains dev VM proof runs it.
 
 ## Certificates
 

@@ -103,11 +103,16 @@ func webSites(items []record, except string) []olsweb.Site {
 			state = r.Pending.Target
 		}
 		limits := recordLimits(r)
+		// The account's own domain first, then its aliases; a domains
+		// change in flight counts as done. olsweb renders the redirects for
+		// an active site only.
+		extra := recordSiteDomains(r)
 		site := olsweb.Site{
 			Name:       siteName(r.Account.ID),
 			Username:   r.Account.Username,
 			Group:      r.Account.Username,
-			Domains:    []string{r.Account.Domain},
+			Domains:    append([]string{r.Account.Domain}, extra.Aliases...),
+			Redirects:  olswebRedirects(extra.Redirects),
 			DocRoot:    r.Account.PublicHTML,
 			PHPVersion: w.PHPVersion,
 			Suspended:  state == "suspended",
@@ -124,7 +129,10 @@ func webSites(items []record, except string) []olsweb.Site {
 			Isolation: olsweb.Isolation{Namespace: true, CGroups: true},
 		}
 		if certificate.installed() {
+			// The certificate names the account's own domain; the HTTPS
+			// listener maps no alias it does not cover.
 			site.TLS = siteTLS(site.Name)
+			site.TLS.Domains = []string{r.Account.Domain}
 		}
 		sites = append(sites, site)
 	}

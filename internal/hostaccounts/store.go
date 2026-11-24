@@ -66,7 +66,18 @@ type record struct {
 	// small; an unfinished cron operation's jobs are there too, under its
 	// pending target, before the crontab changes (store_sitetools.go).
 	Cron string `json:"cron,omitempty"`
+	// Domains is the live site's aliases and redirects in canonical form
+	// (empty: none; see encodeSiteDomains). DomainsNext is what an
+	// unfinished domains operation installs, durable before the config
+	// changes. Strings, so a record stays comparable.
+	Domains     string `json:"domains,omitempty"`
+	DomainsNext string `json:"domains_next,omitempty"`
 }
+
+// maxRecordBytes bounds one stored record: the account, the SFTP keys and
+// two sets of site domains (the recorded one and one being installed).
+const maxRecordBytes = 160 << 10
+
 type nativeSystem interface {
 	// siteToolsSystem writes crontabs and reads logs, quotas and traffic
 	// counters (sitetools_linux.go).
@@ -314,7 +325,7 @@ func (s *store) records() ([]record, error) {
 			return ErrRecovery
 		}
 		return b.ForEach(func(key, value []byte) error {
-			if len(out) >= MaxAccounts || value == nil || len(value) > 32<<10 {
+			if len(out) >= MaxAccounts || value == nil || len(value) > maxRecordBytes {
 				return ErrRecovery
 			}
 			var r record
@@ -322,7 +333,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron" || r.Pending.Action == "domains"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -341,6 +352,8 @@ func (s *store) records() ([]record, error) {
 					_, validTarget = parsePublicTarget(r.Pending.Target)
 				case "cron":
 					validTarget = cronDigestPattern.MatchString(r.Pending.Target)
+				case "domains":
+					validTarget = domainsDigestPattern.MatchString(r.Pending.Target) && validStoredDomains(r.Account.Domain, r.DomainsNext) && r.Pending.Target == domainsDigest(r.DomainsNext)
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
@@ -359,6 +372,11 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Cron != "" && (!cronDigestPattern.MatchString(r.Cron) || r.Cron == emptyCronDigest) {
+				return ErrRecovery
+			}
+			// Like Web, the list fills SiteDomains in; a stored account never
+			// carries it.
+			if !validStoredDomains(r.Account.Domain, r.Domains) || (r.DomainsNext != "" && (r.Pending == nil || r.Pending.Action != "domains")) || r.Account.SiteDomains != nil {
 				return ErrRecovery
 			}
 			if verifyHistory(tx, r) != nil {
@@ -503,6 +521,11 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			} else if r.Pending.Action == "adopt" {
 				// Metadata only: record the directory the intent named.
 				if s.finishAdopt(r) != nil {
+					return ErrRecovery
+				}
+				continue
+			} else if r.Pending.Action == "domains" {
+				if s.finishDomains(ctx, items, r) != nil {
 					return ErrRecovery
 				}
 				continue
@@ -1140,6 +1163,7 @@ func (s *store) list(ctx context.Context) ([]Account, error) {
 		// defaults, which the broker's start wrote to its slice.
 		a.Web = r.Web
 		a.Limits = limitsOf(r.Account)
+		a.SiteDomains = siteDomainsSummary(r)
 		a.SiteFolderChanged = r.Pending == nil && s.native.VerifySiteFiles(r) != nil
 		out = append(out, a)
 	}
@@ -1211,6 +1235,11 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 		if r.Account.Username == in.Username || r.Account.Domain == in.Domain {
 			return Account{}, ErrConflict
 		}
+	}
+	// A domain may belong to one account only: another's alias, or the www.
+	// form of another's domain, which OpenLiteSpeed maps as the same name.
+	if domainTaken(items, "", in.Domain) {
+		return Account{}, ErrConflict
 	}
 	uid, gid, err := s.native.Plan(ctx, in.Username)
 	if err != nil {
@@ -1380,12 +1409,13 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 }
 
 // withWeb is a record's account as the account list shows it: with the live
-// site's settings, which the stored account and the journal never carry,
-// and the limits in force.
+// site's settings and its domains, which the stored account and the journal
+// never carry, and the limits in force.
 func withWeb(r record) Account {
 	a := r.Account
 	a.Web = r.Web
 	a.Limits = limitsOf(r.Account)
+	a.SiteDomains = siteDomainsSummary(r)
 	return a
 }
 

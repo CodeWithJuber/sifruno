@@ -232,6 +232,45 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(result)
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/domains"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/domains")
+			if !idPattern.MatchString(id) || r.ContentLength != 0 {
+				writeError(w, ErrInvalid)
+				return
+			}
+			result, err := s.siteDomains(ctx, id)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/domains"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/domains")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input SiteDomainsInput `json:"input"`
+				Actor string           `json:"actor"`
+			}
+			// Up to 100 redirects do not fit the usual request bound. Both
+			// lists are required: a list left out would remove them all.
+			if decodeBodyWithin(w, r, &in, []string{"aliases", "redirects", "expected_revision", "reason"}, maxSiteDomainsRequestBytes) != nil || in.Input.Aliases == nil || in.Input.Redirects == nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			// The change runs the web apply, on its own limit.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
+			result, err := s.setSiteDomains(ctx, id, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/wordpress"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/wordpress")
 			if !idPattern.MatchString(id) {
@@ -508,6 +547,8 @@ func writeError(w http.ResponseWriter, err error) {
 		code, status = "invalid", 400
 	case errors.Is(err, ErrDeleteBusy):
 		code, status = "delete_busy", 409
+	case errors.Is(err, ErrDomainTaken):
+		code, status = "domain_taken", 409
 	case errors.Is(err, ErrConflict):
 		code, status = "conflict", 409
 	case errors.Is(err, ErrNotFound):
@@ -583,6 +624,18 @@ func strictObject(d *json.Decoder, allowed map[string]bool, requireAll bool, nes
 			var limits AccountLimits
 			if d.Decode(&raw) != nil || strictObject(json.NewDecoder(bytes.NewReader(raw)), map[string]bool{"processes": true, "memory_mib": true, "cpu_percent": true}, true, nil, false) != nil || json.Unmarshal(raw, &limits) != nil || !validLimits(limits) {
 				return ErrInvalid
+			}
+		} else if key == "redirects" && nested == nil {
+			// A site's redirects inside the input: an array of objects, each
+			// with only its own keys, each once, in this case.
+			var raw []json.RawMessage
+			if d.Decode(&raw) != nil || raw == nil {
+				return ErrInvalid
+			}
+			for _, item := range raw {
+				if strictObject(json.NewDecoder(bytes.NewReader(item)), map[string]bool{"domain": true, "path": true, "target": true, "status": true}, false, nil, false) != nil {
+					return ErrInvalid
+				}
 			}
 		} else {
 			var raw json.RawMessage

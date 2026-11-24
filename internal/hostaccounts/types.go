@@ -89,6 +89,12 @@ type Account struct {
 	// the account list fills it in; the stored account and the journal's
 	// rows never carry it.
 	SiteFolderChanged bool `json:"site_folder_changed,omitempty"`
+	// SiteDomains is the live site's aliases and how many redirects it has,
+	// left out when it has neither. Like Web, only the account list and a
+	// change's answer fill it in: the stored account and the journal's rows
+	// never carry it, so a pointer keeps Account comparable while they
+	// compare it.
+	SiteDomains *SiteDomainsSummary `json:"site_domains,omitempty"`
 }
 type CreateInput struct {
 	Username string `json:"username"`

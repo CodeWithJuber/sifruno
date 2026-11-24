@@ -30,6 +30,13 @@ type testIssuer struct {
 	key  *ecdsa.PrivateKey
 }
 
+// sameSiteTLS reports whether a rendered site names its own certificate
+// files and maps exactly these domains on the HTTPS listener.
+func sameSiteTLS(s olsweb.Site, covered ...string) bool {
+	want := siteTLS(s.Name)
+	return s.TLS.CertFile == want.CertFile && s.TLS.KeyFile == want.KeyFile && strings.Join(s.TLS.Domains, ",") == strings.Join(covered, ",")
+}
+
 func newTestKey(t *testing.T, curve elliptic.Curve) *ecdsa.PrivateKey {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(curve, rand.Reader)
@@ -398,7 +405,7 @@ func TestCertificateInstallsAndJournals(t *testing.T) {
 	if f.live[a.Username] != want || len(f.staged) != 0 {
 		t.Fatalf("installed %+v, staged pairs left %d", f.live[a.Username], len(f.staged))
 	}
-	if len(f.sites) != 1 || f.sites[0].TLS != siteTLS(siteName(a.ID)) {
+	if len(f.sites) != 1 || !sameSiteTLS(f.sites[0], a.Domain) {
 		t.Fatalf("the config does not name the site's certificate: %+v", f.sites)
 	}
 	if f.sites[0].TLS.CertFile != "/etc/sifruno/tls/"+siteName(a.ID)+"/cert.pem" || f.sites[0].TLS.KeyFile != "/etc/sifruno/tls/"+siteName(a.ID)+"/key.pem" {
@@ -422,7 +429,7 @@ func TestCertificateInstallsAndJournals(t *testing.T) {
 	if _, err := s.setWeb(ctx, a.ID, WebInput{PHPVersion: "8.4", QuotaMiB: 200, ExpectedRevision: again.Account.Revision, Reason: "Upgrade PHP"}, "test operator"); err != nil {
 		t.Fatal(err)
 	}
-	if f.sites[0].TLS != siteTLS(siteName(a.ID)) || f.sites[0].PHPVersion != "8.4" {
+	if !sameSiteTLS(f.sites[0], a.Domain) || f.sites[0].PHPVersion != "8.4" {
 		t.Fatalf("a web change dropped the certificate: %+v", f.sites[0])
 	}
 	// The journal replays on a fresh open.
@@ -674,7 +681,7 @@ func TestWebSitesCarryCertificates(t *testing.T) {
 	pendingFirst.Pending = &pending{Action: "certificate"}
 	pendingFirst.TLSNext = cert
 	for _, s := range webSites([]record{pendingFirst}, "") {
-		if s.TLS != siteTLS(s.Name) {
+		if !sameSiteTLS(s, "plainacct.test") {
 			t.Fatalf("pending certificate not rendered: %+v", s.TLS)
 		}
 	}

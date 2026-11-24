@@ -299,6 +299,8 @@ case "${1:-}" in
       (cd "$REPO" && node scripts/devvm/proofs/wordpress-wizard.qa.mjs "http://127.0.0.1:$port" "$stage/state" "$run" "$domain" \
         "$HERE/vm.sh" "$guest/state/wizard/jobs.json" "${SIFRUNO_PROOF_CHROME:-}") || touch "$stage/failed"
       "$HERE/vm.sh" ssh "/opt/sifruno-proof/wordpress-wizard.guest.sh check $guest $domain" || touch "$stage/failed"
+      # The browser run also made a PHP site with a database at php-<domain>.
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/wordpress-wizard.guest.sh check-php $guest php-$domain" || touch "$stage/failed"
     } 2>&1 | tee "$transcript"
     echo "Transcript: $transcript (screenshots in $run/)"
     [ ! -e "$stage/failed" ]

@@ -17,6 +17,9 @@ mkdirSync(outDir, { recursive: true });
 const key = readFileSync(join(stateDir, "operator/access.key"), "utf8").trim();
 const panelPassword = `qa ${randomBytes(12).toString("hex")}`;
 const wpPassword = randomBytes(15).toString("base64url");
+// The PHP site with a database: its domain, and the database user's password.
+const phpDomain = `php-${domain}`;
+const dbPassword = randomBytes(15).toString("base64url");
 const checks = [];
 const errors = [];
 const check = (name, ok, detail = "") => { checks.push({ name, ok: Boolean(ok) }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${!ok && detail ? ` (${detail})` : ""}`); };
@@ -68,7 +71,8 @@ try {
   await page.getByTestId("new-website-link").click();
   await page.getByTestId("new-website-form").waitFor();
   check("Websites has a New website button that opens the wizard at /websites/new", new URL(page.url()).pathname === "/websites/new");
-  check("the website type is WordPress", (await page.getByTestId("website-type").innerText()).trim() === "WordPress");
+  check("the website type is a radio group with WordPress chosen", (await page.getByRole("radiogroup", { name: "Website type" }).count()) === 1
+    && (await page.getByRole("radio", { name: /^WordPress/ }).getAttribute("aria-checked")) === "true");
   const pw = page.locator("#nw-admin-password");
   check("the admin password field asks for a new password", (await pw.getAttribute("autocomplete")) === "new-password");
   check("the admin email and username fields autofill correctly",
@@ -194,17 +198,60 @@ try {
   console.log(`  shown: ${problem.slice(0, 200).trimEnd()}`);
   check("a second site for the same domain is refused with a reason", problem.length > 10 && new URL(page.url()).pathname === "/websites/new");
 
+  console.log(`## Browser: a PHP site with a database, ${phpDomain}`);
+  await page.goto(origin + "/websites/new");
+  await page.getByTestId("new-website-form").waitFor();
+  await page.getByText("PHP site", { exact: true }).first().click();
+  check("choosing PHP site leaves no WordPress fields", (await page.locator("#nw-title").count()) === 0 && (await page.locator("#nw-admin-password").count()) === 0);
+  await page.locator("#nw-domain").fill(phpDomain);
+  await page.getByText("Create a database", { exact: true }).click();
+  const dbField = page.locator("#nw-database-password");
+  await dbField.fill(dbPassword);
+  await page.screenshot({ path: join(outDir, "1440-light-php-new-website.png"), fullPage: true, mask: [dbField] });
+  await page.getByTestId("create-website").click();
+  await page.waitForURL(/\/websites\/jobs\/[0-9a-f]{32}$/, { timeout: 60000 });
+  const phpJobId = new URL(page.url()).pathname.split("/").pop();
+  const phpStarted = Date.now();
+  let phpState = "running";
+  while (Date.now() - phpStarted < 15 * 60 * 1000) {
+    if (await page.getByTestId("job-succeeded").count()) { phpState = "succeeded"; break; }
+    if (await page.getByTestId("job-failed").count()) { phpState = "failed"; break; }
+    await sleep(5000);
+  }
+  console.log(`  the PHP site job ended ${phpState} after ${Math.round((Date.now() - phpStarted) / 1000)} s`);
+  if (phpState === "failed") console.log(`  shown: ${(await page.getByTestId("job-failed").innerText()).replace(/\s+/g, " ").slice(0, 600)}`);
+  check("the PHP site job succeeds", phpState === "succeeded");
+  if (phpState === "succeeded") {
+    const phpUser = (await page.getByTestId("job-username").innerText()).trim();
+    console.log(`  hosting account ${phpUser}`);
+    check("its last screen says the PHP site is live over https", (await page.getByTestId("site-protocol").innerText()).startsWith("The PHP site is live. The site uses https"));
+    check("it names the database", (await page.getByTestId("job-database").innerText()).startsWith(`${phpUser}_wp`));
+    check("it says how to upload: SFTP as the account, into public_html", (await page.getByTestId("sftp-username").innerText()).trim() === phpUser && (await page.getByTestId("upload-files").innerText()).includes("public_html"));
+    check("the placeholder step put index.php in place", (await page.getByTestId("placeholder-message").innerText()).startsWith("Added a placeholder page"));
+    check("there is no WordPress admin link", (await page.getByTestId("open-admin").count()) === 0);
+    check(`Open site points at https://${phpDomain}/`, (await page.getByTestId("open-site").getAttribute("href")) === `https://${phpDomain}/`);
+    await page.screenshot({ path: join(outDir, "1440-light-php-job-done.png"), fullPage: true });
+    await page.getByTestId("go-to-websites").click();
+    await page.getByTestId("websites-table").waitFor({ timeout: 30000 });
+    const phpRow = page.locator(`[data-testid="website-row"][data-domain="${phpDomain}"]`);
+    check("Websites lists it as a PHP site", (await phpRow.getByTestId("website-type").innerText()).trim() === "PHP site");
+    await page.screenshot({ path: join(outDir, "1440-light-websites-both.png"), fullPage: true });
+  }
+  const phpJob = await page.evaluate(async (id) => (await fetch(`/api/v1/websites/jobs/${id}`)).text(), phpJobId);
+  check("the jobs API never returns the database password", phpJob.includes(phpJobId) && !phpJob.includes(dbPassword));
+
   console.log("## The password is held nowhere");
   const listed = await page.evaluate(async () => (await fetch("/api/v1/websites/jobs")).text());
   check("the jobs API never returns the WordPress admin password", listed.includes(jobId) && !listed.includes(wpPassword));
   const sites = await page.evaluate(async () => (await fetch("/api/v1/websites/sites")).text());
   check("the websites API never returns it either", sites.includes(domain) && !sites.includes(wpPassword));
   const stored = await page.evaluate(() => JSON.stringify({ ...sessionStorage }) + JSON.stringify({ ...localStorage }));
-  check("the browser's storage holds no password", !stored.includes(wpPassword) && !stored.includes(panelPassword));
+  check("the browser's storage holds no password", !stored.includes(wpPassword) && !stored.includes(panelPassword) && !stored.includes(dbPassword));
   const local = join(outDir, "jobs.json");
   execFileSync(vmsh, ["get", guestJobs, local]);
   const file = readFileSync(local, "utf8");
   check("the job file on the server never holds the WordPress admin password", file.includes(jobId) && !file.includes(wpPassword));
+  check("nor the PHP site's database password", !file.includes(dbPassword));
   check("no browser errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 } catch (e) {
   check("the browser run finished", false, String(e).slice(0, 300));

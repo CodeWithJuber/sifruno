@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Runs inside the dev VM as root (proof.sh wordpress-wizard copies it in).
-#   wordpress-wizard.guest.sh start DIR PORT   start Pebble, the broker and the panel
-#   wordpress-wizard.guest.sh check DIR DOMAIN check the site the wizard made
+#   wordpress-wizard.guest.sh start DIR PORT       start Pebble, the broker and the panel
+#   wordpress-wizard.guest.sh check DIR DOMAIN     check the WordPress site the wizard made,
+#                                                  LiteSpeed Cache included
+#   wordpress-wizard.guest.sh check-php DIR DOMAIN check the PHP site the wizard made
 # The panel runs as sifpanel, the broker's controller, with throwaway state
 # in DIR, the broker socket and the MariaDB admin option file; it listens on
 # 127.0.0.1:PORT only, and the host reaches it through an SSH forward. It
@@ -20,6 +22,7 @@ ACME_DIRECTORY=https://127.0.0.1:14000/dir
 # and is saved per run as DIR/pebble-root.pem.
 PEBBLE_API_CA=/etc/pebble/api-ca.pem
 ACME_CHALLENGES=/var/lib/sifruno-acme
+WPCLI=/usr/local/lib/sifruno/wp-cli.phar
 fails=0
 
 pass() { printf 'PASS  %s\n' "$1"; }
@@ -29,6 +32,35 @@ check() {
   shift
   if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi
 }
+
+# job_field JOBS DOMAIN KIND FIELD: a field of the succeeded job of that kind
+# for the domain ("username", or "result.account_id").
+job_field() {
+  python3 - "$1" "$2" "$3" "$4" <<'PY' 2>/dev/null
+import json, sys
+path, domain, kind, field = sys.argv[1:5]
+jobs = [j for j in json.load(open(path))["jobs"] if j["domain"] == domain and j["kind"] == kind and j["state"] == "succeeded"]
+value = jobs[0] if jobs else {}
+for key in field.split("."):
+    value = value.get(key, "") if isinstance(value, dict) else ""
+print(value)
+PY
+}
+
+# cache_header URL [CURL ARGS...]: the X-LiteSpeed-Cache value of one
+# request over https to this VM, trusting only this run's Pebble root.
+cache_header() {
+  local url="$1" host
+  shift
+  host="${url#https://}"
+  host="${host%%/*}"
+  curl -s -o /dev/null -D - --resolve "$host:443:127.0.0.1" --cacert "$dir/pebble-root.pem" "$@" "$url" |
+    tr -d '\r' | awk -F': *' 'tolower($1)=="x-litespeed-cache"{print $2}'
+}
+
+# site_store ACCOUNT: the site's own LSCache store, named as olsweb names its
+# vhost ("u" and the first 31 characters of the account ID).
+site_store() { printf '%s/cachedata/sifruno-u%s' "$LSWS" "${1:0:31}"; }
 
 case "${1:-}" in
   start)
@@ -117,9 +149,69 @@ case "${1:-}" in
     urls="$(mysql --protocol=socket -uroot -N -B -e "SELECT option_value FROM \`$db\`.\`${prefix}options\` WHERE option_name IN ('home', 'siteurl') ORDER BY option_name" 2>&1 | paste -sd ' ')"
     echo "  WordPress home and siteurl in $db: $urls"
     check "WordPress's home and siteurl are https" test "$urls" = "https://$domain https://$domain"
+
+    # LSCache: the site's vhost has the cache module with its own store, the
+    # plugin is active at its pinned version, and the second anonymous GET of
+    # the home page is a hit.
+    ols_user="$(awk '$1=="user"{print $2; exit}' "$LSWS/conf/httpd_config.conf")"
+    vhconf="$LSWS/conf/vhosts/sifruno-u${account:0:31}/vhconf.conf"
+    store="$(site_store "$account")"
+    check "the site's vhconf.conf turns the cache module on with its own store" bash -c \
+      "grep -A2 '^module cache {' $vhconf | grep -q 'ls_enabled *1' && grep -q '^  storagePath *$store\$' $vhconf"
+    check "httpd_config.conf registers the cache module (the package's block)" grep -q '^module cache {' "$LSWS/conf/httpd_config.conf"
+    # WP-CLI as the site's user, as the broker runs it.
+    wp() { runuser -u "$user" -- "$LSWS/lsphp83/bin/php" "$WPCLI" --path="/home/$user/public_html" --no-color "$@"; }
+    # shellcheck disable=SC2317 # called through check
+    verified() { wp plugin verify-checksums litespeed-cache 2>&1 | grep -q 'Verified 1 of 1 plugins'; }
+    plugin="$(wp plugin get litespeed-cache --field=version 2>/dev/null)"
+    echo "  LiteSpeed Cache plugin: ${plugin:-not installed}"
+    check "the LiteSpeed Cache plugin 7.9.3 is installed" test "$plugin" = 7.9.3
+    check "it is active" wp plugin is-active litespeed-cache
+    check "its files match wordpress.org's checksums" verified
+    check "it does not cache signed-in visitors (cache-priv 0)" test "$(wp litespeed-option get cache-priv 2>/dev/null)" = 0
+    first="$(cache_header "https://$domain/")"
+    second="$(cache_header "https://$domain/")"
+    echo "  X-LiteSpeed-Cache on two GETs of https://$domain/: ${first:-none}, ${second:-none}"
+    check "the second GET of the home page is served from the cache" test "$second" = hit
+    posted="$(cache_header "https://$domain/" -X POST --data probe=1)"
+    echo "  X-LiteSpeed-Cache on a POST: ${posted:-none}"
+    check "a POST is not served from the cache" test "$posted" != hit
+    check "the store is the web server's, 2770, outside every home" test "$(stat -c '%U %a' "$store" 2>/dev/null)" = "${ols_user:-nobody} 2770"
+    ;;
+  check-php)
+    dir="$2"
+    domain="$3"
+    jobs="$dir/state/wizard/jobs.json"
+    user="$(job_field "$jobs" "$domain" php username)"
+    account="$(job_field "$jobs" "$domain" php result.account_id)"
+    echo "  PHP site account made by the wizard: ${user:-none}"
+    check "the account's Linux user exists" getent passwd "$user"
+    page="/home/$user/public_html/index.php"
+    check "the placeholder index.php is the site user's, mode 0644" test "$(stat -c '%U %a' "$page" 2>/dev/null)" = "$user 644"
+    check "it is the only file in public_html" test "$(find "/home/$user/public_html" -mindepth 1 | wc -l)" = 1
+    check "it says the site is ready" grep -q '<h1>This website is ready</h1>' "$page"
+    # "It runs PHP." is printed by PHP; the file itself does not hold it.
+    ok=no
+    for _ in $(seq 1 300); do
+      if curl -s --resolve "$domain:443:127.0.0.1" --cacert "$dir/pebble-root.pem" "https://$domain/" | grep -q 'It runs PHP\.'; then ok=yes; break; fi
+      sleep 2
+    done
+    check "the site serves the placeholder over https, run by PHP, with a certificate from Pebble's root" test "$ok" = yes
+    served="$(openssl s_client -connect 127.0.0.1:443 -servername "$domain" </dev/null 2>/dev/null | openssl x509 2>/dev/null)"
+    san="$(printf '%s\n' "$served" | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ')"
+    check "the served certificate names exactly the domain" test "$san" = "DNS:$domain"
+    vhconf="$LSWS/conf/vhosts/sifruno-u${account:0:31}/vhconf.conf"
+    check "the site runs PHP 8.3 (lsphp83)" grep -q '^  path *'"$LSWS"'/lsphp83/bin/lsphp$' "$vhconf"
+    check "its vhost has the cache module with its own store" grep -q "^  storagePath *$(site_store "$account")\$" "$vhconf"
+    first="$(cache_header "https://$domain/")"
+    second="$(cache_header "https://$domain/")"
+    echo "  X-LiteSpeed-Cache on two GETs of the placeholder: ${first:-none}, ${second:-none}"
+    check "the placeholder is not cached: the page does not ask for it" test "$second" != hit
+    names="$(mysql --protocol=socket -uroot -N -B -e "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='${user}_wp'; SELECT COUNT(*) FROM mysql.user WHERE User='${user}_wp'" 2>/dev/null | paste -sd ' ')"
+    check "the database ${user}_wp and its user exist" test "$names" = "1 1"
     ;;
   *)
-    echo "usage: wordpress-wizard.guest.sh start DIR PORT | check DIR DOMAIN" >&2
+    echo "usage: wordpress-wizard.guest.sh start DIR PORT | check DIR DOMAIN | check-php DIR DOMAIN" >&2
     exit 2
     ;;
 esac

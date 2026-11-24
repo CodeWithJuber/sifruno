@@ -1193,7 +1193,7 @@ scripthandler  {
 }
 
 phpIniOverride  {
-php_admin_value open_basedir "$PMA_DIR/:$PMA_STATE/:$PMA_ETC/:$PANEL_RUN/"
+php_admin_value open_basedir "$PMA_DIR/:$PMA_STATE/:$PMA_ETC/:$PANEL_RUN/:/var/lib/mysql/mysql.sock"
 php_admin_value session.save_path "$PMA_STATE/sessions"
 php_admin_value upload_tmp_dir "$PMA_STATE/tmp"
 php_admin_value sys_temp_dir "$PMA_STATE/tmp"

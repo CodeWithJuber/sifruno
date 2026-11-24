@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -24,6 +24,17 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 with a password folder to the Compat tier, and migrate verify
                 keeps the cutover gate closed against an OpenLiteSpeed copy
                 (where the folder opens) and opens it against an Apache copy.
+  migrate-cpanel
+                Migration v1 against a cPanel stand-in (a Podman container
+                with sshd, MariaDB, Apache and stub whmapi1/uapi scripts; not
+                cPanel): the panel connects with a new key, the host key is
+                confirmed by fingerprint, discovery lists the accounts, a
+                WordPress site moves with its files, database (same user and
+                hash), PHP version and cron, previews on this server and
+                passes verify; marking it ready names the DNS records; the
+                key leaves both servers; a site with a password folder is
+                refused before anything is made; a failed copy removes the
+                account it made; no password is in process arguments.
   broker-web    The broker's web operation: OpenLiteSpeed may read the home,
                 a quota is set, the vhost is rendered, tested and reloaded,
                 a rejected config changes nothing, a symlinked public_html is
@@ -204,6 +215,35 @@ case "${1:-}" in
     transcript="$OUT/installer-sshd-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/installer-sshd.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  migrate-cpanel)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    guest="/var/lib/sifpanel/migrate-$stamp"
+    port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+    build "$stage/sifruno" ./cmd/sifruno
+    build "$stage/hostbroker" ./cmd/hostbroker
+    (cd "$REPO" && npm run --silent panel:build >/dev/null)
+    # Seed the panel's state here, as the wizard proof does: a few seconds
+    # make it, with its access key, which the guest script signs in with.
+    timeout 5 "$stage/sifruno" --listen 127.0.0.1:0 --sites-listen "" --state "$stage/state" --ui "$REPO/web/dist" >/dev/null 2>&1 || true
+    test -s "$stage/state/operator/access.key"
+    tar -czf "$stage/dist.tgz" -C "$REPO/web" dist
+    tar -czf "$stage/state.tgz" -C "$stage" state
+    "$HERE/vm.sh" ssh "systemctl stop sifruno-broker-proof 2>/dev/null; pkill -x sifruno; install -d -m 0755 /opt/sifruno-proof; install -d -o sifpanel -g sifpanel -m 0700 $guest" || true
+    "$HERE/vm.sh" put "$stage/hostbroker" /opt/sifruno-proof/hostbroker
+    for file in sifruno dist.tgz state.tgz; do
+      "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/migrate-cpanel.guest.sh" /opt/sifruno-proof/migrate-cpanel.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/migrate-cpanel.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/migrate-cpanel-$stamp.txt"
+    status=0
+    "$HERE/vm.sh" ssh "/opt/sifruno-proof/migrate-cpanel.guest.sh $guest $port" | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

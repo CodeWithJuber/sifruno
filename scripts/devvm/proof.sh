@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | wordpress-wizard | panel-shell
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | wordpress-wizard | panel-shell | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -47,6 +47,13 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 width, public preview), and over the HTTPS listener as
                 another machine would (admin-only, certificate fingerprint). Needs Node, the repo's npm packages and Playwright's
                 Chromium, or a Chrome binary in SIFRUNO_PROOF_CHROME.
+  installer-sshd
+                The installer's sshd pre-checks: on copies of the VM's sshd
+                configuration, someone must still be able to sign in with a
+                key once passwords are off, and each way that would fail
+                (PermitRootLogin no, a comment-only key file, loose modes, a
+                Match rule on the admin's address) is refused. Live sshd is
+                not changed.
 USAGE
 }
 
@@ -96,6 +103,18 @@ case "${1:-}" in
     transcript="$OUT/proof1-wordpress-ols-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/wordpress-ols.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  installer-sshd)
+    "$HERE/vm.sh" ssh 'install -d -m 0755 /opt/sifruno-proof'
+    "$HERE/vm.sh" put "$REPO/scripts/install/install.sh" /opt/sifruno-proof/install.sh
+    "$HERE/vm.sh" put "$HERE/proofs/installer-sshd.guest.sh" /opt/sifruno-proof/installer-sshd.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/install.sh /opt/sifruno-proof/installer-sshd.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/installer-sshd-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    status=0
+    "$HERE/vm.sh" ssh /opt/sifruno-proof/installer-sshd.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

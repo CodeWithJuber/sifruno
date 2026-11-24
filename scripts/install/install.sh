@@ -193,21 +193,48 @@ sshd_policy_current() { sshd_policy | cmp -s - "$SSHD_DROPIN" 2>/dev/null; }
 # on the server changes. Fails when sshd_config does not include its
 # drop-in folder the way AlmaLinux 9 does.
 sshd_candidate() {
-  local dir file
+  local dir file ok=yes
   # Callers run this inside a condition, where set -e does not apply, so
-  # each step stops it on failure.
+  # each step is checked; on a failure the folder is removed again.
   grep -qxF "$SSHD_INCLUDE" "$SSHD_CONFIG" || return 1
   dir="$(mktemp -d)" || return 1
-  mkdir "$dir/sshd_config.d" || return 1
+  mkdir "$dir/sshd_config.d" || ok=no
   for file in /etc/ssh/sshd_config.d/*.conf; do
-    if [ -e "$file" ] && [ "$file" != "$SSHD_DROPIN" ]; then
-      cp -L -- "$file" "$dir/sshd_config.d/" || return 1
+    if [ "$ok" = yes ] && [ -e "$file" ] && [ "$file" != "$SSHD_DROPIN" ]; then
+      cp -L -- "$file" "$dir/sshd_config.d/" || ok=no
     fi
   done
-  sshd_policy > "$dir/sshd_config.d/${SSHD_DROPIN##*/}" || return 1
-  awk -v inc="$SSHD_INCLUDE" -v new="Include $dir/sshd_config.d/*.conf" \
-    '$0 == inc { print new; next } { print }' "$SSHD_CONFIG" > "$dir/sshd_config" || return 1
-  printf '%s' "$dir"
+  if [ "$ok" = yes ] && sshd_policy > "$dir/sshd_config.d/${SSHD_DROPIN##*/}" &&
+    awk -v inc="$SSHD_INCLUDE" -v new="Include $dir/sshd_config.d/*.conf" \
+      '$0 == inc { print new; next } { print }' "$SSHD_CONFIG" > "$dir/sshd_config"; then
+    printf '%s' "$dir"
+    return 0
+  fi
+  rm -rf -- "$dir"
+  return 1
+}
+
+# The connection sshd -T judges Match rules for: the SSH connection this
+# installer runs in, when SSH_CONNECTION names one, so a Match Address or
+# Match Host rule is judged for the admin's own way in. Prints the -C
+# fields after user=, or nothing when there is no such connection.
+ssh_connection_spec() {
+  local client cport server sport
+  read -r client cport server sport <<<"${SSH_CONNECTION:-}" || true
+  if [[ "$client" =~ ^[0-9A-Fa-f.:]+$ && "$server" =~ ^[0-9A-Fa-f.:]+$ && "$sport" =~ ^[0-9]+$ && "$cport" =~ ^[0-9]+$ ]]; then
+    printf 'host=%s,addr=%s,laddr=%s,lport=%s' "$client" "$client" "$server" "$sport"
+  fi
+}
+
+# Whether the sshd configuration CONFIG, with the drop-ins next to it, has
+# a Match rule that depends on where a connection comes from or arrives.
+sshd_has_address_match() { # sshd_has_address_match CONFIG
+  local files=("$1")
+  local file
+  for file in "$(dirname -- "$1")"/sshd_config.d/*.conf; do
+    [ -e "$file" ] && files+=("$file")
+  done
+  grep -Eiqs '^[[:space:]]*Match[[:space:]].*\b(Address|Host|LocalAddress|LocalPort|RDomain)\b' -- "${files[@]}"
 }
 
 # The value sshd -T prints for KEYWORD, its lines joined by spaces.
@@ -240,14 +267,21 @@ key_file_secure() { # key_file_secure PATH UID HOME
 # for root, a PermitRootLogin that allows keys; and a key file sshd accepts
 # holding at least one valid key. AllowUsers, AllowGroups, DenyUsers and
 # DenyGroups are read in their simplest form only: the user must be named
-# in AllowUsers when it is set, and no group or deny rule may be set.
+# in AllowUsers when it is set, and no group or deny rule may be set. Match
+# rules are judged for the SSH connection the installer runs in; without
+# one, a Match rule on addresses or hosts cannot be judged and fails this.
 ssh_admin_ok() { # ssh_admin_ok CONFIG USER
-  local config="$1" user="$2" entry uid home shell eff allow file files strict
+  local config="$1" user="$2" entry uid home shell eff allow file files strict where
   entry="$(getent -s files passwd "$user")" || return 1
   IFS=: read -r _ _ uid _ _ home shell <<<"$entry"
   case "$shell" in "" | */nologin | */false) return 1 ;; esac
   grep -qxF "$shell" /etc/shells || return 1
-  eff="$(sshd -T -f "$config" -C "user=$user,host=localhost,addr=127.0.0.1" 2>/dev/null)" || return 1
+  where="$(ssh_connection_spec)"
+  if [ -z "$where" ]; then
+    ! sshd_has_address_match "$config" || return 1
+    where="host=localhost,addr=127.0.0.1"
+  fi
+  eff="$(sshd -T -f "$config" -C "user=$user,$where" 2>/dev/null)" || return 1
   [ "$(sshd_value pubkeyauthentication <<<"$eff")" = yes ] || return 1
   [ "$(sshd_value forcecommand <<<"$eff")" = none ] || return 1
   case "$(sshd_value authenticationmethods <<<"$eff")" in any | publickey) ;; *) return 1 ;; esac
@@ -320,8 +354,8 @@ preflight_sshd() {
     echo "ok: $SSH_ADMIN can still sign in over SSH with a key once the policy is in place"
   else
     refuse "Nobody could sign in over SSH once the installer's policy is in place." \
-      "The policy turns password sign-in off. No root or wheel member in /etc/passwd has a login shell, a valid key in a key file sshd accepts (owner and mode), and nothing in the way: PermitRootLogin no for root, a ForceCommand, AuthenticationMethods, or an Allow or Deny rule." \
-      "Add your public key to /root/.ssh/authorized_keys or a local wheel user's, sign in with it once in a second session, then run this again. To see what sshd would apply: sshd -T -C user=root,host=localhost,addr=127.0.0.1"
+      "The policy turns password sign-in off. No root or wheel member in /etc/passwd has a login shell, a valid key in a key file sshd accepts (owner and mode), and nothing in the way: PermitRootLogin no for root, a ForceCommand, AuthenticationMethods, an Allow or Deny rule, or a Match rule on addresses or hosts while the installer does not run over SSH." \
+      "Add your public key to /root/.ssh/authorized_keys or a local wheel user's, sign in with it once in a second session, then run this again over SSH (with sudo, keep SSH_CONNECTION: sudo --preserve-env=SSH_CONNECTION ./install.sh). To see what sshd would apply: sshd -T -C user=root,host=localhost,addr=127.0.0.1"
   fi
   rm -rf -- "$candidate"
   others="$(other_login_users)"
@@ -614,20 +648,25 @@ step_nsswitch() {
       "Its layout is not one the installer knows. Nothing was changed; a copy is in $NSS_BACKUP." \
       "Edit the three lines by hand so each reads 'files', then run this again."
   fi
-  # Labelled before the move, so nothing that can fail sits between the
-  # move and the lookups that decide whether the change stays.
-  restorecon "$new" || true
+  # The label is set before the move and checked after it: under SELinux
+  # enforcing, sshd and others confined cannot read a mislabelled file,
+  # which the lookups below, run as unconfined root, would not notice.
+  if ! restorecon "$new"; then
+    rm -f -- "$new"
+    die "The new $NSSWITCH could not be given its SELinux label." \
+      "Confined services such as sshd could not read it. Nothing was changed." \
+      "Run restorecon -v $NSSWITCH to see the error, fix it, then run this again."
+  fi
   mv -f -- "$new" "$NSSWITCH"
-  restorecon "$NSSWITCH" || true
   # SSH_ADMIN is the user preflight found able to sign in with a key; it was
   # looked up in the local files only, so it must resolve now too.
-  if ! getent passwd root >/dev/null || ! getent group root >/dev/null || ! getent passwd "$PANEL_USER" >/dev/null ||
-    { [ -n "$SSH_ADMIN" ] && ! getent passwd "$SSH_ADMIN" >/dev/null; }; then
+  if ! restorecon "$NSSWITCH" || ! getent passwd root >/dev/null || ! getent group root >/dev/null ||
+    ! getent passwd "$PANEL_USER" >/dev/null || { [ -n "$SSH_ADMIN" ] && ! getent passwd "$SSH_ADMIN" >/dev/null; }; then
+    # cp -a keeps the backup's own label, which was the original's.
     cp -a -- "$NSS_BACKUP" "$NSSWITCH"
-    restorecon "$NSSWITCH" || true
-    die "After the change to $NSSWITCH the system could not look up root, $PANEL_USER or ${SSH_ADMIN:-root} (who signs in over SSH)." \
+    die "After the change to $NSSWITCH, its SELinux label could not be set or the system could not look up root, $PANEL_USER or ${SSH_ADMIN:-root} (who signs in over SSH)." \
       "The new file was rejected and the previous one was put back from $NSS_BACKUP." \
-      "Check that root, $PANEL_USER and your SSH admin are in /etc/passwd and /etc/group, then run this again."
+      "Check that root, $PANEL_USER and your SSH admin are in /etc/passwd and /etc/group, and that restorecon -v $NSSWITCH works, then run this again."
   fi
   changed "$NSSWITCH: passwd, group and shadow set to files (backup: $NSS_BACKUP)"
 }
@@ -662,7 +701,14 @@ step_sshd() {
   fi
   install -o root -g root -m 0600 -- "$candidate/sshd_config.d/${SSHD_DROPIN##*/}" "$SSHD_DROPIN.new"
   rm -rf -- "$candidate"
-  restorecon "$SSHD_DROPIN.new" || true
+  # Labelled before the move and checked after it, as for nsswitch.conf:
+  # sshd cannot read a mislabelled drop-in under SELinux enforcing.
+  if ! restorecon "$SSHD_DROPIN.new"; then
+    rm -f -- "$SSHD_DROPIN.new"
+    die "The new $SSHD_DROPIN could not be given its SELinux label." \
+      "sshd could not read it. Nothing was changed." \
+      "Run restorecon -v /etc/ssh/sshd_config.d to see the error, fix it, then run this again."
+  fi
   if [ -e "$SSHD_DROPIN" ]; then
     SSHD_BACKUP="$(backup_file "$SSHD_DROPIN")"
     SSHD_CHANGE=replaced
@@ -672,9 +718,9 @@ step_sshd() {
   mv -f -- "$SSHD_DROPIN.new" "$SSHD_DROPIN"
   # The live files again, before applying: they are what a reload loads.
   # Reload rather than restart, so the session running this script stays up.
-  if ! sshd -t || ! ssh_admin_ok "$SSHD_CONFIG" "$admin"; then
+  if ! restorecon "$SSHD_DROPIN" || ! sshd -t || ! ssh_admin_ok "$SSHD_CONFIG" "$admin"; then
     sshd_put_back
-    die "sshd rejected the new policy in $SSHD_DROPIN, or $admin could no longer sign in with a key under it." \
+    die "The new policy in $SSHD_DROPIN could not be labelled for SELinux, sshd rejected it, or $admin could no longer sign in with a key under it." \
       "The change was undone and sshd was not reloaded, so sign-in works as before." \
       "Run sshd -t and sshd -T -C user=$admin,host=localhost,addr=127.0.0.1 to see what sshd applies, then run this again."
   fi
@@ -1165,4 +1211,6 @@ main() {
   print_rollback
 }
 
-main "$@"
+# The dev VM's installer-sshd proof loads the functions alone, to check the
+# sshd pre-checks without installing anything.
+[ "${SIFRUNO_INSTALL_FUNCTIONS_ONLY:-}" = 1 ] || main "$@"

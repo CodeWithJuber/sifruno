@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -205,5 +206,37 @@ func TestReachesAsksTheChallengePath(t *testing.T) {
 	}
 	if len(asked) != 0 {
 		t.Fatalf("asked %q", asked)
+	}
+}
+
+// TestProbesRunTogetherWithoutHoldingTheManager: a site whose aliases answer
+// slowly holds up no other certificate, and its probes take one probe's
+// time, not one per alias.
+func TestProbesRunTogetherWithoutHoldingTheManager(t *testing.T) {
+	f := newManagerFixture(t)
+	release := make(chan struct{})
+	var started sync.WaitGroup
+	aliases := []string{}
+	for i := range 15 {
+		aliases = append(aliases, fmt.Sprintf("a%d.slow.example", i))
+	}
+	started.Add(len(aliases))
+	f.m.reaches = func(context.Context, string) bool { started.Done(); <-release; return true }
+	done := make(chan error, 1)
+	go func() {
+		done <- f.m.Refresh(context.Background(), Site{AccountID: strings.Repeat("7", 32), Domain: "slow.example", Aliases: aliases, Revision: 3, Active: true})
+	}()
+	// Every probe is under way at once.
+	started.Wait()
+	// Meanwhile another site gets its certificate.
+	if _, _, err := f.m.Secure(context.Background(), strings.Repeat("8", 32), "other.example", 2); err != nil {
+		t.Fatalf("another site waited for the probes: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := f.issuer.domains; len(got) != 2 || got[0] != "other.example" || !strings.HasPrefix(got[1], "slow.example,a0.slow.example,a1.slow.example") {
+		t.Fatalf("asked for %q", got)
 	}
 }

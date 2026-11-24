@@ -18,6 +18,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -227,23 +228,16 @@ func (m *Manager) Waiting(accountID string) []string {
 // alone, so an alias the certificate authority cannot reach does not let the
 // site's certificate run out.
 func (m *Manager) renew(ctx context.Context, s Site, expiring bool) error {
+	// The probes run before the manager is taken, all at once: a domain
+	// that answers slowly holds up neither another site's certificate nor
+	// its own for longer than one probe's limit.
+	names, waiting := m.probe(ctx, s)
 	select {
 	case m.busy <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 	defer func() { <-m.busy }()
-	names, waiting := []string{s.Domain}, []string{}
-	for _, alias := range s.Aliases {
-		if alias == s.Domain || slices.Contains(names, alias) {
-			continue
-		}
-		if m.reaches(ctx, alias) {
-			names = append(names, alias)
-		} else {
-			waiting = append(waiting, alias)
-		}
-	}
 	m.records.waiting(s.AccountID, s.Domain, waiting)
 	if !expiring && sameNames(names, covered(s)) {
 		return nil
@@ -254,6 +248,34 @@ func (m *Manager) renew(ctx context.Context, s Site, expiring bool) error {
 		_, _, err = m.secure(ctx, s.AccountID, names[:1], s.Revision)
 	}
 	return err
+}
+
+// probe asks every alias of the site at once whether it reaches this
+// server, and answers the names to ask a certificate for (the site's domain
+// first, then the aliases that reach it, in the site's order) and the
+// aliases that wait for their DNS.
+func (m *Manager) probe(ctx context.Context, s Site) (names, waiting []string) {
+	aliases := []string{}
+	for _, alias := range s.Aliases {
+		if alias != s.Domain && !slices.Contains(aliases, alias) {
+			aliases = append(aliases, alias)
+		}
+	}
+	reached := make([]bool, len(aliases))
+	var wg sync.WaitGroup
+	for i, alias := range aliases {
+		wg.Go(func() { reached[i] = m.reaches(ctx, alias) })
+	}
+	wg.Wait()
+	names, waiting = []string{s.Domain}, []string{}
+	for i, alias := range aliases {
+		if reached[i] {
+			names = append(names, alias)
+		} else {
+			waiting = append(waiting, alias)
+		}
+	}
+	return names, waiting
 }
 
 // covered are the domains the site's installed certificate names: what the

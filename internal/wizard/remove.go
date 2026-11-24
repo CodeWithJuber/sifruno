@@ -211,16 +211,27 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 	// Only what the registry lists under this account's name for this
 	// account: the wizard registered exactly that. Anything else with the
 	// name is someone else's and stays.
-	user, database := "the database user "+name, "the database "+name
-	if !taken && slices.ContainsFunc(users, func(u dbhost.User) bool { return u.Name == name && u.Owner == owner }) {
-		plan = append(plan, removal{user, func(ctx context.Context) error { return r.databases.DropUser(ctx, owner, name) }, notDropped(user), false})
-	} else if has, err := r.databases.ServerHas(ctx, "user", name); err == nil && has {
-		out.Kept = append(out.Kept, user)
+	// A moved website made its own databases and users, with the old
+	// server's names; the job recorded them.
+	userNames, dbNames := []string{name}, []string{name}
+	if job.Migration != nil {
+		userNames, dbNames = job.Migration.DatabaseUsers, job.Migration.Databases
 	}
-	if !taken && slices.ContainsFunc(databases, func(d dbhost.Database) bool { return d.Name == name && d.Owner == owner }) {
-		plan = append(plan, removal{database, func(ctx context.Context) error { return r.databases.DropDatabase(ctx, owner, name) }, notDropped(database), false})
-	} else if has, err := r.databases.ServerHas(ctx, "database", name); err == nil && has {
-		out.Kept = append(out.Kept, database)
+	for _, name := range userNames {
+		user := "the database user " + name
+		if !taken && slices.ContainsFunc(users, func(u dbhost.User) bool { return u.Name == name && u.Owner == owner }) {
+			plan = append(plan, removal{user, func(ctx context.Context) error { return r.databases.DropUser(ctx, owner, name) }, notDropped(user), false})
+		} else if has, err := r.databases.ServerHas(ctx, "user", name); err == nil && has {
+			out.Kept = append(out.Kept, user)
+		}
+	}
+	for _, name := range dbNames {
+		database := "the database " + name
+		if !taken && slices.ContainsFunc(databases, func(d dbhost.Database) bool { return d.Name == name && d.Owner == owner }) {
+			plan = append(plan, removal{database, func(ctx context.Context) error { return r.databases.DropDatabase(ctx, owner, name) }, notDropped(database), false})
+		} else if has, err := r.databases.ServerHas(ctx, "database", name); err == nil && has {
+			out.Kept = append(out.Kept, database)
+		}
 	}
 	// Recorded before the broker is asked, so a site whose account goes
 	// stays listed until its database is gone too.

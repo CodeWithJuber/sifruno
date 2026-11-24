@@ -46,6 +46,9 @@ type Job struct {
 	// has. Once that account is gone, Websites lists the site as partly
 	// deleted with this revision until a second delete removes the rest.
 	DeleteRevision uint64 `json:"delete_revision,omitempty"`
+	// Migration is a migration job's record (migrate.go), nil for the
+	// other kinds.
+	Migration *Migration `json:"migration,omitempty"`
 }
 
 // namesSite reports whether the job stands for a site Websites lists: it
@@ -139,6 +142,8 @@ func titlesFor(kind string) []stepTitle {
 		return stepTitles
 	case KindPHP:
 		return phpStepTitles
+	case KindMigration:
+		return migrationStepTitles
 	}
 	return nil
 }
@@ -201,6 +206,9 @@ func (j Job) clone() Job {
 	if j.Result != nil {
 		r := *j.Result
 		j.Result = &r
+	}
+	if j.Migration != nil {
+		j.Migration = j.Migration.clone()
 	}
 	return j
 }

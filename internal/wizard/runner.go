@@ -103,6 +103,8 @@ type Runner struct {
 	// past limit: giving up while the broker is still changing the account
 	// would fail a step that may yet succeed and leave undo racing it.
 	waits map[string]time.Duration
+	// migrations is nil until EnableMigrations (migrate.go).
+	migrations *MigrationOptions
 }
 
 // New returns a runner over the broker, the database service, a store and
@@ -254,6 +256,9 @@ type run struct {
 	dbName      string
 	dbCreated   bool
 	userCreated bool
+
+	// migration is a migration job's own state (migrate.go), nil otherwise.
+	migration *migrationRun
 }
 
 // stepError is a failed step in plain words.
@@ -666,6 +671,17 @@ var stepWhat = map[string]string{
 	StepDatabase:    "The database could not be created.",
 	StepWordPress:   "WordPress could not be installed.",
 	StepPlaceholder: "The placeholder page could not be added.",
+	StepSource:      "The website on the old server cannot be moved as it is.",
+	StepFiles:       "The website's files could not be copied.",
+	StepCron:        "The scheduled jobs could not be copied.",
+}
+
+// what says what failed, for a migration's database step in its own words.
+func (j *run) what(step string) string {
+	if j.migration != nil && step == StepDatabase {
+		return "The databases could not be copied."
+	}
+	return stepWhat[step]
 }
 
 // fail records the failed step, skips the rest, and undoes what the job
@@ -681,11 +697,15 @@ func (j *run) fail(i int, f *stepError) {
 	for k := i + 1; k < len(j.job.Steps); k++ {
 		j.job.Steps[k].State = StepSkipped
 	}
-	j.job.Error = &Failure{Step: step.Name, What: stepWhat[step.Name], Why: why, Next: next, Technical: scrub(f.technical, j.secrets...)}
+	j.job.Error = &Failure{Step: step.Name, What: j.what(step.Name), Why: why, Next: next, Technical: scrub(f.technical, j.secrets...)}
 	j.touch()
 	left, notes := j.undo()
 	if len(left) > 0 {
-		j.job.Error.Next = "These could not be removed and are still on the server: " + strings.Join(left, ", ") + ". Remove them by hand, then create the website again."
+		again := "create the website again"
+		if j.migration != nil {
+			again = "move the website again"
+		}
+		j.job.Error.Next = "These could not be removed and are still on the server: " + strings.Join(left, ", ") + ". Remove them by hand, then " + again + "."
 	}
 	if len(notes) > 0 {
 		j.job.Error.Technical = clip(strings.TrimPrefix(j.job.Error.Technical+"; "+strings.Join(notes, "; "), "; "))
@@ -702,6 +722,9 @@ func (j *run) undo() (left, notes []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), undoLimit)
 	defer cancel()
 	owner := j.job.Username
+	if j.migration != nil {
+		left, notes = j.undoMigration(ctx)
+	}
 	partial := j.dbCreated || j.userCreated
 	dbLeft := false
 	if j.userCreated {
@@ -722,7 +745,8 @@ func (j *run) undo() (left, notes []string) {
 			j.dbCreated = false
 		}
 	}
-	if step := &j.job.Steps[j.index(StepDatabase)]; partial {
+	if i := j.index(StepDatabase); i >= 0 && partial {
+		step := &j.job.Steps[i]
 		switch {
 		case step.State == StepDone && dbLeft:
 			step.Message = "Could not be removed after a later step failed."
@@ -762,7 +786,11 @@ func (j *run) undo() (left, notes []string) {
 	}
 	// The certificate goes with the account: the broker removes its files.
 	for _, name := range []string{StepSSL, StepWeb, StepAccount} {
-		step := &j.job.Steps[j.index(name)]
+		i := j.index(name)
+		if i < 0 {
+			continue // a migration has no ssl step
+		}
+		step := &j.job.Steps[i]
 		if step.State != StepDone {
 			continue
 		}

@@ -23,6 +23,21 @@ func Validate(s Server) error {
 	return err
 }
 
+// ProcessFloor is the lowest procSoftLimit and procHardLimit OpenLiteSpeed
+// 1.9.4 keeps for an lsphp app with phpChildren LSAPI children: below
+// (3 x children + 50) x httpdWorkers it raises both to that number and logs
+// a notice (LocalWorkerConfig::config in src/extensions/localworkerconfig.cpp,
+// where Max connections equals the children here). httpdWorkers 0 assumes
+// DefaultHTTPDWorkers, as a Server does. A caller that derives a site's
+// process limit from something else uses it to render a number
+// OpenLiteSpeed keeps.
+func ProcessFloor(phpChildren, httpdWorkers int) int {
+	if httpdWorkers == 0 {
+		httpdWorkers = DefaultHTTPDWorkers
+	}
+	return (3*phpChildren + 50) * httpdWorkers
+}
+
 // site is a validated Site with its defaults filled in.
 type site struct {
 	Site
@@ -206,7 +221,7 @@ func validateSite(field string, in Site, workers int) (site, error) {
 	// OpenLiteSpeed raises any process limit below this floor itself and logs
 	// a notice (localworkerconfig.cpp), so the rendered number would not be
 	// the one in force. Refusing it keeps the spec honest.
-	floor := (3*v.children + 50) * workers
+	floor := ProcessFloor(v.children, workers)
 	v.processes = in.Limits.Processes
 	if v.processes == 0 {
 		v.processes = max(DefaultProcesses, floor)

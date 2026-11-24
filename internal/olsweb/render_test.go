@@ -33,7 +33,7 @@ func loadSpec(t *testing.T, path string) Server {
 // TestGolden renders each testdata/golden/<case>/spec.json and compares the
 // whole file set, both ways, with testdata/golden/<case>/want/.
 func TestGolden(t *testing.T) {
-	cases := []string{"wordpress", "second-php", "suspended", "namespace-limits", "certificate", "no-certificate"}
+	cases := []string{"wordpress", "second-php", "suspended", "namespace-limits", "certificate", "no-certificate", "account-limits"}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join("testdata", "golden", name)

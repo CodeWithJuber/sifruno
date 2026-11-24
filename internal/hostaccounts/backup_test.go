@@ -782,3 +782,40 @@ func TestBackupHTTPContract(t *testing.T) {
 		t.Fatalf("prune over HTTP: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// Restoring a live site's files copies the staged home over the real one,
+// and with its mode the copy takes the staged folder's ACL, which has no
+// entry for the web server: the dev VM's backups proof saw the site answer
+// 403 after a restore. The restore grants the web server's access again;
+// a database-only restore leaves the folders alone; a failed grant says the
+// files are back but the site may answer 403.
+func TestRestoreGrantsWebAccessAgain(t *testing.T) {
+	s, native := webStore(t)
+	f := &fakeBackup{store: s}
+	s.backup = f
+	ctx := context.Background()
+	live := liveFixture(t, s)
+	configureTarget(t, s)
+	grants := native.webGrants
+	if _, err := s.restoreAccount(ctx, live.Account.ID, restoreInput(live.Account), "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if native.webGrants != grants+1 {
+		t.Fatalf("a files restore granted web access %d times", native.webGrants-grants)
+	}
+	onlyDB := restoreInput(live.Account)
+	onlyDB.Files = false
+	if _, err := s.restoreAccount(ctx, live.Account.ID, onlyDB, "test operator"); err != nil || native.webGrants != grants+1 {
+		t.Fatalf("a database-only restore: %v, grants %d", err, native.webGrants-grants)
+	}
+	native.failure = "grant-acl"
+	_, err := s.restoreAccount(ctx, live.Account.ID, restoreInput(live.Account), "test operator")
+	native.failure = ""
+	var failed *BackupError
+	if !errors.As(err, &failed) || failed.Step != "copy" || !strings.Contains(failed.Detail, "files were restored") {
+		t.Fatalf("a failed grant after the copy: %v", err)
+	}
+	if items, _ := s.leftovers(); len(items) != 0 {
+		t.Fatalf("leftovers after the failed grant: %+v", items)
+	}
+}

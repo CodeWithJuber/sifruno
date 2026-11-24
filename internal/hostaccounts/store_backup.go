@@ -558,6 +558,15 @@ func (s *store) restoreAccount(ctx context.Context, id string, in RestoreInput, 
 	if err = s.backup.Restore(work, t, r, in, l); err != nil {
 		return RestoreResult{}, err
 	}
+	// The copy into the home gives it the staged folder's mode and, with
+	// it, that folder's ACL, which has no entry for the web server: a live
+	// site would answer 403 until its access is granted again. The grant
+	// works on held handles and checks the recorded identities.
+	if in.Files && r.Web.enabled() {
+		if err = s.native.GrantWebAccess(work, r); err != nil {
+			return RestoreResult{}, &BackupError{Step: "copy", Detail: "The files were restored, but the web server's access to the site's folders could not be set again, so the site may answer 403. Change the site's PHP version and back (that sets it again), or ask whoever runs this server to check the broker."}
+		}
+	}
 	return RestoreResult{Snapshot: in.Snapshot, Files: in.Files, Databases: dbs}, nil
 }
 

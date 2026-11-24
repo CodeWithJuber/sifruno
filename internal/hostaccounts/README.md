@@ -323,6 +323,9 @@ Limits for now (not yet run on the dev VM):
   systemd's knowledge; how systemd treats that scope when the slice stops
   is not checked.
 - No IO limit: IOWeight stays at its default, 100, for every account.
+- systemctl is pinned at start like the other fixed utilities, so after a
+  systemd package update creates and plan changes answer 503 until the
+  broker restarts.
 
 ## Websites
 

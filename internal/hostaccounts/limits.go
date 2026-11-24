@@ -120,7 +120,7 @@ func (s *store) applyPlanLimits(ctx context.Context, items []record, i int, old,
 	applyCtx, cancel := webContext(ctx)
 	defer cancel()
 	if s.native.ApplyLimits(applyCtx, uid, next) != nil {
-		s.restoreLimits(applyCtx, uid, old)
+		s.restoreLimits(ctx, uid, old)
 		return errLimitsRejected
 	}
 	if !items[i].Web.enabled() || next == old {
@@ -128,7 +128,7 @@ func (s *store) applyPlanLimits(ctx context.Context, items []record, i int, old,
 	}
 	e := s.applySites(ctx, items, items[i].Account.ID)
 	if errors.Is(e, ErrWebRejected) {
-		s.restoreLimits(applyCtx, uid, old)
+		s.restoreLimits(ctx, uid, old)
 	}
 	return e
 }
@@ -138,9 +138,13 @@ func (s *store) applyPlanLimits(ctx context.Context, items []record, i int, old,
 // root's file for this account's slice alone, systemd keeps the limits it
 // last loaded, and the broker writes every account's recorded limits again
 // at its next start (syncLimitsAtStart) and at the account's next plan
-// change, so one account's drop-in never holds up another account.
+// change, so one account's drop-in never holds up another account. It has
+// its own limit: a site list that took most of the previous one must not
+// leave it no time.
 func (s *store) restoreLimits(ctx context.Context, uid int, old AccountLimits) {
-	_ = s.native.ApplyLimits(ctx, uid, old)
+	restoreCtx, cancel := webContext(ctx)
+	defer cancel()
+	_ = s.native.ApplyLimits(restoreCtx, uid, old)
 }
 
 // syncLimitsAtStart writes every account's recorded limits to its slice

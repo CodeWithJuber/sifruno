@@ -382,6 +382,8 @@ func TestPlanLimitsHTTPContract(t *testing.T) {
 		"below bounds":   input(`{"processes":1,"memory_mib":2048,"cpu_percent":200}`),
 		"fraction":       input(`{"processes":200.5,"memory_mib":2048,"cpu_percent":200}`),
 		"null processes": input(`{"processes":null,"memory_mib":2048,"cpu_percent":200}`),
+		"all zeros":      input(`{"processes":0,"memory_mib":0,"cpu_percent":0}`),
+		"trailing data":  input(`{"processes":200,"memory_mib":2048,"cpu_percent":200} `) + "{}",
 	} {
 		if rec := post(payload); rec.Code != 400 {
 			t.Fatalf("%s: status %d %s", name, rec.Code, rec.Body)

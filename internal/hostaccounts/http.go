@@ -568,8 +568,11 @@ func strictObject(d *json.Decoder, allowed map[string]bool, requireAll bool, nes
 				return ErrInvalid
 			}
 		} else if key == "limits" && nested == nil {
-			// A plan's limits inside the input: all three keys, each once.
-			if strictObject(d, map[string]bool{"processes": true, "memory_mib": true, "cpu_percent": true}, true, nil, false) != nil {
+			// A plan's limits inside the input: all three keys, each once,
+			// in bounds. All zeros would decode as limits left out.
+			var raw json.RawMessage
+			var limits AccountLimits
+			if d.Decode(&raw) != nil || strictObject(json.NewDecoder(bytes.NewReader(raw)), map[string]bool{"processes": true, "memory_mib": true, "cpu_percent": true}, true, nil, false) != nil || json.Unmarshal(raw, &limits) != nil || !validLimits(limits) {
 				return ErrInvalid
 			}
 		} else {

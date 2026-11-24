@@ -93,8 +93,10 @@ case "${1:-}" in
     account="$(python3 -c "import json,sys; j=[x for x in json.load(open('$jobs'))['jobs'] if x['domain']=='$domain' and x['state']=='succeeded']; print(j[0]['result']['account_id'] if j else '')" 2>/dev/null)"
     tls="/etc/sifruno/tls/u${account:0:31}"
     echo "  its certificate folder: $tls"
+    # As long as the http wait above: one run's https page came after more
+    # than two minutes, though it served at once when checked again later.
     ok=no
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 300); do
       if curl -s --resolve "$domain:443:127.0.0.1" --cacert "$dir/pebble-root.pem" "https://$domain/" | grep -q 'Sifruno wizard proof'; then ok=yes; break; fi
       sleep 2
     done

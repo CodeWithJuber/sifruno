@@ -72,7 +72,7 @@ func run() error {
 	acmeInsecure := flag.Bool("acme-insecure-skip-verify", false, "Skip ACME directory TLS verification (test rigs with a private CA only; never in production)")
 	acmeResolver := flag.String("acme-dns-resolver", "127.0.0.1:53", "Resolver used to confirm _acme-challenge TXT propagation before ACME validation")
 	backupRoot := flag.String("backup-root", "", "Backup archive root; empty disables the backup surface")
-	httpsListen := flag.String("https-listen", "", "Optional HTTPS address for the panel beyond loopback, e.g. 0.0.0.0:2083; only admin sign-in (password and code) works there")
+	httpsListen := flag.String("https-listen", "", "Optional HTTPS address for the panel beyond loopback, e.g. 0.0.0.0:2083; admins and customers sign in there with a password and code, the access key does not work there")
 	panelHosts := flag.String("panel-host", "", "Comma-separated host names or IPs the HTTPS listener answers for; required with --https-listen")
 	tlsCert := flag.String("tls-cert", "", "Certificate chain for --https-listen; without it a self-signed certificate is kept in the state directory")
 	tlsKey := flag.String("tls-key", "", "Private key for --tls-cert")
@@ -313,11 +313,13 @@ func run() error {
 		defer listener.Close()
 		remote := &http.Server{Addr: *httpsListen, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 		remoteServer, remoteListener, remoteHosts = remote, listener, hosts
+		// Customers' setup links start with the address they reach the panel at.
+		access.SetPublicAddress(publicAddress(hosts[0], *httpsListen))
 		kind := "operator-provided"
 		if cert.SelfSigned {
 			kind = "self-signed; browsers warn until you add --tls-cert"
 		}
-		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — admin sign-in only\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
+		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — password sign-in only (admins and customers)\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
 			*httpsListen, strings.Join(hosts, ", "), kind, cert.NotAfter.UTC().Format("2006-01-02"), cert.Fingerprint)
 	}
 	if *whmListen != "" {
@@ -453,6 +455,18 @@ func certificateSite(a hostaccounts.Account) acme.Site {
 		site.Covered = strings.Split(a.Certificate.Names, ",")
 	}
 	return site
+}
+
+// publicAddress is the https:// address of the HTTPS listener at a panel
+// host name, with the listener's port unless it is 443.
+func publicAddress(host, listen string) string {
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if _, port, err := net.SplitHostPort(listen); err == nil && port != "443" && port != "" {
+		return "https://" + host + ":" + port
+	}
+	return "https://" + host
 }
 
 // splitHosts reads --panel-host: comma-separated, lower-cased, de-duplicated.

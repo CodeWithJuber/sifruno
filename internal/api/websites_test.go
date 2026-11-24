@@ -179,6 +179,15 @@ func decodeSites(t *testing.T, body []byte) []Website {
 func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...string) {
 	t.Helper()
 	delete(item, "$schema")
+	// usage is there in the list when the account service reports it, with
+	// exactly its five keys.
+	if raw, ok := item["usage"]; ok {
+		var usage map[string]json.RawMessage
+		if json.Unmarshal(raw, &usage) != nil || len(usage) != 5 || usage["disk_used_bytes"] == nil || usage["disk_limit_bytes"] == nil || usage["traffic_month"] == nil || usage["traffic_bytes"] == nil || usage["traffic_complete"] == nil {
+			t.Fatalf("usage %s", raw)
+		}
+		delete(item, "usage")
+	}
 	// limits are there when the account service reports them, with exactly
 	// their three whole numbers.
 	if raw, ok := item["limits"]; ok {

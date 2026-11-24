@@ -40,6 +40,9 @@ type Website struct {
 	// Limits come from the broker's account list; a partly deleted site has
 	// no account and none.
 	Limits *WebsiteLimits `json:"limits,omitempty" doc:"What all of the hosting account's processes may use together: the site's PHP, SFTP sessions and scheduled jobs. Left out for a partly deleted site."`
+	// Usage comes from the broker's usage read (site_tools.go), in the list
+	// only.
+	Usage *WebsiteUsage `json:"usage,omitempty" doc:"Disk use and this month's traffic. In the list only, and left out when the account service could not say within a few seconds."`
 }
 
 // WebsiteLimits are the hosting account's limits, read only here: the
@@ -413,6 +416,13 @@ func listWebsites(ctx context.Context, o Options) ([]Website, error) {
 			continue
 		}
 		listed[id] = true
+	}
+	if usage := listUsage(ctx, o); usage != nil {
+		for i := range sites {
+			if sites[i].State != partlyDeleted {
+				sites[i].Usage = usage[sites[i].AccountID]
+			}
+		}
 	}
 	return sites, nil
 }

@@ -82,6 +82,7 @@ func New(o Options) http.Handler {
 	registerWebsites(api, o)
 	registerSiteDatabases(api, o)
 	registerSiteBackups(api, o)
+	registerSiteTools(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)
@@ -250,7 +251,7 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedBackupMutation(r) || allowedSessionMutation(r)
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedBackupMutation(r) || allowedCronMutation(r) || allowedSessionMutation(r)
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -323,6 +324,9 @@ func New(o Options) http.Handler {
 				}
 				if allowedBackupMutation(r) {
 					prepare = prepareBackupJSON
+				}
+				if allowedCronMutation(r) {
+					prepare = prepareCronJSON
 				}
 				if !prepare(w, r) {
 					return

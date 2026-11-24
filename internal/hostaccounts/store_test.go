@@ -22,6 +22,10 @@ type fakeNative struct {
 	calls   int
 	failure string
 	changed bool
+	// refuseState names a state SetState fails to set, changing nothing.
+	refuseState string
+	// siteApplies counts ApplySites calls, failed ones included.
+	siteApplies int
 	// full and cheap count the two kinds of verification per username.
 	full, cheap map[string]int
 	keys        map[string][]string
@@ -128,6 +132,7 @@ func (f *fakeNative) ApplyWeb(_ context.Context, r record, previous, next WebSta
 	return nil
 }
 func (f *fakeNative) ApplySites(_ context.Context, sites []olsweb.Site) error {
+	f.siteApplies++
 	switch f.failure {
 	case "sites":
 		return ErrUnavailable
@@ -263,6 +268,9 @@ func (f *fakeNative) SetSSHKeys(_ context.Context, r record, canonical []string)
 }
 func (f *fakeNative) SetState(_ context.Context, r record, state string) error {
 	f.calls++
+	if state == f.refuseState {
+		return ErrUnavailable
+	}
 	actual := f.users[r.Account.Username]
 	actual.Account.State = state
 	f.users[r.Account.Username] = actual

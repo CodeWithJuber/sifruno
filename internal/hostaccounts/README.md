@@ -80,8 +80,9 @@ of OS accounts is attempted. Manual recovery tooling is outside this slice.
 
 Active means no account-expiry restriction, while passwords stay locked and shell
 stays nologin. Suspended sets account expiry to1970-01-02. It restricts PAM-aware
-account admission; existing processes, static serving, databases and mail remain
-unaffected. It does not establish full SSH or hosting suspension. External changes
+account admission; existing processes, databases and mail remain unaffected, and
+a live site stops serving (see Websites). It does not establish full SSH or
+hosting suspension. External changes
 to UID/GID, tag, shell, home, lock/expiry or recorded directory identity require
 recovery. Existing file content inside public_html is not inventoried or restored.
 
@@ -166,6 +167,19 @@ free. Delete takes the site out of the config before the user and home go;
 if that config fails its test, the delete ends `rejected` with the account
 unchanged (422), and after any other failure the user is kept.
 
+A state change of an account with a live site rewrites the site list too: a
+suspended account's site stays in the config marked suspended, so
+OpenLiteSpeed answers 403 for every request (ACME challenges included), and
+an active one serves again. The account changes first, as it does without a
+site; then the list is installed under the web operation's four-minute
+limit. If that config fails its test, the old files go back, the account is
+put back into the state it had, and the change is journaled as `rejected`
+with the account unchanged (422 `web_rejected`). Any other failure leaves
+the change pending: on the next start the broker installs the list again
+once the account is in its new state, or ends the change `rejected` the same
+way. Every later install of the site list, for any account, also marks the
+sites of accounts that were suspended before this rule.
+
 The account list shows `web` (`php_version`, `quota_mib`) for each account
 with a live site, so the panel can change one setting and keep the other.
 The list reads it from the record: the stored account and the journal's rows
@@ -180,8 +194,14 @@ Limits for now:
   missing: the site cannot be taken out, so the user stays.
 - Delete removes the vhost's `vhconf.conf` but leaves its empty directory and
   the site's logs under `/usr/local/lsws/logs/sifruno`.
-- A suspended account's site keeps serving; suspension still blocks new
-  logins only.
+- A state change of an account with a live site needs the web operation on,
+  as its delete does, and is refused (503) before anything is journaled
+  without it.
+- The config test counts the suspended site's own vhost as changed, and
+  OpenLiteSpeed 1.9.4 warns for a vhost whose tenant moved `public_html`
+  away. A suspend of such an account is therefore expected to end
+  `rejected`, leaving it active until the directory is back (not yet run on
+  the dev VM). Delete is not affected, because it takes the vhost out.
 
 ## Certificates
 

@@ -174,8 +174,9 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 			} else if e.Status == "rejected" {
 				// Only an operation that rewrites the web config can end
 				// rejected: the config test failed and the old files went back,
-				// so the account is unchanged.
-				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" || e.Before == nil || !sameAccount(e.After, *e.Before) {
+				// so the account is unchanged. A state change rewrites it for
+				// an account with a live site.
+				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" && e.Action != "state" || e.Before == nil || !sameAccount(e.After, *e.Before) {
 					return ErrRecovery
 				}
 				lastSuccess = e

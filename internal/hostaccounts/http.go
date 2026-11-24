@@ -110,6 +110,12 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				writeError(w, ErrInvalid)
 				return
 			}
+			// For an account with a live site the change runs the web apply,
+			// on its own limit.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
 			item, err := s.setState(ctx, id, in.Input, in.Actor)
 			if err != nil {
 				writeError(w, err)

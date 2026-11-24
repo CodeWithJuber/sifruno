@@ -75,7 +75,9 @@ func softQuotaMiB(hard int) int { return hard - hard/10 }
 // name, without the account named by except (used while removing a site).
 // Settings in flight are used for the account they belong to, so a recovery
 // renders the same config as the interrupted write. A site with a
-// certificate gets its files in olsweb.TLSRoot/<site name>/.
+// certificate gets its files in olsweb.TLSRoot/<site name>/. A suspended
+// account's site stays in the list marked suspended, so OpenLiteSpeed
+// refuses every request for it; a state change in flight counts as done.
 func webSites(items []record, except string) []olsweb.Site {
 	sites := []olsweb.Site{}
 	for _, r := range items {
@@ -93,6 +95,10 @@ func webSites(items []record, except string) []olsweb.Site {
 		if r.Pending != nil && r.Pending.Action == "certificate" {
 			certificate = r.TLSNext
 		}
+		state := r.Account.State
+		if r.Pending != nil && r.Pending.Action == "state" {
+			state = r.Pending.Target
+		}
 		site := olsweb.Site{
 			Name:       siteName(r.Account.ID),
 			Username:   r.Account.Username,
@@ -100,6 +106,7 @@ func webSites(items []record, except string) []olsweb.Site {
 			Domains:    []string{r.Account.Domain},
 			DocRoot:    r.Account.PublicHTML,
 			PHPVersion: w.PHPVersion,
+			Suspended:  state == "suspended",
 			Limits:     olsweb.Limits{PHPChildren: 4},
 			Isolation:  olsweb.Isolation{Namespace: true},
 		}

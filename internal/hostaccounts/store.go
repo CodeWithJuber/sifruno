@@ -433,6 +433,27 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				}
 				continue
 			}
+			if r.Pending.Action == "state" && r.Web.enabled() {
+				// Finish the interrupted suspend or resume of a live site: the
+				// account is in its new state (verified above), and installing
+				// the site list is idempotent. A config that now fails its
+				// test puts the account back and ends as rejected, unchanged;
+				// any other failure stays pending for the next start.
+				switch e := s.applySites(ctx, items); {
+				case errors.Is(e, ErrWebRejected):
+					if s.undoState(ctx, r) != nil {
+						continue
+					}
+					operation := *r.Pending
+					r.Pending = nil
+					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+						return ErrRecovery
+					}
+					continue
+				case e != nil:
+					continue
+				}
+			}
 			operation := *r.Pending
 			r.Account.State = r.Pending.Target
 			r.Account.UpdatedAt = time.Now().UTC()
@@ -956,18 +977,17 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	if err != nil {
 		return Account{}, err
 	}
-	var r record
-	found := false
-	for _, item := range items {
+	index := -1
+	for i, item := range items {
 		if item.Account.ID == id {
-			r = item
-			found = true
+			index = i
 			break
 		}
 	}
-	if !found {
+	if index < 0 {
 		return Account{}, ErrNotFound
 	}
+	r := items[index]
 	// A running WordPress install would keep going as a suspended user.
 	if r.Account.Revision != in.ExpectedRevision || s.installing[id] {
 		return Account{}, ErrConflict
@@ -977,6 +997,11 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	}
 	if r.Account.Revision == ^uint64(0) {
 		return Account{}, ErrRecovery
+	}
+	// A live site changes with its account, which needs the web operation:
+	// refused here, before anything is journaled.
+	if r.Web.enabled() && s.web == nil {
+		return Account{}, ErrUnavailable
 	}
 	r.Pending = &pending{Action: "state", Target: in.State, Actor: actor, Reason: in.Reason}
 	before := r.Account
@@ -992,6 +1017,32 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	if s.native.Verify(ctx, next) != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
+	}
+	// A live site follows its account: suspended, OpenLiteSpeed refuses every
+	// request for it; active again, it serves. The site list is installed
+	// under the web operation's own limit, with this account as the pending
+	// change leaves it. If the config fails its test the old files went
+	// back, so the account goes back too and the change ends rejected:
+	// nothing changed. Any other failure stays pending for the next start.
+	if r.Web.enabled() {
+		live := append([]record(nil), items...)
+		live[index] = r
+		switch e := s.applySites(ctx, live); {
+		case errors.Is(e, ErrWebRejected):
+			if s.undoState(ctx, r) != nil {
+				_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+				return Account{}, ErrRecovery
+			}
+			operation := *r.Pending
+			r.Pending = nil
+			if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+				return Account{}, ErrRecovery
+			}
+			return Account{}, ErrWebRejected
+		case e != nil:
+			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+			return Account{}, ErrRecovery
+		}
 	}
 	next.Account.Revision++
 	next.Account.UpdatedAt = time.Now().UTC()

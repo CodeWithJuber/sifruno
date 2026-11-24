@@ -126,3 +126,18 @@ func (s *store) applySitesWithout(ctx context.Context, items []record, id string
 	defer cancel()
 	return s.native.ApplySites(applyCtx, webSites(items, id))
 }
+
+// applySites installs every live site, each as its account's state says.
+func (s *store) applySites(ctx context.Context, items []record) error {
+	return s.applySitesWithout(ctx, items, "")
+}
+
+// undoState puts an account back into the state it had before the state
+// change still pending on r, under the web operation's limit. The native
+// call checks that the account is in the pending state first and in the
+// earlier one afterwards.
+func (s *store) undoState(ctx context.Context, r record) error {
+	undoCtx, cancel := webContext(ctx)
+	defer cancel()
+	return s.native.SetState(undoCtx, targetRecord(r, r.Pending.Target), r.Account.State)
+}

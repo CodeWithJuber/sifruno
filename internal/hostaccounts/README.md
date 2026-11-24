@@ -224,8 +224,11 @@ it changed.
 The panel shows a busy refusal in plain words: "The account still had
 running processes after 3 attempts, so nothing was removed. Suspend the site
 first (that stops its processes and keeps the site off), then delete it
-again." When the 20 seconds run out first, fewer than three attempts were
-made; the message still says three.
+again." A delete from the site's page does that itself for an active site:
+it suspends the site and asks for the delete once more, and says it did. If
+that is refused too, the site stays suspended and the message says so. When
+the 20 seconds run out first, fewer than three attempts were made; the
+message still says three.
 
 Limit for now: a tenant whose processes fork faster than the kill passes end
 them can keep refusing the delete of an active site, until the planned

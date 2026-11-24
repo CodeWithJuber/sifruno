@@ -200,6 +200,16 @@ test("using the current folder and applying a suspension again post their own bo
 
 const removedAll = ["the database example_wp", "the hosting account example with its files and its site on the web server"];
 
+test("a delete that suspended the site first says so before what it removed", () => {
+  const done = api.parseWebsiteDeleted({ domain: "example.com", removed: removedAll, kept: [], suspended_first: true });
+  assert.deepEqual(done, { domain: "example.com", removed: removedAll, kept: [], suspended_first: true });
+  assert.equal(api.deletedSummary(done), `The site's processes kept running, so the panel suspended the site first, then deleted it. Removed: ${removedAll.join(", ")}.`);
+  assert.deepEqual(api.parseWebsiteDeleted({ domain: "example.com", removed: removedAll, kept: [], suspended_first: false }), { domain: "example.com", removed: removedAll, kept: [] });
+  for (const bad of ["true", 1, null]) {
+    assert.equal(api.parseWebsiteDeleted({ domain: "example.com", removed: removedAll, kept: [], suspended_first: bad }), undefined, String(bad));
+  }
+});
+
 test("a change reads the session token, then posts its own field and the page's revision with CSRF", async () => {
   const calls = [];
   await withFetch(async (url, init) => {

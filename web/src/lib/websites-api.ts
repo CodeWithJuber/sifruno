@@ -41,10 +41,13 @@ export interface WebsiteDetail extends Website {
 }
 // What a finished delete removed, in order, and what it left alone: a
 // database or database user with the site's name that is not registered to it.
+// suspended_first: the site's processes kept running, so the panel suspended
+// the site and asked for the delete again.
 export interface WebsiteDeleted {
   domain: string;
   removed: string[];
   kept: string[];
+  suspended_first?: true;
 }
 
 export const readTimeoutMs = 10000;
@@ -100,7 +103,8 @@ export function parseWebsiteList(v: unknown): Website[] | undefined {
 
 export function parseWebsiteDeleted(v: unknown): WebsiteDeleted | undefined {
   if (!object(v) || !shortText(v.domain, 253) || !v.domain || !shortList(v.removed, 200) || !shortList(v.kept, 200)) return undefined;
-  return { domain: v.domain, removed: [...v.removed], kept: [...v.kept] };
+  if (v.suspended_first !== undefined && typeof v.suspended_first !== "boolean") return undefined;
+  return { domain: v.domain, removed: [...v.removed], kept: [...v.kept], ...(v.suspended_first ? { suspended_first: true as const } : {}) };
 }
 
 // ---- What the page shows ------------------------------------------------------
@@ -175,11 +179,13 @@ export function folderNotice(site: Website): FolderNotice | undefined {
   return undefined;
 }
 
-// A sentence for the end of a delete: what went, and what was left alone.
+// A sentence for the end of a delete: the suspend the panel did first, if
+// any, what went, and what was left alone.
 export function deletedSummary(done: WebsiteDeleted): string {
+  const suspended = done.suspended_first ? "The site's processes kept running, so the panel suspended the site first, then deleted it. " : "";
   const removed = done.removed.length ? `Removed: ${done.removed.join(", ")}.` : "";
   const kept = done.kept.length ? ` Left on the server, because it is not registered to this website: ${done.kept.join(", ")}.` : "";
-  return `${removed}${kept}`.trim();
+  return `${suspended}${removed}${kept}`.trim();
 }
 
 // ---- Errors -----------------------------------------------------------------

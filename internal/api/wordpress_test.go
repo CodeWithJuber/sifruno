@@ -42,6 +42,9 @@ func (s *wizardBrokerSpy) Create(_ context.Context, in hostaccounts.CreateInput,
 func (s *wizardBrokerSpy) Delete(context.Context, string, hostaccounts.DeleteInput, string) (hostaccounts.Account, error) {
 	return hostaccounts.Account{}, nil
 }
+func (s *wizardBrokerSpy) SetState(context.Context, string, hostaccounts.StateInput, string) (hostaccounts.Account, error) {
+	return hostaccounts.Account{}, nil
+}
 func (s *wizardBrokerSpy) SetWeb(_ context.Context, id string, in hostaccounts.WebInput, _ string) (hostaccounts.WebResult, error) {
 	return hostaccounts.WebResult{Account: hostaccounts.Account{ID: id, Revision: in.ExpectedRevision + 1}}, nil
 }

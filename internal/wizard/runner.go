@@ -22,6 +22,9 @@ type Accounts interface {
 	List(context.Context) ([]hostaccounts.Account, error)
 	Create(context.Context, hostaccounts.CreateInput, string) (hostaccounts.Account, error)
 	Delete(context.Context, string, hostaccounts.DeleteInput, string) (hostaccounts.Account, error)
+	// SetState suspends a site whose delete was refused because its
+	// processes kept running, before the delete is asked once more.
+	SetState(context.Context, string, hostaccounts.StateInput, string) (hostaccounts.Account, error)
 	SetWeb(context.Context, string, hostaccounts.WebInput, string) (hostaccounts.WebResult, error)
 	InstallWordPress(context.Context, string, hostaccounts.WordPressInput, string) (hostaccounts.WordPressResult, error)
 }

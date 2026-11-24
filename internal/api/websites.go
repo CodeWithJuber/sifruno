@@ -75,11 +75,13 @@ type WebsiteFolderBody struct {
 
 // WebsiteDeleted says what a finished delete removed, in order, and what it
 // left alone: a database or database user with the site's name that is not
-// registered to it.
+// registered to it. SuspendedFirst: the site's processes kept running, so the
+// panel suspended the site and asked for the delete again.
 type WebsiteDeleted struct {
-	Domain  string   `json:"domain"`
-	Removed []string `json:"removed"`
-	Kept    []string `json:"kept"`
+	Domain         string   `json:"domain"`
+	Removed        []string `json:"removed"`
+	Kept           []string `json:"kept"`
+	SuspendedFirst bool     `json:"suspended_first,omitempty"`
 }
 
 type websiteListBody struct {
@@ -316,7 +318,7 @@ func registerWebsites(a huma.API, o Options) {
 		if err != nil {
 			return nil, websiteRemoveError(err)
 		}
-		out := WebsiteDeleted{Domain: done.Domain, Removed: done.Removed, Kept: done.Kept}
+		out := WebsiteDeleted{Domain: done.Domain, Removed: done.Removed, Kept: done.Kept, SuspendedFirst: done.SuspendedFirst}
 		if out.Kept == nil {
 			out.Kept = []string{}
 		}

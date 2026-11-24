@@ -137,6 +137,78 @@ func TestRemoveSiteSaysWhenTheAccountWasBusy(t *testing.T) {
 	}
 }
 
+// An active site whose delete is refused because its processes kept
+// running is suspended (that ends them and keeps the site off) and its
+// delete asked once more, at the revision the suspend left. The result
+// says the site was suspended first.
+func TestRemoveSiteSuspendsABusySiteAndAsksAgain(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name   string
+		stands bool
+	}{{"suspended", false}, {"suspended, its processes outliving it", true}} {
+		f, done, a := removable(t)
+		f.acc.busyDeletes = 1
+		if c.stands {
+			f.acc.stateErr, f.acc.stateStands = hostaccounts.ErrUnavailable, true
+		}
+		got, err := f.runner.RemoveSite(ctx, a.ID, "example.com", a.Revision, "local-operator")
+		if err != nil || !got.SuspendedFirst || !slices.Equal(got.Removed, []string{siteAccount, siteUser, siteDB}) {
+			t.Fatalf("%s: %+v %v", c.name, got, err)
+		}
+		want := []string{fmt.Sprintf("delete 0001 rev=%d", a.Revision), fmt.Sprintf("state 0001 suspended rev=%d", a.Revision), fmt.Sprintf("delete 0001 rev=%d", a.Revision+1)}
+		if calls := slices.DeleteFunc(slices.Clone(f.acc.calls), func(c string) bool { return c == "list" }); !slices.Equal(calls, want) || len(f.dbs.calls) != 2 {
+			t.Fatalf("%s: calls %q %q", c.name, f.acc.calls, f.dbs.calls)
+		}
+		if marked, _ := f.runner.Get(done.ID); marked.RemovedAt == "" || marked.DeleteRevision != a.Revision {
+			t.Fatalf("%s: job after the delete %+v", c.name, marked)
+		}
+	}
+}
+
+// One retry only. Refused again, the site stays suspended and the message
+// says both steps; nothing was removed. A suspend that did not take stops
+// there, and a retry that fails another way says the site was suspended.
+func TestRemoveSiteAfterTheSuspendSaysWhatHappened(t *testing.T) {
+	ctx := context.Background()
+	const busy = "The account still had running processes after 3 attempts, so nothing was removed. "
+
+	f, _, a := removable(t)
+	f.acc.busyDeletes = 2
+	_, err := f.runner.RemoveSite(ctx, a.ID, "example.com", a.Revision, "local-operator")
+	failure := removeFailure(t, err, ErrConflict)
+	want := busy + "The panel then suspended the site (that stops its processes and keeps the site off) and asked again, but processes were still running, so the site stays suspended. Delete it again in a few minutes; if it is refused again, ask whoever runs this server to check what runs as the user example."
+	if failure.Why != want || len(failure.Removed) != 0 || len(f.dbs.calls) != 0 {
+		t.Fatalf("refused twice: %+v, database calls %q", failure, f.dbs.calls)
+	}
+	if deletes := slices.DeleteFunc(slices.Clone(f.acc.calls), func(c string) bool { return !strings.HasPrefix(c, "delete") }); len(deletes) != 2 {
+		t.Fatalf("deletes asked %q", deletes)
+	}
+	if acc := f.acc.accounts[0]; acc.State != "suspended" || acc.Revision != a.Revision+1 || len(f.runner.Succeeded()) != 1 {
+		t.Fatalf("after two refusals: %+v, sites %d", acc, len(f.runner.Succeeded()))
+	}
+
+	f, _, a = removable(t)
+	f.acc.busyDeletes, f.acc.stateErr = 1, hostaccounts.ErrUnavailable
+	_, err = f.runner.RemoveSite(ctx, a.ID, "example.com", a.Revision, "local-operator")
+	failure = removeFailure(t, err, ErrConflict)
+	want = busy + "The panel tried to suspend the site first, but the account service did not confirm that it was suspended. Suspend the site first (that stops its processes and keeps the site off), then delete it again."
+	if failure.Why != want || !strings.Contains(failure.Technical, "suspend: "+hostaccounts.ErrUnavailable.Error()) || f.acc.accounts[0].State != "active" {
+		t.Fatalf("suspend not taken: %+v %+v", failure, f.acc.accounts[0])
+	}
+	if deletes := slices.DeleteFunc(slices.Clone(f.acc.calls), func(c string) bool { return !strings.HasPrefix(c, "delete") }); len(deletes) != 1 {
+		t.Fatalf("deletes asked %q", deletes)
+	}
+
+	f, _, a = removable(t)
+	f.acc.busyDeletes, f.acc.delErr = 1, hostaccounts.ErrUnavailable
+	_, err = f.runner.RemoveSite(ctx, a.ID, "example.com", a.Revision, "local-operator")
+	failure = removeFailure(t, err, ErrUnavailable)
+	if !strings.HasPrefix(failure.Why, "The account's processes kept running, so the panel suspended the site and asked for the delete again. The account service did not answer, so the panel cannot tell whether the hosting account was deleted.") {
+		t.Fatalf("retry not answered: %+v", failure)
+	}
+}
+
 func TestRemoveSiteSaysWhatIsLeftAndCarriesOn(t *testing.T) {
 	f, done, a := removable(t)
 	ctx := context.Background()

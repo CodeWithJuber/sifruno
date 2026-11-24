@@ -385,6 +385,42 @@ func TestWebsiteDeleteRefusedAsBusy(t *testing.T) {
 	}
 }
 
+// An active site whose delete is refused as busy is suspended and its
+// delete asked once more; the answer says so. Refused again, the answer is
+// 409, the site stays suspended, and the message says both steps.
+func TestWebsiteDeleteSuspendsABusySiteFirst(t *testing.T) {
+	for _, busy := range []int{1, 2} {
+		f, _, broker, databases, site := actionsFixture(t)
+		cookie, csrf := websiteSignIn(t, f)
+		broker.mu.Lock()
+		broker.busyDeletes = busy
+		broker.mu.Unlock()
+		w := websiteRequest(f.handler, "POST", sitePath(site, "delete"), map[string]any{"confirm_domain": "example.com", "expected_revision": site.Revision}, cookie, csrf)
+		asked := []string{
+			fmt.Sprintf(`delete %s rev=%d reason="Deleted from the website's page" actor=local-operator`, site.AccountID, site.Revision),
+			fmt.Sprintf(`state %s suspended rev=%d reason="Suspended to delete it from the website's page: its processes kept running" actor=local-operator`, site.AccountID, site.Revision),
+			fmt.Sprintf(`delete %s rev=%d reason="Deleted from the website's page" actor=local-operator`, site.AccountID, site.Revision+1),
+		}
+		if !slices.Equal(broker.changes, asked) {
+			t.Fatalf("busy %d: broker asked %q", busy, broker.changes)
+		}
+		if busy == 1 {
+			var done WebsiteDeleted
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &done) != nil || !done.SuspendedFirst || len(done.Removed) != 3 || len(databases.drops) != 2 {
+				t.Fatalf("delete after the suspend %d: %s", w.Code, w.Body.String())
+			}
+			continue
+		}
+		want := "The account still had running processes after 3 attempts, so nothing was removed. The panel then suspended the site (that stops its processes and keeps the site off) and asked again, but processes were still running, so the site stays suspended. Delete it again in a few minutes; if it is refused again, ask whoever runs this server to check what runs as the user example."
+		if w.Code != 409 || problemDetail(t, w) != want || len(databases.drops) != 0 {
+			t.Fatalf("refused twice %d: %s", w.Code, w.Body.String())
+		}
+		if now := decodeDetail(t, websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+site.AccountID, nil, cookie, "")); now.State != "suspended" || now.Revision != site.Revision+1 {
+			t.Fatalf("site after two refusals %+v", now)
+		}
+	}
+}
+
 func TestWebsiteActionAdmission(t *testing.T) {
 	f, _, broker, databases, site := actionsFixture(t)
 	bodies := map[string]string{

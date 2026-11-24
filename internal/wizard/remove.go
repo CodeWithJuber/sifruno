@@ -17,19 +17,24 @@ var ErrNotFound = errors.New("website not found")
 
 const (
 	// A delete rewrites the web server's config (the broker allows 4 minutes)
-	// and then removes the user and home on a second limit of 4.
-	removeLimit  = 10 * time.Minute
-	removeReason = "Deleted from the website's page"
+	// and then removes the user and home on a second limit of 4. The suspend
+	// and second ask after a busy refusal share what is left of it.
+	removeLimit   = 10 * time.Minute
+	removeReason  = "Deleted from the website's page"
+	suspendReason = "Suspended to delete it from the website's page: its processes kept running"
 )
 
 // Removal is a finished site delete. Removed names what went, in order. Kept
 // names a database or database user that has the site's name but is not
-// registered to it, which the delete therefore left alone.
+// registered to it, which the delete therefore left alone. SuspendedFirst:
+// the account service refused the delete because the site's processes kept
+// running, so the panel suspended the site and asked again.
 type Removal struct {
-	Domain   string
-	Username string
-	Removed  []string
-	Kept     []string
+	Domain         string
+	Username       string
+	Removed        []string
+	Kept           []string
+	SuspendedFirst bool
 }
 
 // RemoveFailure is a site delete that was refused or stopped. Reason is
@@ -175,14 +180,30 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 		}
 	}
 	var plan []removal
+	suspendedFirst := false
 	if i >= 0 {
+		active := accounts[i].State == "active"
 		plan = append(plan, removal{"the hosting account " + owner + " with its files and its site on the web server", func(ctx context.Context) error {
-			_, err := r.accounts.Delete(ctx, accountID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: removeReason}, actor)
-			switch {
-			case errors.Is(err, hostaccounts.ErrNotFound):
-				return nil // already gone
-			case errors.Is(err, hostaccounts.ErrDeleteBusy):
+			err := r.deleteAccount(ctx, accountID, revision, actor)
+			if !errors.Is(err, hostaccounts.ErrDeleteBusy) {
+				return err
+			}
+			if !active {
 				return &busyRefusal{why: busyNothingRemoved + " " + busySuspendFirst, err: err}
+			}
+			// The safe order, done once for the person: suspended, the site
+			// is off, nothing new starts for the account and its processes
+			// end again. The job keeps the revision the delete was first
+			// asked at, which a partly deleted site is listed and asked
+			// again with.
+			next, suspendErr := r.suspendForDelete(ctx, accountID, revision, actor)
+			if suspendErr != nil {
+				return &busyRefusal{why: busyNothingRemoved + " The panel tried to suspend the site first, but the account service did not confirm that it was suspended. " + busySuspendFirst, err: fmt.Errorf("%w; suspend: %v", err, suspendErr)}
+			}
+			suspendedFirst = true
+			err = r.deleteAccount(ctx, accountID, next, actor)
+			if errors.Is(err, hostaccounts.ErrDeleteBusy) {
+				return &busyRefusal{why: busyNothingRemoved + " The panel then suspended the site (that stops its processes and keeps the site off) and asked again, but processes were still running, so the site stays suspended. Delete it again in a few minutes; if it is refused again, ask whoever runs this server to check what runs as the user " + owner + ".", err: err}
 			}
 			return err
 		}, accountNotDeleted, true})
@@ -230,6 +251,9 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 			return Removal{}, f
 		}
 		why, unsure, reason := step.failed(err)
+		if step.account && suspendedFirst {
+			why = "The account's processes kept running, so the panel suspended the site and asked for the delete again. " + why
+		}
 		f.Reason = reason
 		if len(f.Removed) == 0 {
 			why += " Nothing was removed before that."
@@ -263,7 +287,39 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 	if err := r.store.markRemoved(accountID, timestamp(time.Now())); err != nil {
 		fmt.Fprintf(logOutput, "website %s: marking its job as removed could not be saved: %v\n", domain, err)
 	}
+	out.SuspendedFirst = suspendedFirst
 	return out, nil
+}
+
+// deleteAccount asks the account service to delete the site's hosting
+// account at revision. An account that is already gone counts as deleted.
+func (r *Runner) deleteAccount(ctx context.Context, accountID string, revision uint64, actor string) error {
+	_, err := r.accounts.Delete(ctx, accountID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: removeReason}, actor)
+	if errors.Is(err, hostaccounts.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+// suspendForDelete suspends an active site whose delete was refused because
+// its processes kept running, and answers the account's revision after it.
+// A suspension stands even when some processes outlive it, and the account
+// service then answers unavailable; so after an error the account list says
+// whether this suspension took: the account suspended, one revision on.
+func (r *Runner) suspendForDelete(ctx context.Context, accountID string, revision uint64, actor string) (uint64, error) {
+	changed, err := r.accounts.SetState(ctx, accountID, hostaccounts.StateInput{State: "suspended", ExpectedRevision: revision, Reason: suspendReason}, actor)
+	if err == nil {
+		return changed.Revision, nil
+	}
+	accounts, listErr := r.accounts.List(ctx)
+	if listErr != nil {
+		return 0, err
+	}
+	k := slices.IndexFunc(accounts, func(a hostaccounts.Account) bool { return a.ID == accountID })
+	if k < 0 || accounts[k].State != "suspended" || accounts[k].Revision != revision+1 {
+		return 0, err
+	}
+	return accounts[k].Revision, nil
 }
 
 // accountNotDeleted explains the broker's answer to a delete that failed.

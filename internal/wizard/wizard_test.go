@@ -50,6 +50,13 @@ type fakeAccounts struct {
 	delErr   error
 	delCtx   error
 	next     int
+	// busyDeletes is how many deletes, in turn, are refused because the
+	// account's processes kept running; nothing changes. stateErr is
+	// SetState's answer; with stateStands the state changes all the same,
+	// as a suspension whose processes outlived it does.
+	busyDeletes int
+	stateErr    error
+	stateStands bool
 
 	webLeft, installLeft time.Duration // time to its deadline each call was given
 }
@@ -99,6 +106,10 @@ func (f *fakeAccounts) Delete(ctx context.Context, id string, in hostaccounts.De
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.delCtx = ctx.Err()
+	if f.busyDeletes > 0 {
+		f.busyDeletes--
+		return hostaccounts.Account{}, hostaccounts.ErrDeleteBusy
+	}
 	if f.delErr != nil {
 		return hostaccounts.Account{}, f.delErr
 	}
@@ -112,6 +123,28 @@ func (f *fakeAccounts) Delete(ctx context.Context, id string, in hostaccounts.De
 	}
 	f.accounts = slices.Delete(f.accounts, i, i+1)
 	return hostaccounts.Account{ID: id}, nil
+}
+
+func (f *fakeAccounts) SetState(_ context.Context, id string, in hostaccounts.StateInput, _ string) (hostaccounts.Account, error) {
+	f.record(fmt.Sprintf("state %s %s rev=%d", id[28:], in.State, in.ExpectedRevision))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stateErr != nil && !f.stateStands {
+		return hostaccounts.Account{}, f.stateErr
+	}
+	i := slices.IndexFunc(f.accounts, func(a hostaccounts.Account) bool { return a.ID == id })
+	if i < 0 {
+		return hostaccounts.Account{}, hostaccounts.ErrNotFound
+	}
+	if f.accounts[i].Revision != in.ExpectedRevision || in.Reason == "" {
+		return hostaccounts.Account{}, hostaccounts.ErrConflict
+	}
+	f.accounts[i].State = in.State
+	f.accounts[i].Revision++
+	if f.stateErr != nil {
+		return hostaccounts.Account{}, f.stateErr
+	}
+	return f.accounts[i], nil
 }
 
 func (f *fakeAccounts) SetWeb(ctx context.Context, id string, in hostaccounts.WebInput, _ string) (hostaccounts.WebResult, error) {

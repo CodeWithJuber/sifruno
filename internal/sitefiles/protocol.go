@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -58,8 +59,9 @@ const (
 // Size is how many bytes follow the line for write and upload. Mode is the
 // permission bits for mode, as three or four octal digits ("0644");
 // setuid, setgid and sticky are refused. Overwrite lets an upload replace a
-// file. ExpectedVersion makes a write fail with "changed" unless the file
-// still has this Version (or, for a new file, when one appeared meanwhile).
+// file. A write's ExpectedVersion is the Version the editor opened: the
+// write fails with "changed" unless the file still has it. Empty makes a
+// new file only: the write fails with "exists" if the name is taken.
 type Request struct {
 	Op              string `json:"op"`
 	Path            string `json:"path"`
@@ -251,14 +253,15 @@ func ReadLine(r *bufio.Reader, limit int) ([]byte, error) {
 	}
 }
 
-// decodeStrict decodes exactly one JSON object with no unknown field.
+// decodeStrict decodes exactly one JSON object with no unknown field and
+// nothing after it. More() alone would let a stray "}" or "]" through.
 func decodeStrict(line []byte, out any) error {
 	d := json.NewDecoder(bytes.NewReader(line))
 	d.DisallowUnknownFields()
 	if err := d.Decode(out); err != nil {
 		return errInvalid
 	}
-	if d.More() {
+	if _, err := d.Token(); !errors.Is(err, io.EOF) {
 		return errInvalid
 	}
 	return nil

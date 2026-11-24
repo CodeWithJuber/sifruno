@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"time"
@@ -36,6 +37,10 @@ var errHome = errors.New("the working directory is not a folder of the running u
 // answer could not be written whole, or the file changed size while it was
 // sent; the caller then exits non-zero and the broker discards the answer.
 func Serve(home *os.File, in io.Reader, out io.Writer) error {
+	// Only home's descriptor is used below; without this the *os.File could
+	// be collected meanwhile and its finalizer close that descriptor, which
+	// a later open would then reuse for another folder.
+	defer runtime.KeepAlive(home)
 	var st unix.Stat_t
 	if err := unix.Fstat(int(home.Fd()), &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR || int(st.Uid) != os.Getuid() {
 		return errHome
@@ -342,7 +347,9 @@ func (s *server) put(r Request, names []string) error {
 		default:
 			return s.fail(ErrNotAFile)
 		}
-		if r.Op == OpUpload && !r.Overwrite {
+		// An upload replaces a file only when asked; a write without the
+		// version it opened is a new file, so it never replaces one either.
+		if (r.Op == OpUpload && !r.Overwrite) || (r.Op == OpWrite && r.ExpectedVersion == "") {
 			return s.fail(ErrExists)
 		}
 		if r.ExpectedVersion != "" && version(&st) != r.ExpectedVersion {

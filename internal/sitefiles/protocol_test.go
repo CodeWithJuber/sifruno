@@ -92,6 +92,8 @@ func TestParseRequestIsStrict(t *testing.T) {
 	for _, line := range []string{
 		`{"op":"list","path":"","extra":1}`,
 		`{"op":"list","path":""} {"op":"list"}`,
+		`{"op":"list","path":""}}`,
+		`{"op":"list","path":""}]`,
 		`{"op":"read","path":"../x"}`,
 		`["list"]`,
 		"{\"op\":\"read\",\"path\":\"a\xff\"}",
@@ -168,6 +170,8 @@ func TestParseAnswerChecksTheHelpersWords(t *testing.T) {
 		{rename, `{"file":{"name":"a","type":"folder","size":0,"mode":"0755","modified":"` + when + `"}}`},
 		{mode, `{"file":{"name":"a","type":"file","size":1,"mode":"0644","modified":"` + when + `","version":"0123456789abcdef"}}`},
 		{read, `{"error":"a message the helper made up"}`},
+		{read, `{"error":"failed"}}`},
+		{list, `{}]`},
 		{read, `{"error":"is_link","file":{"name":"index.php","type":"file","size":1,"mode":"0644","modified":"` + when + `","version":"0123456789abcdef"}}`},
 		{read, `{"file":{"name":"index.php","type":"file","size":1,"mode":"0644","modified":"` + when + `","version":"0123456789abcdef"},"extra":1}`},
 	}

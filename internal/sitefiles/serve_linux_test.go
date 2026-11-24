@@ -228,10 +228,15 @@ func TestWriteIsAtomicAndKeepsTheMode(t *testing.T) {
 	// The page that loaded the old version cannot overwrite the new one.
 	a, _ = call(t, home, Request{Op: OpWrite, Path: "public_html/index.php", Size: 1, ExpectedVersion: loaded}, []byte("x"))
 	wantError(t, a, ErrChanged)
-	// A new file is made 0644.
+	// A new file is made 0644; a write without a version never replaces one.
 	a, _ = call(t, home, Request{Op: OpWrite, Path: "public_html/new.css", Size: 4}, []byte("a{} "))
 	if a.Error != "" || a.File.Mode != "0644" {
 		t.Fatalf("new file %+v", a)
+	}
+	a, _ = call(t, home, Request{Op: OpWrite, Path: "public_html/new.css", Size: 4}, []byte("lost"))
+	wantError(t, a, ErrExists)
+	if got, _ := os.ReadFile(filepath.Join(dir, "public_html", "new.css")); string(got) != "a{} " {
+		t.Fatalf("a write without a version replaced a file: %q", got)
 	}
 	a, _ = call(t, home, Request{Op: OpWrite, Path: "public_html/bin.txt", Size: 3}, []byte("a\x00b"))
 	wantError(t, a, ErrBinary)

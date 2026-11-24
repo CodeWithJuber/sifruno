@@ -1,4 +1,4 @@
-import { Archive, Folder, Globe, History, Home, Layers, ListChecks, Network, Plus, Server, Settings, ShieldCheck, HardDrive, Users } from "lucide-react";
+import { Archive, Database, Folder, Globe, History, Home, Layers, ListChecks, Network, Plus, Server, Settings, ShieldCheck, HardDrive, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 // One list drives the sidebar, the command palette, the breadcrumb and the
@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 // Change trail and AI budget screens live under Customers, Security,
 // Activity and Settings. testId keeps the ids the browser QA scripts click.
 
-export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "security" | "settings" | "tour";
+export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "security" | "settings" | "tour";
 
 export interface Page {
   id: PageId;
@@ -34,6 +34,7 @@ export const pages: readonly Page[] = [
   { id: "new-website", path: "/websites/new", label: "New website", title: "New website", subtitle: "Create a WordPress website on this server.", icon: Plus, testId: "nav-new-website", audience: "private", group: "main", parent: "websites" },
   { id: "website-job", path: "/websites/jobs/$jobId", label: "Website setup", title: "Website setup", subtitle: "Follow each step while the panel creates the website.", icon: ListChecks, testId: "nav-website-job", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/jobs\/[^/]+$/ },
   { id: "website", path: "/websites/sites/$accountId", label: "Overview", title: "Website overview", subtitle: "One website: its status, versions and links.", icon: Globe, testId: "nav-website", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+$/ },
+  { id: "site-databases", path: "/websites/sites/$accountId/databases", label: "Databases", title: "Databases", subtitle: "One website's databases and database users.", icon: Database, testId: "nav-site-databases", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/databases$/ },
   { id: "static-sites", path: "/websites/static", label: "Static sites (old)", title: "Static sites (old)", subtitle: "Websites made with the old static-file model.", icon: Globe, testId: "nav-static-sites", audience: "private", group: "main", parent: "websites" },
   { id: "files", path: "/websites/files", label: "Files", title: "Files", subtitle: "View and edit your website's files.", icon: Folder, testId: "nav-files", audience: "private", group: "main", parent: "websites" },
   { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },

@@ -1,3 +1,4 @@
+import { lazy } from "react";
 import type { ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { AppShell, isPublicPreview } from "@/shell/AppShell";
@@ -29,6 +30,15 @@ function WebsiteRoute() {
   return <WebsiteView accountId={accountId} />;
 }
 
+// One website's Databases page. Keyed by the id, so moving from one website
+// to another starts fresh.
+const SiteDatabases = lazy(() => import("@/SiteDatabases").then((m) => ({ default: m.SiteDatabases })));
+const siteDatabasesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/databases", component: SiteDatabasesRoute, beforeLoad: privateOnly });
+function SiteDatabasesRoute() {
+  const { accountId } = siteDatabasesRoute.useParams();
+  return <SiteDatabases key={accountId} accountId={accountId} />;
+}
+
 const routeTree = rootRoute.addChildren([
   route("/", HomeView),
   route("/tour", TourView, previewOnly),
@@ -36,6 +46,7 @@ const routeTree = rootRoute.addChildren([
   route("/websites/new", NewWebsiteView, privateOnly),
   websiteJobRoute,
   websiteRoute,
+  siteDatabasesRoute,
   route("/websites/static", ShellRendered, privateOnly),
   route("/websites/files", ShellRendered, privateOnly),
   route("/websites/backups", ShellRendered, privateOnly),

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -148,6 +149,11 @@ type nativeSystem interface {
 	// InstallWordPress runs WP-CLI as the account's user into its live
 	// site; it changes only the tenant's files.
 	InstallWordPress(context.Context, record, WordPressInput) (WordPressResult, error)
+	// RunFiles runs the file helper (FilesHelper) as the account's user,
+	// in its home, in a transient unit in the account's slice: stdin is its
+	// request, its answer goes to stdout. It returns nil only when the
+	// helper exited 0. Root opens nothing in the home.
+	RunFiles(ctx context.Context, r record, stdin io.Reader, stdout io.Writer) error
 	// Delete removes the managed system identity and owned home after
 	// ownership verification; it must be safe to retry after a crash. It
 	// ends the account's processes first. errAccountBusy: userdel still
@@ -189,6 +195,9 @@ type store struct {
 	// running outside the lock; delete refuses them while their user's
 	// processes run.
 	installing map[string]bool
+	// fileRuns counts each account's file operations running outside the
+	// lock (store_files.go); they never make the account busy.
+	fileRuns map[string]int
 	// backup runs restic and the database tools (nil: off). backupMu lets
 	// one backup operation run at a time, outside mu, so a long backup
 	// holds no other account.

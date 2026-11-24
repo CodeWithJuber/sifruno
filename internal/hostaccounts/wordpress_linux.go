@@ -131,10 +131,18 @@ func siteUnit(uid int) (string, error) {
 // it failed. systemd expands $NAME and ${NAME} in a service's arguments when
 // it runs them, so every "$" is doubled, which it turns back into one.
 func siteRunArgs(r record, unit string, left time.Duration, path string, args []string) ([]string, error) {
+	return siteRunArgsIn(r, unit, left, r.Account.PublicHTML, path, args)
+}
+
+// siteRunArgsIn is siteRunArgs with the folder the step starts in: the
+// account's public_html, or its home (the file manager's helper, which
+// must work while public_html is missing). Only those two are accepted.
+func siteRunArgsIn(r record, unit string, left time.Duration, dir, path string, args []string) ([]string, error) {
 	uid := r.Account.UID
 	limits := recordLimits(r)
 	if !validLimitUID(uid) || r.Account.GID != uid || !siteUnitPattern.MatchString(unit) || !strings.HasPrefix(unit, "sifruno-site-"+strconv.Itoa(uid)+"-") ||
-		!validLimits(limits) || left <= 0 || !filepath.IsAbs(path) || !filepath.IsAbs(r.Account.PublicHTML) || !validUsername(r.Account.Username) {
+		!validLimits(limits) || left <= 0 || !filepath.IsAbs(path) || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir ||
+		(dir != r.Account.PublicHTML && dir != r.Account.Home) || !validUsername(r.Account.Username) {
 		return nil, ErrInvalid
 	}
 	id := strconv.Itoa(uid)
@@ -148,7 +156,7 @@ func siteRunArgs(r record, unit string, left time.Duration, path string, args []
 		"--description=sifruno site step",
 		"--slice=user-" + id + ".slice",
 		"--uid=" + id, "--gid=" + id,
-		"--working-directory=" + r.Account.PublicHTML,
+		"--working-directory=" + dir,
 		"--property=TasksMax=" + strconv.Itoa(limits.Processes),
 		"--property=RuntimeMaxSec=" + strconv.FormatInt(int64((left+time.Second-1)/time.Second), 10),
 		"--property=KillMode=control-group",
@@ -188,22 +196,32 @@ func (n *linuxSystem) stopSiteUnit(ctx context.Context, unit string) error {
 // then returns, or WaitDelay kills it, and systemd's own RuntimeMaxSec stops
 // the unit if that kill failed.
 func (n *linuxSystem) runAsSite(ctx context.Context, r record, path, stdin string, args ...string) ([]byte, int, error) {
+	out := &tailBuffer{}
+	code, e := n.runSiteProgram(ctx, r, r.Account.PublicHTML, path, strings.NewReader(stdin), out, out, args...)
+	return out.b, code, e
+}
+
+// runSiteProgram is runAsSite with the folder the step starts in (see
+// siteRunArgsIn) and streams: stdin is copied to the program as it reads,
+// and its output reaches stdout and stderr as it writes, so a caller can
+// pass a large file through without holding it.
+func (n *linuxSystem) runSiteProgram(ctx context.Context, r record, dir, path string, stdin io.Reader, stdout, stderr io.Writer, args ...string) (int, error) {
 	deadline, ok := ctx.Deadline()
 	if ctx.Err() != nil || !ok || n.limitsUID(r.Account.UID) != nil {
-		return nil, -1, ErrUnavailable
+		return -1, ErrUnavailable
 	}
 	before, ok := n.tools[systemdRun]
 	actual, e := trustedFile(systemdRun, false)
 	if !ok || e != nil || !os.SameFile(before, actual) || before.Size() != actual.Size() || !before.ModTime().Equal(actual.ModTime()) {
-		return nil, -1, ErrUnavailable
+		return -1, ErrUnavailable
 	}
 	unit, e := siteUnit(r.Account.UID)
 	if e != nil {
-		return nil, -1, ErrUnavailable
+		return -1, ErrUnavailable
 	}
-	runArgs, e := siteRunArgs(r, unit, time.Until(deadline), path, args)
+	runArgs, e := siteRunArgsIn(r, unit, time.Until(deadline), dir, path, args)
 	if e != nil {
-		return nil, -1, ErrUnavailable
+		return -1, ErrUnavailable
 	}
 	cmd := exec.CommandContext(ctx, systemdRun, runArgs...)
 	cmd.Dir = "/"
@@ -214,18 +232,17 @@ func (n *linuxSystem) runAsSite(ctx context.Context, r record, path, stdin strin
 	// moment, and Wait fails if the pipe is still open after WaitDelay.
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Cancel = func() error { return n.stopSiteUnit(context.WithoutCancel(ctx), unit) }
-	cmd.Stdin = strings.NewReader(stdin)
-	out := &tailBuffer{}
-	cmd.Stdout, cmd.Stderr = out, out
+	cmd.Stdin = stdin
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	runErr := cmd.Run()
 	if ctx.Err() != nil {
-		return out.b, -1, ErrUnavailable
+		return -1, ErrUnavailable
 	}
 	var exit *exec.ExitError
 	if runErr != nil && !errors.As(runErr, &exit) {
-		return out.b, -1, ErrUnavailable
+		return -1, ErrUnavailable
 	}
-	return out.b, cmd.ProcessState.ExitCode(), nil
+	return cmd.ProcessState.ExitCode(), nil
 }
 
 func (n *linuxSystem) InstallWordPress(ctx context.Context, r record, in WordPressInput) (WordPressResult, error) {

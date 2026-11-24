@@ -824,6 +824,78 @@ send text or a path.
   nothing is journaled. A failed run answers 422 `install_failed` with step
   `placeholder` and the end of what PHP printed.
 
+## File manager
+
+`POST /v1/accounts/{id}/files/{op}` lists, reads, writes, uploads,
+downloads, makes folders, renames, deletes and changes the mode of files in
+an account's home. Root never opens a path inside the home for it.
+
+- Every operation runs `/usr/local/lib/sifruno/bin/sifruno-files`
+  (`cmd/sifruno-files`, `internal/sitefiles`), which ships in the release
+  beside the broker, as the account's user: the WordPress install's site
+  step (`systemd-run` transient service in `user-<uid>.slice`, the plan's
+  task limit, `NoNewPrivileges=yes`, the time left as `RuntimeMaxSec`),
+  started in the home instead of public_html, with no argument. Before each
+  run the broker checks the helper as it checks its other fixed tools: a
+  regular root-owned file with one link in root-owned folders no one else
+  may write, executable by the site user. It needs the web operation
+  (`--web-user`), which makes the empty HOME every site step gets.
+- The request is one JSON line on stdin (`op`, `path`, and the operation's
+  own fields), followed for a write or upload by exactly its `size` in
+  bytes. The answer is one JSON line on stdout, followed for a read or
+  download by exactly the file's size in bytes. The helper refuses to run
+  as root.
+- Paths are relative to the home: at most 1024 bytes and 64 names, each 1
+  to 255 bytes of UTF-8; an absolute path, `.`, `..`, an empty name, NUL or
+  any other control character is refused. The helper opens each name from
+  the home with `O_NOFOLLOW`, so a link is listed as a link (never
+  followed), a path through a link is refused (`is_link`), and a delete or
+  rename acts on the link itself. A folder delete opens each folder from its
+  parent's handle with `O_NOFOLLOW` and removes every name relative to it.
+- Bounds: the editor reads and writes UTF-8 text with no NUL byte, at most
+  1 MiB; an upload is at most 64 MiB, a download at most 1 GiB, a list at
+  most 5000 names. A write or upload goes to a new `O_EXCL` temporary file
+  beside the target, is synced and given its mode (a replaced file keeps
+  its own; a new one gets 0644), then renamed over the target, or linked to
+  a name that must be free for an upload that may not overwrite. A failed
+  one leaves the file as it was. A mode change sets the permission bits
+  only; setuid, setgid and sticky are refused.
+- The helper's answer comes from a process with the tenant's rights, which
+  the tenant's own processes may trace, so the broker bounds and checks it
+  (`sitefiles.ParseAnswer`) before using any of it, and fails a helper that
+  sends more or fewer bytes than it promised. The client checks the broker's
+  answer again.
+- A write's `expected_version` is the file's `version` from the read: 16 hex
+  digits from its device, inode, size and modified and change times. A file
+  changed since answers `changed`.
+
+Checked under the broker lock, then run outside it on the operation's own
+limit (two minutes; fifteen for an upload or download), which does not
+follow the caller:
+
+- Only this account must have no unfinished operation (503 `recovery`);
+  another account's does not stop a file operation, as for backups, because
+  the operation touches only this tenant's home with its rights.
+- A suspended account's files can be listed, read and downloaded, so an
+  operator can look at a suspended site and take its files; changes answer
+  409 until it is resumed, so a suspension stays a freeze. Changes also
+  answer 409 while a WordPress install or a restore writes into the home.
+- Up to four file operations run at once per account (409 beyond); other
+  accounts are not counted against it.
+- Nothing is journaled, and the account is never marked busy: a suspend or
+  delete goes ahead and ends a running helper with the account's other
+  processes. What only root controls (user, group, home object, marker) is
+  checked again just before the run, so the helper starts only with the UID
+  that belongs to this account now; a delete that lands between that check
+  and systemd's start is the remaining window.
+
+A refusal of the helper's answers 422 `{"error": "file_failed", "reason":
+"<code>"}` (`not_found`, `exists`, `is_link`, `not_a_folder`, `is_a_folder`,
+`not_a_file`, `too_large`, `binary`, `changed`, `permission`, `quota`,
+`no_space`, `too_deep`, `unsupported`, `invalid`, `failed`); the quota applies
+because the helper writes as the tenant. Not yet run on the dev VM:
+`scripts/devvm/proofs/files.guest.sh` (`proof.sh files`) is the proof to run.
+
 ## Backups
 
 Website backups go to an SFTP storage server with restic 0.20.0, which the

@@ -85,6 +85,8 @@ type fakeNative struct {
 	// siteTools models crontabs, logs, quotas and traffic counters
 	// (sitetools_test.go).
 	siteTools *fakeSiteTools
+	// files is the file manager's state (files_fake_test.go).
+	files fakeFiles
 }
 
 func (f *fakeNative) EndProcesses(_ context.Context, r record) error {

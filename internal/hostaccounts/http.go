@@ -26,6 +26,11 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
 		switch {
+		case fileRoutePattern.MatchString(r.URL.Path):
+			// The file manager's routes (files_http.go), first because
+			// ".../files/delete" also ends like an account delete. Each runs
+			// the file helper as the account's user, on its own limit.
+			serveFiles(w, r, s)
 		case r.Method == "GET" && r.URL.Path == "/v1/web-preview":
 			if r.URL.ForceQuery || r.URL.RawPath != "" {
 				writeError(w, ErrInvalid)

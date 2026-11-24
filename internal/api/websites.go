@@ -473,7 +473,7 @@ func findWebsite(ctx context.Context, o Options, id string) (Website, hostaccoun
 // but not yet its database: the job is all that is left to describe it.
 func partlyDeletedWebsite(j wizard.Job) Website {
 	return Website{
-		AccountID: j.Result.AccountID, Username: j.Username, Domain: j.Domain, Kind: j.Kind, State: partlyDeleted,
+		AccountID: j.Result.AccountID, Username: j.Username, Domain: j.Domain, Kind: siteKind(j), State: partlyDeleted,
 		WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: j.DeleteRevision,
 		Aliases: []WebsiteDomain{},
 	}
@@ -485,7 +485,7 @@ func website(a hostaccounts.Account, j wizard.Job, certs SiteCertificates) Websi
 		https.NotAfter = time.Unix(a.Certificate.NotAfter, 0).UTC().Format(time.RFC3339)
 	}
 	site := Website{
-		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: j.Kind, State: a.State, HTTPS: https,
+		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: siteKind(j), State: a.State, HTTPS: https,
 		PHPVersion: a.Web.PHPVersion, WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: a.Revision,
 		SiteFolderChanged: a.SiteFolderChanged, Limits: websiteLimits(a.Limits),
 	}

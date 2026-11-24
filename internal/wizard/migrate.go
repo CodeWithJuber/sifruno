@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"slices"
 	"strings"
@@ -789,8 +790,8 @@ func (r *Runner) ReadyMigration(ctx context.Context, id, actor string) (Job, err
 	if m.Gate != GateOpen && m.Gate != GateAccepted {
 		return Job{}, refuse(ErrConflict, "The cutover gate is %s. Fix what the comparison found and compare again, or accept the red lines with a reason.", m.Gate)
 	}
-	if m.Address == "" {
-		return Job{}, refuse(ErrUnavailable, "This server's public address is not set, so the panel cannot name the DNS records. Start the panel with --dns-ip set to it.")
+	if ip := net.ParseIP(m.Address); ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		return Job{}, refuse(ErrUnavailable, "This server's public address is not set, so the panel cannot name the DNS records. Start the panel with --dns-ip set to it, then mark the website ready again.")
 	}
 	m.Gate = GateReady
 	m.DNS = []DNSRecord{{Name: job.Domain, Type: dnsType(m.Address), Value: m.Address}, {Name: "www." + job.Domain, Type: dnsType(m.Address), Value: m.Address}}

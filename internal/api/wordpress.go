@@ -79,6 +79,14 @@ var wizardFields = map[string][]wizardField{
 	"domain-remove":   {{name: "domain"}, {name: "expected_revision", whole: true}},
 	"redirect-add":    {{name: "from"}, {name: "to"}, {name: "status", whole: true}, {name: "expected_revision", whole: true}},
 	"redirect-remove": {{name: "from"}, {name: "expected_revision", whole: true}},
+	// Move a website here (migrations.go).
+	"migration-source":   {{name: "host"}, {name: "port", whole: true}},
+	"migration-host-key": {{name: "fingerprint"}},
+	"migration-cancel":   {},
+	"migration":          {{name: "source"}, {name: "username"}},
+	"migration-verify":   {},
+	"migration-accept":   {{name: "reason"}},
+	"migration-ready":    {},
 }
 
 var wholeNumber = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)
@@ -93,6 +101,9 @@ func wizardRoute(r *http.Request) string {
 		return "wordpress"
 	case "/api/v1/websites/php":
 		return "php-site"
+	}
+	if route := migrationRoute(r.URL.Path); route != "" {
+		return route
 	}
 	return websiteAction(r.URL.Path)
 }

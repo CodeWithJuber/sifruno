@@ -64,6 +64,9 @@ type Options struct {
 	// (internal/phpmyadmin): never this one. Nil answers 503 on the open
 	// route.
 	PhpMyAdmin PhpMyAdmin
+	// Migrations is the broker's migration surface for "Move a website
+	// here"; nil answers 503 on /api/v1/websites/migrations.
+	Migrations hostaccounts.MigrationService
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -95,6 +98,7 @@ func build(o Options) (http.Handler, *routeMux) {
 	registerSites(api, o)
 	registerAccounts(api, o)
 	registerWizard(api, o)
+	registerMigrations(api, o)
 	registerWebsites(api, o)
 	registerWebsiteDomains(api, o)
 	registerSiteDatabases(api, o)
@@ -385,6 +389,9 @@ func build(o Options) (http.Handler, *routeMux) {
 			}
 			if files := fileRouteWait(r); files > 0 {
 				wait = files
+			}
+			if isMigrationSlow(r) {
+				wait = migrationWait
 			}
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait))
 		}

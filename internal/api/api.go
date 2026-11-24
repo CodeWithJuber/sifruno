@@ -321,8 +321,14 @@ func New(o Options) http.Handler {
 				}
 			}
 			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
-			// Starting a job lists accounts and probes the database first.
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
+			// Starting a job lists accounts and probes the database first. A
+			// site action waits for the broker, whose web change takes minutes
+			// on a busy host.
+			wait := 60 * time.Second
+			if mutation && websiteAction(r.URL.Path) != "" {
+				wait = websiteActionWait
+			}
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait))
 		}
 		mux.ServeHTTP(w, r)
 	})

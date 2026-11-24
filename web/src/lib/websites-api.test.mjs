@@ -1,18 +1,22 @@
-// Websites list client checks with synthetic fetch responses; no server or state.
+// Websites client checks with synthetic sessions and fetch responses; no server or state.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 
-const source = readFileSync(new URL("./websites-api.ts", import.meta.url), "utf8");
-const api = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source, { mode: "transform" })).toString("base64")}`);
+const moduleURL = (source) => `data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source, { mode: "transform" })).toString("base64")}`;
+const sitesURL = moduleURL(readFileSync(new URL("./sites-api.ts", import.meta.url), "utf8"));
+const api = await import(moduleURL(readFileSync(new URL("./websites-api.ts", import.meta.url), "utf8").replace('"./sites-api"', JSON.stringify(sitesURL))));
 
 const accountId = "0123456789abcdef0123456789abcdef";
 const site = (change = {}) => ({
   account_id: accountId, username: "example", domain: "example.com", state: "active",
   https: { on: true, not_after: "2027-02-21T12:30:00Z" }, php_version: "8.3", wordpress_version: "7.1.5",
-  url: "https://example.com/", admin_url: "https://example.com/wp-admin/", created_at: "2026-11-23T10:00:00Z", ...change,
+  url: "https://example.com/", admin_url: "https://example.com/wp-admin/", created_at: "2026-11-23T10:00:00Z", revision: 7, ...change,
 });
+// One site as its page reads it, and a signed-in session for its changes.
+const detail = (change = {}) => site({ php_versions: ["8.2", "8.3"], ...change });
+const session = { authenticated: true, csrf_token: "synthetic-csrf-token", expires_at: "2026-11-23T10:15:00Z" };
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 
 async function withFetch(mock, operation) {
@@ -38,7 +42,14 @@ test("parsing refuses anything outside the contract", () => {
     site({ https: { on: "yes", not_after: "" } }), site({ https: { on: true, not_after: "soon" } }), site({ https: null }),
     site({ url: "javascript:alert(1)" }), site({ admin_url: "ftp://example.com/" }), site({ url: "not a url" }),
     site({ php_version: 8.3 }), site({ wordpress_version: undefined }), site({ created_at: "yesterday" }),
+    site({ revision: 0 }), site({ revision: "7" }), site({ revision: 1.5 }), site({ revision: undefined }), site({ revision: 2 ** 60 }),
   ]) assert.equal(api.parseWebsite(bad), undefined, JSON.stringify(bad));
+  // One site also names the PHP versions installed on the server.
+  assert.deepEqual(api.parseWebsiteDetail(detail()), detail());
+  assert.deepEqual(api.parseWebsiteDetail(detail({ php_versions: [] })).php_versions, []);
+  for (const bad of [site(), detail({ php_versions: "8.3" }), detail({ php_versions: ["8.3", 8.4] }), detail({ php_versions: ["latest"] }), detail({ php_versions: Array(11).fill("8.3") }), detail({ revision: 0 })]) {
+    assert.equal(api.parseWebsiteDetail(bad), undefined, JSON.stringify(bad));
+  }
   for (const bad of [null, [], { sites: {} }, { items: [] }, { sites: [site(), { ...site(), url: "data:text/html,x" }] }]) {
     assert.equal(api.parseWebsiteList(bad), undefined, JSON.stringify(bad));
   }
@@ -104,8 +115,9 @@ test("errors say what happened, why and what next, with the request under techni
 
 test("getWebsite asks for one account and checks the answer is that account", async () => {
   const urls = [];
-  await withFetch(async (url) => { urls.push(url); return json({ $schema: "x", ...site() }); }, async () => {
-    assert.equal((await api.getWebsite(accountId)).account_id, accountId);
+  await withFetch(async (url) => { urls.push(url); return json({ $schema: "x", ...detail() }); }, async () => {
+    const one = await api.getWebsite(accountId);
+    assert.equal(one.account_id, accountId); assert.deepEqual(one.php_versions, ["8.2", "8.3"]); assert.equal(one.revision, 7);
     await assert.rejects(api.getWebsite("f".repeat(32)), (error) => /not in the form/.test(error.why));
   });
   assert.deepEqual(urls, [`/api/v1/websites/sites/${accountId}`, `/api/v1/websites/sites/${"f".repeat(32)}`]);
@@ -127,4 +139,108 @@ test("a cancelled read says so", async () => {
     controller.abort();
     await assert.rejects(pending, (error) => error.why === "The request was cancelled." && /cancelled$/.test(error.technical));
   });
+});
+
+test("the PHP action offers only other installed versions, and only for a live site", () => {
+  assert.deepEqual(api.phpChange(detail({ php_versions: ["8.1", "8.2", "8.3"] })), { kind: "ready", versions: ["8.1", "8.2"] });
+  assert.deepEqual(api.phpChange(detail({ php_version: "", php_versions: ["8.3"] })), { kind: "ready", versions: ["8.3"] });
+  assert.match(api.phpChange(detail({ php_versions: ["8.3"] })).why, /PHP 8\.3 is the only version installed/);
+  assert.match(api.phpChange(detail({ php_versions: [] })).why, /found no PHP versions/);
+  assert.match(api.phpChange(detail({ state: "suspended" })).why, /Resume the website/);
+  assert.match(api.phpChange(detail({ state: "recovery_required" })).why, /has been checked/);
+});
+
+const removedAll = ["the database example_wp", "the hosting account example with its files and its site on the web server"];
+
+test("a change reads the session token, then posts its own field and the page's revision with CSRF", async () => {
+  const calls = [];
+  await withFetch(async (url, init) => {
+    calls.push({ url, init });
+    if (url === "/api/v1/session") return json(session);
+    if (url.endsWith("/delete")) return json({ $schema: "x", domain: "example.com", removed: removedAll, kept: [] });
+    const body = JSON.parse(init.body);
+    return json(detail({ revision: 8, ...(body.php_version ? { php_version: body.php_version } : { state: body.state }) }));
+  }, async () => {
+    const php = await api.changePhpVersion(detail(), "8.2");
+    assert.equal(php.php_version, "8.2"); assert.equal(php.revision, 8);
+    assert.equal((await api.setWebsiteState(detail(), "suspended")).state, "suspended");
+    assert.equal((await api.setWebsiteState(detail({ state: "suspended" }), "active")).state, "active");
+    const done = await api.deleteWebsite(detail(), "example.com");
+    assert.deepEqual(done, { domain: "example.com", removed: removedAll, kept: [] });
+    assert.equal(api.deletedSummary(done), `Removed: ${removedAll.join(", ")}.`);
+    assert.equal(api.deletedSummary({ domain: "example.com", removed: ["the hosting account example"], kept: ["the database example_wp"] }),
+      "Removed: the hosting account example. Left on the server, because it is not registered to this website: the database example_wp.");
+  });
+  const posts = calls.filter((call) => call.init.method === "POST");
+  assert.equal(calls.filter((call) => call.url === "/api/v1/session").length, 4);
+  assert.deepEqual(posts.map((call) => [call.url, JSON.parse(call.init.body)]), [
+    [`/api/v1/websites/sites/${accountId}/php`, { php_version: "8.2", expected_revision: 7 }],
+    [`/api/v1/websites/sites/${accountId}/state`, { state: "suspended", expected_revision: 7 }],
+    [`/api/v1/websites/sites/${accountId}/state`, { state: "active", expected_revision: 7 }],
+    [`/api/v1/websites/sites/${accountId}/delete`, { confirm_domain: "example.com", expected_revision: 7 }],
+  ]);
+  for (const post of posts) {
+    assert.equal(post.init.headers["X-CSRF-Token"], session.csrf_token);
+    assert.equal(post.init.headers["Content-Type"], "application/json");
+    assert.equal(post.init.credentials, "same-origin");
+  }
+});
+
+test("a refused change says what happened, why and what next, with the revision under technical details", async () => {
+  const refuse = (status, title, body) => async (url) => url === "/api/v1/session" ? json(session) : json({ title, status, ...body }, status);
+  const rejected = "The web server's configuration test failed with PHP 8.4, so the site kept PHP 8.3. PHP 8.4 may not be installed on this server.";
+  await withFetch(refuse(422, "Unprocessable Entity", { detail: rejected, errors: [{ message: "account service: web configuration rejected" }] }), async () => {
+    await assert.rejects(api.changePhpVersion(detail(), "8.4"), (error) => {
+      assert.ok(error instanceof api.WebsitesApiError);
+      assert.equal(error.status, 422);
+      assert.equal(error.message, "The PHP version was not changed.");
+      assert.equal(error.why, rejected);
+      assert.match(error.next, /Choose another PHP version/);
+      assert.equal(error.technical, `POST /api/v1/websites/sites/${accountId}/php returned HTTP 422 (Unprocessable Entity); account service: web configuration rejected; expected revision 7`);
+      return true;
+    });
+  });
+  const stale = "This website changed after the page loaded it, so nothing changed. Reload the page, check the website, then try again.";
+  await withFetch(refuse(409, "Conflict", { detail: stale }), async () => {
+    await assert.rejects(api.setWebsiteState(detail(), "suspended"), (error) => error.status === 409 && error.message === "The website was not suspended." && error.why === stale && /Reload the page to see the website as it is now/.test(error.next));
+    await assert.rejects(api.setWebsiteState(detail({ state: "suspended" }), "active"), (error) => error.message === "The website was not resumed.");
+  });
+  // A stopped delete names what went and what is left, in the server's words.
+  const left = "The database server did not remove the database example_wp. Removed before that: the database user example_wp. Still on the server: the database example_wp, the hosting account example with its files and its site on the web server.";
+  await withFetch(refuse(503, "Service Unavailable", { detail: left, errors: [{ message: "ERROR 1010: database directory not empty" }] }), async () => {
+    await assert.rejects(api.deleteWebsite(detail(), "example.com"), (error) => error.status === 503 && error.message === "The website was not deleted." && error.why === left && /Reload the page/.test(error.next) && /ERROR 1010/.test(error.technical));
+  });
+  await withFetch(refuse(422, "Unprocessable Entity", { detail: "The domain you typed is not this website's domain, example.com. Nothing was removed." }), async () => {
+    await assert.rejects(api.deleteWebsite(detail(), "example.org"), (error) => error.status === 422 && /Type the website's domain exactly/.test(error.next));
+  });
+});
+
+test("a change whose answer is lost is not reported as not made", async () => {
+  // The session is read; the POST then fails on the network.
+  await withFetch(async (url) => { if (url === "/api/v1/session") return json(session); throw new TypeError("fetch failed"); }, async () => {
+    await assert.rejects(api.changePhpVersion(detail(), "8.2"), (error) => error.status === 0 && error.message === "The panel could not confirm the change." && /may still finish/.test(error.why)
+      && /Reload the page to see the website as it is now/.test(error.next) && /network error; expected revision 7$/.test(error.technical));
+  });
+  // An answer for another site, or one outside the contract.
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json(detail({ account_id: "f".repeat(32) })), async () => {
+    await assert.rejects(api.setWebsiteState(detail(), "suspended"), (error) => error.message === "The panel could not confirm the change." && /cannot tell whether the change was made/.test(error.why));
+  });
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ domain: "other.example", removed: [], kept: [] }), async () => {
+    await assert.rejects(api.deleteWebsite(detail(), "example.com"), (error) => error.message === "The panel could not confirm the change.");
+  });
+});
+
+test("a change is not sent without a session", async () => {
+  const urls = [];
+  await withFetch(async (url) => { urls.push(url); return json({ authenticated: false }); }, async () => {
+    await assert.rejects(api.deleteWebsite(detail(), "example.com"), (error) => error.status === 401 && error.message === "The website was not deleted." && error.why === "Your sign-in has ended." && /Sign in again/.test(error.next));
+  });
+  await withFetch(async (url) => { urls.push(url); return json({ title: "Unauthorized", status: 401, detail: "Operator session required" }, 401); }, async () => {
+    await assert.rejects(api.changePhpVersion(detail(), "8.2"), (error) => error.status === 401 && error.message === "The PHP version was not changed.");
+  });
+  // The session could not be read at all: nothing was sent, so nothing changed.
+  await withFetch(async (url) => { urls.push(url); throw new TypeError("fetch failed"); }, async () => {
+    await assert.rejects(api.setWebsiteState(detail(), "suspended"), (error) => error.message === "The website was not suspended." && error.why === "The panel could not reach its server.");
+  });
+  assert.deepEqual(urls, ["/api/v1/session", "/api/v1/session", "/api/v1/session"]);
 });

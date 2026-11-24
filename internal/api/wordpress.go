@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -44,8 +45,33 @@ type websiteJobListOutput struct{ Body websiteJobListBody }
 
 const wizardUnavailable = "Website creation is not set up on this server"
 
-// wordpressKeys are the request's keys, exactly as the contract spells them.
-var wordpressKeys = []string{"domain", "title", "admin_user", "admin_email", "admin_password", "php_version"}
+// wizardFields are each POST's keys under /api/v1/websites, exactly as the
+// contract spells them and in its order: the wizard's request, and the site
+// page's three changes by action. A key is text unless it is whole.
+type wizardField struct {
+	name  string
+	whole bool // a whole number, as a revision is
+}
+
+var wizardFields = map[string][]wizardField{
+	"wordpress": {{name: "domain"}, {name: "title"}, {name: "admin_user"}, {name: "admin_email"}, {name: "admin_password"}, {name: "php_version"}},
+	"php":       {{name: "php_version"}, {name: "expected_revision", whole: true}},
+	"state":     {{name: "state"}, {name: "expected_revision", whole: true}},
+	"delete":    {{name: "confirm_domain"}, {name: "expected_revision", whole: true}},
+}
+
+var wholeNumber = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)
+
+// wizardRoute names the POST a request is, as wizardFields keys it, or "".
+func wizardRoute(r *http.Request) string {
+	if r.Method != http.MethodPost {
+		return ""
+	}
+	if r.URL.Path == "/api/v1/websites/wordpress" {
+		return "wordpress"
+	}
+	return websiteAction(r.URL.Path)
+}
 
 func wizardError(err error) error {
 	var refusal *wizard.Refusal
@@ -109,20 +135,26 @@ func isWizardPath(p string) bool {
 	return p == "/api/v1/websites" || strings.HasPrefix(p, "/api/v1/websites/")
 }
 
-func allowedWizardMutation(r *http.Request) bool {
-	return r.Method == http.MethodPost && r.URL.Path == "/api/v1/websites/wordpress"
-}
+func allowedWizardMutation(r *http.Request) bool { return wizardRoute(r) != "" }
 
-// prepareWizardJSON checks the wizard's body before Huma decodes it.
+// prepareWizardJSON checks a body under /api/v1/websites (the wizard's
+// request, or one of the site page's changes) before Huma decodes it.
 func prepareWizardJSON(w http.ResponseWriter, r *http.Request) bool {
-	return prepareStrictJSON(w, r, wordpressKeys)
+	return prepareStrictJSON(w, r, wizardFields[wizardRoute(r)])
 }
 
 // prepareStrictJSON bounds and checks a POST body before Huma decodes it:
-// JSON content type, at most 4 KiB, one object holding only the contract's
-// keys, each once, each a string. Go's decoder would accept a key in another
-// case, so keys are compared exactly. Nothing from the body is echoed back.
-func prepareStrictJSON(w http.ResponseWriter, r *http.Request, keys []string) bool {
+// JSON content type, at most 4 KiB, one object holding only the request's
+// own fields, each once, each a string or, for a revision, a whole number.
+// Go's decoder would accept a key in another case, so keys are compared
+// exactly. Nothing from the body is echoed back.
+func prepareStrictJSON(w http.ResponseWriter, r *http.Request, fields []wizardField) bool {
+	names := make([]string, len(fields))
+	whole := map[string]bool{}
+	for i, f := range fields {
+		names[i] = f.name
+		whole[f.name] = f.whole
+	}
 	ct, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || ct != "application/json" || (params["charset"] != "" && !strings.EqualFold(params["charset"], "utf-8")) {
 		operator.WriteError(w, 415, "invalid_request", "Send the request as JSON.")
@@ -157,10 +189,10 @@ func prepareStrictJSON(w http.ResponseWriter, r *http.Request, keys []string) bo
 			operator.WriteError(w, 400, "invalid_request", "The request must be one JSON object.")
 			return false
 		}
-		if !slices.Contains(keys, key) {
-			only := strings.Join(keys, "")
-			if n := len(keys); n > 1 {
-				only = strings.Join(keys[:n-1], ", ") + " and " + keys[n-1]
+		if !slices.Contains(names, key) {
+			only := strings.Join(names, "")
+			if n := len(names); n > 1 {
+				only = strings.Join(names[:n-1], ", ") + " and " + names[n-1]
 			}
 			operator.WriteError(w, 422, "invalid_request", "The request has a field this form does not use. Send only "+only+".")
 			return false
@@ -175,7 +207,12 @@ func prepareStrictJSON(w http.ResponseWriter, r *http.Request, keys []string) bo
 			operator.WriteError(w, 400, "invalid_request", "The request must be one JSON object.")
 			return false
 		}
-		if v := bytes.TrimSpace(value); len(v) == 0 || v[0] != '"' {
+		v := bytes.TrimSpace(value)
+		if whole[key] && !wholeNumber.Match(v) {
+			operator.WriteError(w, 422, "invalid_request", key+" must be a whole number.")
+			return false
+		}
+		if !whole[key] && (len(v) == 0 || v[0] != '"') {
 			operator.WriteError(w, 422, "invalid_request", key+" must be text.")
 			return false
 		}

@@ -84,9 +84,10 @@ type Runner struct {
 	certificates Certificates // nil: certificates are not set up, and sites use http
 	store        *Store
 
-	mu      sync.Mutex
-	running map[string]string // domain -> job ID
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	running  map[string]string // domain -> job ID
+	wg       sync.WaitGroup
+	removing sync.Mutex // one site delete at a time
 
 	digits func() string // two digits for a username retry
 	limit  time.Duration
@@ -120,11 +121,12 @@ func (r *Runner) Get(id string) (Job, bool) { return r.store.Get(id) }
 func (r *Runner) List() []Job { return r.store.List(maxListed) }
 
 // Succeeded returns every kept job that made a site, newest first: all
-// 50 the store keeps, not only the 20 that List answers.
+// 50 the store keeps, not only the 20 that List answers. A job whose site
+// was deleted since is left out.
 func (r *Runner) Succeeded() []Job {
 	out := []Job{}
 	for _, j := range r.store.List(maxJobs) {
-		if j.State == StateSucceeded && j.Result != nil && j.Result.AccountID != "" {
+		if j.namesSite() && j.Result != nil && j.Result.AccountID != "" {
 			out = append(out, j)
 		}
 	}

@@ -26,6 +26,31 @@ type sitesBroker struct {
 	accounts []hostaccounts.Account
 	listErr  error
 	lists    int
+	// changes records every SetWeb, SetState and Delete; changeErr, when
+	// set, is their answer, and nothing changes.
+	changes   []string
+	changeErr error
+}
+
+// changed applies one change to an account at its revision, as the broker
+// does: the revision must match and moves on.
+func (b *sitesBroker) changed(call, id string, revision uint64, edit func(*hostaccounts.Account)) (hostaccounts.Account, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.changes = append(b.changes, call)
+	if b.changeErr != nil {
+		return hostaccounts.Account{}, b.changeErr
+	}
+	i := slices.IndexFunc(b.accounts, func(a hostaccounts.Account) bool { return a.ID == id })
+	if i < 0 {
+		return hostaccounts.Account{}, hostaccounts.ErrNotFound
+	}
+	if b.accounts[i].Revision != revision {
+		return hostaccounts.Account{}, hostaccounts.ErrConflict
+	}
+	edit(&b.accounts[i])
+	b.accounts[i].Revision++
+	return b.accounts[i], nil
 }
 
 func (b *sitesBroker) List(context.Context) ([]hostaccounts.Account, error) {
@@ -45,11 +70,25 @@ func (b *sitesBroker) Create(_ context.Context, in hostaccounts.CreateInput, _ s
 	b.accounts = append(b.accounts, a)
 	return a, nil
 }
-func (b *sitesBroker) Delete(context.Context, string, hostaccounts.DeleteInput, string) (hostaccounts.Account, error) {
-	return hostaccounts.Account{}, nil
+func (b *sitesBroker) Delete(_ context.Context, id string, in hostaccounts.DeleteInput, actor string) (hostaccounts.Account, error) {
+	a, err := b.changed(fmt.Sprintf("delete %s rev=%d reason=%q actor=%s", id, in.ExpectedRevision, in.Reason, actor), id, in.ExpectedRevision, func(*hostaccounts.Account) {})
+	if err != nil {
+		return hostaccounts.Account{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.accounts = slices.DeleteFunc(b.accounts, func(x hostaccounts.Account) bool { return x.ID == id })
+	return a, nil
 }
-func (b *sitesBroker) SetWeb(_ context.Context, id string, in hostaccounts.WebInput, _ string) (hostaccounts.WebResult, error) {
-	return hostaccounts.WebResult{Account: hostaccounts.Account{ID: id, Revision: in.ExpectedRevision + 1}}, nil
+
+// SetWeb keeps the settings on the account, where the list reports them.
+func (b *sitesBroker) SetWeb(_ context.Context, id string, in hostaccounts.WebInput, actor string) (hostaccounts.WebResult, error) {
+	web := hostaccounts.WebState{PHPVersion: in.PHPVersion, QuotaMiB: in.QuotaMiB}
+	a, err := b.changed(fmt.Sprintf("web %s php=%s quota=%d rev=%d reason=%q actor=%s", id, in.PHPVersion, in.QuotaMiB, in.ExpectedRevision, in.Reason, actor), id, in.ExpectedRevision, func(a *hostaccounts.Account) { a.Web = web })
+	if err != nil {
+		return hostaccounts.WebResult{}, err
+	}
+	return hostaccounts.WebResult{Account: a, Web: web}, nil
 }
 func (b *sitesBroker) InstallWordPress(context.Context, string, hostaccounts.WordPressInput, string) (hostaccounts.WordPressResult, error) {
 	return hostaccounts.WordPressResult{Version: "7.1.5"}, nil
@@ -57,8 +96,8 @@ func (b *sitesBroker) InstallWordPress(context.Context, string, hostaccounts.Wor
 func (b *sitesBroker) Capability(context.Context) (hostaccounts.Capability, error) {
 	return hostaccounts.Capability{Available: true}, nil
 }
-func (b *sitesBroker) SetState(context.Context, string, hostaccounts.StateInput, string) (hostaccounts.Account, error) {
-	return hostaccounts.Account{}, errors.New("not used")
+func (b *sitesBroker) SetState(_ context.Context, id string, in hostaccounts.StateInput, actor string) (hostaccounts.Account, error) {
+	return b.changed(fmt.Sprintf("state %s %s rev=%d reason=%q actor=%s", id, in.State, in.ExpectedRevision, in.Reason, actor), id, in.ExpectedRevision, func(a *hostaccounts.Account) { a.State = in.State })
 }
 func (b *sitesBroker) SetPlan(context.Context, string, hostaccounts.PlanInput, string) (hostaccounts.Account, error) {
 	return hostaccounts.Account{}, errors.New("not used")
@@ -124,8 +163,9 @@ func decodeSites(t *testing.T, body []byte) []Website {
 	return sites
 }
 
-// checkWebsiteShape compares one entry's keys with the contract, exactly.
-func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage) {
+// checkWebsiteShape compares one entry's keys with the contract, exactly:
+// the list's entry, plus more for the one-site read (php_versions).
+func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...string) {
 	t.Helper()
 	delete(item, "$schema")
 	keys := slices.Sorted(func(yield func(string) bool) {
@@ -135,7 +175,7 @@ func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage) {
 			}
 		}
 	})
-	want := []string{"account_id", "admin_url", "created_at", "domain", "https", "php_version", "state", "url", "username", "wordpress_version"}
+	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "created_at", "domain", "https", "php_version", "revision", "state", "url", "username", "wordpress_version"}, more...)))
 	if !slices.Equal(keys, want) {
 		t.Fatalf("website keys %q", keys)
 	}
@@ -185,7 +225,7 @@ func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
 	}
 	want := Website{AccountID: second.Result.AccountID, Username: "second", Domain: "second.example", State: "active",
 		HTTPS: WebsiteHTTPS{On: true, NotAfter: "2027-02-21T12:30:00Z"}, PHPVersion: "8.3", WordPressVersion: "7.1.5",
-		URL: "http://second.example/", AdminURL: "http://second.example/wp-admin/", CreatedAt: second.CreatedAt}
+		URL: "http://second.example/", AdminURL: "http://second.example/wp-admin/", CreatedAt: second.CreatedAt, Revision: 2}
 	if sites[0] != want {
 		t.Fatalf("second site %+v\nwant %+v", sites[0], want)
 	}
@@ -202,7 +242,7 @@ func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &one) != nil {
 		t.Fatalf("one site %d: %s", w.Code, w.Body.String())
 	}
-	checkWebsiteShape(t, one)
+	checkWebsiteShape(t, one, "php_versions")
 	var got Website
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got != want {
 		t.Fatalf("one site %+v", got)

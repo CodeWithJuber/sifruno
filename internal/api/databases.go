@@ -167,10 +167,15 @@ func isSiteDatabasePath(p string) bool {
 	return found && (strings.HasSuffix(rest, "/databases") || strings.Contains(rest, "/databases/"))
 }
 
-// prepareDatabaseJSON applies the wizard's body rules with this route's keys.
+// prepareDatabaseJSON applies the wizard's body rules with this route's
+// keys, all of them text.
 func prepareDatabaseJSON(w http.ResponseWriter, r *http.Request) bool {
 	keys, _ := databaseMutationKeys(r)
-	return prepareStrictJSON(w, r, keys)
+	fields := make([]wizardField, len(keys))
+	for i, k := range keys {
+		fields[i] = wizardField{name: k}
+	}
+	return prepareStrictJSON(w, r, fields)
 }
 
 // registerSiteDatabases adds a site's Databases page. The routes sit under

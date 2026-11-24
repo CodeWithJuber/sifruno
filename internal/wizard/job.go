@@ -38,7 +38,14 @@ type Job struct {
 	Actor      string   `json:"actor"`
 	CreatedAt  string   `json:"created_at"`
 	UpdatedAt  string   `json:"updated_at"`
+	// RemovedAt is when the site this job made was deleted from its page,
+	// RFC 3339. Such a job is kept as a record but no longer names a site.
+	RemovedAt string `json:"removed_at,omitempty"`
 }
+
+// namesSite reports whether the job stands for a site Websites lists: it
+// succeeded, and the site was not deleted since.
+func (j Job) namesSite() bool { return j.State == StateSucceeded && j.RemovedAt == "" }
 
 // Step is one part of the job. StartedAt and FinishedAt are RFC 3339 or
 // empty. "undone" means the job removed what the step created after a later
@@ -351,14 +358,15 @@ func (s *Store) put(j Job) error {
 
 // trimLocked drops the oldest jobs past the limits and reports whether it
 // dropped any. Succeeded jobs are what Websites lists, so they have their own,
-// larger limit; a running job is never dropped.
+// larger limit; the job of a site deleted since counts with the others, so
+// deleted sites do not use up that limit. A running job is never dropped.
 func (s *Store) trimLocked() bool {
 	succeeded, other := 0, 0
 	for _, j := range s.jobs {
-		switch j.State {
-		case StateSucceeded:
+		switch {
+		case j.namesSite():
 			succeeded++
-		case StateRunning:
+		case j.State == StateRunning:
 		default:
 			other++
 		}
@@ -367,10 +375,10 @@ func (s *Store) trimLocked() bool {
 	kept := s.jobs[:0]
 	for _, j := range s.jobs { // oldest first
 		switch {
-		case j.State == StateSucceeded && succeeded > maxSucceeded:
+		case j.namesSite() && succeeded > maxSucceeded:
 			succeeded--
 			dropped = true
-		case j.State != StateSucceeded && j.State != StateRunning && other > maxJobs:
+		case !j.namesSite() && j.State != StateRunning && other > maxJobs:
 			other--
 			dropped = true
 		default:
@@ -379,6 +387,25 @@ func (s *Store) trimLocked() bool {
 	}
 	s.jobs = kept
 	return dropped
+}
+
+// markRemoved records that the site of this account was deleted: every job
+// that made it gets RemovedAt, and the store is saved.
+func (s *Store) markRemoved(accountID, at string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for i := range s.jobs {
+		if j := &s.jobs[i]; j.namesSite() && j.Result != nil && j.Result.AccountID == accountID {
+			j.RemovedAt, j.UpdatedAt = at, at
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	s.trimLocked()
+	return s.writeLocked()
 }
 
 // forget removes a job from memory only: used when its first save failed,

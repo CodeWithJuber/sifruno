@@ -168,6 +168,9 @@ type fakeDatabases struct {
 	userErr    error
 	privErr    error
 	dropErr    error
+	dropDBErr  error         // DropDatabase only
+	users      []dbhost.User // the registry's users
+	listErr    error         // AllDatabases and AllUsers
 	privsSeen  []string
 }
 
@@ -180,9 +183,11 @@ func (f *fakeDatabases) record(call string) {
 
 func (f *fakeDatabases) Probe(context.Context) (string, error) { return "10.11", f.probeErr }
 func (f *fakeDatabases) AllDatabases(context.Context) ([]dbhost.Database, error) {
-	return slices.Clone(f.existing), nil
+	return slices.Clone(f.existing), f.listErr
 }
-func (f *fakeDatabases) AllUsers(context.Context) ([]dbhost.User, error) { return nil, nil }
+func (f *fakeDatabases) AllUsers(context.Context) ([]dbhost.User, error) {
+	return slices.Clone(f.users), f.listErr
+}
 func (f *fakeDatabases) ServerHas(_ context.Context, kind, name string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -243,6 +248,9 @@ func (f *fakeDatabases) DropDatabase(_ context.Context, owner, name string) erro
 	f.record("drop-db " + owner + " " + name)
 	if f.dropErr != nil {
 		return f.dropErr
+	}
+	if f.dropDBErr != nil {
+		return f.dropDBErr
 	}
 	f.remove("database", name)
 	return nil

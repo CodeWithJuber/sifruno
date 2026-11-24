@@ -50,6 +50,8 @@ func accountError(err error) error {
 		return huma.Error409Conflict("Account identity, domain or revision changed; refresh and review before retrying")
 	case errors.Is(err, hostaccounts.ErrNotFound):
 		return huma.Error404NotFound("Managed account not found")
+	case errors.Is(err, hostaccounts.ErrWebRejected):
+		return huma.Error422UnprocessableEntity("The web server's configuration test failed with this change, so the server kept its old configuration and the account is unchanged")
 	case errors.Is(err, hostaccounts.ErrRecovery):
 		return huma.Error503ServiceUnavailable("Account recovery requires operator review; do not retry creation")
 	default:

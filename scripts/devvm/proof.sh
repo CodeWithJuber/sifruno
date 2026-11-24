@@ -34,7 +34,9 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 passes verify; marking it ready names the DNS records; the
                 key leaves both servers; a site with a password folder is
                 refused before anything is made; a failed copy removes the
-                account it made; no password is in process arguments.
+                account it made; a tenant's link to /root or hard link to a
+                root-only file brings nothing of /root; no password is in
+                process arguments.
   broker-web    The broker's web operation: OpenLiteSpeed may read the home,
                 a quota is set, the vhost is rendered, tested and reloaded,
                 a rejected config changes nothing, a symlinked public_html is

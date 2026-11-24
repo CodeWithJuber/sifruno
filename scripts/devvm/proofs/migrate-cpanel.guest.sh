@@ -12,7 +12,7 @@
 # /usr/local/cpanel/bin/uapi that print the JSON shapes cPanel's public API
 # documentation gives for listaccts, domainuserdata,
 # php_get_vhost_versions, Mysql list_databases and list_users, for exactly
-# the accounts this script makes. Three accounts:
+# the accounts this script makes. Five accounts:
 #   shop<id>   WordPress whose .htaccess has only rewrite rules (Native):
 #              the full path, from discovery to the DNS records
 #   staff<id>  a password-protected folder (.htaccess + .htpasswd) and a
@@ -20,6 +20,11 @@
 #              because OpenLiteSpeed would open the folder
 #   trig<id>   a PHP site whose database has a trigger: the copy fails at
 #              the database and the job removes what it created
+#   race<id>   a tenant that swaps a folder for a link to /root while the
+#              copy runs: the old server reads the home as the account,
+#              so nothing of /root reaches this server
+#   hard<id>   a tenant holding a hard link to a root-only file: the copy
+#              stops on what the account may not read; nothing arrives
 # Every check prints PASS or FAIL; the exit status is the number of FAILs.
 set -uo pipefail
 
@@ -35,8 +40,10 @@ IMAGE=docker.io/library/almalinux@sha256:1d06c00a6025b4faf042d3827d9ea8dc6b7a752
 RUNID="$(date +%s)"
 RUNID="${RUNID: -5}"
 CTR="sifruno-cpanel-standin-$RUNID"
-SHOP="shop$RUNID" STAFF="staff$RUNID" TRIG="trig$RUNID"
-SHOP_DOMAIN="$SHOP.proof.test" STAFF_DOMAIN="$STAFF.proof.test" TRIG_DOMAIN="$TRIG.proof.test"
+SHOP="shop$RUNID" STAFF="staff$RUNID" TRIG="trig$RUNID" RACE="race$RUNID" HARD="hard$RUNID"
+SHOP_DOMAIN="$SHOP.proof.test" STAFF_DOMAIN="$STAFF.proof.test" TRIG_DOMAIN="$TRIG.proof.test" RACE_DOMAIN="$RACE.proof.test" HARD_DOMAIN="$HARD.proof.test"
+# Only root may read these on the stand-in; neither may reach this server.
+ROOT_MARK="root-only-$RUNID-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 TITLE="Stand-in cPanel site $RUNID"
 API="http://127.0.0.1:$PORT"
 WORK="$(mktemp -d /root/migrate-cpanel.XXXXXX)"
@@ -128,11 +135,11 @@ SHOP_PW="$(secret)" STAFF_PW="$(secret)" TRIG_PW="$(secret)" HT_PW="$(secret)"
 printf '%s' "$SHOP_PW" > "$WORK/shop.pw"
 {
   echo "set -e"
-  for u in "$SHOP" "$STAFF" "$TRIG"; do
+  for u in "$SHOP" "$STAFF" "$TRIG" "$RACE" "$HARD"; do
     echo "useradd -m -d /home/$u $u; chmod 0711 /home/$u; install -d -o $u -g apache -m 0750 /home/$u/public_html"
   done
   echo "cat > /etc/httpd/conf.d/standin.conf <<'CONF'"
-  for pair in "$SHOP:$SHOP_DOMAIN" "$STAFF:$STAFF_DOMAIN" "$TRIG:$TRIG_DOMAIN"; do
+  for pair in "$SHOP:$SHOP_DOMAIN" "$STAFF:$STAFF_DOMAIN" "$TRIG:$TRIG_DOMAIN" "$RACE:$RACE_DOMAIN" "$HARD:$HARD_DOMAIN"; do
     u="${pair%%:*}" d="${pair#*:}"
     printf '<VirtualHost *:80>\n  ServerName %s\n  ServerAlias www.%s\n  DocumentRoot /home/%s/public_html\n  <Directory /home/%s/public_html>\n    AllowOverride All\n    Require all granted\n  </Directory>\n</VirtualHost>\n' "$d" "$d" "$u" "$u"
   done
@@ -190,6 +197,13 @@ printf '<Files \"backup.sql\">\n  Require all denied\n</Files>\n' > /home/$STAFF
 echo 'dump' > /home/$STAFF/public_html/backup.sql
 chown -R $STAFF:apache /home/$STAFF; chmod 0711 /home/$STAFF"
 in_ctr "echo '<?php echo \"Orders\";' > /home/$TRIG/public_html/index.php; chown -R $TRIG:apache /home/$TRIG/public_html"
+in_ctr "set -e; printf '%s\n' '$ROOT_MARK' > /root/standin-secret.txt; chmod 0600 /root/standin-secret.txt
+printf '%s\n' '$ROOT_MARK' > /root/standin-linked.txt; chmod 0600 /root/standin-linked.txt
+ln /root/standin-linked.txt /home/$HARD/public_html/linked.txt
+echo '<?php echo \"Hard\";' > /home/$HARD/public_html/index.php; chown $HARD:apache /home/$HARD/public_html/index.php
+install -d -o $RACE -g apache -m 0750 /home/$RACE/public_html/assets
+echo '<?php echo \"Race\";' > /home/$RACE/public_html/index.php; echo 'a' > /home/$RACE/public_html/assets/a.css
+chown $RACE:apache /home/$RACE/public_html/index.php /home/$RACE/public_html/assets/a.css"
 
 # The cPanel API stand-ins: the documented JSON shapes for these accounts.
 cat > "$WORK/whmapi1" <<'STUB'
@@ -246,15 +260,15 @@ case "$fn" in
 *) echo "stand-in uapi: $fn is not part of the proof" >&2; exit 1 ;;
 esac
 STUB
-printf '%s %s\n%s %s\n%s %s\n' "$SHOP" "$SHOP_DOMAIN" "$STAFF" "$STAFF_DOMAIN" "$TRIG" "$TRIG_DOMAIN" > "$WORK/accounts"
+printf '%s %s\n' "$SHOP" "$SHOP_DOMAIN" "$STAFF" "$STAFF_DOMAIN" "$TRIG" "$TRIG_DOMAIN" "$RACE" "$RACE_DOMAIN" "$HARD" "$HARD_DOMAIN" > "$WORK/accounts"
 in_ctr "install -d -m 0755 /usr/local/cpanel/bin"
 podman cp "$WORK/whmapi1" "$CTR:/usr/local/cpanel/bin/whmapi1"
 podman cp "$WORK/uapi" "$CTR:/usr/local/cpanel/bin/uapi"
 podman cp "$WORK/accounts" "$CTR:/etc/standin-accounts"
 in_ctr "chmod 0755 /usr/local/cpanel/bin/whmapi1 /usr/local/cpanel/bin/uapi"
-check "the stand-in whmapi1 prints listaccts JSON for the three accounts" bash -c "podman exec $CTR /usr/local/cpanel/bin/whmapi1 --output=json listaccts | python3 -c 'import json,sys; assert len(json.load(sys.stdin)[\"data\"][\"acct\"]) == 3'"
+check "the stand-in whmapi1 prints listaccts JSON for the five accounts" bash -c "podman exec $CTR /usr/local/cpanel/bin/whmapi1 --output=json listaccts | python3 -c 'import json,sys; assert len(json.load(sys.stdin)[\"data\"][\"acct\"]) == 5'"
 # The old site is reached by its domain, as DNS would reach it.
-for d in "$SHOP_DOMAIN" "$STAFF_DOMAIN" "$TRIG_DOMAIN"; do echo "$CIP $d www.$d # sifruno-migrate-proof-$RUNID" >> /etc/hosts; done
+for d in "$SHOP_DOMAIN" "$STAFF_DOMAIN" "$TRIG_DOMAIN" "$RACE_DOMAIN" "$HARD_DOMAIN"; do echo "$CIP $d www.$d # sifruno-migrate-proof-$RUNID" >> /etc/hosts; done
 check "the old WordPress site answers with its title" bash -c "curl -s http://$SHOP_DOMAIN/ | grep -q '$TITLE'"
 check "the old staff site closes /private/ with 401" test "$(curl -s -o /dev/null -w '%{http_code}' "http://$STAFF_DOMAIN/private/")" = 401
 check "the old staff site denies /backup.sql with 403" test "$(curl -s -o /dev/null -w '%{http_code}' "http://$STAFF_DOMAIN/backup.sql")" = 403
@@ -296,7 +310,7 @@ install_key shop
 check "the admin's command adds one restricted key line to root's authorized_keys" in_ctr "grep -c ' sifruno-migration-$SRC\$' /root/.ssh/authorized_keys | grep -qx 1 && grep -q '^restrict ssh-ed25519 ' /root/.ssh/authorized_keys"
 call GET "/api/v1/websites/migrations/sources/$SRC/accounts"
 echo "  accounts listed: $(json "$WORK/answer.json" "' '.join(a['user'] for a in d['accounts'])")"
-check "discovery lists the three accounts with whmapi1 listaccts" test "$(json "$WORK/answer.json" "len(d['accounts'])")" = 3
+check "discovery lists the five accounts with whmapi1 listaccts" test "$(json "$WORK/answer.json" "len(d['accounts'])")" = 5
 
 echo
 echo "## 4. Move $SHOP_DOMAIN"
@@ -391,7 +405,31 @@ check "the created database and user are gone" test -z "$(mysql --protocol=socke
 check "the key is removed after the failure too" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 
 echo
-echo "## 7. API tokens cannot move websites"
+echo "## 7. $RACE_DOMAIN: a folder swapped for a link to /root during the copy"
+connect race; pin race >/dev/null 2>&1; install_key race
+# The tenant swaps assets for a link to /root and back, as fast as it can,
+# for the whole copy.
+in_ctr "runuser -u $RACE -- bash -c 'cd /home/$RACE/public_html; while :; do mv assets assets.real 2>/dev/null; ln -sfn /root assets; rm -f assets; mv assets.real assets 2>/dev/null; done' >/dev/null 2>&1 &"
+run_job "$RACE"
+in_ctr "pkill -u $RACE -f 'while :'" >/dev/null 2>&1
+echo "  ended $state; why: $(json "$WORK/job.json" "(d['job'].get('error') or {}).get('why', '')")"
+check "the move either finished or stopped on what the account may not read" bash -c "[ $state = succeeded ] || grep -q 'cannot be read by the account itself' $WORK/job.json"
+check "nothing of /root reached this server (homes, staging)" bash -c "! grep -rqsF '$ROOT_MARK' /home /var/lib/sifruno-restore"
+check "the key is removed afterwards" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
+
+echo
+echo "## 8. $HARD_DOMAIN: a hard link to a root-only file"
+check "the stand-in tenant holds a hard link to a root-only file" in_ctr "[ \"\$(stat -c '%U %a %h' /home/$HARD/public_html/linked.txt)\" = 'root 600 2' ]"
+connect hard; pin hard >/dev/null 2>&1; install_key hard
+run_job "$HARD"
+echo "  why: $(json "$WORK/job.json" "(d['job'].get('error') or {}).get('why', '')")"
+check "the move stops on the file the account may not read" bash -c "[ $state = failed ] && grep -q 'cannot be read by the account itself' $WORK/job.json"
+check "the root-only content is nowhere on this server" bash -c "! grep -rqsF '$ROOT_MARK' /home /var/lib/sifruno-restore"
+check "the failed move removed the account $HARD" bash -c "! getent passwd $HARD"
+check "the key is removed after the failure too" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
+
+echo
+echo "## 9. API tokens cannot move websites"
 call POST /api/v1/session/tokens "$(body tok '{"name":"Proof token","expires_in_days":1}')"
 token="$(json "$WORK/answer.json" "d['token']")"
 printf 'Authorization: Bearer %s\n' "$token" > "$WORK/token.hdr"

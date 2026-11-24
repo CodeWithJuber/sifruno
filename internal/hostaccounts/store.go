@@ -1010,7 +1010,7 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	// list again, journaled like any change, so an operator can enforce a
 	// suspension made before the site list followed the account.
 	if r.Account.State == in.State && !(in.State == "suspended" && r.Web.enabled()) {
-		return r.Account, nil
+		return withWeb(r), nil
 	}
 	if r.Account.Revision == ^uint64(0) {
 		return Account{}, ErrRecovery
@@ -1069,7 +1069,15 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	if _, e := s.resultEvent(next, operation, "succeeded"); e != nil {
 		return Account{}, ErrRecovery
 	}
-	return next.Account, nil
+	return withWeb(next), nil
+}
+
+// withWeb is a record's account as the account list shows it: with the live
+// site's settings, which the stored account and the journal never carry.
+func withWeb(r record) Account {
+	a := r.Account
+	a.Web = r.Web
+	return a
 }
 
 // A fresh dedicated broker directory has its own marker in addition to the

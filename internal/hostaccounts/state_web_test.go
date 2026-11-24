@@ -58,7 +58,8 @@ func TestSuspendStopsTheLiveSiteAndResumeServesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != "suspended" || got.Revision != r.Account.Revision+1 || f.users[r.Account.Username].Account.State != "suspended" {
+	// The answer shows the live site's settings, as the account list does.
+	if got.State != "suspended" || got.Revision != r.Account.Revision+1 || got.Web != r.Web || f.users[r.Account.Username].Account.State != "suspended" {
 		t.Fatalf("suspended account %+v", got)
 	}
 	site := siteOf(t, f.sites, r.Account.ID)
@@ -66,7 +67,7 @@ func TestSuspendStopsTheLiveSiteAndResumeServesIt(t *testing.T) {
 		t.Fatalf("after suspend: %d installs, sites %+v", f.siteApplies, f.sites)
 	}
 	after := recordFor(t, s, r.Account.ID)
-	if after.Pending != nil || after.Account != got || after.Web != r.Web || after.HistorySequence != r.HistorySequence+2 {
+	if after.Pending != nil || withWeb(after) != got || after.Account.Web != (WebState{}) || after.Web != r.Web || after.HistorySequence != r.HistorySequence+2 {
 		t.Fatalf("record after suspend %+v", after)
 	}
 	// Rendered, that site refuses every request and names no path under the
@@ -97,7 +98,7 @@ func TestSuspendStopsTheLiveSiteAndResumeServesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumed.State != "active" || resumed.Revision != got.Revision+1 || siteOf(t, f.sites, r.Account.ID).Suspended || f.siteApplies != 2 {
+	if resumed.State != "active" || resumed.Revision != got.Revision+1 || resumed.Web != r.Web || siteOf(t, f.sites, r.Account.ID).Suspended || f.siteApplies != 2 {
 		t.Fatalf("after resume: %+v, %d installs, sites %+v", resumed, f.siteApplies, f.sites)
 	}
 }

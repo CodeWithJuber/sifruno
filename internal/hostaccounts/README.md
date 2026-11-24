@@ -199,8 +199,8 @@ revision goes up by one). Without a live site, or for a resume of an active
 account, the same state changes nothing.
 
 The account list shows `web` (`php_version`, `quota_mib`) for each account
-with a live site, so the panel can change one setting and keep the other.
-The list reads it from the record: the stored account and the journal's rows
+with a live site, so the panel can change one setting and keep the other;
+a state change's answer shows it the same way. Both read it from the record: the stored account and the journal's rows
 do not carry it, and a stored account that does is refused as damaged.
 
 Limits for now:

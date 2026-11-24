@@ -23,7 +23,7 @@ const maxTransferBody = maxTransferArchive + 16384
 
 // Native handlers deliberately parse only after the outer operator admission.
 // The semaphore spans parsing and storage to bound simultaneous archive memory.
-func registerSiteTransfers(mux *http.ServeMux, a huma.API, o Options) {
+func registerSiteTransfers(mux *routeMux, a huma.API, o Options) {
 	slots := make(chan struct{}, 2)
 	admit := func(w http.ResponseWriter) bool {
 		select {

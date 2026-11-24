@@ -207,9 +207,16 @@ func registerWebsites(a huma.API, o Options) {
 		return &websiteOutput{Body: WebsiteDetail{Website: site, PHPVersions: installedPHP(), Redirects: websiteRedirects(ctx, o, site)}}
 	}
 	huma.Register(a, op("list-websites", "/api/v1/websites/sites"), func(ctx context.Context, _ *struct{}) (*websiteListOutput, error) {
+		p, admitted := requestPrincipal(ctx)
+		if !admitted {
+			return nil, huma.Error503ServiceUnavailable(websitesNoBroker)
+		}
 		sites, err := listWebsites(ctx, o)
 		if err != nil {
 			return nil, err
+		}
+		if p.Restricted() {
+			sites = slices.DeleteFunc(sites, func(site Website) bool { return !p.Owns(site.AccountID) })
 		}
 		return &websiteListOutput{Body: websiteListBody{Sites: sites}}, nil
 	})
@@ -337,6 +344,7 @@ func registerWebsites(a huma.API, o Options) {
 		if err != nil {
 			return nil, websiteRemoveError(err)
 		}
+		forgetWebsite(o, in.AccountID)
 		out := WebsiteDeleted{Domain: done.Domain, Removed: done.Removed, Kept: done.Kept, SuspendedFirst: done.SuspendedFirst}
 		if out.Kept == nil {
 			out.Kept = []string{}

@@ -22,6 +22,23 @@ type actorKey struct{}
 
 func siteActor(ctx context.Context) string { actor, _ := ctx.Value(actorKey{}).(string); return actor }
 
+// principalKey carries who an admitted request acts for (operator.Principal).
+type principalKey struct{}
+
+// requestPrincipal is the admitted request's principal. ok is false when
+// none was admitted, which a handler must treat as a refusal.
+func requestPrincipal(ctx context.Context) (operator.Principal, bool) {
+	p, ok := ctx.Value(principalKey{}).(operator.Principal)
+	return p, ok
+}
+
+// mayNameOthers reports whether an answer may name another website: an
+// admin's may, a customer's must not.
+func mayNameOthers(ctx context.Context) bool {
+	p, ok := requestPrincipal(ctx)
+	return ok && !p.Restricted()
+}
+
 type siteIDInput struct {
 	ID string `path:"id"`
 }

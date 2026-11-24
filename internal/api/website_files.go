@@ -283,7 +283,7 @@ func tokenRefusedSiteFile(p string) bool {
 
 // registerWebsiteFiles adds a website's Files page: list, read and save
 // through Huma, and upload and download as streams on the mux.
-func registerWebsiteFiles(mux *http.ServeMux, a huma.API, o Options) {
+func registerWebsiteFiles(mux *routeMux, a huma.API, o Options) {
 	read := func(id, path string) huma.Operation {
 		return huma.Operation{OperationID: id, Method: http.MethodGet, Path: path, SkipValidateParams: true}
 	}

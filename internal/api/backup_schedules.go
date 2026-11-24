@@ -48,7 +48,7 @@ func backupScheduleError(w http.ResponseWriter, err error) {
 	operator.WriteError(w, status, "backup_schedule_failed", detail)
 }
 
-func registerBackupSchedules(mux *http.ServeMux, a huma.API, o Options) {
+func registerBackupSchedules(mux *routeMux, a huma.API, o Options) {
 	respond := func(w http.ResponseWriter, schedule *sites.BackupSchedule) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(backupScheduleEnvelope{schedule, []string{"hourly", "daily", "weekly"}, sites.MaxBackups, o.BackupSchedulerEnabled})

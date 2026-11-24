@@ -77,7 +77,13 @@ type serverOutput struct{ Body ServerReport }
 type servicesOutput struct{ Body serverinfo.Services }
 
 func New(o Options) http.Handler {
-	mux := http.NewServeMux()
+	h, _ := build(o)
+	return h
+}
+
+// build is New, and also returns the mux so tests can list every route.
+func build(o Options) (http.Handler, *routeMux) {
+	mux := newRouteMux()
 	cfg := huma.DefaultConfig("Sifruno feasibility workbench", "0.1.0")
 	cfg.DocsPath = ""
 	cfg.SchemasPath = "" // Local spec, no third-party documentation CDN.
@@ -98,6 +104,9 @@ func New(o Options) http.Handler {
 	registerRestorePreview(mux, api, o)
 	if o.Operator != nil {
 		o.Operator.Register(mux)
+		if o.Accounts != nil {
+			o.Operator.CheckWebsitesWith(missingWebsites(o.Accounts))
+		}
 	}
 	collector := func() *serverinfo.Collector {
 		if o.Server != nil {
@@ -216,7 +225,22 @@ func New(o Options) http.Handler {
 	for _, origin := range o.AllowedOrigins {
 		origins[origin] = true
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// admit is Authorize for the site, account and wizard routes, with the
+	// customer table for a restricted session (customer_routes.go). It runs
+	// again after a body is read. The request it returns carries the actor
+	// and the principal.
+	admit := func(w http.ResponseWriter, r *http.Request, mutation bool) (*http.Request, bool) {
+		p, ok := o.Operator.AuthorizePrincipal(w, r, mutation)
+		if !ok {
+			return r, false
+		}
+		if p.Restricted() && !customerAdmitted(w, r, mux, p) {
+			return r, false
+		}
+		ctx := context.WithValue(r.Context(), actorKey{}, p.Actor)
+		return r.WithContext(context.WithValue(ctx, principalKey{}, p)), true
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
@@ -245,7 +269,10 @@ func New(o Options) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
-		if remote && !remoteAdmitted(w, r, o.Operator) {
+		if !customerScope(w, r, mux, o.Operator) {
+			return
+		}
+		if remote && !remoteAdmitted(w, r, o.Operator, mux) {
 			return
 		}
 		for _, prefix := range []string{"/json-api", "/execute", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
@@ -275,9 +302,9 @@ func New(o Options) http.Handler {
 				return
 			}
 		}
+		var ok bool
 		if isSitePath(r.URL.Path) {
-			actor, ok := o.Operator.Authorize(w, r, mutation)
-			if !ok {
+			if r, ok = admit(w, r, mutation); !ok {
 				return
 			}
 			if o.Sites == nil {
@@ -290,16 +317,13 @@ func New(o Options) http.Handler {
 				}
 				// Recheck sessions that may have expired or been revoked while
 				// reading the body. Admission does not cancel dispatched work.
-				actor, ok = o.Operator.Authorize(w, r, true)
-				if !ok {
+				if r, ok = admit(w, r, true); !ok {
 					return
 				}
 			}
-			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
 		}
 		if isAccountPath(r.URL.Path) {
-			actor, ok := o.Operator.Authorize(w, r, mutation)
-			if !ok {
+			if r, ok = admit(w, r, mutation); !ok {
 				return
 			}
 			if mutation {
@@ -309,19 +333,16 @@ func New(o Options) http.Handler {
 				// Body reads can outlive logout, revocation or session expiry.
 				// Recheck admission before dispatch; this does not cancel work
 				// already admitted to the account service.
-				actor, ok = o.Operator.Authorize(w, r, true)
-				if !ok {
+				if r, ok = admit(w, r, true); !ok {
 					return
 				}
 			}
-			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
 		}
 		if isWizardPath(r.URL.Path) {
 			// The same admission as the account routes: session, and for the
 			// POST also Origin and CSRF, rechecked after the body is read.
-			actor, ok := o.Operator.Authorize(w, r, mutation)
-			if !ok {
+			if r, ok = admit(w, r, mutation); !ok {
 				return
 			}
 			if mutation {
@@ -342,12 +363,10 @@ func New(o Options) http.Handler {
 				if !prepare(w, r) {
 					return
 				}
-				actor, ok = o.Operator.Authorize(w, r, true)
-				if !ok {
+				if r, ok = admit(w, r, true); !ok {
 					return
 				}
 			}
-			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
 			// Starting a job lists accounts and probes the database first. A
 			// site action waits for the broker, whose web change takes minutes
 			// on a busy host.
@@ -365,14 +384,15 @@ func New(o Options) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+	return handler, mux
 }
 
 // remoteAdmitted applies the network rules: the panel page and its assets
 // load for anyone (they hold no data), session routes check themselves, the
 // WHM transport has its own listener, and every other API or spec route needs
-// an admin session, including the monitoring readings that loopback serves
-// without one.
-func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager) bool {
+// a session, including the monitoring readings that loopback serves without
+// one: an admin's, or a customer's on the routes the customer table allows.
+func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager, mux *routeMux) bool {
 	path := r.URL.Path
 	for _, prefix := range []string{"/json-api", "/execute", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
 		if strings.HasPrefix(path, prefix) {
@@ -388,6 +408,9 @@ func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager
 		return false
 	}
 	mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-	_, ok := op.Authorize(w, r, mutation)
+	p, ok := op.AuthorizePrincipal(w, r, mutation)
+	if ok && p.Restricted() {
+		return customerAdmitted(w, r, mux, p)
+	}
 	return ok
 }

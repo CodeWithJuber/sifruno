@@ -216,7 +216,7 @@ func registerSiteDatabases(a huma.API, o Options) {
 		if err != nil {
 			return nil, err
 		}
-		name, err := newDatabaseName("database", owner, in.Body.NameSuffix, dbhost.MaxDatabaseLen, others)
+		name, err := newDatabaseName("database", owner, in.Body.NameSuffix, dbhost.MaxDatabaseLen, others, mayNameOthers(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -240,7 +240,7 @@ func registerSiteDatabases(a huma.API, o Options) {
 		if err != nil {
 			return nil, err
 		}
-		name, err := newDatabaseName("user", owner, in.Body.NameSuffix, dbhost.MaxUserLen, others)
+		name, err := newDatabaseName("user", owner, in.Body.NameSuffix, dbhost.MaxUserLen, others, mayNameOthers(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -373,8 +373,9 @@ func siteDatabaseOwners(ctx context.Context, o Options, accountID string) (owner
 // Usernames may hold "_", so a name can also fall inside another account's
 // prefix: bob's bob_x_wp is inside account bob_x's. Such a name is refused
 // before the server is asked, so that account keeps its own names and the
-// answer never tells whether that account has the name already.
-func newDatabaseName(kind, owner, suffix string, max int, others []string) (string, error) {
+// answer never tells whether that account has the name already. A
+// customer's answer does not name the other prefix (nameOthers false).
+func newDatabaseName(kind, owner, suffix string, max int, others []string, nameOthers bool) (string, error) {
 	if !databaseSuffix.MatchString(suffix) {
 		return "", huma.Error422UnprocessableEntity(databaseSuffixRule)
 	}
@@ -383,6 +384,9 @@ func newDatabaseName(kind, owner, suffix string, max int, others []string) (stri
 		return "", huma.Error422UnprocessableEntity("name_suffix is too long for this website: the whole " + kind + " name, " + owner + "_ and the suffix, can have at most " + strconv.Itoa(max) + " characters.")
 	}
 	for _, other := range others {
+		if strings.HasPrefix(name, other+"_") && !nameOthers {
+			return "", huma.Error422UnprocessableEntity("The " + kind + " name " + name + " is kept for another website on this server. Choose another name_suffix.")
+		}
 		if strings.HasPrefix(name, other+"_") {
 			return "", huma.Error422UnprocessableEntity("The " + kind + " name " + name + " begins with another website's prefix, " + other + "_, so it is kept for that website. Choose a name_suffix that does not make that prefix.")
 		}

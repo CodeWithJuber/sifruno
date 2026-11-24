@@ -26,7 +26,7 @@ func restorePreviewShape(raw []byte) bool {
 	return true
 }
 
-func registerRestorePreview(mux *http.ServeMux, a huma.API, o Options) {
+func registerRestorePreview(mux *routeMux, a huma.API, o Options) {
 	// Outer middleware admits the local session, exact origin and CSRF token
 	// before bounded strict JSON parsing. A raw response preserves the exact DTO.
 	mux.HandleFunc("POST /api/v1/sites/{id}/restore-preview", func(w http.ResponseWriter, r *http.Request) {

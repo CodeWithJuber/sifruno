@@ -16,7 +16,7 @@ import (
 
 const webPreviewPath = "/api/v1/accounts/web-preview"
 
-func registerWebPreview(mux *http.ServeMux, a huma.API, o Options) {
+func registerWebPreview(mux *routeMux, a huma.API, o Options) {
 	mux.HandleFunc(webPreviewPath, func(w http.ResponseWriter, r *http.Request) {
 		// Account middleware admits a local operator before any broker contact.
 		if r.Method != http.MethodGet {

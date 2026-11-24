@@ -344,10 +344,14 @@ func applyDomains(ctx context.Context, o Options, t domainsTargetSite, next host
 }
 
 // domainTakenError names the website that has the domain, when the list
-// says; the account service refused it either way.
+// says and the request is an admin's; the account service refused it
+// either way.
 func domainTakenError(ctx context.Context, o Options, id, domain string, err error) error {
 	technical := errors.New("account service: " + err.Error())
 	owner := ""
+	if !mayNameOthers(ctx) {
+		return huma.Error409Conflict(domain+" already belongs to another website on this server. A domain can belong to one website only.", technical)
+	}
 	if accounts, lerr := o.Accounts.List(ctx); lerr == nil {
 		for _, a := range accounts {
 			if a.ID != id && sameHost(a, domain) {

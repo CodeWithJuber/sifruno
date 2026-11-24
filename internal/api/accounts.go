@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"strings"
@@ -122,8 +123,44 @@ func registerAccounts(a huma.API, o Options) {
 		if err != nil {
 			return nil, accountError(err)
 		}
+		forgetWebsite(o, in.ID)
 		return &accountOutput{Body: v}, nil
 	})
+}
+
+// forgetWebsite takes a deleted hosting account off every customer's
+// websites. The delete already happened, so a failure to save is logged and
+// the answer stays a success: the ID then gives nothing, because hosting
+// account IDs are random and never reused.
+func forgetWebsite(o Options, accountID string) {
+	if o.Operator == nil {
+		return
+	}
+	if err := o.Operator.ForgetWebsite(accountID); err != nil {
+		log.Printf("customer logins: website %s was deleted but could not be taken off the customers' lists: %v", accountID, err)
+	}
+}
+
+// missingWebsites is the operator's check that the websites given to a
+// customer are hosting accounts the broker has.
+func missingWebsites(service hostaccounts.Service) operator.WebsiteCheck {
+	return func(ctx context.Context, ids []string) ([]string, error) {
+		accounts, err := service.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		known := make(map[string]bool, len(accounts))
+		for _, a := range accounts {
+			known[a.ID] = true
+		}
+		var missing []string
+		for _, id := range ids {
+			if !known[id] {
+				missing = append(missing, id)
+			}
+		}
+		return missing, nil
+	}
 }
 
 func isAccountPath(p string) bool {

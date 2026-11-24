@@ -577,8 +577,12 @@ change no account; a restore changes only the tenant's own files and
 databases with the tenant's rights, as a WordPress install does, and the
 panel's job log records who asked. What a restore or drill leaves as root,
 its staging folder and its temporary users, is listed in the broker's
-database before it is made and removed afterwards; an interrupted one is
-removed before the next backup operation starts.
+database before it is made and removed afterwards. What an interrupted one
+left, such as a staging folder whose option file holds the temporary
+user's password, is removed when the broker starts, before its socket
+accepts requests (at most 30 seconds). If that fails, for instance because
+MariaDB is not running yet, the broker says so on stderr and starts
+anyway, and the next backup operation tries again before it runs.
 
 Disk space. The dumps, the staging folders and restic's cache sit on the
 server's own disk, usually the filesystem that also holds the broker's

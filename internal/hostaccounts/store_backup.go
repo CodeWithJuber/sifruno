@@ -153,6 +153,31 @@ func (s *store) cleanBackupLeftovers(ctx context.Context) error {
 	return s.writeBackup("leftovers", kept)
 }
 
+// cleanBackupLeftoversAtStart runs once before the broker's socket accepts
+// requests. A broker stopped mid-restore leaves the staging folder, which
+// holds the temporary MariaDB user's option file with its password, and
+// that user. It answers an error when anything is still left, such as a
+// user that could not be dropped because MariaDB is not running yet; the
+// broker starts anyway, and each backup operation tries again first.
+func (s *store) cleanBackupLeftoversAtStart(ctx context.Context) error {
+	if s.backup == nil {
+		return nil
+	}
+	s.backupMu.Lock()
+	defer s.backupMu.Unlock()
+	if err := s.cleanBackupLeftovers(ctx); err != nil {
+		return err
+	}
+	items, err := s.leftovers()
+	if err != nil {
+		return err
+	}
+	if len(items) > 0 {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 // recordLeftover lists a restore's or drill's root-side state before any of
 // it is made.
 func (s *store) recordLeftover(l backupLeftover) error {

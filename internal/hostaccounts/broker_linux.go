@@ -5,6 +5,7 @@ package hostaccounts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -182,6 +183,15 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	// Backups need no option: each operation checks restic's pin and its
 	// tools when it runs, and answers unavailable without them.
 	s.backup = newResticEngine(s.opts.StateDir)
+	// What an interrupted restore or drill left (its staging folder holds a
+	// temporary MariaDB password) goes before the socket accepts requests.
+	// A failure does not stop the broker: each backup operation tries again
+	// first.
+	cleaning, cancelCleaning := context.WithTimeout(ctx, 30*time.Second)
+	if s.cleanBackupLeftoversAtStart(cleaning) != nil {
+		fmt.Fprintln(os.Stderr, "sifruno broker: what an interrupted backup restore or drill left could not all be removed at start (MariaDB may not be running yet); the next backup operation tries again first")
+	}
+	cancelCleaning()
 	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: opts.SocketPath, Net: "unix"})
 	if e != nil {
 		return ErrUnavailable

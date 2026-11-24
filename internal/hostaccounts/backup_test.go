@@ -530,6 +530,36 @@ func TestRestoreRecordsItsLeftoversFirst(t *testing.T) {
 	}
 }
 
+// At start the broker removes what a restore or drill interrupted by a
+// crash left; what it cannot remove yet stays listed and is not an error
+// that stops the broker.
+func TestBrokerStartCleansBackupLeftovers(t *testing.T) {
+	s, f := backupStore(t)
+	ctx := context.Background()
+	l := backupLeftover{Op: strings.Repeat("b", 32), Users: map[string]string{"fixtureacct_wp": "sifruno_rst_0123456789abcdef"}}
+	if err := s.recordLeftover(l); err != nil {
+		t.Fatal(err)
+	}
+	f.failCleanup = true
+	if err := s.cleanBackupLeftoversAtStart(ctx); err == nil {
+		t.Fatal("a leftover that could not be removed must be reported")
+	}
+	if items, _ := s.leftovers(); len(items) != 1 {
+		t.Fatalf("the leftover must stay listed for the next operation: %+v", items)
+	}
+	f.failCleanup = false
+	if err := s.cleanBackupLeftoversAtStart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := s.leftovers(); len(items) != 0 || !slices.Equal(f.cleaned, []string{l.Op}) {
+		t.Fatalf("after a clean start: %+v cleaned %v", items, f.cleaned)
+	}
+	s.backup = nil
+	if err := s.cleanBackupLeftoversAtStart(ctx); err != nil {
+		t.Fatalf("backups off: %v", err)
+	}
+}
+
 func TestRestoreRefusals(t *testing.T) {
 	s, f := backupStore(t)
 	ctx := context.Background()

@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# Runs inside the dev VM as root (proof.sh account-limits copies it in).
+# Proves the per-account process, memory and CPU limits: the installer's
+# pam_limits file and OpenLiteSpeed cgroups setting, the broker's slice
+# drop-in at create and plan change, a tenant's fork loop stopping at the
+# limit, a runuser session in the user slice with TasksMax set, the site's
+# lsphp process and its limits, and the delete of an active site while a
+# fork loop runs. Prints PASS/FAIL per check, and what it read.
+# shellcheck disable=SC2317 # the helpers are called through check
+set -uo pipefail
+
+BIN=/opt/sifruno-proof
+SOCKET=/run/sifruno-broker/control.sock
+STATE=/var/lib/sifruno-broker
+LSWS=/usr/local/lsws
+UNITS=/etc/systemd/system
+LIMITS_FILE=/etc/security/limits.d/90-sifruno-accounts.conf
+RUNID="$(date +%s)"
+RUNID="${RUNID: -5}"
+A_USER="lma${RUNID}"
+B_USER="lmb${RUNID}"
+A_DOMAIN="${A_USER}.proof.test"
+B_DOMAIN="${B_USER}.proof.test"
+fails=0
+
+pass() { printf 'PASS  %s\n' "$1"; }
+fail() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
+check() {
+  local what="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi
+}
+drive() { runuser -u sifpanel -- "$BIN/brokerdrive" --socket "$SOCKET" "$@"; }
+revision() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('account', d)['revision'])"; }
+field() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
+code() { curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" "http://127.0.0.1$2"; }
+wait_for() { # wait_for DOMAIN PATH CODE [TEXT]
+  local _
+  for _ in $(seq 1 150); do
+    if [ "$(code "$1" "$2")" = "$3" ] && { [ -z "${4:-}" ] || curl -s -H "Host: $1" "http://127.0.0.1$2" | grep -q "$4"; }; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+# The tenant's own file writes, as its user without PAM.
+as_tenant() { # as_tenant USER COMMAND
+  local uid
+  uid="$(id -u "$1")"
+  setpriv --reuid="$uid" --regid="$uid" --clear-groups -- sh -c "cd /home/$1 && $2"
+}
+# A PAM session of the tenant, started from a transient system service so it
+# is not inside this script's own (root's) login session: pam_systemd then
+# registers it under user-<uid>.slice, and pam_limits applies limits.d, as
+# for an SFTP login or a cron job. runuser -u runs the command without the
+# tenant's nologin shell.
+tenant_session() { # tenant_session USER COMMAND...
+  systemd-run --quiet --wait --pipe --collect -- /usr/sbin/runuser -u "$1" -- "${@:2}"
+}
+# The same, left running in the background as unit NAME.
+tenant_session_bg() { # tenant_session_bg NAME USER COMMAND...
+  systemd-run --quiet --collect --unit "$1" -- /usr/sbin/runuser -u "$2" -- "${@:3}"
+}
+slice_dir() { printf '/sys/fs/cgroup/user.slice/user-%s.slice' "$1"; }
+show() { systemctl show -P "$2" "user-$1.slice"; }
+slice_has() { # slice_has UID TASKSMAX MEMORYMAX_BYTES CPUQUOTA_PER_SEC
+  [ "$(show "$1" TasksMax)" = "$2" ] && [ "$(show "$1" MemoryMax)" = "$3" ] && [ "$(show "$1" CPUQuotaPerSecUSec)" = "$4" ]
+}
+has_limits() { # has_limits JSON PROCESSES MEMORY_MIB CPU_PERCENT
+  printf '%s' "$1" | python3 -c "import json,sys; d=json.load(sys.stdin); l=d.get('account', d).get('limits'); sys.exit(0 if l == {'processes': $2, 'memory_mib': $3, 'cpu_percent': $4} else 1)"
+}
+between() { [ "${1:-0}" -ge "$2" ] && [ "${1:-0}" -le "$3" ]; }
+ols_cgroups() { awk '/^CGIRLimit/{b=1} b&&$1=="cgroups"{print $2; exit}' "$LSWS/conf/httpd_config.conf"; }
+
+# A loop that forks sleeping children until fork() fails or 150 are running,
+# then prints how many it made and the error, and ends them.
+FORK_COUNT='
+import os, signal, time
+kids, err = [], "none"
+for _ in range(150):
+    try:
+        pid = os.fork()
+    except OSError as e:
+        err = e.strerror
+        break
+    if pid == 0:
+        time.sleep(120)
+        os._exit(0)
+    kids.append(pid)
+print(len(kids), err)
+for k in kids:
+    os.kill(k, signal.SIGKILL)
+for k in kids:
+    os.waitpid(k, 0)
+'
+# A fork loop that never stops: every process keeps forking, and waits a
+# moment when fork() fails, so it refills whatever the broker ends.
+FORK_LOOP='
+import os, time
+while True:
+    try:
+        os.fork()
+    except OSError:
+        time.sleep(0.01)
+'
+
+echo "# Per-account process, memory and CPU limits"
+echo "# $(date -u +%FT%TZ)  $(rpm -q openlitespeed lsphp83 systemd pam | paste -sd ' ')  SELinux $(getenforce)  cgroup fs $(stat -fc %T /sys/fs/cgroup)"
+echo "# account A $A_USER ($A_DOMAIN), account B $B_USER ($B_DOMAIN)"
+
+echo
+echo "## 1. The installer's two steps"
+# The VM was provisioned by an older installer: run the two new steps from
+# this release's install.sh, as an upgrade would. In a subshell, because
+# install.sh turns on errexit, which this script does not use.
+# shellcheck disable=SC1091
+(SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$BIN/install.sh" && step_limits && step_ols_cgroups && printf '  changed: %s\n' "${CHANGES[@]}") || fail "the installer's limits and cgroups steps run"
+check "the limits file is root's, 0644" test "$(stat -c '%U:%G %a' "$LIMITS_FILE")" = "root:root 644"
+check "it sets nproc 100, soft and hard, for UIDs 20000:60000" grep -qxE '20000:60000 +hard +nproc +100' "$LIMITS_FILE"
+check "and the soft limit too" grep -qxE '20000:60000 +soft +nproc +100' "$LIMITS_FILE"
+echo "  CGIRLimit cgroups: $(ols_cgroups)"
+check "OpenLiteSpeed's CGIRLimit has cgroups 1" test "$(ols_cgroups)" = 1
+# shellcheck disable=SC2016 # expands in the inner shell
+check "the installer's steps change nothing the second time" bash -c 'SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$0" && step_limits && step_ols_cgroups && [ "${#CHANGES[@]}" -eq 0 ]' "$BIN/install.sh"
+check "OpenLiteSpeed is running" systemctl is-active --quiet lsws
+
+echo
+echo "## 2. The broker writes each account's slice limits"
+ols_user="$(awk '$1=="user"{print $2; exit}' "$LSWS/conf/httpd_config.conf")"
+ols_user="${ols_user:-nobody}"
+systemctl stop sifruno-broker-proof 2>/dev/null
+systemctl reset-failed sifruno-broker-proof 2>/dev/null
+systemd-run --quiet --unit sifruno-broker-proof --collect \
+  "$BIN/hostbroker" --state "$STATE" --socket "$SOCKET" --homes /home --controller-uid "$(id -u sifpanel)" --web-user "$ols_user"
+for _ in $(seq 1 60); do [ -S "$SOCKET" ] && break; sleep 1; done
+check "the broker started with --web-user $ols_user" test -S "$SOCKET"
+a="$(drive create --username "$A_USER" --domain "$A_DOMAIN" --reason 'Limits proof, account A')" || fail "broker creates account A"
+b="$(drive create --username "$B_USER" --domain "$B_DOMAIN" --reason 'Limits proof, account B')" || fail "broker creates account B"
+a_id="$(printf '%s' "$a" | field '["id"]')"
+b_id="$(printf '%s' "$b" | field '["id"]')"
+a_rev="$(printf '%s' "$a" | revision)"
+b_rev="$(printf '%s' "$b" | revision)"
+a_uid="$(id -u "$A_USER")"
+dropin="$UNITS/user-$a_uid.slice.d/50-sifruno-limits.conf"
+echo "  $dropin:"
+sed 's/^/    /' "$dropin"
+check "A's answer carries the default limits" has_limits "$a" 100 1024 100
+check "A's drop-in is root's, 0644" test "$(stat -c '%U:%G %a' "$dropin")" = "root:root 644"
+check "systemd loaded it: TasksMax 100, MemoryMax 1 GiB, CPUQuota 100%" slice_has "$a_uid" 100 1073741824 1s
+
+echo
+echo "## 3. A runuser session lands in the user slice with TasksMax set"
+session="$(tenant_session "$A_USER" /usr/bin/cat /proc/self/cgroup /proc/self/limits)"
+printf '%s\n' "$session" | grep -E '^0::|Max processes|Max address space' | sed 's/^/  /'
+check "the session runs in user-$a_uid.slice" grep -q "^0::/user.slice/user-$a_uid.slice/" <<<"$session"
+check "the session's RLIMIT_NPROC is 100 (limits.d)" grep -qE '^Max processes +100 +100 ' <<<"$session"
+tenant_session_bg "limits-proof-hold-$RUNID" "$A_USER" /usr/bin/sleep 600
+sleep 2
+echo "  pids.max $(cat "$(slice_dir "$a_uid")/pids.max" 2>&1), memory.max $(cat "$(slice_dir "$a_uid")/memory.max" 2>&1), cpu.max $(cat "$(slice_dir "$a_uid")/cpu.max" 2>&1)"
+check "the active slice's pids.max is 100" test "$(cat "$(slice_dir "$a_uid")/pids.max")" = 100
+
+echo
+echo "## 4. A plan change moves the limits, also of the active slice"
+planned="$(drive plan --id "$a_id" --revision "$a_rev" --plan larger --processes 120 --memory-mib 2048 --cpu-percent 200 --reason 'Larger plan')" || fail "A's plan changes to 120 tasks, 2 GiB, two CPUs"
+a_rev="$(printf '%s' "$planned" | revision)"
+check "the answer carries the new limits" has_limits "$planned" 120 2048 200
+check "the drop-in says TasksMax=120" grep -qx 'TasksMax=120' "$dropin"
+check "systemd loaded it: TasksMax 120, MemoryMax 2 GiB, CPUQuota 200%" slice_has "$a_uid" 120 2147483648 2s
+echo "  after the change: pids.max $(cat "$(slice_dir "$a_uid")/pids.max" 2>&1), memory.max $(cat "$(slice_dir "$a_uid")/memory.max" 2>&1), cpu.max $(cat "$(slice_dir "$a_uid")/cpu.max" 2>&1)"
+check "daemon-reload applied it to the active slice: pids.max 120" test "$(cat "$(slice_dir "$a_uid")/pids.max")" = 120
+check "and memory.max 2 GiB" test "$(cat "$(slice_dir "$a_uid")/memory.max")" = 2147483648
+back="$(drive plan --id "$a_id" --revision "$a_rev" --plan default --processes 100 --memory-mib 1024 --cpu-percent 100 --reason 'Back to the default plan')" || fail "A's plan changes back to the defaults"
+a_rev="$(printf '%s' "$back" | revision)"
+check "the active slice's pids.max is 100 again" test "$(cat "$(slice_dir "$a_uid")/pids.max")" = 100
+answer="$(drive plan --id "$a_id" --revision "$a_rev" --plan default --processes 5 --memory-mib 1024 --cpu-percent 100 --reason 'Too small' 2>&1 >/dev/null)"
+echo "  5 tasks: $answer"
+check "limits out of bounds are refused" grep -q 'invalid' <<<"$answer"
+systemctl stop "limits-proof-hold-$RUNID" 2>/dev/null
+
+echo
+echo "## 5. A tenant's fork loop stops at the limit"
+counted="$(tenant_session "$A_USER" /usr/bin/python3 -c "$FORK_COUNT")"
+echo "  children made, and fork's error: $counted"
+check "the loop made fewer than 100 children, not 150" between "${counted%% *}" 1 99
+check "fork() failed with EAGAIN" grep -q 'Resource temporarily unavailable' <<<"$counted"
+
+echo
+echo "## 6. The site's lsphp and its limits"
+as_tenant "$A_USER" "printf '%s\n' '<?php echo \"site A on php \", PHP_MAJOR_VERSION, \".\", PHP_MINOR_VERSION;' > public_html/index.php"
+as_tenant "$B_USER" "printf '%s\n' '<?php echo \"site B on php \", PHP_MAJOR_VERSION, \".\", PHP_MINOR_VERSION;' > public_html/index.php"
+a_live="$(drive web --id "$a_id" --revision "$a_rev" --php 8.3 --quota-mib 200 --reason 'Go live')" || fail "A goes live"
+b_live="$(drive web --id "$b_id" --revision "$b_rev" --php 8.3 --quota-mib 200 --reason 'Go live')" || fail "B goes live"
+a_rev="$(printf '%s' "$a_live" | revision)"
+b_rev="$(printf '%s' "$b_live" | revision)"
+vhconf="$LSWS/conf/vhosts/sifruno-u${a_id:0:31}/vhconf.conf"
+grep -E '^(namespace|cgroups) |memHardLimit|procHardLimit' "$vhconf" | sed 's/^/  /'
+check "A's vhost asks for cgroups" grep -qE '^cgroups +2$' "$vhconf"
+check "and renders memHardLimit 1024M, procHardLimit 496" bash -c "grep -qE '^ +memHardLimit +1024M$' '$vhconf' && grep -qE '^ +procHardLimit +496$' '$vhconf'"
+check "A serves PHP" wait_for "$A_DOMAIN" / 200 'site A on php 8.3'
+check "B serves PHP" wait_for "$B_DOMAIN" / 200 'site B on php 8.3'
+lsphp="$(pgrep -u "$a_uid" -f lsphp | head -1)"
+if [ -n "$lsphp" ]; then
+  echo "  lsphp $lsphp: $(cat "/proc/$lsphp/cgroup")"
+  grep -E 'Max processes|Max address space' "/proc/$lsphp/limits" | sed 's/^/  /'
+  check "lsphp runs in user-$a_uid.slice/litespeed-exec.scope (OpenLiteSpeed cgroups)" grep -q "^0::/user.slice/user-$a_uid.slice/litespeed-exec.scope" "/proc/$lsphp/cgroup"
+  # Read from OpenLiteSpeed 1.9.4's source: the vhost's rlimits are set on
+  # the path without the namespace container and not in it (ns.c), so these
+  # two may fail with namespace on; the slice above is then the bound.
+  check "lsphp's RLIMIT_NPROC is the vhost's procHardLimit, 496" grep -qE '^Max processes +496 +496 ' "/proc/$lsphp/limits"
+  check "lsphp's RLIMIT_AS is the vhost's memHardLimit, 1 GiB" grep -qE '^Max address space +1073741824 +1073741824 ' "/proc/$lsphp/limits"
+else
+  fail "an lsphp process runs as A"
+fi
+
+echo
+echo "## 7. Delete of the active site while a fork loop runs"
+tenant_session_bg "limits-proof-loop-$RUNID" "$A_USER" /usr/bin/python3 -c "$FORK_LOOP"
+sleep 5
+running="$(pgrep -u "$a_uid" -c)"
+echo "  A's processes with the loop running: $running; slice pids.current $(cat "$(slice_dir "$a_uid")/pids.current" 2>&1)"
+check "the loop runs, held at or under the limit" between "$running" 20 100
+check "B still serves while A's loop runs" wait_for "$B_DOMAIN" / 200 'site B on php 8.3'
+started="$(date +%s)"
+if drive delete --id "$a_id" --revision "$a_rev" --reason 'Remove A with its fork loop' >/dev/null; then
+  pass "the delete of active A succeeds with its fork loop running ($(($(date +%s) - started)) s)"
+else
+  fail "the delete of active A succeeds with its fork loop running"
+fi
+check "A's Linux user is gone" bash -c "! getent passwd $A_USER"
+check "no process runs as A's UID" bash -c "! pgrep -u $a_uid"
+check "A's drop-in is gone" test ! -e "$dropin"
+check "B still serves" test "$(code "$B_DOMAIN" /)" = 200
+systemctl stop "limits-proof-loop-$RUNID" 2>/dev/null
+drive delete --id "$b_id" --revision "$b_rev" --reason 'Remove B' >/dev/null || fail "the operator deletes B"
+check "B's Linux user is gone" bash -c "! getent passwd $B_USER"
+check "OpenLiteSpeed is still running" systemctl is-active --quiet lsws
+
+echo
+if [ "$fails" -eq 0 ]; then echo "RESULT: all checks passed"; else echo "RESULT: $fails check(s) failed"; fi
+exit "$fails"

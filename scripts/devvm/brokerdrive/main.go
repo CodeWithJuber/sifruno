@@ -31,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -42,8 +42,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch global.Arg(0) {
 	case "wordpress":
 		timeout = 12 * time.Minute
-	case "web", "certificate", "delete", "state", "backup-target", "backups":
-		// A state change of a live site re-applies the site list too.
+	case "web", "certificate", "delete", "state", "plan", "backup-target", "backups":
+		// A state change of a live site re-applies the site list too, and
+		// so does a plan change of its limits.
 		timeout = 6 * time.Minute
 	case "backup", "restore", "drill", "prune":
 		timeout = 125 * time.Minute
@@ -59,6 +60,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	username := command.String("username", "", "Account username (create)")
 	domain := command.String("domain", "", "Account domain (create)")
 	state := command.String("state", "", "active or suspended (state)")
+	plan := command.String("plan", "default", "Plan name (plan)")
+	processes := command.Int("processes", 0, "Process limit of the account; with --memory-mib and --cpu-percent, or none to keep the limits (plan)")
+	memoryMiB := command.Int("memory-mib", 0, "Memory limit of the account in MiB (plan)")
+	cpuPercent := command.Int("cpu-percent", 0, "CPU limit of the account, 100 is one CPU (plan)")
 	php := command.String("php", "8.3", "PHP version for the site (web)")
 	quota := command.Int("quota-mib", 0, "Disk quota in MiB (web)")
 	title := command.String("title", "", "Site title (wordpress)")
@@ -100,6 +105,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		result, err = service.Create(ctx, hostaccounts.CreateInput{Username: *username, Domain: *domain, Reason: *reason}, *actor)
 	case "state":
 		result, err = service.SetState(ctx, *id, hostaccounts.StateInput{State: *state, ExpectedRevision: *revision, Reason: *reason}, *actor)
+	case "plan":
+		limits := hostaccounts.AccountLimits{Processes: *processes, MemoryMiB: *memoryMiB, CPUPercent: *cpuPercent}
+		result, err = service.SetPlan(ctx, *id, hostaccounts.PlanInput{Plan: *plan, Limits: limits, ExpectedRevision: *revision, Reason: *reason}, *actor)
 	case "delete":
 		result, err = service.Delete(ctx, *id, hostaccounts.DeleteInput{ExpectedRevision: *revision, Reason: *reason}, *actor)
 	case "public-html":

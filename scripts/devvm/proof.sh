@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | backups | broker-isolation | wordpress-wizard | whmcs-module | panel-shell | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | backups | broker-isolation | account-limits | wordpress-wizard | whmcs-module | panel-shell | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -50,6 +50,15 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 rewrites the tenant's vhost; the operator suspends the tenant
                 (403), uses its new public_html (a link is refused), resumes
                 it, and deletes it after the tenant changed its home's mode.
+  account-limits
+                Per-account process, memory and CPU limits: this release's
+                installer steps (pam_limits nproc for the account UIDs,
+                OpenLiteSpeed cgroups 1), the broker's slice drop-in at
+                create and plan change (also of an active slice), a runuser
+                session in the user slice with TasksMax set, a tenant's fork
+                loop stopping at the limit, the site's lsphp in its slice
+                with its rlimits read from /proc, and the delete of an
+                active site while a fork loop runs.
   wordpress-wizard
                 The New website wizard end to end: the panel runs as sifpanel
                 with the broker and the MariaDB option file, a browser on this
@@ -215,6 +224,28 @@ case "${1:-}" in
     transcript="$OUT/broker-isolation-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/broker-isolation.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  account-limits)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    # A broker left running by an earlier proof holds its binary open, so
+    # stop it before the copy replaces the file. Its state stays on disk.
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in hostbroker brokerdrive; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
+    # The guest runs this release's two installer steps from install.sh.
+    "$HERE/vm.sh" put "$REPO/scripts/install/install.sh" /opt/sifruno-proof/install.sh
+    "$HERE/vm.sh" put "$HERE/proofs/account-limits.guest.sh" /opt/sifruno-proof/account-limits.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/install.sh /opt/sifruno-proof/account-limits.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/account-limits-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    status=0
+    "$HERE/vm.sh" ssh /opt/sifruno-proof/account-limits.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

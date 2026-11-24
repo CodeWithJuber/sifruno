@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	"sifruno/internal/olsweb"
 )
 
 // webChanges makes n web changes of the account, each moving its quota, and
@@ -384,6 +386,77 @@ func TestOperatorKeepsRoomWhenCompactionCannotRun(t *testing.T) {
 	}
 	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: a.Revision, Reason: "Closed"}, "test operator"); err != nil {
 		t.Fatalf("delete at the tenant limit: %v", err)
+	}
+}
+
+// TestLargestRecordFits: the largest record the broker's inputs can make
+// stays inside maxRecordBytes, which records() holds every record to. Only
+// one operation is pending at a time, so one of the next fields is filled:
+// the largest, a domains set being installed. Every other field is at its
+// bound, texts made of the character JSON escapes most, and the homes
+// directory as long as the broker admits it.
+func TestLargestRecordFits(t *testing.T) {
+	domains := strings.Repeat("a", maxSiteDomainsBytes-2)
+	if !siteDomainsSized(domains) || siteDomainsSized(domains+"a") {
+		t.Fatal("the domains fixture is not at its bound")
+	}
+	keys := make([]string, MaxSSHKeys)
+	for i := range keys {
+		keys[i] = strings.Repeat("k", maxSSHKeyLine)
+	}
+	names := make([]string, olsweb.MaxDomainsPerSite)
+	for i := range names {
+		names[i] = strings.Repeat("n", 253)
+	}
+	escaped := func(n int) string { return strings.Repeat("<", n) }
+	cert := CertificateState{NotAfter: math.MaxInt64, Fingerprint: strings.Repeat("f", 64), Names: strings.Join(names, ",")}
+	limits := AccountLimits{Processes: math.MaxInt, MemoryMiB: math.MaxInt, CPUPercent: math.MaxInt}
+	id := strings.Repeat("a", 32)
+	home := "/" + strings.Repeat("h", 2047) + "/" + strings.Repeat("u", 32)
+	when := time.Date(2026, 11, 24, 23, 59, 59, 999999999, time.FixedZone("", -12*3600))
+	big := ^uint64(0)
+	r := record{
+		Version:   1,
+		Account:   Account{ID: id, Username: strings.Repeat("u", 32), Domain: strings.Repeat("d", 253), Plan: escaped(64), Home: home, PublicHTML: home + "/public_html", State: "recovery_required", UID: lastAccountID, GID: lastAccountID, Revision: big, CreatedAt: when, UpdatedAt: when, Certificate: cert, Limits: limits},
+		Tag:       "sifruno-managed-" + id,
+		Ownership: ownership{Home: fileIdentity{big, big}, Public: fileIdentity{big, big}, Marker: fileIdentity{big, big}},
+		Pending:   &pending{Action: "domains", Target: "sha256=" + strings.Repeat("0", 64), Actor: escaped(120), Reason: escaped(500), OperationID: id},
+		Actor:     escaped(120), Reason: escaped(500), HistorySequence: big, HistoryStart: big,
+		SSHKeys: strings.Join(keys, "\n"),
+		Web:     WebState{PHPVersion: "8.3", QuotaMiB: math.MaxInt},
+		TLS:     cert, LimitsNext: limits,
+		Cron:    strings.Repeat("c", 64),
+		Domains: domains, DomainsNext: domains,
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > maxRecordBytes {
+		t.Fatalf("the largest record takes %d bytes, more than the %d records() admits", len(raw), maxRecordBytes)
+	}
+	t.Logf("the largest record takes %d of %d bytes", len(raw), maxRecordBytes)
+}
+
+// TestOversizedRecordIsNotStored: a record past the bound is refused before
+// anything is written, so the store stays readable for every account.
+func TestOversizedRecordIsNotStored(t *testing.T) {
+	s, _, _ := setupStore(t)
+	a := createFixture(t, s)
+	r := recordFor(t, s, a.ID)
+	rows := len(historyRows(t, s, a.ID))
+	huge := r
+	huge.Reason = strings.Repeat("x", maxRecordBytes)
+	huge.Pending = &pending{Action: "state", Target: "suspended", Actor: "test operator", Reason: "Too big"}
+	before := a
+	if _, err := s.beginOperation(huge, &before); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an oversized record was journaled: %v", err)
+	}
+	if err := s.save(huge); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an oversized record was saved: %v", err)
+	}
+	if got := recordFor(t, s, a.ID); got != r || len(historyRows(t, s, a.ID)) != rows {
+		t.Fatalf("the store changed: %+v", got)
 	}
 }
 

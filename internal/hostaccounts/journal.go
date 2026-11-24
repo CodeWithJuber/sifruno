@@ -109,6 +109,12 @@ func (s *store) appendEvent(r record, e operationEvent) (record, error) {
 	e.RecordedAt = time.Now().UTC()
 	raw, _ := json.Marshal(e)
 	state, _ := json.Marshal(r)
+	// A record records() would refuse is never written: it would stop every
+	// account. What tenants and the panel can send stays inside the bound
+	// (TestLargestRecordFits); the broker's own paths are the operator's.
+	if len(state) > maxRecordBytes {
+		return r, ErrInvalid
+	}
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(historyBucket)
 		key := eventKey(r.Account.ID, e.Sequence)

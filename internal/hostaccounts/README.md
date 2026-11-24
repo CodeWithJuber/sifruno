@@ -59,7 +59,10 @@ reason is1–500UTF8bytes, with controls and outer whitespace refused. Requests 
 strict JSON≤16KiB (a certificate request up to 160 KiB, a domains request up to 96 KiB), including duplicate/unknown/case-alias/null/invalidUTF8 guards.
 There are at most 2000 managed accounts (`MaxAccounts`) and 256 audit event rows
 per account at a time (`MaxHistoryRows`); compaction (below) keeps an account in
-use far below that.
+use far below that. One account's stored record is at most 160 KiB: the largest
+the inputs can make (two domain sets at their bound, ten SFTP keys, a
+certificate for 16 names) takes about 153 KiB, and a record past the bound is
+refused before it is written, since the account list refuses to read one.
 
 UID/GID pairs in20000–60000 are reserved in durable private bbolt metadata before
 OS changes. Controller UID, existing local users/groups/homes and metadata

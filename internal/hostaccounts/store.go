@@ -405,6 +405,10 @@ func (s *store) save(r record) error {
 	if err != nil {
 		return ErrRecovery
 	}
+	// As appendEvent: records() would refuse it, and with it every account.
+	if len(b) > maxRecordBytes {
+		return ErrInvalid
+	}
 	if s.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(accountBucket).Put([]byte(r.Account.ID), b) }) != nil {
 		return ErrRecovery
 	}

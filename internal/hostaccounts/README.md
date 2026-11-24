@@ -192,7 +192,8 @@ on the dev VM: `scripts/devvm/proofs/broker-isolation.guest.sh` and
 - A pass signals, then reads `/proc` until no process has the account's UID
   as its real, effective or saved user ID (a zombie not yet reaped counts),
   for up to 250 ms. Up to four passes catch what started meanwhile: a fork
-  that raced the signal, or a process root started for the account.
+  that raced the signal, or a process root started for the account. A scan
+  stops between entries once its time is up.
 
 Delete: after the intent is journaled and the site is out of the config, an
 active account is expired and locked as a suspend does, so no new login or
@@ -200,13 +201,24 @@ cron job starts for it; then its processes end and `userdel` runs. userdel
 refuses a user it finds busy (exit 8) before it changes anything
 (shadow-utils 4.9 `userdel.c`); it checks threads and the account's
 subordinate IDs too, so it is tried up to three times, each after the
-processes were ended again. If it still refuses, the account gets back the
-expiry it had, the site goes back into the config, and the delete ends
-`rejected` with the account unchanged: the answer is 409 `conflict`, and
-every other account can still change. The next start does the same for an
-interrupted delete. A delete stays pending, and stops every mutation, only
-when a root step fails: the expiry cannot be put back, or the site cannot
-go back into the config (its test now fails, or the reload does).
+processes were ended again. Ending processes has 20 seconds in all, every
+pass of every try, apart from the delete's own limit: a tenant with very
+many processes makes each `/proc` scan slow, and when the 20 seconds are
+spent the user counts as busy.
+
+Whatever stops the delete before userdel changed anything takes one path:
+the user still busy, the 20 seconds spent, kill or a `/proc` read failing,
+the lock failing, or the delete's time running out. The account gets back
+the expiry it had, on a fresh limit of its own, and is checked; the site
+goes back into the config; and the delete ends `rejected` with the account
+unchanged, so every other account can still change. A busy user answers 409
+`conflict`; the other causes answer 503 `unavailable`. The next start does
+the same for an interrupted delete. A delete stays pending, and stops every
+mutation, only when a root step fails or its effect is unknown: the expiry
+cannot be put back or the account does not check out afterwards, the site
+cannot go back into the config (its test now fails, or the reload does), or
+userdel exits other than 0 or 8, or does not finish, since nobody knows what
+it changed.
 
 Suspend: after the suspension is journaled (and a live site's list
 installed), the account's processes end. This runs with the tenant's own

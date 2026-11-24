@@ -61,7 +61,9 @@ type fakeNative struct {
 	tlsGoneWhileServed bool
 	// ended counts EndProcesses calls per username. Failure "busy" stands
 	// for a process that outlived every pass: EndProcesses reports it, and
-	// Delete answers as userdel's refusal, changing nothing.
+	// Delete answers as userdel's refusal, changing nothing. Failure
+	// "stopped" is a Delete that stopped before userdel for another reason
+	// (kill or a /proc read failed, time ran out) and put the account back.
 	ended map[string]int
 }
 
@@ -273,6 +275,9 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 	}
 	if f.failure == "busy" {
 		return errAccountBusy
+	}
+	if f.failure == "stopped" {
+		return errNothingRemoved
 	}
 	delete(f.users, r.Account.Username)
 	// The native delete removes the site's TLS directory with the account.

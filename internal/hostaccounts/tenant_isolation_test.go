@@ -349,6 +349,45 @@ func TestBusyDeleteAtRestartBlocksNoOtherAccount(t *testing.T) {
 	}
 }
 
+// A delete the native side stopped before userdel for another reason than
+// a busy user (ending the processes failed, a /proc read failed, time ran
+// out) and put back ends rejected the same way, at once and at the next
+// start: the answer is 503, and another account can change at once.
+func TestStoppedDeleteBlocksNoOtherAccount(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	tenant := liveFixture(t, s)
+	other := liveAccount(t, s, "secondacct", "second.test")
+
+	f.failure = "stopped"
+	if _, err := s.delete(ctx, tenant.Account.ID, DeleteInput{ExpectedRevision: tenant.Account.Revision, Reason: "Abuse"}, "test operator"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a delete stopped before userdel: %v", err)
+	}
+	f.failure = ""
+	busyDeleteRejected(t, s, f, tenant)
+	if _, err := suspend(s, other); err != nil {
+		t.Fatalf("another account's suspend after the stopped delete: %v", err)
+	}
+	other = recordFor(t, s, other.Account.ID)
+
+	f.failure = "sites"
+	if _, err := s.delete(ctx, tenant.Account.ID, DeleteInput{ExpectedRevision: tenant.Account.Revision, Reason: "Abuse"}, "test operator"); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("interrupted delete: %v", err)
+	}
+	f.failure = "stopped"
+	s.mu.Lock()
+	err := s.refresh(ctx, true)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.failure = ""
+	busyDeleteRejected(t, s, f, tenant)
+	if _, err := s.setState(ctx, other.Account.ID, StateInput{State: "active", ExpectedRevision: other.Account.Revision, Reason: "Paid"}, "test operator"); err != nil {
+		t.Fatalf("another account's resume after the stopped delete at restart: %v", err)
+	}
+}
+
 func busyDeleteRejected(t *testing.T, s *store, f *fakeNative, tenant record) {
 	t.Helper()
 	after := recordFor(t, s, tenant.Account.ID)

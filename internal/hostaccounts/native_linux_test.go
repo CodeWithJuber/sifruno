@@ -3,6 +3,7 @@
 package hostaccounts
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -503,13 +504,166 @@ func TestProcessStatusUIDs(t *testing.T) {
 	if ids, ok := statusUIDs(self); !ok || ids[0] != uint32(os.Getuid()) || ids[1] != uint32(os.Geteuid()) {
 		t.Fatalf("this process's IDs read as %v %v", ids, ok)
 	}
-	if running, err := accountRunning(uint32(os.Getuid())); err != nil || !running {
+	if running, err := accountRunning(t.Context(), uint32(os.Getuid())); err != nil || !running {
 		t.Fatalf("this process is not seen: %v %v", running, err)
+	}
+	// A scan stops as soon as its context is done, between entries.
+	done, cancel := context.WithCancel(t.Context())
+	cancel()
+	if running, err := accountRunning(done, uint32(os.Getuid())); !errors.Is(err, ErrUnavailable) || running {
+		t.Fatalf("a scan after its context ended: %v %v", running, err)
 	}
 	for name, want := range map[string]bool{"1": true, "4242": true, "self": false, "": false, "12a": false, "12345678901": false} {
 		if pidName(name) != want {
 			t.Errorf("pidName(%q) != %v", name, want)
 		}
+	}
+}
+
+// removalSteps stands in for removeUser's root steps and records their
+// order. end answers endErr (called with end's context), userdel answers
+// codes in turn (the last one again) or userdelErr, and putBack records
+// whether its context was live and how long it had.
+type removalSteps struct {
+	calls      []string
+	lockErr    error
+	endErr     func(context.Context) error
+	endLeft    time.Duration
+	codes      []int
+	userdelErr error
+	putBackErr error
+	backLive   bool
+	backLeft   time.Duration
+}
+
+func (s *removalSteps) removal() userRemoval {
+	left := func(ctx context.Context) time.Duration {
+		d, ok := ctx.Deadline()
+		if !ok {
+			return -1
+		}
+		return time.Until(d)
+	}
+	return userRemoval{
+		lock: func(ctx context.Context) error {
+			s.calls = append(s.calls, "lock")
+			if ctx.Err() != nil {
+				return ErrUnavailable
+			}
+			return s.lockErr
+		},
+		end: func(ctx context.Context) error {
+			s.calls = append(s.calls, "end")
+			s.endLeft = left(ctx)
+			if s.endErr != nil {
+				return s.endErr(ctx)
+			}
+			return nil
+		},
+		userdel: func(context.Context) (int, error) {
+			s.calls = append(s.calls, "userdel")
+			if s.userdelErr != nil {
+				return -1, s.userdelErr
+			}
+			code := s.codes[0]
+			if len(s.codes) > 1 {
+				s.codes = s.codes[1:]
+			}
+			return code, nil
+		},
+		putBack: func(ctx context.Context) error {
+			s.calls = append(s.calls, "put back")
+			s.backLive, s.backLeft = ctx.Err() == nil, left(ctx)
+			return s.putBackErr
+		},
+	}
+}
+
+// Whatever stops a delete before userdel changed anything puts the account
+// back on a fresh, bounded context and ends in errAccountBusy or
+// errNothingRemoved, which the store ends rejected. Only a userdel that
+// failed other than busy, or a put-back that failed, leaves the delete
+// pending.
+func TestUserRemovalPutsBackWhateverStopsItBeforeUserdel(t *testing.T) {
+	failWith := func(err error) func(context.Context) error {
+		return func(context.Context) error { return err }
+	}
+	waitForEnd := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ErrUnavailable
+	}
+	expired, cancel := context.WithCancel(t.Context())
+	cancel()
+	soon := func() context.Context {
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+		t.Cleanup(cancel)
+		return ctx
+	}
+	put := []string{"lock", "end", "put back"}
+	for _, c := range []struct {
+		name  string
+		ctx   context.Context
+		steps removalSteps
+		want  error
+		calls []string
+	}{
+		{"removed", t.Context(), removalSteps{codes: []int{0}}, nil, []string{"lock", "end", "userdel"}},
+		{"busy, then gone", t.Context(), removalSteps{endErr: failWith(errAccountBusy), codes: []int{8, 0}}, nil, []string{"lock", "end", "userdel", "end", "userdel"}},
+		{"busy after every try", t.Context(), removalSteps{codes: []int{8}}, errAccountBusy, []string{"lock", "end", "userdel", "end", "userdel", "end", "userdel", "put back"}},
+		{"the lock failed", t.Context(), removalSteps{lockErr: ErrUnavailable}, errNothingRemoved, []string{"lock", "put back"}},
+		{"kill did not run", t.Context(), removalSteps{endErr: failWith(ErrUnavailable)}, errNothingRemoved, put},
+		{"/proc unreadable", t.Context(), removalSteps{endErr: failWith(ErrUnavailable), codes: []int{0}}, errNothingRemoved, put},
+		{"the credential refused", t.Context(), removalSteps{endErr: failWith(ErrRecovery)}, errNothingRemoved, put},
+		{"the caller's limit ran out while processes ended", soon(), removalSteps{endErr: waitForEnd}, errNothingRemoved, put},
+		{"the caller's limit was already gone", expired, removalSteps{}, errNothingRemoved, []string{"lock", "put back"}},
+		{"userdel failed other than busy", t.Context(), removalSteps{codes: []int{1}}, ErrUnavailable, []string{"lock", "end", "userdel"}},
+		{"userdel did not finish", t.Context(), removalSteps{userdelErr: ErrUnavailable}, ErrUnavailable, []string{"lock", "end", "userdel"}},
+		{"the put-back failed", t.Context(), removalSteps{codes: []int{8}, putBackErr: ErrRecovery}, ErrRecovery, []string{"lock", "end", "userdel", "end", "userdel", "end", "userdel", "put back"}},
+	} {
+		err := c.steps.removal().run(c.ctx, time.Hour)
+		if err != c.want || !reflect.DeepEqual(c.steps.calls, c.calls) {
+			t.Errorf("%s: %v after %q, want %v after %q", c.name, err, c.steps.calls, c.want, c.calls)
+		}
+		if len(c.calls) > 0 && c.calls[len(c.calls)-1] == "put back" && (!c.steps.backLive || c.steps.backLeft <= putBackTimeout-time.Second || c.steps.backLeft > putBackTimeout) {
+			t.Errorf("%s: the put-back ran on a context live %v with %v left", c.name, c.steps.backLive, c.steps.backLeft)
+		}
+	}
+}
+
+// Ending processes has processBudget in all, on its own clock: with minutes
+// left to the caller, a scan that does not finish within it counts as a
+// busy user, put back and rejected, not a timeout.
+func TestUserRemovalBudgetMakesASlowScanBusy(t *testing.T) {
+	caller, cancel := context.WithTimeout(t.Context(), webApplyTimeout)
+	defer cancel()
+	steps := removalSteps{codes: []int{0}}
+	if err := steps.removal().run(caller, processBudget); err != nil || processBudget != 20*time.Second || steps.endLeft <= processBudget-time.Second || steps.endLeft > processBudget {
+		t.Fatalf("removed: %v, ending processes had %v of a %v budget", err, steps.endLeft, processBudget)
+	}
+
+	start := time.Now()
+	steps = removalSteps{endErr: func(ctx context.Context) error {
+		<-ctx.Done()
+		return ErrUnavailable
+	}}
+	if err := steps.removal().run(caller, 50*time.Millisecond); err != errAccountBusy || caller.Err() != nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("a scan past the budget: %v after %v, the caller's context %v", err, time.Since(start), caller.Err())
+	}
+	if !reflect.DeepEqual(steps.calls, []string{"lock", "end", "put back"}) || !steps.backLive {
+		t.Fatalf("a scan past the budget ran %q, put back on a live context %v", steps.calls, steps.backLive)
+	}
+
+	// Processes left after the passes still go to userdel, which judges for
+	// itself; once the budget is spent the next try counts as busy.
+	steps = removalSteps{endErr: func(ctx context.Context) error {
+		if ctx.Err() != nil {
+			return ErrUnavailable
+		}
+		<-ctx.Done()
+		return errAccountBusy
+	}, codes: []int{8}}
+	if err := steps.removal().run(caller, 50*time.Millisecond); err != errAccountBusy || !reflect.DeepEqual(steps.calls, []string{"lock", "end", "userdel", "end", "put back"}) {
+		t.Fatalf("busy until the budget ran out: %v after %q", err, steps.calls)
 	}
 }
 
@@ -586,7 +740,7 @@ func TestRootOnlyEndProcessesTakesOnlyTheAccount(t *testing.T) {
 	t.Cleanup(func() { _ = bCmd.Process.Kill(); <-bDone })
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if running, err := accountRunning(uint32(a.Account.UID)); err == nil && running {
+		if running, err := accountRunning(t.Context(), uint32(a.Account.UID)); err == nil && running {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -607,10 +761,10 @@ func TestRootOnlyEndProcessesTakesOnlyTheAccount(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the first user's process still runs")
 	}
-	if running, err := accountRunning(uint32(a.Account.UID)); err != nil || running {
+	if running, err := accountRunning(t.Context(), uint32(a.Account.UID)); err != nil || running {
 		t.Fatalf("a process of the first user is left: %v %v", running, err)
 	}
-	if running, err := accountRunning(uint32(b.Account.UID)); err != nil || !running {
+	if running, err := accountRunning(t.Context(), uint32(b.Account.UID)); err != nil || !running {
 		t.Fatalf("the other user's process ended: %v %v", running, err)
 	}
 

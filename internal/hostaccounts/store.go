@@ -119,7 +119,8 @@ type nativeSystem interface {
 	// Delete removes the managed system identity and owned home after
 	// ownership verification; it must be safe to retry after a crash. It
 	// ends the account's processes first. errAccountBusy: userdel still
-	// refused the user as busy, and nothing changed.
+	// refused the user as busy, and nothing changed. errNothingRemoved: it
+	// stopped for another reason before userdel ran, and nothing changed.
 	Delete(context.Context, record) error
 	// EndProcesses ends every process that runs as the account's user, by
 	// signalling as that user, never as root. errAccountBusy: some were
@@ -174,6 +175,11 @@ const (
 // still running after the broker ended them; for a delete, userdel refused
 // the user and nothing changed.
 var errAccountBusy = errors.New("account processes still running")
+
+// errNothingRemoved is the native answer when a delete stopped for another
+// reason before userdel changed anything (a /proc read or kill failed, or
+// time ran out) and the account was put back as it was.
+var errNothingRemoved = errors.New("delete stopped before anything was removed")
 
 var accountBucket = []byte("hostaccounts-v1")
 var configBucket = []byte("hostbroker-config-v1")
@@ -496,12 +502,13 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					}
 				}
 				if e := s.native.Delete(ctx, r); e != nil {
-					// A busy user ends the delete rejected, as in delete: the
-					// site goes back and nothing else changed. Any other
-					// failure keeps the record and retries on the next
-					// refresh; an uncertain destructive effect is never
-					// force-closed.
-					if errors.Is(e, errAccountBusy) {
+					// A delete that stopped before userdel changed anything (a
+					// busy user, a failed /proc read, time run out) ends
+					// rejected, as in delete: the site goes back and nothing
+					// else changed. Any other failure keeps the record and
+					// retries on the next refresh; an uncertain destructive
+					// effect is never force-closed.
+					if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
 						live := append([]record(nil), items...)
 						live[i].Pending = nil
 						if r.Web.enabled() && s.applySites(ctx, live, "") != nil {
@@ -889,23 +896,28 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	removeCtx, cancel := webContext(ctx)
 	e = s.native.Delete(removeCtx, r)
 	cancel()
-	if errors.Is(e, errAccountBusy) {
-		// A process of the account was still running after the broker ended
-		// them, so userdel refused the user and nothing was removed. The
-		// site goes back into the config (items lists the account without
-		// its pending delete) and the delete ends rejected, the account
-		// unchanged: a process the tenant keeps alive holds up this delete
-		// only. If the site cannot go back, the delete stays pending.
+	if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
+		// The native delete stopped before userdel changed anything and put
+		// the account back: a process of the account was still running
+		// after the broker ended them, or ending them failed or ran out of
+		// time. The site goes back into the config (items lists the account
+		// without its pending delete; applySites has its own limit) and the
+		// delete ends rejected, the account unchanged: what the tenant does
+		// holds up this delete only. If the site cannot go back, the delete
+		// stays pending.
 		if r.Web.enabled() && s.applySites(ctx, items, "") != nil {
 			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 			return Account{}, ErrRecovery
 		}
 		operation := *r.Pending
 		r.Pending = nil
-		if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+		if _, err := s.resultEvent(r, operation, "rejected"); err != nil {
 			return Account{}, ErrRecovery
 		}
-		return Account{}, ErrConflict
+		if errors.Is(e, errAccountBusy) {
+			return Account{}, ErrConflict
+		}
+		return Account{}, ErrUnavailable
 	}
 	if e != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
@@ -993,7 +1005,8 @@ func (s *store) list(ctx context.Context) ([]Account, error) {
 // and the checks made after an intent is journaled read only what root
 // controls (a create's run before its user can act). Nor can a tenant's
 // running processes: delete ends them, and if userdel still refuses the
-// user, the delete ends rejected (README, Processes).
+// user, or ending them fails or runs out of its budget, the delete ends
+// rejected (README, Processes).
 func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 	if ctx == nil {
 		return nil, ErrInvalid

@@ -904,51 +904,122 @@ const userdelBusy = 8
 // started meanwhile: a fork that raced the signal, or a process root
 // started for the account. userdelTries bounds the same race between the
 // last pass and userdel.
+//
+// processBudget bounds all the process ending of one delete, every pass of
+// every try, on its own clock and well inside the delete's own limit: a
+// tenant with very many processes makes each /proc scan slow, and when the
+// budget runs out the user counts as busy, so the delete is put back and
+// ends rejected instead of running into that limit. putBackTimeout bounds
+// the put-back (usermod, then passwd and chage to check the account), on a
+// context of its own.
 const (
-	processPasses = 4
-	processWait   = 250 * time.Millisecond
-	processPoll   = 25 * time.Millisecond
-	killTimeout   = 5 * time.Second
-	userdelTries  = 3
+	processPasses  = 4
+	processWait    = 250 * time.Millisecond
+	processPoll    = 25 * time.Millisecond
+	killTimeout    = 5 * time.Second
+	userdelTries   = 3
+	processBudget  = 20 * time.Second
+	putBackTimeout = time.Minute
 )
 
 // removeUser removes the account's user once its processes have ended. An
 // active account is first expired and locked, as a suspend does, so no new
 // login or cron job starts for it while they end. userdel is tried a few
-// times, each after the processes were ended again. If it still refuses the
-// user as busy, the account gets back the expiry it had and the answer is
-// errAccountBusy: nothing changed.
+// times, each after the processes were ended again (userRemoval.run).
 func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
 	active := r.Account.State == "active"
-	if active {
-		if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "1970-01-02", "--lock", "--", r.Account.Username); e != nil {
+	return userRemoval{
+		lock: func(ctx context.Context) error {
+			if !active {
+				return nil
+			}
+			_, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "1970-01-02", "--lock", "--", r.Account.Username)
 			return e
-		}
+		},
+		end: func(ctx context.Context) error { return n.EndProcesses(ctx, r) },
+		userdel: func(ctx context.Context) (int, error) {
+			_, code, e := n.commandStatus(ctx, commandTimeout, "/usr/sbin/userdel", "--", r.Account.Username)
+			return code, e
+		},
+		putBack: func(ctx context.Context) error {
+			if active {
+				if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "", "--lock", "--", r.Account.Username); e != nil {
+					return e
+				}
+			}
+			return n.VerifyAccount(ctx, r)
+		},
+	}.run(ctx, processBudget)
+}
+
+// userRemoval is the steps of removeUser, kept apart so their order, the
+// budget and the put-back can be tested without root. lock expires and
+// locks an active account; end ends its processes; userdel answers
+// userdel's exit status; putBack undoes lock and checks the account is as
+// its record says.
+type userRemoval struct {
+	lock, end, putBack func(context.Context) error
+	userdel            func(context.Context) (int, error)
+}
+
+// run removes the user. Whatever stops it before userdel changed anything
+// takes one path: the user still busy after the last try, the budget for
+// ending processes spent, a /proc read or kill or the lock failing, the
+// caller's limit. putBack runs on a fresh, bounded context, since the
+// caller's may be what ran out, and the answer is errAccountBusy for a busy
+// user (the budget spent counts as busy) and errNothingRemoved otherwise:
+// the account is as it was. If the put-back fails, its error is the answer
+// and the delete stays pending. A userdel that exits other than 0 or 8, or
+// does not finish, leaves the user in a state nobody knows: its error is
+// the answer, and the delete stays pending too.
+func (u userRemoval) run(ctx context.Context, budget time.Duration) error {
+	stopped, e := u.remove(ctx, budget)
+	if stopped == nil {
+		return e
 	}
+	backCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), putBackTimeout)
+	defer cancel()
+	if e := u.putBack(backCtx); e != nil {
+		return e
+	}
+	if errors.Is(stopped, errAccountBusy) {
+		return errAccountBusy
+	}
+	return errNothingRemoved
+}
+
+// remove runs lock, then end and userdel up to userdelTries times. stopped
+// is why it stopped before userdel changed anything; otherwise err is
+// userdel's answer: nil when the user is gone.
+func (u userRemoval) remove(ctx context.Context, budget time.Duration) (stopped, err error) {
+	if e := u.lock(ctx); e != nil {
+		return e, nil
+	}
+	endCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	for try := 0; try < userdelTries; try++ {
-		if e := n.EndProcesses(ctx, r); e != nil && !errors.Is(e, errAccountBusy) {
-			return e
+		// Processes still there after the passes go on to userdel, which
+		// judges for itself.
+		if e := u.end(endCtx); e != nil && !errors.Is(e, errAccountBusy) {
+			if endCtx.Err() != nil && ctx.Err() == nil {
+				return errAccountBusy, nil
+			}
+			return e, nil
 		}
-		_, code, e := n.commandStatus(ctx, commandTimeout, "/usr/sbin/userdel", "--", r.Account.Username)
-		if e != nil {
-			return e
+		if ctx.Err() != nil {
+			return ErrUnavailable, nil
 		}
-		if code == 0 {
-			return nil
-		}
-		if code != userdelBusy {
-			return ErrUnavailable
+		code, e := u.userdel(ctx)
+		switch {
+		case e != nil:
+			return nil, e
+		case code == 0:
+			return nil, nil
+		case code != userdelBusy:
+			return nil, ErrUnavailable
 		}
 	}
-	if active {
-		if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "", "--lock", "--", r.Account.Username); e != nil {
-			return e
-		}
-		if e := n.VerifyAccount(ctx, r); e != nil {
-			return e
-		}
-	}
-	return errAccountBusy
+	return errAccountBusy, nil
 }
 
 // EndProcesses ends every process that runs as the account's user: an SFTP
@@ -1066,7 +1137,7 @@ func (n *linuxSystem) signalAs(ctx context.Context, cred *syscall.Credential) er
 func waitGone(ctx context.Context, uid uint32) (bool, error) {
 	deadline := time.Now().Add(processWait)
 	for {
-		running, e := accountRunning(uid)
+		running, e := accountRunning(ctx, uid)
 		if e != nil {
 			return false, e
 		}
@@ -1088,8 +1159,10 @@ func waitGone(ctx context.Context, uid uint32) (bool, error) {
 // or saved user ID, a zombie not yet reaped included. That is what userdel
 // looks for (shadow-utils user_busy), less the subordinate IDs and the
 // per-thread IDs it also reads; userdel stays the judge of those. A
-// process that ends while it is read is skipped.
-func accountRunning(uid uint32) (bool, error) {
+// process that ends while it is read is skipped. A scan of very many
+// processes is slow, so it stops with ErrUnavailable as soon as ctx is
+// done, between entries.
+func accountRunning(ctx context.Context, uid uint32) (bool, error) {
 	proc, e := os.Open("/proc")
 	if e != nil {
 		return false, ErrUnavailable
@@ -1098,6 +1171,9 @@ func accountRunning(uid uint32) (bool, error) {
 	for {
 		names, readErr := proc.Readdirnames(1024)
 		for _, name := range names {
+			if ctx.Err() != nil {
+				return false, ErrUnavailable
+			}
 			if !pidName(name) {
 				continue
 			}

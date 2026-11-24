@@ -112,9 +112,28 @@ export function parseNamed(v: unknown, limit = databaseNameLimit): string | unde
   return object(v) && validName(v.name, limit) ? v.name : undefined;
 }
 
+// Opening phpMyAdmin answers a one-time link to its sign-in script, on the
+// panel's own address. The link signs in once, within a minute; the
+// temporary database user behind it lasts until loginExpiresAt.
+export interface PhpMyAdminLink { url: string; linkExpiresAt: Date; loginExpiresAt: Date }
+const phpMyAdminLink = /^\/api\/v1\/phpmyadmin\/sifruno-signon\.php\?code=[A-Za-z0-9_-]{43}$/;
+const time = (v: unknown): Date | undefined => {
+  if (!text(v)) return undefined;
+  const date = new Date(v);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+};
+
+export function parsePhpMyAdminLink(v: unknown): PhpMyAdminLink | undefined {
+  if (!object(v) || !text(v.url) || !phpMyAdminLink.test(v.url)) return undefined;
+  const linkExpiresAt = time(v.link_expires_at);
+  const loginExpiresAt = time(v.login_expires_at);
+  if (!linkExpiresAt || !loginExpiresAt) return undefined;
+  return { url: v.url, linkExpiresAt, loginExpiresAt };
+}
+
 // ---- Errors -----------------------------------------------------------------
 
-export type Operation = "list" | "createDatabase" | "createUser" | "setPassword" | "deleteDatabase" | "deleteUser";
+export type Operation = "list" | "createDatabase" | "createUser" | "setPassword" | "deleteDatabase" | "deleteUser" | "openPhpMyAdmin";
 
 export const whatFailed: Record<Operation, string> = {
   list: "The databases could not be loaded.",
@@ -123,6 +142,7 @@ export const whatFailed: Record<Operation, string> = {
   setPassword: "The password was not changed.",
   deleteDatabase: "The database was not deleted.",
   deleteUser: "The database user was not deleted.",
+  openPhpMyAdmin: "phpMyAdmin did not open.",
 };
 
 // message is what happened; why and next are shown under it; technical goes
@@ -153,6 +173,13 @@ function serverTechnical(problem: ObjectValue): string {
 
 function explain(operation: Operation, status: number, detail: string): { why: string; next: string } {
   const versions = "Reload the page and try again. If it happens again, the panel and the server may be different versions.";
+  if (operation === "openPhpMyAdmin") {
+    switch (status) {
+      case 409: return { why: detail || "This website has no database yet.", next: "Create a database below, then choose Open phpMyAdmin again." };
+      case 503: return { why: detail || "phpMyAdmin or the database server is not available right now.", next: "If phpMyAdmin is not set up, run Sifruno's installer (install.sh) on the server again. Otherwise check the database server, then try again." };
+      case 502: return { why: detail || "The database server refused to make phpMyAdmin's temporary user.", next: "Try again. If it keeps failing, check the database server's log." };
+    }
+  }
   switch (status) {
     case 400: return { why: detail || "The server could not read the request.", next: versions };
     case 401: return { why: "Your sign-in has ended.", next: operation === "list" ? "Sign in again to see the databases." : "Sign in again, then try again." };
@@ -170,7 +197,7 @@ function explain(operation: Operation, status: number, detail: string): { why: s
 }
 
 const unexpected = (operation: Operation, where: string) =>
-  new DatabasesApiError(0, whatFailed[operation], "The server's answer was not in the form the panel expects.", operation === "list" ? "Reload the page. If it happens again, the panel and the server may be different versions." : "Refresh the list to see whether the change was made before you try again.", `${where}: response did not match the databases contract`);
+  new DatabasesApiError(0, whatFailed[operation], "The server's answer was not in the form the panel expects.", operation === "list" || operation === "openPhpMyAdmin" ? "Reload the page and try again. If it happens again, the panel and the server may be different versions." : "Refresh the list to see whether the change was made before you try again.", `${where}: response did not match the databases contract`);
 
 const notSent = (operation: Operation, why: string, technical: string) =>
   new DatabasesApiError(422, whatFailed[operation], why, "Fix the marked field, then try again.", `not sent: ${technical}`);
@@ -209,7 +236,8 @@ async function request(operation: Operation, url: string, options: RequestOption
     } catch {
       const seconds = Math.round(options.timeoutMs / 1000);
       if (timedOut) {
-        const written = method === "POST" && Boolean(options.csrf);
+        // Opening phpMyAdmin changes nothing the page shows.
+        const written = method === "POST" && Boolean(options.csrf) && operation !== "openPhpMyAdmin";
         throw new DatabasesApiError(0, written ? "The panel could not confirm the change." : whatFailed[operation], `The server did not answer within ${seconds} seconds.`, written ? "Refresh the list to see whether the change was made before you try again." : "Try again. If it keeps happening, check the server's load.", `${where}: no answer within ${seconds} s`);
       }
       const cancelled = Boolean(options.signal?.aborted);
@@ -308,4 +336,16 @@ export async function deleteDatabaseUser(accountId: string, user: string, typed:
   const problem = checkConfirmName(user, typed);
   if (problem) throw notSent("deleteUser", problem, "the typed name does not match");
   return change("deleteUser", `${base(accountId)}/users/${user}/delete`, { confirm_name: typed }, user, databaseUserLimit, options.signal);
+}
+
+// One click: a temporary database user for this website's databases and a
+// one-time link that opens phpMyAdmin signed in as it. The server picks the
+// databases; nothing in the request names them.
+export async function openPhpMyAdmin(accountId: string, options: { signal?: AbortSignal } = {}): Promise<PhpMyAdminLink> {
+  if (!validAccountId(accountId)) throw notAWebsite("openPhpMyAdmin");
+  const url = `${base(accountId)}/phpmyadmin`;
+  const csrf = await csrfToken("openPhpMyAdmin", options.signal);
+  const link = parsePhpMyAdminLink(await request("openPhpMyAdmin", url, { method: "POST", body: {}, csrf, timeoutMs: writeTimeoutMs, signal: options.signal }));
+  if (!link) throw unexpected("openPhpMyAdmin", `POST ${url}`);
+  return link;
 }

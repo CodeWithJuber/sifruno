@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
-import { ArrowLeft, CircleAlert, CircleCheck, Database, Eye, EyeOff, KeyRound, Plus, RefreshCw, Trash2, TriangleAlert, UserRound } from "lucide-react";
+import { CircleAlert, CircleCheck, Database, ExternalLink, Eye, EyeOff, KeyRound, Plus, RefreshCw, Trash2, TriangleAlert, UserRound } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -13,8 +12,8 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { checkConfirmName, checkDatabaseChoice, checkPassword, checkSuffix, createDatabaseUser, createSiteDatabase, databaseHost, DatabasesApiError, databasesFor, deleteDatabaseUser, deleteSiteDatabase, fullName, listSiteDatabases, setDatabaseUserPassword, suffixLimit, usedByWordPress } from "@/lib/databases-api";
-import type { NameKind, SiteDatabase, SiteDatabases as DatabaseList } from "@/lib/databases-api";
+import { checkConfirmName, checkDatabaseChoice, checkPassword, checkSuffix, createDatabaseUser, createSiteDatabase, databaseHost, DatabasesApiError, databasesFor, deleteDatabaseUser, deleteSiteDatabase, fullName, listSiteDatabases, openPhpMyAdmin, setDatabaseUserPassword, suffixLimit, usedByWordPress } from "@/lib/databases-api";
+import type { NameKind, PhpMyAdminLink, SiteDatabase, SiteDatabases as DatabaseList } from "@/lib/databases-api";
 import { getWebsite, WebsitesApiError } from "@/lib/websites-api";
 import type { Website } from "@/lib/websites-api";
 import { useShell } from "@/shell/context";
@@ -431,6 +430,75 @@ function DeleteForm({ accountId, target, onBusy, onDeleted, onCancel }: { accoun
   </form>;
 }
 
+// ---- phpMyAdmin -------------------------------------------------------------------
+
+// One click opens phpMyAdmin signed in to this website's databases. The tab
+// opens during the click, so a popup blocker lets it through, and gets its
+// address when the panel answers; it loses its opener first. If the browser
+// opened no tab, the one-time link is offered instead: it signs in once,
+// within a minute.
+function OpenPhpMyAdmin({ accountId, hasDatabases, announcer }: { accountId: string; hasDatabases: boolean; announcer: Announcer }) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<Problem>();
+  const [blocked, setBlocked] = useState<PhpMyAdminLink>();
+  const hintId = "open-phpmyadmin-hint";
+
+  const open = async () => {
+    if (busy || !hasDatabases) return;
+    setBusy(true);
+    setProblem(undefined);
+    setBlocked(undefined);
+    const tab = window.open("", "_blank");
+    if (tab) {
+      tab.opener = null;
+      try {
+        tab.document.title = "Opening phpMyAdmin…";
+        tab.document.body.textContent = "Opening phpMyAdmin…";
+      } catch {
+        // The person closed the tab at once; it is checked again below.
+        tab.blur();
+      }
+    }
+    try {
+      const link = await openPhpMyAdmin(accountId);
+      if (tab && !tab.closed) {
+        tab.location.replace(link.url);
+        announcer.say("phpmyadmin", "phpMyAdmin opened in a new tab.", 500);
+      } else {
+        setBlocked(link);
+      }
+    } catch (error) {
+      tab?.close();
+      setProblem(problemFrom(error, "phpMyAdmin did not open."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="flex flex-col gap-2" data-testid="phpmyadmin">
+    <div>
+      <Button type="button" variant="outline" className={`${control} px-4 aria-disabled:opacity-70`} disabled={busy || !hasDatabases} focusableWhenDisabled aria-describedby={hintId} onClick={() => void open()} data-testid="open-phpmyadmin">
+        <ExternalLink className="rtl:-scale-x-100" aria-hidden="true" />{busy ? "Opening phpMyAdmin…" : "Open phpMyAdmin"}<span className="sr-only"> (opens in a new tab)</span>
+      </Button>
+    </div>
+    <div id={hintId} className="text-sm text-muted-foreground" data-testid="open-phpmyadmin-hint">
+      {hasDatabases ? "Opens in a new tab, signed in to this website's databases only. It works while you are signed in to the panel, for up to an hour."
+        : "Create a database first: phpMyAdmin shows this website's databases only."}
+    </div>
+    {blocked && <Alert role={undefined} className="text-start" data-testid="phpmyadmin-blocked">
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>Your browser did not open a new tab.</AlertTitle>
+      <AlertDescription className="flex flex-col gap-2 text-start text-foreground">
+        <div>It may block new tabs from this page. This link signs in to phpMyAdmin once, within a minute.</div>
+        <a href={blocked.url} target="_blank" rel="noopener noreferrer" className={linkButton("default", "w-fit px-4")} onClick={() => setBlocked(undefined)} data-testid="phpmyadmin-link">
+          <ExternalLink className="rtl:-scale-x-100" aria-hidden="true" />Open phpMyAdmin<span className="sr-only"> (opens in a new tab)</span>
+        </a>
+      </AlertDescription>
+    </Alert>}
+    {problem && <ProblemAlert problem={problem} testId="phpmyadmin-problem" />}
+  </div>;
+}
+
 // ---- The page -------------------------------------------------------------------
 
 interface PageData { site: Website; list: DatabaseList }
@@ -548,6 +616,7 @@ export function SiteDatabases({ accountId }: { accountId: string }) {
         <h2 ref={headingRef} tabIndex={-1} className="wrap-anywhere outline-none" data-testid="databases-heading">Databases for {site.domain}</h2>
         <p className="text-sm">Each database belongs to this website. An app connects with the host, a database name, a user name and that user's password.</p>
       </div>
+      <OpenPhpMyAdmin accountId={accountId} hasDatabases={list.databases.length > 0} announcer={announcer} />
       {notice && <Alert role={undefined} className="text-start" data-testid="databases-notice">
         <CircleCheck className="text-primary" aria-hidden="true" />
         <AlertTitle>{notice}</AlertTitle>

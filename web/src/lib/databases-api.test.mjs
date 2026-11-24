@@ -230,3 +230,51 @@ test("an ended session, a lost connection and a cancelled request are told apart
     await assert.rejects(api.listSiteDatabases(accountId, { signal: controller.signal }), (error) => error.status === 0 && error.why === "The request was cancelled.");
   });
 });
+
+test("Open phpMyAdmin posts an empty object with the session token and takes only a sign-in link on the panel", async () => {
+  const link = `/api/v1/phpmyadmin/sifruno-signon.php?code=${"C".repeat(43)}`;
+  const answer = { $schema: "x", url: link, link_expires_at: "2026-11-24T10:01:00Z", login_expires_at: "2026-11-24T11:00:00Z" };
+  const { calls, mock } = server(() => json(answer, 201));
+  await withFetch(mock, async () => {
+    const opened = await api.openPhpMyAdmin(accountId);
+    assert.equal(opened.url, link);
+    assert.equal(opened.linkExpiresAt.toISOString(), "2026-11-24T10:01:00.000Z");
+    assert.equal(opened.loginExpiresAt.toISOString(), "2026-11-24T11:00:00.000Z");
+  });
+  assert.deepEqual(calls.map((call) => [call.method, call.url, call.body]), [["POST", `${base}/phpmyadmin`, {}]]);
+  assert.equal(calls[0].headers["X-CSRF-Token"], session.csrf_token);
+
+  // A link anywhere else, or without its code, is never opened.
+  for (const url of [`https://evil.example${link}`, "//evil.example/x", "/api/v1/phpmyadmin/index.php", `${link}&next=//evil.example`, "javascript:alert(1)", `/api/v1/phpmyadmin/sifruno-signon.php?code=${"C".repeat(42)}`]) {
+    assert.equal(api.parsePhpMyAdminLink({ ...answer, url }), undefined, url);
+  }
+  assert.equal(api.parsePhpMyAdminLink({ ...answer, login_expires_at: "soon" }), undefined);
+  await withFetch(server(() => json({ ...answer, url: "https://evil.example/" }, 201)).mock, async () => {
+    await assert.rejects(api.openPhpMyAdmin(accountId), (error) => error.status === 0 && error.message === "phpMyAdmin did not open." && /Reload the page/.test(error.next));
+  });
+  let requests = 0;
+  await withFetch(async () => { requests += 1; return json(session); }, async () => {
+    await assert.rejects(api.openPhpMyAdmin("not-an-id"), (error) => error.status === 404 && /nothing was sent/.test(error.technical));
+  });
+  assert.equal(requests, 0);
+});
+
+test("a phpMyAdmin that does not open says what happened, why and what to do", async () => {
+  const cases = [
+    [problem(409, "This website has no database yet, so phpMyAdmin would have nothing to show. Create a database first."), /no database yet/, /Create a database below/],
+    [problem(503, "phpMyAdmin is not set up on this server. Run Sifruno's installer (install.sh) again to add it."), /not set up/, /install\.sh/],
+    [problem(429, "Too many phpMyAdmin sign-ins are open on this server."), /Too many/, /Wait a minute/],
+    [problem(502, "The database server refused to make phpMyAdmin's temporary user. Open Technical details to see why.", [{ message: "ERROR 1045 (28000): Access denied" }]), /temporary user/, /database server's log/],
+    [problem(403, "An API token cannot use this part of the panel API."), /API token/, /Reload the page/],
+  ];
+  for (const [response, why, next] of cases) {
+    await withFetch(server(() => response.clone()).mock, async () => {
+      await assert.rejects(api.openPhpMyAdmin(accountId), (error) => {
+        assert.ok(error instanceof api.DatabasesApiError);
+        assert.equal(error.message, "phpMyAdmin did not open.");
+        assert.match(error.why, why); assert.match(error.next, next);
+        return true;
+      });
+    });
+  }
+});

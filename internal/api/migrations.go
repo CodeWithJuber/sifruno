@@ -27,6 +27,7 @@ const (
 )
 
 var (
+	migrationStalePath  = regexp.MustCompile(`^/api/v1/websites/migrations/stale-keys/[a-f0-9]{32}/cleared$`)
 	migrationSourcePath = regexp.MustCompile(`^/api/v1/websites/migrations/sources/[a-f0-9]{32}/(host-key|cancel)$`)
 	migrationJobPath    = regexp.MustCompile(`^/api/v1/websites/migrations/[a-f0-9]{32}/(verify|accept|ready)$`)
 	migrationReadPath   = regexp.MustCompile(`^/api/v1/websites/migrations/sources/[a-f0-9]{32}/accounts$`)
@@ -39,6 +40,9 @@ func migrationRoute(p string) string {
 		return "migration-source"
 	case "/api/v1/websites/migrations":
 		return "migration"
+	}
+	if migrationStalePath.MatchString(p) {
+		return "migration-stale-cleared"
 	}
 	if m := migrationSourcePath.FindStringSubmatch(p); m != nil {
 		return "migration-" + m[1]
@@ -114,6 +118,28 @@ type migrationAccountsOutput struct {
 type migrationCancelOutput struct {
 	Body hostaccounts.MigrationFinishResult
 }
+
+// StaleKey is a migration key line that may still be in root's
+// authorized_keys on an old server: the broker could not prove it removed.
+type StaleKey struct {
+	ID     string    `json:"id"`
+	Host   string    `json:"host"`
+	Port   int       `json:"port"`
+	Line   string    `json:"line" doc:"The line ends with this text."`
+	Detail string    `json:"detail"`
+	Since  time.Time `json:"since"`
+}
+type staleKeysOutput struct {
+	Body struct {
+		Keys []StaleKey `json:"keys"`
+	}
+}
+type staleClearedOutput struct {
+	Body struct {
+		Cleared string `json:"cleared"`
+	}
+}
+
 type migrationStartInput struct {
 	Body struct {
 		Source   string `json:"source" pattern:"^[a-f0-9]{32}$" doc:"The old server's migration ID."`
@@ -246,6 +272,37 @@ func registerMigrations(a huma.API, o Options) {
 			return nil, migrationBrokerError(err)
 		}
 		return &migrationCancelOutput{Body: res}, nil
+	})
+	huma.Register(a, op("list-stale-migration-keys", http.MethodGet, "/api/v1/websites/migrations/stale-keys", http.StatusOK), func(ctx context.Context, _ *struct{}) (*staleKeysOutput, error) {
+		b, err := broker()
+		if err != nil {
+			return nil, err
+		}
+		items, err := b.StaleMigrationKeys(ctx)
+		if err != nil {
+			return nil, migrationBrokerError(err)
+		}
+		out := &staleKeysOutput{}
+		out.Body.Keys = make([]StaleKey, 0, len(items))
+		for _, k := range items {
+			out.Body.Keys = append(out.Body.Keys, StaleKey{ID: k.ID, Host: k.Host, Port: k.Port, Line: k.Comment, Detail: k.Detail, Since: k.At})
+		}
+		return out, nil
+	})
+	huma.Register(a, op("clear-stale-migration-key", http.MethodPost, "/api/v1/websites/migrations/stale-keys/{id}/cleared", http.StatusOK), func(ctx context.Context, in *migrationEmptyInput) (*staleClearedOutput, error) {
+		b, err := broker()
+		if err != nil {
+			return nil, err
+		}
+		if err = b.ClearStaleMigrationKey(ctx, in.ID, hostaccounts.MigrationFinishInput{Reason: "The admin removed the key line by hand"}, siteActor(ctx)); err != nil {
+			if errors.Is(err, hostaccounts.ErrNotFound) {
+				return nil, huma.Error404NotFound("That key line is not listed any more.")
+			}
+			return nil, migrationBrokerError(err)
+		}
+		out := &staleClearedOutput{}
+		out.Body.Cleared = in.ID
+		return out, nil
 	})
 	huma.Register(a, op("start-migration", http.MethodPost, "/api/v1/websites/migrations", http.StatusAccepted), func(ctx context.Context, in *migrationStartInput) (*websiteJobOutput, error) {
 		if _, err := broker(); err != nil {

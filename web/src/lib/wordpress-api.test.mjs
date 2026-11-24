@@ -426,6 +426,19 @@ test("opening a source posts only host and port and trusts only a source with it
   });
 });
 
+test("stale key lines are read only with the line they name, and cleared with the session", async () => {
+  const key = { id: sourceId, host: "old.example.test", port: 22, line: `sifruno-migration-${sourceId}`, detail: "Remove the line.", since: "2026-11-24T10:00:00Z" };
+  assert.deepEqual(migrations.parseStaleKeys({ keys: [key] }), [key]);
+  assert.equal(migrations.parseStaleKeys({ keys: [{ ...key, line: "sifruno-migration-" + "d".repeat(32) }] }), undefined);
+  const posts = [];
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    posts.push({ url, method: options.method, csrf: options.headers["X-CSRF-Token"] });
+    return json({ cleared: sourceId });
+  }, async () => { await migrations.clearStaleKey(sourceId); });
+  assert.deepEqual(posts, [{ url: `/api/v1/websites/migrations/stale-keys/${sourceId}/cleared`, method: "POST", csrf: "fixture-csrf" }]);
+});
+
 test("accepting red lines sends the trimmed reason and expects the move back", async () => {
   const posts = [];
   await withFetch(async (url, options) => {

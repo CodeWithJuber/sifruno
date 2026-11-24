@@ -32,6 +32,20 @@ const text = (v: unknown, max = 4096): v is string => typeof v === "string" && v
 const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 const sourceId = (v: unknown): v is string => text(v) && /^[a-f0-9]{32}$/.test(v);
 
+// A key line a migration could not prove removed from an old server: the
+// line ending in `line` is in root's authorized_keys on host, maybe.
+export interface StaleKey { id: string; host: string; port: number; line: string; detail: string; since: string }
+
+export function parseStaleKeys(v: unknown): StaleKey[] | undefined {
+  if (!object(v) || !Array.isArray(v.keys) || v.keys.length > 256) return undefined;
+  const out: StaleKey[] = [];
+  for (const k of v.keys) {
+    if (!object(k) || !sourceId(k.id) || !text(k.host, 253) || !count(k.port) || !text(k.line, 64) || k.line !== `sifruno-migration-${k.id}` || !text(k.detail, 1100) || !text(k.since, 40)) return undefined;
+    out.push({ id: k.id, host: k.host, port: k.port, line: k.line, detail: k.detail, since: k.since });
+  }
+  return out;
+}
+
 export function parseSource(v: unknown): MigrationSource | undefined {
   const s = object(v) ? v.source : undefined;
   if (!object(s) || !sourceId(s.id) || !text(s.host, 253) || !count(s.port) || !text(s.key_line) || !text(s.install_command) || !text(s.pinned_fingerprint, 80) || !text(s.expires_at, 40)) return undefined;
@@ -119,6 +133,22 @@ export async function cancelSource(id: string, options: { signal?: AbortSignal }
   const value = await request("create", url, { method: "POST", body: {}, csrf, timeoutMs: slowMs, signal: options.signal, what });
   if (!object(value) || typeof value.removed_from_source !== "boolean" || !text(value.detail)) throw unexpected(what, `POST ${url}`);
   return { removed_from_source: value.removed_from_source, detail: value.detail };
+}
+
+export async function listStaleKeys(options: { signal?: AbortSignal } = {}): Promise<StaleKey[]> {
+  const what = "The key lines left on old servers could not be listed.";
+  const url = `${base}/stale-keys`;
+  const keys = parseStaleKeys(await request("read", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
+  if (!keys) throw unexpected(what, `GET ${url}`);
+  return keys;
+}
+
+export async function clearStaleKey(id: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+  const what = "The key line was not taken off the list.";
+  const csrf = await csrfToken(options.signal);
+  const url = `${base}/stale-keys/${id}/cleared`;
+  const value = await request("create", url, { method: "POST", body: {}, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what });
+  if (!object(value) || value.cleared !== id) throw unexpected(what, `POST ${url}`);
 }
 
 async function jobChange(what: string, url: string, body: unknown, signal?: AbortSignal): Promise<WebsiteJob> {

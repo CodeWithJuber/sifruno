@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"sifruno/internal/cpsource"
 	"sifruno/internal/hostaccounts"
@@ -195,6 +196,24 @@ func TestMoveAWebsiteHereRefusesAPITokens(t *testing.T) {
 	// The website jobs a token may read are unchanged.
 	if w := clientRequest(f.handler, false, "GET", "/api/v1/websites/jobs", created.Token, nil); w.Code != 200 {
 		t.Fatalf("jobs with a token: %d", w.Code)
+	}
+}
+
+// Key lines a migration could not prove removed are listed with their
+// server, and dropped once the admin says they removed them.
+func TestStaleMigrationKeys(t *testing.T) {
+	f, _, spy := migrationFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	spy.stale = []hostaccounts.StaleMigrationKey{{ID: testSourceID, Host: "old.example.test", Port: 22, Comment: "sifruno-migration-" + testSourceID, Detail: "Remove the line ending in sifruno-migration-" + testSourceID + " from /root/.ssh/authorized_keys on old.example.test (SSH port 22).", At: time.Now().UTC()}}
+	w := websiteRequest(f.handler, "GET", "/api/v1/websites/migrations/stale-keys", nil, cookie, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"host":"old.example.test"`) || !strings.Contains(w.Body.String(), `"line":"sifruno-migration-`+testSourceID+`"`) {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/migrations/stale-keys/"+testSourceID+"/cleared", map[string]any{}, cookie, ""); w.Code != 403 {
+		t.Fatalf("without CSRF: %d", w.Code)
+	}
+	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/migrations/stale-keys/"+testSourceID+"/cleared", map[string]any{}, cookie, csrf); w.Code != 200 || len(spy.cleared) != 1 {
+		t.Fatalf("cleared: %d %s", w.Code, w.Body.String())
 	}
 }
 

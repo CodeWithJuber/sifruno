@@ -190,6 +190,9 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/websites/migrations/{id}/verify":           adminOnly,
 	"POST /api/v1/websites/migrations/{id}/accept":           adminOnly,
 	"POST /api/v1/websites/migrations/{id}/ready":            adminOnly,
+	// Key lines a migration could not prove removed from an old server.
+	"GET /api/v1/websites/migrations/stale-keys":               adminOnly,
+	"POST /api/v1/websites/migrations/stale-keys/{id}/cleared": adminOnly,
 
 	// The WHM compatibility transport and cPanel paths.
 	"/json-api/":         adminOnly,

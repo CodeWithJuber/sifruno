@@ -660,19 +660,31 @@ func (j *run) removeKey() {
 	j.begin(i)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	res, err := j.migration.options.Broker.FinishMigration(ctx, j.job.Migration.Source, hostaccounts.MigrationFinishInput{Reason: migrateReason}, j.actor)
+	m := j.job.Migration
+	// Only a removal the old server proved is reported as one; anything
+	// else names the line to remove and the server.
+	manual := "Remove the line ending in sifruno-migration-" + m.Source + " from /root/.ssh/authorized_keys on " + m.SourceHost + "."
+	res, err := j.migration.options.Broker.FinishMigration(ctx, m.Source, hostaccounts.MigrationFinishInput{Reason: migrateReason}, j.actor)
+	var message string
 	switch {
 	case errors.Is(err, hostaccounts.ErrNotFound):
-		j.end(i, StepDone, "The migration's key was already gone from this server.")
+		message = "The account service no longer knows this migration, so the panel cannot tell whether the old server still has its key line. " + manual
+		j.end(i, StepFailed, message)
 	case err != nil:
-		j.end(i, StepFailed, "The account service did not remove the migration key; it expires 24 hours after you connected. "+j.technical(err))
+		message = "The account service did not answer, so the key was not removed. It ends the migration 24 hours after you connected and removes the line then, or lists it for you to remove. " + manual
+		j.end(i, StepFailed, message+" "+j.technical(err))
 	case res.RemovedFromSource:
-		j.job.Migration.KeyRemoved = true
-		j.end(i, StepDone, "The old server no longer accepts the migration key, and this server deleted it.")
+		m.KeyRemoved = true
+		message = "The old server no longer accepts the migration key, and this server deleted it."
+		j.end(i, StepDone, message)
 	default:
-		j.end(i, StepFailed, "This server deleted the migration key, but the old server may still list it. "+clip(res.Detail))
+		message = "This server deleted the migration key, but the old server was not shown to refuse it. " + clip(res.Detail)
+		if !strings.Contains(res.Detail, "sifruno-migration-"+m.Source) {
+			message += " " + manual
+		}
+		j.end(i, StepFailed, message)
 	}
-	j.activity(j.actor, "The migration key was removed.")
+	j.activity(j.actor, message)
 }
 
 func (j *run) activity(actor, what string) {

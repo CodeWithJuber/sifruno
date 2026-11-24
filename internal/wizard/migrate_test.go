@@ -37,6 +37,8 @@ type fakeMigrationBroker struct {
 	cron      []hostaccounts.CronJob
 	accounts  *fakeAccounts
 	removedOK bool
+	finishErr error
+	detail    string
 }
 
 func (f *fakeMigrationBroker) GetMigration(_ context.Context, id string) (hostaccounts.Migration, error) {
@@ -73,7 +75,7 @@ func (f *fakeMigrationBroker) FinishMigration(context.Context, string, hostaccou
 	f.mu.Lock()
 	f.finished++
 	f.mu.Unlock()
-	return hostaccounts.MigrationFinishResult{RemovedFromSource: f.removedOK}, nil
+	return hostaccounts.MigrationFinishResult{RemovedFromSource: f.removedOK, Detail: f.detail}, f.finishErr
 }
 func (f *fakeMigrationBroker) SetCron(_ context.Context, id string, in hostaccounts.CronInput, _ string) (hostaccounts.CronResult, error) {
 	f.order.add(fmt.Sprintf("cron %s %d", id[28:], len(in.Jobs)))
@@ -312,6 +314,34 @@ func TestDeletingAMovedSiteTakesItsDatabases(t *testing.T) {
 		if !slices.Contains(got.Removed, want) {
 			t.Fatalf("removed %q", got.Removed)
 		}
+	}
+}
+
+// The key step reports a removal only when the old server proved it; any
+// other answer names the line and the server, in the step and the
+// activity log alike.
+func TestKeyStepNeverClaimsARemovalItDidNotSee(t *testing.T) {
+	line := "sifruno-migration-" + sourceID + " from /root/.ssh/authorized_keys on old.example.test"
+	for name, setup := range map[string]func(*fakeMigrationBroker){
+		"refused": func(b *fakeMigrationBroker) {
+			b.removedOK, b.detail = false, "The old server did not remove the key: sed: Permission denied."
+		},
+		"not found": func(b *fakeMigrationBroker) { b.removedOK, b.finishErr = false, hostaccounts.ErrNotFound },
+		"no answer": func(b *fakeMigrationBroker) { b.removedOK, b.finishErr = false, hostaccounts.ErrUnavailable },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMigrationFixture(t)
+			setup(f.broker)
+			job := f.migrate(t)
+			key := job.Steps[len(job.Steps)-1]
+			last := job.Migration.Activity[len(job.Migration.Activity)-1].What
+			if key.State != StepFailed || !strings.Contains(key.Message, line) || job.Migration.KeyRemoved || !strings.Contains(last, line) {
+				t.Fatalf("key step %+v, activity %q", key, last)
+			}
+			if strings.Contains(strings.ToLower(last), "was removed") {
+				t.Fatalf("the activity log claims a removal: %q", last)
+			}
+		})
 	}
 }
 

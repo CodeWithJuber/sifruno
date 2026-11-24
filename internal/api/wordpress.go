@@ -80,13 +80,14 @@ var wizardFields = map[string][]wizardField{
 	"redirect-add":    {{name: "from"}, {name: "to"}, {name: "status", whole: true}, {name: "expected_revision", whole: true}},
 	"redirect-remove": {{name: "from"}, {name: "expected_revision", whole: true}},
 	// Move a website here (migrations.go).
-	"migration-source":   {{name: "host"}, {name: "port", whole: true}},
-	"migration-host-key": {{name: "fingerprint"}},
-	"migration-cancel":   {},
-	"migration":          {{name: "source"}, {name: "username"}},
-	"migration-verify":   {},
-	"migration-accept":   {{name: "reason"}},
-	"migration-ready":    {},
+	"migration-source":        {{name: "host"}, {name: "port", whole: true}},
+	"migration-host-key":      {{name: "fingerprint"}},
+	"migration-cancel":        {},
+	"migration-stale-cleared": {},
+	"migration":               {{name: "source"}, {name: "username"}},
+	"migration-verify":        {},
+	"migration-accept":        {{name: "reason"}},
+	"migration-ready":         {},
 }
 
 var wholeNumber = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)

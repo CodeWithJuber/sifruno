@@ -13,8 +13,8 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateLabel } from "@/lib/api";
-import { acceptMigration, cancelSource, checkAcceptReason, checkSourceHost, checkSourcePort, confirmFingerprint, getMigrationJob, listSourceAccounts, openSource, readyMigration, startMigration, verifyMigration } from "@/lib/migration-api";
-import type { MigrationSource, SourceAccount } from "@/lib/migration-api";
+import { acceptMigration, cancelSource, checkAcceptReason, checkSourceHost, checkSourcePort, clearStaleKey, confirmFingerprint, getMigrationJob, listSourceAccounts, listStaleKeys, openSource, readyMigration, startMigration, verifyMigration } from "@/lib/migration-api";
+import type { MigrationSource, SourceAccount, StaleKey } from "@/lib/migration-api";
 import { hostsLine } from "@/lib/migration-record";
 import type { MigrationRecord } from "@/lib/migration-record";
 import { jobProgress, validJobId } from "@/lib/wordpress-api";
@@ -71,6 +71,39 @@ function CopyBlock({ id, label, value }: { id: string; label: string; value: str
     </div>
     <pre id={id} tabIndex={0} aria-labelledby={`${id}-label`} className="overflow-x-auto rounded-md border border-border bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all">{value}</pre>
   </div>;
+}
+
+// Key lines the panel could not prove removed from an old server: each
+// says which line to remove and where, until the admin says it is done.
+function StaleKeys() {
+  const [keys, setKeys] = useState<StaleKey[]>([]);
+  const [problem, setProblem] = useState<Problem>();
+  const [busy, setBusy] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    listStaleKeys({ signal: controller.signal }).then(setKeys, (error: unknown) => {
+      if (!controller.signal.aborted) setProblem(problemFrom(error, "The key lines left on old servers could not be listed."));
+    });
+    return () => controller.abort();
+  }, []);
+  const cleared = (id: string) => {
+    setBusy(id); setProblem(undefined);
+    clearStaleKey(id).then(() => setKeys((list) => list.filter((k) => k.id !== id)), (error: unknown) => setProblem(problemFrom(error, "The key line was not taken off the list."))).finally(() => setBusy(""));
+  };
+  if (!keys.length && !problem) return null;
+  return <Alert className="text-start" data-testid="move-stale-keys">
+    <CircleAlert aria-hidden="true" />
+    <AlertTitle>Remove {keys.length === 1 ? "a migration key line" : `${keys.length} migration key lines`} from old servers</AlertTitle>
+    <AlertDescription className="flex flex-col gap-3 text-start text-foreground">
+      <p>Sifruno could not confirm that these old servers removed the key it used. On each server, delete the line from <code>/root/.ssh/authorized_keys</code>, then mark it done here.</p>
+      {problem && <Explanation problem={problem} />}
+      <ul role="list" className="flex flex-col gap-2">{keys.map((k) => <li key={k.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3" data-testid={`stale-${k.id}`}>
+        <span className="min-w-0 break-all text-sm"><span className="font-medium">{k.host}</span> (SSH port {k.port}): the line ending in <code>{k.line}</code>
+          <span className="block text-xs text-muted-foreground">Since {dateLabel(k.since)}. {k.detail}</span></span>
+        <Button size="sm" variant="outline" disabled={busy === k.id} onClick={() => cleared(k.id)}>I removed it</Button>
+      </li>)}</ul>
+    </AlertDescription>
+  </Alert>;
 }
 
 // ---- Connect, confirm, choose -------------------------------------------------
@@ -137,6 +170,7 @@ export function MoveWebsite() {
   const heading = (children: ReactNode) => <h2 ref={headingRef} tabIndex={-1} className="outline-none">{children}</h2>;
 
   return <div className="flex w-full max-w-3xl flex-col gap-5" data-testid="move-website" data-stage={stage}>
+    <StaleKeys />
     {ended && <Alert role="status" className="text-start"><CircleCheck aria-hidden="true" /><AlertTitle>{ended}</AlertTitle></Alert>}
     {stage === "connect" && <section className={`${panel} flex flex-col gap-5`}>
       <div className="flex flex-col gap-1">

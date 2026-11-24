@@ -10,6 +10,24 @@ import (
 
 const signonName = "SifrunoPMA_0123456789abcdef0123"
 
+// signonPrivileges is the grant's privilege list, spelled out: what a
+// temporary user can do, and that it can make nothing that records it as
+// DEFINER.
+const signonPrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, SHOW VIEW"
+
+func TestSignonPrivilegesMakeNothingWithADefiner(t *testing.T) {
+	for _, p := range SignonPrivileges {
+		if !AllowedPrivileges[p] {
+			t.Fatalf("%s is not in the account privilege whitelist", p)
+		}
+		for _, definer := range []string{"ALL PRIVILEGES", "TRIGGER", "CREATE VIEW", "CREATE ROUTINE", "ALTER ROUTINE", "EVENT"} {
+			if p == definer {
+				t.Fatalf("a temporary user gets %s", p)
+			}
+		}
+	}
+}
+
 func TestSignonUserNames(t *testing.T) {
 	for _, name := range []string{signonName, "SifrunoPMA_ffffffffffffffffffff"} {
 		if !ValidSignonUser(name) {
@@ -46,8 +64,8 @@ func TestCreateSignonUserGrantsTheWebsitesDatabasesOnly(t *testing.T) {
 	want := []string{
 		sqlVersion,
 		"CREATE USER '" + signonName + "'@'localhost' IDENTIFIED BY 'pw\\'secret'",
-		"GRANT ALL PRIVILEGES ON `alpha\\_wp`.* TO '" + signonName + "'@'localhost';\n" +
-			"GRANT ALL PRIVILEGES ON `alpha\\_shop`.* TO '" + signonName + "'@'localhost'",
+		"GRANT " + signonPrivileges + " ON `alpha\\_wp`.* TO '" + signonName + "'@'localhost';\n" +
+			"GRANT " + signonPrivileges + " ON `alpha\\_shop`.* TO '" + signonName + "'@'localhost'",
 	}
 	if !slices.Equal(f.stmts, want) {
 		t.Fatalf("statements\n%q\nwant\n%q", f.stmts, want)
@@ -86,7 +104,7 @@ func TestCreateSignonUserUndoesAFailedGrant(t *testing.T) {
 	if err := svc.CreateDatabase(ctx, "alpha", "alpha_wp"); err != nil {
 		t.Fatal(err)
 	}
-	grant := "GRANT ALL PRIVILEGES ON `alpha\\_wp`.* TO '" + signonName + "'@'localhost'"
+	grant := "GRANT " + signonPrivileges + " ON `alpha\\_wp`.* TO '" + signonName + "'@'localhost'"
 	f.errs = map[string]error{grant: errors.New("ERROR 1044 (42000) at line 1: Access denied")}
 	f.stmts = nil
 	if err := svc.CreateSignonUser(ctx, "alpha", signonName, "pw", []string{"alpha_wp"}); err == nil {

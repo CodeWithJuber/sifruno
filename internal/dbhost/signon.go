@@ -10,7 +10,7 @@ import (
 
 // Temporary users for phpMyAdmin's one-click sign-in (internal/phpmyadmin).
 // Each has a random name with SignonUserPrefix, a random password the panel
-// never stores, and every privilege on one website's databases only. They are
+// never stores, and SignonPrivileges on one website's databases only. They are
 // not in the registry: no website lists them, no backup or account move
 // carries them, and the panel drops them when they expire.
 //
@@ -22,6 +22,15 @@ import (
 const SignonUserPrefix = "SifrunoPMA_"
 
 var signonUserPattern = regexp.MustCompile(`^SifrunoPMA_[a-f0-9]{20}$`)
+
+// SignonPrivileges are what a temporary user gets on each database: the
+// table and data privileges, without TRIGGER, CREATE VIEW, CREATE ROUTINE,
+// ALTER ROUTINE and EVENT. A trigger, view, routine or event records its
+// DEFINER, and once the sweeper drops the temporary user it would fail for
+// the site's own user (MariaDB error 1449). The site's own database user
+// makes those.
+var SignonPrivileges = []string{"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "REFERENCES", "INDEX", "ALTER",
+	"CREATE TEMPORARY TABLES", "LOCK TABLES", "EXECUTE", "SHOW VIEW"}
 
 // ValidSignonUser reports whether name is a temporary user's name: the
 // prefix and 20 lowercase hexadecimal characters.
@@ -39,7 +48,7 @@ func sqlEndSessions(user, host string) string {
 }
 
 // CreateSignonUser makes the temporary user name with password and grants it
-// every privilege on each of databases, all of which must be owner's in the
+// SignonPrivileges on each of databases, all of which must be owner's in the
 // registry. Each grant names its database exactly (grantDB escapes "_" and
 // "%"). A name already on the server is ErrExists and nothing changes. When a
 // grant fails, the user is dropped again before the error is returned.
@@ -75,7 +84,7 @@ func (s *LocalService) CreateSignonUser(ctx context.Context, owner, name, passwo
 	}
 	grants := make([]string, len(databases))
 	for i, db := range databases {
-		grants[i] = sqlGrant(db, name, s.host(), []string{"ALL PRIVILEGES"})
+		grants[i] = sqlGrant(db, name, s.host(), SignonPrivileges)
 	}
 	if _, err := s.Run.Run(ctx, strings.Join(grants, ";\n")); err != nil {
 		if dropErr := s.DropSignonUser(context.WithoutCancel(ctx), name); dropErr != nil {

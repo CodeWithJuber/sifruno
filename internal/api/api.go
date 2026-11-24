@@ -21,6 +21,7 @@ import (
 	"sifruno/internal/operator"
 	"sifruno/internal/platform"
 	"sifruno/internal/serverinfo"
+	"sifruno/internal/sitebackups"
 	"sifruno/internal/sites"
 	"sifruno/internal/trail"
 	"sifruno/internal/wizard"
@@ -50,6 +51,9 @@ type Options struct {
 	// Databases manages a site's databases and database users. Nil answers
 	// 503 on the /api/v1/websites/sites/{account_id}/databases routes.
 	Databases Databases
+	// Backups runs website backups through the broker. Nil answers 503 on
+	// the backup routes.
+	Backups *sitebackups.Manager
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -77,6 +81,7 @@ func New(o Options) http.Handler {
 	registerWizard(api, o)
 	registerWebsites(api, o)
 	registerSiteDatabases(api, o)
+	registerSiteBackups(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)
@@ -245,7 +250,7 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedSessionMutation(r)
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedBackupMutation(r) || allowedSessionMutation(r)
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -316,6 +321,9 @@ func New(o Options) http.Handler {
 				if allowedDatabaseMutation(r) {
 					prepare = prepareDatabaseJSON
 				}
+				if allowedBackupMutation(r) {
+					prepare = prepareBackupJSON
+				}
 				if !prepare(w, r) {
 					return
 				}
@@ -331,6 +339,9 @@ func New(o Options) http.Handler {
 			wait := 60 * time.Second
 			if mutation && websiteAction(r.URL.Path) != "" {
 				wait = websiteActionWait
+			}
+			if mutation && allowedBackupMutation(r) {
+				wait = backupWait(r)
 			}
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait))
 		}

@@ -31,6 +31,7 @@ import (
 	"sifruno/internal/panelcert"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
+	"sifruno/internal/sitebackups"
 	"sifruno/internal/sites"
 	"sifruno/internal/tlshost"
 	"sifruno/internal/trail"
@@ -250,6 +251,7 @@ func run() error {
 		}
 	}
 	var websiteJobs *wizard.Runner
+	var siteBackups *sitebackups.Manager
 	var certificates *acme.Manager
 	if *accountsSocket != "" && dbSvc != nil {
 		broker := hostaccounts.NewClient(*accountsSocket)
@@ -277,6 +279,16 @@ func run() error {
 			}
 		}
 		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress}, dbSvc, jobs, certs)
+		// Website backups: the broker runs restic; the panel schedules the
+		// nightly backups, the weekly prune and drill, and the jobs a person
+		// starts. Nothing runs until backup storage is set up.
+		backupBroker, okBackups := broker.(sitebackups.Broker)
+		if !okBackups {
+			return errors.New("the account broker client lacks the backup operations")
+		}
+		if siteBackups, err = sitebackups.Open(sitebackups.StatePath(dir), backupBroker, dbSvc); err != nil {
+			return err
+		}
 	}
 	var remoteServer *http.Server
 	var remoteListener net.Listener
@@ -320,7 +332,7 @@ func run() error {
 	if dbSvc != nil {
 		siteDatabases = dbSvc
 	}
-	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	if remoteServer != nil {
 		// The same API, behind operator.Remote: only the panel's host names,
 		// only TLS, and only admin sessions.
@@ -341,6 +353,11 @@ func run() error {
 		renewDone := make(chan struct{})
 		go func() { defer close(renewDone); certificates.Run(ctx) }()
 		defer func() { stop(); <-renewDone }()
+	}
+	if siteBackups != nil {
+		backupsDone := make(chan struct{})
+		go func() { defer close(backupsDone); siteBackups.Run(ctx) }()
+		defer func() { stop(); <-backupsDone }()
 	}
 	done := make(chan error, len(servers))
 	for i, running := range servers {

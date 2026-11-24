@@ -200,6 +200,9 @@ func renderVhost(v site) []byte {
 	}
 	renderCache(&b, v)
 	renderACMEChallenge(&b)
+	if !v.Suspended {
+		renderFolders(&b, v)
+	}
 
 	b.WriteString("\nrewrite  {\n")
 	kv(&b, "enable", "1")

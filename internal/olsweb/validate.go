@@ -247,6 +247,9 @@ func validateSite(field string, in Site, workers int) (site, error) {
 	if err := checkRedirects(field, in.Domains, in.Redirects); err != nil {
 		return site{}, err
 	}
+	if err := checkFolders(field, in.Name, in.Folders); err != nil {
+		return site{}, err
+	}
 	return v, nil
 }
 

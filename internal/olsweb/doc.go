@@ -40,6 +40,13 @@
 //     SuspendedDocRoot, so no path it names is under the tenant's home and
 //     the tenant cannot make its config test fail; SuspendedDocRoot must
 //     exist before such a render is tested.
+//   - An active site's protected folders (access.go), converted from a
+//     migrated site's .htaccess by internal/htaccess: one "realm" block per
+//     password folder, whose userDB is RealmFile(site, n) in RealmRoot
+//     outside every home, and one "context exp:" regex context per folder,
+//     with allowBrowse 0 for a folder closed to all (its <Files> names left
+//     out of the regex), or accessControl lists and the realm, and always a
+//     rewrite block with enable 0. A suspended site renders none of them.
 //
 // # Certificates
 //
@@ -214,9 +221,36 @@
 //     not installed): httpd_config.conf has the stock "module cache" block
 //     with ls_enabled 1 and enableCache 0, and cachedata is root-owned 0755.
 //
+// Read 2026-11-24, same tag and docs, for protected folders (internal/htaccess
+// doc.go, "Converting access rules", has the Apache side):
+//
+//   - /security/access/ and /security/realms/ [2026-04-28]: context
+//     Accessible (allowBrowse), Access Allowed and Denied, a realm's user DB
+//     file readable by the web server user; the stock Example vhconf.conf
+//     (dist/conf/vhosts/Example) shows the plain-text realm, required,
+//     authName and accessControl keys.
+//   - src/http/httpvhost.cpp configContext, configContextAuth and
+//     configRealm; src/http/httpcontext.cpp set (an "exp:" URI is a PCRE
+//     regex) and inherit; src/http/httpreq.cpp processContext (regex
+//     contexts first, location default "$DOC_ROOT$0"), processMatchedURI
+//     (allowBrowse 0 is 403), processPath and setMimeBySuffix;
+//     src/http/httpsession.cpp processContextAuth (403 before 401);
+//     src/util/accesscontrol.cpp (the most specific entry wins, ALL sets the
+//     default, parseNetmask refuses /32 and /128); src/lsr/ls_pcreg.c
+//     ls_pcresub_compile (a location template never fails to compile).
+//
 // # Unverified
 //
 // Not confirmed on an official page or by running a server:
+//
+//   - That OpenLiteSpeed loads the protected-folder contexts and realms
+//     without a warning, matches the regexes as PCRE does, serves index
+//     files and PHP through a realm's regex context, and answers 403, 401
+//     and 200 as access.go expects; the migrate-cpanel dev VM proof runs
+//     them. When the config loads, OpenLiteSpeed stats the regex context's
+//     location template, "$DOC_ROOT$0", as root: a tenant who makes a "$0"
+//     folder in its public_html can turn its own protected files into 404s,
+//     never open them.
 //
 //   - The exact bytes Render produces have not been loaded by OpenLiteSpeed
 //     from this package's tests; the tests check them against the grammar

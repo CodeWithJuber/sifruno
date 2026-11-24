@@ -113,6 +113,10 @@ type Site struct {
 	// deny rules, for an active site only: a suspended site refuses every
 	// request and redirects none.
 	Redirects []Redirect `json:"redirects,omitempty"`
+	// Folders are the site's protected folders (access.go), sorted by path,
+	// rendered for an active site only: a suspended site refuses every
+	// request anyway.
+	Folders []Folder `json:"folders,omitempty"`
 }
 
 // Redirect answers requests with a 301 or 302 to Target. Exactly one of

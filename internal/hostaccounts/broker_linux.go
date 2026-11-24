@@ -192,6 +192,16 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 		fmt.Fprintln(os.Stderr, "sifruno broker: what an interrupted backup restore or drill left could not all be removed at start (MariaDB may not be running yet); the next backup operation tries again first")
 	}
 	cancelCleaning()
+	// Every account's limits go to its slice drop-in before the socket
+	// accepts requests: accounts made before limits were recorded get the
+	// defaults, and a deleted account's leftover goes. A failure does not
+	// stop the broker or hold up any account: each plan change writes its
+	// account's drop-in again.
+	syncing, cancelSyncing := context.WithTimeout(ctx, 2*time.Minute)
+	if s.syncLimitsAtStart(syncing) != nil {
+		fmt.Fprintln(os.Stderr, "sifruno broker: the accounts' process, memory and CPU limits could not all be written to their systemd slices at start; a plan change of an account writes its limits again")
+	}
+	cancelSyncing()
 	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: opts.SocketPath, Net: "unix"})
 	if e != nil {
 		return ErrUnavailable

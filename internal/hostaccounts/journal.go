@@ -179,8 +179,11 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 				// next start finds its account still in its old state. A
 				// delete also ends rejected when it stopped before userdel
 				// changed anything (a busy user, a failed /proc read, time
-				// run out): nothing was removed and the site went back.
-				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" && e.Action != "state" || e.Before == nil || !sameAccount(e.After, *e.Before) {
+				// run out): nothing was removed and the site went back. A
+				// plan change ends rejected when its limits could not be
+				// written or loaded, or a live site's config with them failed
+				// its test: the old drop-in and site list went back.
+				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" && e.Action != "state" && e.Action != "plan" || e.Before == nil || !sameAccount(e.After, *e.Before) {
 					return ErrRecovery
 				}
 				lastSuccess = e

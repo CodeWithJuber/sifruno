@@ -27,7 +27,9 @@ const nologin = "/usr/sbin/nologin"
 // own user (see signalAs), never as root.
 const killPath = "/usr/bin/kill"
 
-var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin}
+// systemctl reloads systemd after an account's slice limits change
+// (limits_linux.go), with or without the web operation.
+var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin, systemctl}
 
 type nativeUser struct {
 	Username         string
@@ -59,7 +61,10 @@ type linuxSystem struct {
 	mailDir string
 	// tlsDir is olsweb.TLSRoot, the only path the rendered config names; it
 	// is a field so a root-only test can use a scratch directory.
-	tlsDir  string
+	tlsDir string
+	// unitDir is systemdUnitDir, where the accounts' slice drop-ins go; a
+	// field so a root-only test can use a scratch directory.
+	unitDir string
 	cacheMu sync.Mutex
 	cache   *accountDatabase
 }
@@ -87,7 +92,7 @@ func newLinuxSystem(opts BrokerOptions, web *WebOptions) (*linuxSystem, error) {
 	if e != nil || supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return nil, ErrUnavailable
 	}
-	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir, tlsDir: olsweb.TLSRoot}
+	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir, tlsDir: olsweb.TLSRoot, unitDir: systemdUnitDir}
 	if web != nil && n.enableWeb(web) != nil {
 		return nil, ErrUnavailable
 	}

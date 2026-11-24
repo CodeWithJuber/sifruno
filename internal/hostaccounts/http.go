@@ -132,7 +132,7 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				Input PlanInput `json:"input"`
 				Actor string    `json:"actor"`
 			}
-			if decodeBody(w, r, &in, []string{"plan", "expected_revision", "reason"}) != nil {
+			if decodeBody(w, r, &in, []string{"plan", "limits", "expected_revision", "reason"}) != nil {
 				writeError(w, ErrInvalid)
 				return
 			}
@@ -565,6 +565,11 @@ func strictObject(d *json.Decoder, allowed map[string]bool, requireAll bool, nes
 		seen[key] = true
 		if key == "input" && nested != nil {
 			if strictObject(d, nested, nestedRequireAll, nil, false) != nil {
+				return ErrInvalid
+			}
+		} else if key == "limits" && nested == nil {
+			// A plan's limits inside the input: all three keys, each once.
+			if strictObject(d, map[string]bool{"processes": true, "memory_mib": true, "cpu_percent": true}, true, nil, false) != nil {
 				return ErrInvalid
 			}
 		} else {

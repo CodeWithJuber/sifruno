@@ -17,7 +17,8 @@ network listener, passwords, free-form commands, deletion or rollback API exists
 
 Native execution requires preinstalled regular root-owned binaries at fixed
 paths: /usr/sbin/groupadd, useradd, usermod, userdel, nologin; /usr/bin/passwd,
-chage and kill (which runs only as an account's own user, see Processes).
+chage, kill (which runs only as an account's own user, see Processes) and
+systemctl (only `daemon-reload`, see Resource limits).
 Arguments are fixed typed options and validated account identity. Subprocesses
 have fixed credential-free locale/PATH, no shell and bounded output. Commands
 have15second deadlines within the broker request's45second overall deadline;
@@ -230,10 +231,12 @@ that is refused too, the site stays suspended and the message says so. When
 the 20 seconds run out first, fewer than three attempts were made; the
 message still says three.
 
-Limit for now: a tenant whose processes fork faster than the kill passes end
-them can keep refusing the delete of an active site, until the planned
-cgroup process limits (Phase 1, "cgroup limits" in the account broker
-rework) bound how many it can start. Suspending first makes the operator's
+A tenant whose processes fork faster than the kill passes end them could
+keep refusing the delete of an active site. The account's process limit
+(Resource limits) bounds how many it can have: 100 tasks by default, in its
+user slice and, for PAM sessions, as RLIMIT_NPROC, so the passes catch up.
+`scripts/devvm/proofs/account-limits.guest.sh` is the proof to run on the
+dev VM; it has not run yet. Suspending first still makes the operator's
 intent win: a suspension stands even when processes survive it, so the site
 is off and no login, cron job or PHP request starts for the account while
 the delete is asked again.
@@ -245,6 +248,81 @@ either way; if a process outlived the last pass the answer is 503
 `unavailable`, and a suspend of the suspended account, with or without a
 site, ends its processes again. A suspend the next start finishes does not
 end them: suspend again.
+
+## Resource limits
+
+Every account has limits on all of its processes together (`limits` on the
+account: `processes`, `memory_mib`, `cpu_percent`). A new account gets
+`DefaultLimits`: 100 tasks, 1024 MiB, 100% (one CPU). `SetPlan` changes
+them (`POST /v1/accounts/{id}/plan`, input `plan`, optional `limits` with
+all three keys, `expected_revision`, `reason`); left out, they stay. Bounds:
+32 to 4096 tasks, 256 to 65536 MiB, 10 to 6400%.
+
+Where they apply:
+
+- User slice. The broker writes
+  `/etc/systemd/system/user-<uid>.slice.d/50-sifruno-limits.conf`
+  (`[Slice]` `TasksMax=`, `MemoryMax=<n>M`, `CPUQuota=<n>%`; root, 0644)
+  and runs `/usr/bin/systemctl daemon-reload`. pam_systemd puts every PAM
+  session of the user (SFTP, cron, `runuser`) in a scope under
+  `user-<uid>.slice`, with `user@<uid>.service`; a slice's limits bound
+  everything below it. The path is built only from a UID in the account
+  range (never 0, a system user or the controller), reached through
+  directory handles opened without following links from the root-owned
+  unit directory, and the file is written beside its target and renamed.
+  systemd reads drop-ins when it loads a unit or reloads, so the broker
+  reloads after each write; a reload rereads every unit file and reruns the
+  generators, so it runs once per account change and once at start, not
+  per request.
+- PHP. OpenLiteSpeed 1.9.4 can put lsphp in the user's slice: with
+  `cgroups` on at the server (the installer sets it to 1 in `CGIRLimit`)
+  and in the vhost (rendered as 2), lscgid writes the new process into
+  `/sys/fs/cgroup/user.slice/user-<uid>.slice/litespeed-exec.scope` and
+  runs `systemctl start user-<uid>.slice` (`cgroup_v2` in
+  `src/extensions/cgi/lscgid.cpp`), so the slice's limits cover the site's
+  PHP too. The lsphp app also gets `memSoftLimit`/`memHardLimit` (the plan's
+  memory, as each process's RLIMIT_AS) and `procSoftLimit`/`procHardLimit`
+  (the plan's processes as RLIMIT_NPROC, raised to the floor OpenLiteSpeed
+  keeps, 496 for 4 children and 8 workers, `olsweb.ProcessFloor`). Read
+  from the 1.9.4 source, not run: OpenLiteSpeed sets those rlimits on the
+  path without its namespace container, and none in the container's path
+  (`ns.c`), which broker sites use; there the slice is the bound.
+- Every PAM session. The installer's
+  `/etc/security/limits.d/90-sifruno-accounts.conf` sets nproc 100 (soft
+  and hard) for UIDs 20000 to 60000. pam_limits applies it in the session
+  phase; RLIMIT_NPROC counts all tasks of the real UID on the host, so a
+  fork loop started in an SFTP or cron session stops at fork() even outside
+  any slice. It does not reach processes started without PAM: lsphp from
+  lscgid, or what the broker runs as the account (kill, WP-CLI, cp).
+
+Create writes the drop-in before anything is journaled; if it cannot, the
+create is refused (503) and nothing changes. A plan change journals its
+intent with the new limits (`limits_next` in the record) and then applies
+them: the drop-in, and for a live site whose limits changed the site list
+(which needs the web operation; without it, or while WordPress installs,
+it is refused before the intent). If the drop-in cannot be written or
+loaded, or the site list fails its test, the old drop-in goes back and the
+change ends `rejected` with the account unchanged (503 `unavailable` or 422
+`web_rejected`); no other account is held up. A site list that fails after
+its test stays pending like any web change; the next start finishes it.
+Delete removes the drop-in once the user is gone; if that fails the delete
+still succeeds. At every start, before the socket accepts requests, the
+broker writes every account's recorded limits (the defaults for an account
+made before limits were) and removes drop-ins of account-range UIDs no
+account holds, then reloads once. A failure there is reported on stderr and
+the broker starts anyway. The account list and the journal's rows show the
+limits; an unchanged plan is a no-op only while the drop-in still holds
+them.
+
+Limits for now (not yet run on the dev VM):
+
+- That `daemon-reload` applies a changed drop-in to an active slice at once
+  is inferred, not documented: `systemctl set-property` is the documented
+  runtime path. The dev VM proof reads `pids.max` after a change.
+- OpenLiteSpeed writes into the slice's cgroup directory itself, outside
+  systemd's knowledge; how systemd treats that scope when the slice stops
+  is not checked.
+- No IO limit: IOWeight stays at its default, 100, for every account.
 
 ## Websites
 

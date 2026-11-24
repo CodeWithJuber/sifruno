@@ -69,6 +69,12 @@ type Account struct {
 	// is none. It always equals the record's TLS, so the account list shows
 	// it and the journal's before and after rows record it.
 	Certificate CertificateState `json:"certificate,omitzero"`
+	// Limits are the account's process, memory and CPU limits; the stored
+	// account and the journal's rows carry them, so every plan change that
+	// sets them is recorded. An account made before limits were recorded has
+	// none stored and runs with DefaultLimits; the account list shows the
+	// limits in force either way.
+	Limits AccountLimits `json:"limits,omitzero"`
 	// Web is the live site's PHP version and quota, left out when there is no
 	// site. Only the account list and a state change's answer fill it in,
 	// from the record's Web: the stored account and the journal's rows never
@@ -97,9 +103,11 @@ type StateInput struct {
 	Reason           string `json:"reason"`
 }
 type PlanInput struct {
-	Plan             string `json:"plan"`
-	ExpectedRevision uint64 `json:"expected_revision"`
-	Reason           string `json:"reason"`
+	Plan string `json:"plan"`
+	// Limits, when given, replace the account's limits; left out, they stay.
+	Limits           AccountLimits `json:"limits,omitzero"`
+	ExpectedRevision uint64        `json:"expected_revision"`
+	Reason           string        `json:"reason"`
 }
 type DeleteInput struct {
 	ExpectedRevision uint64 `json:"expected_revision"`
@@ -110,7 +118,9 @@ type Service interface {
 	List(context.Context) ([]Account, error)
 	Create(context.Context, CreateInput, string) (Account, error)
 	SetState(context.Context, string, StateInput, string) (Account, error)
-	// SetPlan updates reserved package metadata only; no native effect.
+	// SetPlan updates the plan name and, when given, the account's process,
+	// memory and CPU limits, which the broker applies to the account's user
+	// slice and its site's PHP (README, Resource limits).
 	SetPlan(context.Context, string, PlanInput, string) (Account, error)
 	// Delete permanently removes the managed identity after ownership
 	// verification. There is no undo; the operation is journaled.
@@ -159,7 +169,7 @@ func validState(in StateInput, actor string) bool {
 	return (in.State == "active" || in.State == "suspended") && in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)
 }
 func validPlan(in PlanInput, actor string) bool {
-	return validText(in.Plan, 64) && in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)
+	return validText(in.Plan, 64) && (!in.Limits.given() || validLimits(in.Limits)) && in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)
 }
 func validDelete(in DeleteInput, actor string) bool {
 	return in.ExpectedRevision > 0 && validText(in.Reason, 500) && validText(actor, 120)

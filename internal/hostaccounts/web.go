@@ -64,6 +64,9 @@ func validWebState(w WebState) bool {
 // webDigest is the journal target for a web operation.
 func webDigest(w WebState) string { return fmt.Sprintf("php=%s;quota=%d", w.PHPVersion, w.QuotaMiB) }
 
+// sitePHPChildren is the LSAPI children of every site's lsphp app.
+const sitePHPChildren = 4
+
 // siteName is the vhost name: the account ID, which is unique and fits
 // OpenLiteSpeed's name rules (usernames may hold underscores; names may not).
 func siteName(id string) string { return "u" + id[:31] }
@@ -99,6 +102,7 @@ func webSites(items []record, except string) []olsweb.Site {
 		if r.Pending != nil && r.Pending.Action == "state" {
 			state = r.Pending.Target
 		}
+		limits := recordLimits(r)
 		site := olsweb.Site{
 			Name:       siteName(r.Account.ID),
 			Username:   r.Account.Username,
@@ -107,8 +111,17 @@ func webSites(items []record, except string) []olsweb.Site {
 			DocRoot:    r.Account.PublicHTML,
 			PHPVersion: w.PHPVersion,
 			Suspended:  state == "suspended",
-			Limits:     olsweb.Limits{PHPChildren: 4},
-			Isolation:  olsweb.Isolation{Namespace: true},
+			// The account's limits for its lsphp app: memory as each
+			// process's RLIMIT_AS, processes as RLIMIT_NPROC, raised to the
+			// floor OpenLiteSpeed keeps for these children (it would raise a
+			// lower number itself). OpenLiteSpeed 1.9.4 sets these rlimits on
+			// the path without its namespace container; in the container's
+			// path (ns.c) it sets none. The account-wide bound comes from
+			// cgroups: with them on, lscgid puts lsphp in
+			// user-<uid>.slice/litespeed-exec.scope (cgroup_v2 in lscgid.cpp),
+			// under the slice's TasksMax, MemoryMax and CPUQuota.
+			Limits:    olsweb.Limits{PHPChildren: sitePHPChildren, MemoryMiB: limits.MemoryMiB, Processes: max(limits.Processes, olsweb.ProcessFloor(sitePHPChildren, 0))},
+			Isolation: olsweb.Isolation{Namespace: true, CGroups: true},
 		}
 		if certificate.installed() {
 			site.TLS = siteTLS(site.Name)

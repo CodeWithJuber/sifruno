@@ -67,6 +67,15 @@ type fakeNative struct {
 	// "stopped" is a Delete that stopped before userdel for another reason
 	// (kill or a /proc read failed, time ran out) and put the account back.
 	ended map[string]int
+	// dropIns models the slice drop-ins by UID, reloads counts systemd
+	// reloads, and limitsLog records each limits call. failLimits makes that
+	// many coming ApplyLimits calls fail before writing anything;
+	// failLimitsAfter makes them fail after the write, as a failed reload.
+	dropIns         map[int]AccountLimits
+	reloads         int
+	limitsLog       []string
+	failLimits      int
+	failLimitsAfter int
 }
 
 func (f *fakeNative) EndProcesses(_ context.Context, r record) error {

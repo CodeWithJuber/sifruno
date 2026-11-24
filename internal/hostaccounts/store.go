@@ -58,6 +58,9 @@ type record struct {
 	// installs; its files were staged before the intent was journaled.
 	TLS     CertificateState `json:"tls"`
 	TLSNext CertificateState `json:"tls_next"`
+	// LimitsNext is what an unfinished plan operation applies (empty: the
+	// limits stay), durable before the slice drop-in changes.
+	LimitsNext AccountLimits `json:"limits_next,omitzero"`
 }
 type nativeSystem interface {
 	Plan(context.Context, string) (int, int, error)
@@ -132,6 +135,18 @@ type nativeSystem interface {
 	// still running after its last pass. It changes no record.
 	EndProcesses(context.Context, record) error
 	SetState(context.Context, record, string) error
+	// ApplyLimits writes the account's user slice drop-in with these limits
+	// and reloads systemd. The UID must be in the account range and not the
+	// controller's. It touches no tenant file and is safe to repeat.
+	ApplyLimits(ctx context.Context, uid int, l AccountLimits) error
+	// VerifyLimits reports whether the drop-in holds exactly these limits.
+	VerifyLimits(uid int, l AccountLimits) error
+	// RemoveLimits removes the account's drop-in and reloads systemd.
+	RemoveLimits(ctx context.Context, uid int) error
+	// SyncLimits makes the drop-ins match want, one per account UID, removes
+	// the broker's drop-in of every other account-range UID, and reloads
+	// systemd once if anything changed.
+	SyncLimits(ctx context.Context, want map[int]AccountLimits) error
 	GuardState(string) error
 	GuardHomes([]record) error
 }
@@ -323,6 +338,9 @@ func (s *store) records() ([]record, error) {
 			if (r.TLS.installed() && !validCertificateState(r.TLS)) || (!r.TLS.installed() && r.TLS != CertificateState{}) || r.Account.Certificate != r.TLS || (r.TLSNext != CertificateState{} && (r.Pending == nil || r.Pending.Action != "certificate")) {
 				return ErrRecovery
 			}
+			if (r.Account.Limits.given() && !validLimits(r.Account.Limits)) || (r.LimitsNext.given() && (!validLimits(r.LimitsNext) || r.Pending == nil || r.Pending.Action != "plan")) {
+				return ErrRecovery
+			}
 			if verifyHistory(tx, r) != nil {
 				return ErrRecovery
 			}
@@ -461,6 +479,44 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					return ErrRecovery
 				}
 				continue
+			} else if r.Pending.Action == "plan" {
+				// Finish the interrupted plan change: its limits were durable
+				// before the slice drop-in changed, and applying them is
+				// idempotent. Only what root controls is checked, so a
+				// tenant's own folders cannot keep it pending. A drop-in or
+				// site list that cannot take the new limits ends it rejected,
+				// unchanged; any other failure stays pending for the next
+				// start. A plan change journaled by an earlier broker has no
+				// limits and keeps the account's.
+				current := r
+				current.Pending = nil
+				if s.native.VerifyAccount(ctx, current) != nil {
+					continue
+				}
+				operation := *r.Pending
+				switch e := s.applyPlanLimits(ctx, items, i, limitsOf(r.Account), recordLimits(r)); {
+				case errors.Is(e, errLimitsRejected) || errors.Is(e, ErrWebRejected):
+					r.Pending, r.LimitsNext = nil, AccountLimits{}
+					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+						return ErrRecovery
+					}
+					continue
+				case e != nil:
+					continue
+				}
+				r.Account.Plan = operation.Target
+				if r.LimitsNext.given() {
+					r.Account.Limits = r.LimitsNext
+				}
+				r.LimitsNext = AccountLimits{}
+				r.Account.Revision++
+				r.Account.UpdatedAt = time.Now().UTC()
+				r.Actor, r.Reason = operation.Actor, operation.Reason
+				r.Pending = nil
+				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+					return ErrRecovery
+				}
+				continue
 			} else if s.native.VerifyAccount(ctx, targetRecord(r, r.Pending.Target)) != nil {
 				// A state change whose account verifies in its old state
 				// changed nothing: the broker stopped before the account
@@ -476,19 +532,6 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
 						return ErrRecovery
 					}
-				}
-				continue
-			}
-			if r.Pending.Action == "plan" {
-				// Metadata-only operation: finish the interrupted write.
-				operation := *r.Pending
-				r.Account.Plan = r.Pending.Target
-				r.Account.Revision++
-				r.Account.UpdatedAt = time.Now().UTC()
-				r.Actor, r.Reason = r.Pending.Actor, r.Pending.Reason
-				r.Pending = nil
-				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
-					return ErrRecovery
 				}
 				continue
 			}
@@ -526,6 +569,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					}
 					continue
 				}
+				s.removeLimits(ctx, r.Account.UID)
 				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
 					return ErrRecovery
 				}
@@ -783,31 +827,48 @@ func (s *store) setPlan(ctx context.Context, id string, in PlanInput, actor stri
 	if err != nil {
 		return Account{}, err
 	}
-	var r record
-	found := false
-	for _, item := range items {
+	index := -1
+	for i, item := range items {
 		if item.Account.ID == id {
-			r = item
-			found = true
+			index = i
 			break
 		}
 	}
-	if !found {
+	if index < 0 {
 		return Account{}, ErrNotFound
 	}
+	r := items[index]
 	if r.Account.Revision != in.ExpectedRevision {
 		return Account{}, ErrConflict
 	}
-	if r.Account.Plan == in.Plan {
+	old := limitsOf(r.Account)
+	next := old
+	if in.Limits.given() {
+		next = in.Limits
+	}
+	// An unchanged plan is a no-op only while the slice drop-in still holds
+	// its limits. A drop-in edited or removed outside the broker, or an
+	// account recorded before limits were, goes through the ordinary
+	// journaled path, which writes the drop-in and moves the revision on.
+	if r.Account.Plan == in.Plan && r.Account.Limits == next && s.native.VerifyLimits(r.Account.UID, next) == nil {
 		return r.Account, nil
 	}
 	if r.Account.Revision == ^uint64(0) {
 		return Account{}, ErrRecovery
 	}
-	// Metadata-only operation: no native call, but the same intent/result
-	// journal discipline as native mutations (crash between intent and
-	// result is reconciled by refresh).
+	// New limits reach a live site's PHP through the site list, which needs
+	// the web operation, and would restart PHP under a running WordPress
+	// install: both are refused before anything is journaled. Two history
+	// rows, with room left as beginOperation leaves it.
+	render := r.Web.enabled() && next != old
+	if render && s.web == nil {
+		return Account{}, ErrUnavailable
+	}
+	if (render && s.installing[id]) || r.HistorySequence > MaxHistoryRows-3 {
+		return Account{}, ErrConflict
+	}
 	r.Pending = &pending{Action: "plan", Target: in.Plan, Actor: actor, Reason: in.Reason}
+	r.LimitsNext = next
 	before := r.Account
 	operationID, e := randomID()
 	if e != nil {
@@ -816,13 +877,34 @@ func (s *store) setPlan(ctx context.Context, id string, in PlanInput, actor stri
 	r.Pending.OperationID = operationID
 	after := r.Account
 	after.Plan = in.Plan
+	after.Limits = next
 	after.Revision++
 	intent := operationEvent{OperationID: operationID, Action: "plan", Status: "intended", Actor: actor, Reason: in.Reason, Before: &before, After: after}
 	r, err = s.appendEvent(r, intent)
 	if err != nil {
 		return Account{}, ErrRecovery
 	}
+	live := append([]record(nil), items...)
+	live[index] = r
+	switch e := s.applyPlanLimits(ctx, live, index, old, next); {
+	case errors.Is(e, errLimitsRejected), errors.Is(e, ErrWebRejected):
+		// The old drop-in and site list went back: the account is
+		// unchanged and nothing holds up any other account.
+		operation := *r.Pending
+		r.Pending, r.LimitsNext = nil, AccountLimits{}
+		if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+			return Account{}, ErrRecovery
+		}
+		if errors.Is(e, ErrWebRejected) {
+			return Account{}, ErrWebRejected
+		}
+		return Account{}, ErrUnavailable
+	case e != nil:
+		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		return Account{}, ErrRecovery
+	}
 	r.Account.Plan = in.Plan
+	r.Account.Limits, r.LimitsNext = next, AccountLimits{}
 	r.Account.Revision++
 	r.Account.UpdatedAt = time.Now().UTC()
 	r.Actor, r.Reason = actor, in.Reason
@@ -928,6 +1010,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
 	}
+	s.removeLimits(ctx, r.Account.UID)
 	operation := *r.Pending
 	r.Pending = nil
 	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {
@@ -937,6 +1020,17 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		return Account{}, ErrRecovery
 	}
 	return before, nil
+}
+
+// removeLimits takes a deleted account's slice drop-in away once its user
+// and processes are gone. The delete has succeeded by then and cannot be
+// undone, so a failure does not change its answer: the drop-in names a UID
+// no account holds, which the broker's next start removes
+// (syncLimitsAtStart) and the next create of that UID rewrites.
+func (s *store) removeLimits(ctx context.Context, uid int) {
+	removeCtx, cancel := webContext(ctx)
+	defer cancel()
+	_ = s.native.RemoveLimits(removeCtx, uid)
 }
 func (s *store) capability(ctx context.Context) (Capability, error) {
 	if snapshotReentry(ctx, s) {
@@ -991,8 +1085,11 @@ func (s *store) list(ctx context.Context) ([]Account, error) {
 		if r.Pending != nil {
 			a.State = "recovery_required"
 		}
-		// The settings applied now; an unfinished web change is not shown.
+		// The settings applied now; an unfinished web or plan change is not
+		// shown. An account recorded before limits were runs with the
+		// defaults, which the broker's start wrote to its slice.
 		a.Web = r.Web
+		a.Limits = limitsOf(r.Account)
 		a.SiteFolderChanged = r.Pending == nil && s.native.VerifySiteFiles(r) != nil
 		out = append(out, a)
 	}
@@ -1077,6 +1174,13 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 			return Account{}, ErrRecovery
 		}
 	}
+	// The account's limits are in place before its user exists, so nothing
+	// it runs ever starts without them. A failure refuses the create before
+	// anything is journaled: the drop-in names only this unused UID, and the
+	// next create of it, or the broker's next start, rewrites it.
+	if s.native.ApplyLimits(ctx, uid, DefaultLimits) != nil {
+		return Account{}, ErrUnavailable
+	}
 	var id [16]byte
 	if _, err = rand.Read(id[:]); err != nil {
 		return Account{}, ErrUnavailable
@@ -1084,7 +1188,7 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	key := hex.EncodeToString(id[:])
 	now := time.Now().UTC()
 	home := filepath.Join(s.opts.HomesDir, in.Username)
-	r := record{Version: 1, Tag: "sifruno-managed-" + key, Account: Account{ID: key, Username: in.Username, Domain: in.Domain, Plan: planOrDefault(in.Plan), Home: home, PublicHTML: filepath.Join(home, "public_html"), State: "recovery_required", UID: uid, GID: gid, Revision: 1, CreatedAt: now, UpdatedAt: now}, Pending: &pending{Action: "create", Target: "active", Actor: actor, Reason: in.Reason}}
+	r := record{Version: 1, Tag: "sifruno-managed-" + key, Account: Account{ID: key, Username: in.Username, Domain: in.Domain, Plan: planOrDefault(in.Plan), Limits: DefaultLimits, Home: home, PublicHTML: filepath.Join(home, "public_html"), State: "recovery_required", UID: uid, GID: gid, Revision: 1, CreatedAt: now, UpdatedAt: now}, Pending: &pending{Action: "create", Target: "active", Actor: actor, Reason: in.Reason}}
 	r, err = s.beginOperation(r, nil)
 	if err != nil {
 		return Account{}, ErrRecovery
@@ -1219,10 +1323,12 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 }
 
 // withWeb is a record's account as the account list shows it: with the live
-// site's settings, which the stored account and the journal never carry.
+// site's settings, which the stored account and the journal never carry,
+// and the limits in force.
 func withWeb(r record) Account {
 	a := r.Account
 	a.Web = r.Web
+	a.Limits = limitsOf(r.Account)
 	return a
 }
 

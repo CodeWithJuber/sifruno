@@ -96,10 +96,15 @@ func (c *client) SetPlan(ctx context.Context, id string, in PlanInput, actor str
 		return Account{}, ErrInvalid
 	}
 	var out Account
-	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/plan", struct {
+	// New limits for an account with a live site rewrite the web server's
+	// config, which can take minutes on a busy host. A 422 web_rejected
+	// answer means that config failed its test and was restored, and 503
+	// unavailable that the limits could not be applied: either way the
+	// account is unchanged.
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/plan", struct {
 		Input PlanInput `json:"input"`
 		Actor string    `json:"actor"`
-	}{in, actor}, &out)
+	}{in, actor}, &out, maxResponseBytes)
 	return out, err
 }
 func (c *client) Delete(ctx context.Context, id string, in DeleteInput, actor string) (Account, error) {

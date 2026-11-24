@@ -92,6 +92,7 @@
   "POST /api/v1/websites/sites/{account_id}/backups/restore": "adminOnly",
   "POST /api/v1/websites/sites/{account_id}/cron": "ownWebsite",
   "POST /api/v1/websites/sites/{account_id}/databases": "ownWebsite",
+  "POST /api/v1/websites/sites/{account_id}/databases/phpmyadmin": "ownWebsite",
   "POST /api/v1/websites/sites/{account_id}/databases/users": "ownWebsite",
   "POST /api/v1/websites/sites/{account_id}/databases/users/{user}/delete": "ownWebsite",
   "POST /api/v1/websites/sites/{account_id}/databases/users/{user}/password": "ownWebsite",

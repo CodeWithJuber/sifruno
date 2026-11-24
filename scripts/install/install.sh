@@ -16,7 +16,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PREFIX=/usr/local/lib/sifruno
 readonly BIN_DIR="$PREFIX/bin"
 readonly UI_DIR="$PREFIX/ui"
-readonly PROGRAMS=(sifruno hostbroker hostsetup panelctl)
+# sifruno-files is the file manager's helper: the broker runs it as a site's
+# own user and checks it before each run (root's, 0755, one link, in these
+# root-owned folders).
+readonly PROGRAMS=(sifruno hostbroker hostsetup panelctl sifruno-files)
 readonly BROKER_STATE=/var/lib/sifruno-broker
 readonly BROKER_SOCKET=/run/sifruno-broker/control.sock
 readonly HOMES=/home

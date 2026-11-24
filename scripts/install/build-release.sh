@@ -6,8 +6,8 @@
 #   artifacts/release/sifruno-linux-amd64.tar.gz.sha256
 #
 # The tarball unpacks to sifruno-linux-amd64/ with bin/ (sifruno, hostbroker,
-# hostsetup, panelctl), ui/ (the built panel), install.sh and a SHA256SUMS of
-# those files. Set SIFRUNO_RELEASE_OUT to write somewhere else.
+# hostsetup, panelctl, sifruno-files), ui/ (the built panel), install.sh and a
+# SHA256SUMS of those files. Set SIFRUNO_RELEASE_OUT to write somewhere else.
 set -euo pipefail
 umask 022
 
@@ -36,7 +36,9 @@ root="$stage/$NAME"
 mkdir -p "$root/bin"
 
 echo "Building the programs (linux/amd64, CGO off, -trimpath)"
-for program in sifruno hostbroker hostsetup panelctl; do
+# sifruno-files is the file manager's helper, which the broker runs as a
+# site's user (internal/sitefiles).
+for program in sifruno hostbroker hostsetup panelctl sifruno-files; do
   (cd "$REPO" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
     go build -mod=readonly -trimpath -buildvcs=false -o "$root/bin/$program" "./cmd/$program")
 done

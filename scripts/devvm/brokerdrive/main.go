@@ -31,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|delete [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|delete|backup-status|backup-target|backup|backups|restore|drill|prune [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -42,9 +42,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch global.Arg(0) {
 	case "wordpress":
 		timeout = 12 * time.Minute
-	case "web", "certificate", "delete", "state":
+	case "web", "certificate", "delete", "state", "backup-target", "backups":
 		// A state change of a live site re-applies the site list too.
 		timeout = 6 * time.Minute
+	case "backup", "restore", "drill", "prune":
+		timeout = 125 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -69,6 +71,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	adminPasswordFile := command.String("admin-password-file", "", "File holding the WordPress admin password (wordpress)")
 	dbPasswordFile := command.String("db-password-file", "", "File holding the database password (wordpress)")
 	certFile := command.String("cert-file", "", "PEM certificate chain, leaf first (certificate)")
+	host := command.String("host", "", "Storage server host (backup-target)")
+	port := command.Int("port", 22, "Storage server SSH port (backup-target)")
+	user := command.String("user", "", "Storage server SFTP user (backup-target)")
+	path := command.String("path", "", "Repository folder on the storage server (backup-target)")
+	knownHostsFile := command.String("known-hosts-file", "", "ssh-keyscan output for the storage server (backup-target)")
+	// The repository password is shown once; it goes to this file, never
+	// to the output.
+	passwordOut := command.String("password-out", "", "File (0600) that receives the repository password when it is shown (backup-target)")
+	snapshot := command.String("snapshot", "", "Snapshot ID (restore)")
+	files := command.Bool("files", false, "Restore the files (restore)")
+	var databases multiFlag
+	command.Var(&databases, "db", "Database to back up or restore; repeat for several (backup, restore)")
 	var keyFiles multiFlag
 	command.Var(&keyFiles, "key-file", "Public key file to install (ssh-keys); repeat for several, omit all to remove access. With certificate: the PEM private key, once")
 	if command.Parse(global.Args()[1:]) != nil || command.NArg() != 0 {
@@ -164,6 +178,52 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		result = installed
+	case "backup-status", "backup-target", "backup", "backups", "restore", "drill", "prune":
+		backups, ok := service.(hostaccounts.BackupService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no backup surface")
+			return 1
+		}
+		dbs := []string(databases)
+		if dbs == nil {
+			dbs = []string{}
+		}
+		switch global.Arg(0) {
+		case "backup-status":
+			result, err = backups.BackupStatus(ctx)
+		case "backup-target":
+			known, readErr := os.ReadFile(*knownHostsFile)
+			if readErr != nil || *passwordOut == "" {
+				fmt.Fprintln(stderr, "backup-target needs --known-hosts-file and --password-out")
+				return 2
+			}
+			var saved hostaccounts.BackupTargetResult
+			saved, err = backups.SetBackupTarget(ctx, hostaccounts.BackupTargetInput{Host: *host, Port: *port, User: *user, Path: *path, KnownHosts: string(known), Reason: *reason}, *actor)
+			if err == nil && saved.Password != "" {
+				if writeErr := os.WriteFile(*passwordOut, []byte(saved.Password+"\n"), 0600); writeErr != nil {
+					fmt.Fprintln(stderr, "write the password file:", writeErr)
+					return 1
+				}
+				fmt.Fprintf(stderr, "repository password shown once: written to %s\n", *passwordOut)
+				saved.Password = ""
+			}
+			result = saved
+		case "backup":
+			result, err = backups.BackupAccount(ctx, *id, hostaccounts.BackupInput{Databases: dbs, Reason: *reason}, *actor)
+		case "backups":
+			result, err = backups.ListBackups(ctx, *id)
+		case "restore":
+			result, err = backups.RestoreAccount(ctx, *id, hostaccounts.RestoreInput{ExpectedRevision: *revision, Snapshot: *snapshot, Files: *files, Databases: dbs, Reason: *reason}, *actor)
+		case "drill":
+			result, err = backups.DrillAccount(ctx, *id, hostaccounts.DrillInput{Reason: *reason}, *actor)
+		case "prune":
+			result, err = backups.PruneBackups(ctx, hostaccounts.PruneInput{Reason: *reason}, *actor)
+		}
+		var failed *hostaccounts.BackupError
+		if errors.As(err, &failed) {
+			fmt.Fprintf(stderr, "broker refused: backup %s step failed: %s\n", failed.Step, failed.Detail)
+			return 1
+		}
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", global.Arg(0))
 		return 2

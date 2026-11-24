@@ -79,6 +79,16 @@ Run on 2026-11-23 with `scripts/devvm/proof.sh broker-wordpress` on the dev VM, 
 
 The install took 230 s under software emulation, past the broker's 45 s request limit, so this run also shows that the long-running response arrives. Later commits refused a suspend or web change during an install, refused passwords with an edge space (WP-CLI's prompt trims them), and gave OpenLiteSpeed's test and restart their own time limits; those are covered by unit tests and by the wizard proof below, which ran the same install through the panel. A re-run on `d99cdd0` failed at its first step because the proof's own driver stopped waiting for the web change after 60 s while the broker finished it; the driver now waits six minutes (`0b9bd2c`).
 
+## Phase 1: the installer's sshd pre-checks
+
+Run on 2026-11-24 with `scripts/devvm/proof.sh installer-sshd` on the dev VM (OpenSSH 9.9p1, SELinux enforcing), with `install.sh` and the guest script as in `3ba55f1`. The installer turns SSH passwords off; these checks decide whether someone could still sign in once it does. The proof loads the installer's functions alone and works on copies of the VM's sshd configuration and throwaway users.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| sshd pre-checks: the candidate copy with the policy is accepted by `sshd -t`; other users get SFTP only and no passwords; root with a key counts, but not with `PermitRootLogin no`, an Allow or Deny rule that leaves it out, `AuthenticationMethods` needing a password, or a ForceCommand; Match rules on addresses are judged for the admin's own SSH connection, and refused when there is none; a wheel member counts only with a valid key, StrictModes-safe modes and a login shell; other users who would lose a shell are listed; the live sshd files are unchanged | [phase1-installer-sshd.txt](phase1-installer-sshd.txt) | 30 passed, 0 failed |
+
+What this run does not show: the installer writing the policy and reloading sshd on a fresh server, and a second sign-in after it. That is the fresh-install test (`scripts/devvm/fresh-install-test.sh`), not yet run with this commit. A failed SELinux relabel was not provoked.
+
 ## Phase 1: the New website wizard, with SSL
 
 Run on 2026-11-24 with `scripts/devvm/proof.sh wordpress-wizard` on the dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3, MariaDB 10.11, QEMU software emulation), built from `70efa12`. The panel ran in the VM as `sifpanel` with the real broker (`--web-user`), the MariaDB admin option file, and ACME pointed at Pebble 2.10.1, Let's Encrypt's test CA, installed by provisioning (its DNS answers 127.0.0.1 for every name, so it validates HTTP-01 against this VM's OpenLiteSpeed). Headless Chrome on the host reached the panel through `vm.sh forward` and drove the wizard as an admin would.

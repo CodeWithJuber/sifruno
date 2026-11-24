@@ -3,7 +3,9 @@
 # Proves that a tenant who renames its own public_html affects only its own
 # account: another account still changes PHP, is suspended and resumed; the
 # operator can suspend the tenant (403), use the tenant's new public_html,
-# resume it, and delete it. Prints PASS/FAIL per check.
+# resume it, and delete it. A tenant's running processes end when it is
+# suspended or deleted, another account's do not, and a delete with a
+# process running succeeds. Prints PASS/FAIL per check.
 # shellcheck disable=SC2317 # the helpers are called through check
 set -uo pipefail
 
@@ -54,6 +56,22 @@ as_tenant() { # as_tenant USER COMMAND
   setpriv --reuid="$uid" --regid="$uid" --clear-groups -- sh -c "cd /home/$1 && $2"
 }
 ols_lines() { "$LSWS/bin/openlitespeed" -t 2>&1 | sed -E 's/^[0-9-]+ [0-9:.]+ //; s/\[[0-9]+\] //' | grep -E "^\[(ERROR|WARN)\].*$1" | sort -u; }
+SFTP_SERVER=/usr/libexec/openssh/sftp-server
+# Long-running processes of a tenant: a sleep, and an SFTP server reading a
+# pipe as an open SFTP session runs it. Started without PAM, as as_tenant,
+# and handed to init (setsid -f) as a login's or a worker's would be, so an
+# ended one is reaped at once and not left as a zombie of this script.
+tenant_processes() { # tenant_processes USER
+  local uid
+  uid="$(id -u "$1")"
+  setsid -f setpriv --reuid="$uid" --regid="$uid" --clear-groups -- sleep 3600 </dev/null >/dev/null 2>&1
+  if [ -x "$SFTP_SERVER" ]; then
+    setsid -f setpriv --reuid="$uid" --regid="$uid" --clear-groups -- sh -c "sleep 3600 | $SFTP_SERVER" </dev/null >/dev/null 2>&1
+  fi
+  sleep 1
+}
+# tenant_running UID: a sleep runs as UID, and an SFTP server when installed.
+tenant_running() { pgrep -u "$1" -x sleep >/dev/null && { [ ! -x "$SFTP_SERVER" ] || pgrep -u "$1" -x sftp-server >/dev/null; }; }
 
 echo "# A tenant's own folder change stays with its own account"
 echo "# $(date -u +%FT%TZ)  $(rpm -q openlitespeed lsphp83 | paste -sd ' ')  SELinux $(getenforce)"
@@ -133,8 +151,17 @@ check "A is still active and marked, never recovery_required" listed "$a_id" "a[
 
 echo
 echo "## 5. The operator suspends A"
+a_uid="$(id -u "$A_USER")"
+b_uid="$(id -u "$B_USER")"
+tenant_processes "$A_USER"
+tenant_processes "$B_USER"
+check "A has a sleep and an SFTP server running" tenant_running "$a_uid"
+check "B has a sleep and an SFTP server running" tenant_running "$b_uid"
 held="$(drive state --id "$a_id" --revision "$a_rev" --state suspended --reason 'Site folder changed')" || fail "the operator suspends A"
 a_rev="$(printf '%s' "$held" | revision)"
+echo "  processes of A after the suspend: $(pgrep -u "$a_uid" -l | paste -sd ' ')"
+check "the suspend ended every process of A" bash -c "! pgrep -u $a_uid"
+check "B's processes still run" tenant_running "$b_uid"
 check "A answers 403" wait_for "$A_DOMAIN" / 403
 check "A's suspended vhost names no path in /home" bash -c "! grep -q '/home' $a_vhost/vhconf.conf"
 again="$(drive state --id "$a_id" --revision "$a_rev" --state suspended --reason 'Apply again')" || fail "the operator applies A's suspension again"
@@ -172,16 +199,27 @@ else
 fi
 
 echo
-echo "## 7. Delete, after the tenant changed its home's mode"
+echo "## 7. Delete, after the tenant changed its home's mode, with its processes running"
 as_tenant "$A_USER" "chmod 0700 /home/$A_USER"
 check "the list marks A's folder changed again" listed "$a_id" "a[0].get('site_folder_changed') is True"
+tenant_processes "$A_USER"
+check "A, active again, has a sleep and an SFTP server running" tenant_running "$a_uid"
 drive delete --id "$a_id" --revision "$a_rev" --reason 'Remove tenant A' >/dev/null || fail "the operator deletes A"
 check "A's Linux user is gone" bash -c "! getent passwd $A_USER"
+check "no process runs as A's UID" bash -c "! pgrep -u $a_uid"
 check "A's home is gone" test ! -e "/home/$A_USER"
 check "A's vhost config is gone" test ! -e "$a_vhost/vhconf.conf"
 check "B still serves" test "$(code "$B_DOMAIN" /)" = 200
-drive delete --id "$b_id" --revision "$b_rev" --reason 'Remove account B' >/dev/null || fail "the operator deletes B"
+check "B's processes still run" tenant_running "$b_uid"
+if quota="$(drive web --id "$b_id" --revision "$b_rev" --php 8.4 --quota-mib 300 --reason 'Larger quota')"; then
+  pass "B can still change after A's delete"
+  b_rev="$(printf '%s' "$quota" | revision)"
+else
+  fail "B can still change after A's delete"
+fi
+drive delete --id "$b_id" --revision "$b_rev" --reason 'Remove account B' >/dev/null || fail "the operator deletes B, its processes running"
 check "B's Linux user is gone" bash -c "! getent passwd $B_USER"
+check "no process runs as B's UID" bash -c "! pgrep -u $b_uid"
 check "OpenLiteSpeed is still running" systemctl is-active --quiet lsws
 config_status=0
 "$LSWS/bin/openlitespeed" -t >/dev/null 2>&1 || config_status=$?

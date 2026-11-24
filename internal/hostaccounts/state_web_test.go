@@ -125,6 +125,52 @@ func TestSuspendSucceedsWhilePublicHTMLIsMissing(t *testing.T) {
 	}
 }
 
+// A suspend of a suspended account with a live site installs the site list
+// again, journaled like any change, so a suspension made before the list
+// followed the account can be enforced. Without a live site, or for a resume
+// of an active account, the same state changes nothing.
+func TestSuspendAgainInstallsTheSiteList(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	before := liveFixture(t, s)
+	same, err := s.setState(ctx, before.Account.ID, StateInput{State: "active", ExpectedRevision: before.Account.Revision, Reason: "Paid"}, "test operator")
+	if err != nil || same.Revision != before.Account.Revision || recordFor(t, s, before.Account.ID).HistorySequence != before.HistorySequence || f.siteApplies != 0 {
+		t.Fatalf("a resume of an active account changed something: %+v %v", same, err)
+	}
+	first, err := suspend(s, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The broker before this rule left the installed list serving the site.
+	for i := range f.sites {
+		f.sites[i].Suspended = false
+	}
+	suspended := recordFor(t, s, before.Account.ID)
+	again, err := suspend(s, suspended)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := recordFor(t, s, before.Account.ID)
+	if again.State != "suspended" || again.Revision != first.Revision+1 || after.Pending != nil || after.HistorySequence != suspended.HistorySequence+2 || f.siteApplies != 2 || !siteOf(t, f.sites, before.Account.ID).Suspended {
+		t.Fatalf("a second suspend did not install the site list again: %+v, %d installs, sites %+v", again, f.siteApplies, f.sites)
+	}
+	if got := historyActions(t, s, before.Account.ID); got[len(got)-2] != "state:intended" || got[len(got)-1] != "state:succeeded" {
+		t.Fatalf("history %v", got)
+	}
+
+	// An account without a site has nothing to install.
+	other, err := s.create(ctx, CreateInput{Username: "secondacct", Domain: "second.test", Reason: "Synthetic core verification"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other, err = s.setState(ctx, other.ID, StateInput{State: "suspended", ExpectedRevision: other.Revision, Reason: "Unpaid"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if same, err := s.setState(ctx, other.ID, StateInput{State: "suspended", ExpectedRevision: other.Revision, Reason: "Unpaid"}, "test operator"); err != nil || same.Revision != other.Revision || f.siteApplies != 2 {
+		t.Fatalf("a second suspend without a site changed something: %+v %v", same, err)
+	}
+}
+
 func TestSuspendEndsRejectedWhenTheConfigFailsItsTest(t *testing.T) {
 	s, f := webStore(t)
 	before := liveFixture(t, s)

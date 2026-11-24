@@ -191,8 +191,12 @@ once the account is in its new state, or ends the change `rejected` the same
 way. A pending state change whose account the next start finds in its old
 state changed nothing (the broker stopped before the account changed, or
 after a rejected list put it back) and ends `rejected`, unchanged, so it
-does not block every account. Every later install of the site list, for any account, also marks the
-sites of accounts that were suspended before this rule.
+does not block every account. Every later install of the site list, for
+any account, also marks the sites of accounts that were suspended before
+this rule. To enforce one at once, suspend it again: a suspend of a suspended account with a live site
+installs the site list again, journaled like any state change (the
+revision goes up by one). Without a live site, or for a resume of an active
+account, the same state changes nothing.
 
 The account list shows `web` (`php_version`, `quota_mib`) for each account
 with a live site, so the panel can change one setting and keep the other.

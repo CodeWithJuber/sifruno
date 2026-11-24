@@ -1006,7 +1006,10 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	if r.Account.Revision != in.ExpectedRevision || s.installing[id] {
 		return Account{}, ErrConflict
 	}
-	if r.Account.State == in.State {
+	// A suspend of a suspended account with a live site installs the site
+	// list again, journaled like any change, so an operator can enforce a
+	// suspension made before the site list followed the account.
+	if r.Account.State == in.State && !(in.State == "suspended" && r.Web.enabled()) {
 		return r.Account, nil
 	}
 	if r.Account.Revision == ^uint64(0) {

@@ -17,11 +17,12 @@ import (
 // without a decision, or an entry names a route that does not exist.
 //
 // A customer may list and open its websites, change their domains and
-// redirects, databases, files and scheduled jobs, read their logs and usage,
-// and see their backups. It may not create, suspend, resume or delete a
-// website, change its PHP version, folder, plan or limits, take or restore a
-// backup, set up backup storage, see the server, use API tokens, see other
-// customers, run the New website wizard, or use the older static sites.
+// redirects, databases (phpMyAdmin included), files and scheduled jobs, read
+// their logs and usage, and see their backups. It may not create, suspend,
+// resume or delete a website, change its PHP version, folder, plan or
+// limits, take or restore a backup, set up backup storage, see the server,
+// use API tokens, see other customers, run the New website wizard, or use
+// the older static sites.
 // (PHP version and the folder repair stay admin-only: Jev, 0.82.)
 
 type customerAccess int
@@ -89,27 +90,30 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/websites/sites/{account_id}/databases/{name}/delete":         ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/databases/users/{user}/password": ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/databases/users/{user}/delete":   ownWebsite,
-	"GET /api/v1/websites/sites/{account_id}/files":                            ownWebsite,
-	"GET /api/v1/websites/sites/{account_id}/files/content":                    ownWebsite,
-	"GET /api/v1/websites/sites/{account_id}/files/download":                   ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/files/save":                      ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/files/folder":                    ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/files/rename":                    ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/files/delete":                    ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/files/mode":                      ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/files/upload":                    ownWebsite,
-	"GET /api/v1/websites/sites/{account_id}/cron":                             ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/cron":                            ownWebsite,
-	"GET /api/v1/websites/sites/{account_id}/logs/{kind}":                      ownWebsite,
-	"GET /api/v1/websites/sites/{account_id}/usage":                            ownWebsite,
-	"GET /api/v1/websites/sites/{account_id}/backups":                          ownWebsite,
-	"POST /api/v1/websites/sites/{account_id}/backups":                         adminOnly,
-	"POST /api/v1/websites/sites/{account_id}/backups/restore":                 adminOnly,
-	"POST /api/v1/websites/sites/{account_id}/backups/drill":                   adminOnly,
-	"GET /api/v1/websites/backup-storage":                                      adminOnly,
-	"POST /api/v1/websites/backup-storage":                                     adminOnly,
-	"POST /api/v1/websites/backup-storage/password":                            adminOnly,
-	"POST /api/v1/websites/backup-storage/password-saved":                      adminOnly,
+	// phpMyAdmin opens on its own origin, signed in as a temporary user
+	// limited to this website's databases (internal/phpmyadmin).
+	"POST /api/v1/websites/sites/{account_id}/databases/phpmyadmin": ownWebsite,
+	"GET /api/v1/websites/sites/{account_id}/files":                 ownWebsite,
+	"GET /api/v1/websites/sites/{account_id}/files/content":         ownWebsite,
+	"GET /api/v1/websites/sites/{account_id}/files/download":        ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/files/save":           ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/files/folder":         ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/files/rename":         ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/files/delete":         ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/files/mode":           ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/files/upload":         ownWebsite,
+	"GET /api/v1/websites/sites/{account_id}/cron":                  ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/cron":                 ownWebsite,
+	"GET /api/v1/websites/sites/{account_id}/logs/{kind}":           ownWebsite,
+	"GET /api/v1/websites/sites/{account_id}/usage":                 ownWebsite,
+	"GET /api/v1/websites/sites/{account_id}/backups":               ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/backups":              adminOnly,
+	"POST /api/v1/websites/sites/{account_id}/backups/restore":      adminOnly,
+	"POST /api/v1/websites/sites/{account_id}/backups/drill":        adminOnly,
+	"GET /api/v1/websites/backup-storage":                           adminOnly,
+	"POST /api/v1/websites/backup-storage":                          adminOnly,
+	"POST /api/v1/websites/backup-storage/password":                 adminOnly,
+	"POST /api/v1/websites/backup-storage/password-saved":           adminOnly,
 
 	// The New website wizard and its jobs, which list every website.
 	"POST /api/v1/websites/wordpress": adminOnly,

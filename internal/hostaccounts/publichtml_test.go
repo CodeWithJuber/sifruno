@@ -101,6 +101,10 @@ func TestAdoptRefusalsJournalNothing(t *testing.T) {
 		"not a folder":   {in: AdoptInput{ExpectedRevision: tenant.Account.Revision, Reason: "r"}, actor: "op", want: ErrConflict, setup: func() { f.failure = "adopt" }, teardown: func() { f.failure = "" }},
 		"installing":     {in: AdoptInput{ExpectedRevision: tenant.Account.Revision, Reason: "r"}, actor: "op", want: ErrConflict, setup: func() { s.installing = map[string]bool{tenant.Account.ID: true} }, teardown: func() { s.installing = nil }},
 		"web off":        {in: AdoptInput{ExpectedRevision: tenant.Account.Revision, Reason: "r"}, actor: "op", want: ErrUnavailable, setup: func() { s.web = nil }, teardown: func() { s.web = &WebOptions{ServerUser: "nobody"} }},
+		// The folder changed again before the grant: the tenant's, a conflict.
+		"folder changed again": {in: AdoptInput{ExpectedRevision: tenant.Account.Revision, Reason: "r"}, actor: "op", want: ErrConflict, setup: func() { f.failure = "grant" }, teardown: func() { f.failure = "" }},
+		// The ACL could not be written: the host's, unavailable.
+		"acl not written": {in: AdoptInput{ExpectedRevision: tenant.Account.Revision, Reason: "r"}, actor: "op", want: ErrUnavailable, setup: func() { f.failure = "grant-acl" }, teardown: func() { f.failure = "" }},
 	} {
 		id := tc.id
 		if id == "" {

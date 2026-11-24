@@ -135,8 +135,11 @@ func (f *fakeNative) InstallWordPress(_ context.Context, r record, in WordPressI
 
 func (f *fakeNative) GrantWebAccess(_ context.Context, r record) error {
 	f.webGrants++
-	if f.failure == "grant" {
+	switch f.failure {
+	case "grant":
 		return ErrRecovery
+	case "grant-acl":
+		return ErrUnavailable
 	}
 	return nil
 }

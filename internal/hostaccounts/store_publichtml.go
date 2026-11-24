@@ -86,8 +86,15 @@ func (s *store) adoptPublicHTML(ctx context.Context, id string, in AdoptInput, a
 	}
 	next := r
 	next.Ownership.Public = public
-	if r.Web.enabled() && s.native.GrantWebAccess(ctx, next) != nil {
-		return Account{}, ErrConflict
+	// A folder that changed again before the grant is the tenant's doing, a
+	// conflict; an ACL the host could not write is unavailable.
+	if r.Web.enabled() {
+		switch err := s.native.GrantWebAccess(ctx, next); {
+		case errors.Is(err, ErrUnavailable):
+			return Account{}, ErrUnavailable
+		case err != nil:
+			return Account{}, ErrConflict
+		}
 	}
 
 	if conflict {

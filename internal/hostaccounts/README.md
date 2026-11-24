@@ -127,8 +127,9 @@ adopting the current one: `AdoptPublicHTML`
   A missing folder, a link, a file or someone else's directory is refused
   (409) with nothing changed. Then it sets both to 0750 with `fchmod` on
   those handles. For a live site the web server's access is granted on the
-  new folder the same way as for a web change. Both steps touch only the
-  tenant's own directories and are safe to repeat.
+  new folder the same way as for a web change: a folder that changed again
+  meanwhile is 409, an ACL the host could not write is 503 `unavailable`.
+  Both steps touch only the tenant's own directories and are safe to repeat.
 - The intent (action `adopt`, the target naming the directory as
   `<device>:<inode>`) and the result are journaled and the revision goes
   up by one. A restart between the two records the named directory.

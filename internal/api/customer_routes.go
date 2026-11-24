@@ -22,8 +22,8 @@ import (
 // their logs and usage, and see their backups. It may not create, suspend,
 // resume or delete a website, change its PHP version, folder, plan or
 // limits, take or restore a backup, set up backup storage, see the server,
-// use API tokens, see other customers, run the New website wizard, or use
-// the older static sites.
+// use API tokens, see other customers, run the New website wizard, move a
+// website here from another server, or use the older static sites.
 // (PHP version and the folder repair stay admin-only: Jev, 0.82.)
 
 type customerAccess int
@@ -178,6 +178,18 @@ var customerRoutes = map[string]customerAccess{
 	"GET /openapi.yaml":     adminOnly,
 	"GET /openapi-3.0.json": adminOnly,
 	"GET /openapi-3.0.yaml": adminOnly,
+
+	// Moving a website here from another server: it needs root on the old
+	// server and makes a hosting account, so it is the operator's.
+	"POST /api/v1/websites/migrations/sources":               adminOnly,
+	"GET /api/v1/websites/migrations/sources/{id}":           adminOnly,
+	"POST /api/v1/websites/migrations/sources/{id}/host-key": adminOnly,
+	"GET /api/v1/websites/migrations/sources/{id}/accounts":  adminOnly,
+	"POST /api/v1/websites/migrations/sources/{id}/cancel":   adminOnly,
+	"POST /api/v1/websites/migrations":                       adminOnly,
+	"POST /api/v1/websites/migrations/{id}/verify":           adminOnly,
+	"POST /api/v1/websites/migrations/{id}/accept":           adminOnly,
+	"POST /api/v1/websites/migrations/{id}/ready":            adminOnly,
 
 	// The WHM compatibility transport and cPanel paths.
 	"/json-api/":         adminOnly,

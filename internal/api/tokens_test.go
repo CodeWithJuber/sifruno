@@ -97,6 +97,8 @@ func TestAPITokenThroughThePanelAPI(t *testing.T) {
 			// later route, and a path that only cleans into an allowed one.
 			{"GET", "/api/v1/trail"}, {"GET", "/api/v1/budget"}, {"GET", "/api/v1/platform"}, {"GET", "/api/v1/not-yet-written"},
 			{"GET", "/api/v1/sites/../session"}, {"GET", "/api/v1/sitesx"},
+			// Credential set-up inside an allowed area.
+			{"GET", "/api/v1/websites/backup-storage"}, {"POST", "/api/v1/websites/backup-storage"},
 		} {
 			w := clientRequest(h, network, route.method, route.path, created.Token, map[string]string{})
 			if w.Code != 403 || problemError(t, w) != "token_not_allowed" {

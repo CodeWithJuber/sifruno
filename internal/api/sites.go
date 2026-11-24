@@ -285,12 +285,22 @@ func isSessionPath(path string) bool {
 // included, refuses tokens until it is named here.
 var tokenAreas = []string{"/api/v1/accounts", "/api/v1/server", "/api/v1/services", "/api/v1/sites", "/api/v1/status", "/api/v1/websites"}
 
+// tokenRefused are routes inside those areas that set up credentials: backup
+// storage holds the storage server's details and shows the repository
+// password once. They are for a signed-in admin only.
+var tokenRefused = []string{"/api/v1/websites/backup-storage"}
+
 func tokenArea(p string) bool {
 	if path.Clean(p) != p {
 		return false
 	}
 	if p == "/openapi.json" {
 		return true
+	}
+	for _, refused := range tokenRefused {
+		if p == refused || strings.HasPrefix(p, refused+"/") {
+			return false
+		}
 	}
 	for _, area := range tokenAreas {
 		if p == area || strings.HasPrefix(p, area+"/") {

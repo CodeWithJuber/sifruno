@@ -86,6 +86,8 @@ type legoIssuer struct {
 	cfg  Config
 	http *http.Client
 	user *accountUser
+	// reach is the reachability probe's client; nil uses defaultReachClient.
+	reach *http.Client
 
 	mu     sync.Mutex
 	client *lego.Client // made, and the account registered, on first use
@@ -185,10 +187,14 @@ func loadOrCreateKey(path string) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// Issue gets a certificate for domain over HTTP-01 with a new ECDSA P-256
-// key, and answers the full chain, leaf first.
-func (l *legoIssuer) Issue(ctx context.Context, domain string) (Certificate, error) {
-	res, err := l.obtain(ctx, domain)
+// Issue gets one certificate naming domains (the first is its common name)
+// over HTTP-01 with a new ECDSA P-256 key, and answers the full chain, leaf
+// first. Every domain must validate, or none is issued.
+func (l *legoIssuer) Issue(ctx context.Context, domains []string) (Certificate, error) {
+	if len(domains) == 0 {
+		return Certificate{}, errors.New("acme: no domains to ask a certificate for")
+	}
+	res, err := l.obtain(ctx, domains)
 	if accountUnknown(err) {
 		// The certificate authority no longer knows the saved account (a
 		// test CA such as Pebble forgets it on restart): register the key
@@ -196,7 +202,7 @@ func (l *legoIssuer) Issue(ctx context.Context, domain string) (Certificate, err
 		if ferr := l.forgetAccount(); ferr != nil {
 			return Certificate{}, ferr
 		}
-		res, err = l.obtain(ctx, domain)
+		res, err = l.obtain(ctx, domains)
 	}
 	if err != nil {
 		return Certificate{}, classify(err)
@@ -207,12 +213,12 @@ func (l *legoIssuer) Issue(ctx context.Context, domain string) (Certificate, err
 	return Certificate{ChainPEM: res.Certificate, KeyPEM: res.PrivateKey}, nil
 }
 
-func (l *legoIssuer) obtain(ctx context.Context, domain string) (*certificate.Resource, error) {
+func (l *legoIssuer) obtain(ctx context.Context, domains []string) (*certificate.Resource, error) {
 	client, err := l.ready(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return client.Certificate.Obtain(ctx, certificate.ObtainRequest{Domains: []string{domain}, KeyType: certcrypto.EC256, Bundle: true})
+	return client.Certificate.Obtain(ctx, certificate.ObtainRequest{Domains: domains, KeyType: certcrypto.EC256, Bundle: true})
 }
 
 func accountUnknown(err error) bool {

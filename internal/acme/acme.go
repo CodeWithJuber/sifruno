@@ -3,6 +3,11 @@
 // HTTP-01 challenges with files in one shared directory; the finished
 // certificate and key go to the account broker through an Installer, the
 // only way a certificate reaches the web server. Nothing here runs as root.
+//
+// One certificate covers a site's domain and those of its aliases that
+// reach this server when it is asked for: the panel first asks each alias's
+// challenge path itself (Reaches), so an alias whose DNS does not point here
+// yet waits on http instead of failing the certificate for every domain.
 package acme
 
 import (
@@ -11,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -48,10 +54,16 @@ type Installer interface {
 	Install(ctx context.Context, accountID string, revision uint64, certPEM, keyPEM []byte) (newRevision uint64, notAfter time.Time, err error)
 }
 
-// Issuer gets a certificate for one domain. The lego client is the real one;
-// tests use a fake.
+// Issuer gets one certificate naming these domains, the first the site's
+// own. The lego client is the real one; tests use a fake.
 type Issuer interface {
-	Issue(ctx context.Context, domain string) (Certificate, error)
+	Issue(ctx context.Context, domains []string) (Certificate, error)
+}
+
+// Reacher is what an Issuer may also do: say whether a domain reaches this
+// server's HTTP-01 challenge path now. Without it every alias is asked for.
+type Reacher interface {
+	Reaches(ctx context.Context, domain string) bool
 }
 
 // Certificate is what an Issuer answers: the chain PEM, leaf first, and the
@@ -67,9 +79,16 @@ type Certificate struct {
 type Site struct {
 	AccountID string
 	Domain    string
-	Revision  uint64
-	Active    bool
-	NotAfter  time.Time
+	// Aliases are the site's other domains. A certificate names those of
+	// them that reach this server when it is asked for; the others wait for
+	// their DNS and are served over http.
+	Aliases []string
+	// Covered are the domains the installed certificate names, as the broker
+	// reports them; empty when it reports none.
+	Covered  []string
+	Revision uint64
+	Active   bool
+	NotAfter time.Time
 }
 
 // Sites lists the hosting accounts.
@@ -99,6 +118,7 @@ type Manager struct {
 	busy      chan struct{} // one attempt at a time
 	log       io.Writer
 	now       func() time.Time
+	reaches   func(context.Context, string) bool
 }
 
 // NewManager returns a manager over any issuer, keeping its records in
@@ -112,6 +132,10 @@ func NewManager(issuer Issuer, installer Installer, sites Sites, stateDir string
 		return nil, err
 	}
 	m := &Manager{issuer: issuer, installer: installer, sites: sites, busy: make(chan struct{}, 1), log: os.Stderr, now: time.Now}
+	m.reaches = func(context.Context, string) bool { return true }
+	if r, ok := issuer.(Reacher); ok {
+		m.reaches = r.Reaches
+	}
 	if m.records, err = openRecords(dir, m.log); err != nil {
 		return nil, err
 	}
@@ -135,14 +159,21 @@ func (m *Manager) Secure(ctx context.Context, accountID, domain string, revision
 		return 0, time.Time{}, ctx.Err()
 	}
 	defer func() { <-m.busy }()
-	m.records.attempt(accountID, domain, m.now())
+	return m.secure(ctx, accountID, []string{domain}, revision)
+}
+
+// secure gets and installs one certificate for names, the site's own domain
+// first, while the caller holds m.busy.
+func (m *Manager) secure(ctx context.Context, accountID string, names []string, revision uint64) (uint64, time.Time, error) {
+	label := strings.Join(names, ", ")
+	m.records.attempt(accountID, names[0], m.now())
 	issueCtx, cancel := context.WithTimeout(ctx, issueLimit)
-	cert, err := m.issuer.Issue(issueCtx, domain)
+	cert, err := m.issuer.Issue(issueCtx, names)
 	cancel()
 	if err != nil {
 		err = classify(err)
 		m.records.failed(accountID, err)
-		m.logf("acme: %s (account %s): no certificate: %s", domain, accountID, oneLine(err))
+		m.logf("acme: %s (account %s): no certificate: %s", label, accountID, oneLine(err))
 		return 0, time.Time{}, err
 	}
 	newRevision, notAfter, err := m.installer.Install(ctx, accountID, revision, cert.ChainPEM, cert.KeyPEM)
@@ -151,12 +182,104 @@ func (m *Manager) Secure(ctx context.Context, accountID, domain string, revision
 	if err != nil {
 		err = fmt.Errorf("%w: %w", ErrInstall, err)
 		m.records.failed(accountID, err)
-		m.logf("acme: %s (account %s): certificate issued but not installed: %s", domain, accountID, oneLine(err))
+		m.logf("acme: %s (account %s): certificate issued but not installed: %s", label, accountID, oneLine(err))
 		return 0, time.Time{}, err
 	}
 	m.records.installed(accountID, notAfter)
-	m.logf("acme: %s (account %s): certificate installed, valid until %s", domain, accountID, notAfter.UTC().Format(time.DateOnly))
+	m.logf("acme: %s (account %s): certificate installed, valid until %s", label, accountID, notAfter.UTC().Format(time.DateOnly))
 	return newRevision, notAfter, nil
+}
+
+// Refresh brings a live site's certificate up to date after its domains
+// changed: it asks for one naming the site's domain and those of its aliases
+// that reach this server now, unless the installed one names exactly those
+// and has more than 30 days left. The aliases that do not reach this server
+// are recorded (Waiting). A person changed the site, so it does not wait
+// for the 6-hour retry or the week after a refused install. It answers the
+// attempt's error, nil when nothing was needed.
+func (m *Manager) Refresh(ctx context.Context, s Site) error {
+	if s.AccountID == "" || s.Domain == "" {
+		return errors.New("acme: an account and a domain are needed")
+	}
+	if !s.Active {
+		return nil
+	}
+	notAfter := s.NotAfter
+	if notAfter.IsZero() {
+		r, _ := m.records.get(s.AccountID)
+		notAfter = r.NotAfter
+	}
+	return m.renew(ctx, s, due(notAfter, time.Time{}, m.now()))
+}
+
+// Waiting names the site's aliases its last certificate request left out
+// because they did not reach this server: their DNS does not point here
+// yet.
+func (m *Manager) Waiting(accountID string) []string {
+	r, _ := m.records.get(accountID)
+	return slices.Clone(r.Waiting)
+}
+
+// renew asks for a certificate naming the site's domain and its aliases
+// that reach this server, when the installed one is expiring (or missing)
+// or names other domains than those. A failed validation of an expiring
+// certificate with aliases is tried once more for the site's own domain
+// alone, so an alias the certificate authority cannot reach does not let the
+// site's certificate run out.
+func (m *Manager) renew(ctx context.Context, s Site, expiring bool) error {
+	select {
+	case m.busy <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-m.busy }()
+	names, waiting := []string{s.Domain}, []string{}
+	for _, alias := range s.Aliases {
+		if alias == s.Domain || slices.Contains(names, alias) {
+			continue
+		}
+		if m.reaches(ctx, alias) {
+			names = append(names, alias)
+		} else {
+			waiting = append(waiting, alias)
+		}
+	}
+	m.records.waiting(s.AccountID, s.Domain, waiting)
+	if !expiring && sameNames(names, covered(s)) {
+		return nil
+	}
+	_, _, err := m.secure(ctx, s.AccountID, names, s.Revision)
+	if errors.Is(err, ErrValidation) && expiring && len(names) > 1 {
+		m.records.waiting(s.AccountID, s.Domain, append(waiting, names[1:]...))
+		_, _, err = m.secure(ctx, s.AccountID, names[:1], s.Revision)
+	}
+	return err
+}
+
+// covered are the domains the site's installed certificate names: what the
+// broker reports, or the site's own domain alone for a certificate the
+// broker reports no names for, or none without a certificate.
+func covered(s Site) []string {
+	if len(s.Covered) > 0 {
+		return s.Covered
+	}
+	if !s.NotAfter.IsZero() {
+		return []string{s.Domain}
+	}
+	return nil
+}
+
+// sameNames compares two lists of domains as sets.
+func sameNames(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+}
+
+// mayChange reports whether the names a site's certificate should carry
+// can differ from the site's own domain: it has aliases, or the installed
+// certificate names other domains.
+func mayChange(s Site) bool {
+	c := covered(s)
+	return len(s.Aliases) > 0 || (len(c) > 0 && !slices.Equal(c, []string{s.Domain}))
 }
 
 // Run renews certificates until ctx ends: once 2 minutes after start, then
@@ -214,9 +337,14 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 		if notAfter.IsZero() {
 			notAfter = r.NotAfter
 		}
-		if due(notAfter, r.LastAttempt.Add(retryWait(r)), now) {
-			// Secure logs the outcome; the error is already in the record.
-			_, _, _ = m.Secure(ctx, s.AccountID, s.Domain, s.Revision)
+		retryAt := r.LastAttempt.Add(retryWait(r))
+		// A site with aliases is looked at too when its certificate is not
+		// due: an alias whose DNS now points here, or one removed, changes
+		// the names it should carry.
+		expiring := due(notAfter, retryAt, now)
+		if expiring || (!now.Before(retryAt) && mayChange(s)) {
+			// secure logs the outcome; the error is already in the record.
+			_ = m.renew(ctx, s, expiring)
 		}
 	}
 	return m.nextWait()

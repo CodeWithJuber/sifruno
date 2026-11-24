@@ -21,7 +21,8 @@ import (
 
 type fakeIssuer struct{ err error }
 
-func (f fakeIssuer) Issue(_ context.Context, domain string) (acme.Certificate, error) {
+func (f fakeIssuer) Issue(_ context.Context, domains []string) (acme.Certificate, error) {
+	domain := strings.Join(domains, ",")
 	if f.err != nil {
 		return acme.Certificate{}, f.err
 	}

@@ -298,14 +298,30 @@ type issuerFake struct {
 	err     error
 	domains []string
 	keys    [][]byte
+	// unreachable names the domains that do not reach this server;
+	// failMany fails a request for more than one name.
+	unreachable map[string]bool
+	failMany    error
+	probes      []string
 }
 
-func (f *issuerFake) Issue(_ context.Context, domain string) (Certificate, error) {
+func (f *issuerFake) Reaches(_ context.Context, domain string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.probes = append(f.probes, domain)
+	return !f.unreachable[domain]
+}
+
+func (f *issuerFake) Issue(_ context.Context, names []string) (Certificate, error) {
+	domain := strings.Join(names, ",")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.domains = append(f.domains, domain)
 	if f.err != nil {
 		return Certificate{}, f.err
+	}
+	if f.failMany != nil && len(names) > 1 {
+		return Certificate{}, f.failMany
 	}
 	key := []byte("-----BEGIN EC PRIVATE KEY-----\nfake\n-----END EC PRIVATE KEY-----\n")
 	f.keys = append(f.keys, key)

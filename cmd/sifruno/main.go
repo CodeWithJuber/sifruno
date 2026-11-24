@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -427,13 +428,25 @@ func (b brokerSites) Sites(ctx context.Context) ([]acme.Site, error) {
 	}
 	sites := make([]acme.Site, 0, len(accounts))
 	for _, a := range accounts {
-		site := acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: a.State == "active"}
-		if a.Certificate.NotAfter > 0 {
-			site.NotAfter = time.Unix(a.Certificate.NotAfter, 0)
-		}
-		sites = append(sites, site)
+		sites = append(sites, certificateSite(a))
 	}
 	return sites, nil
+}
+
+// certificateSite is a broker account as the certificate manager sees it:
+// its domain, its aliases, and the domains its certificate names.
+func certificateSite(a hostaccounts.Account) acme.Site {
+	site := acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: a.State == "active"}
+	if a.SiteDomains != nil {
+		site.Aliases = slices.Clone(a.SiteDomains.Aliases)
+	}
+	if a.Certificate.NotAfter > 0 {
+		site.NotAfter = time.Unix(a.Certificate.NotAfter, 0)
+	}
+	if a.Certificate.Names != "" {
+		site.Covered = strings.Split(a.Certificate.Names, ",")
+	}
+	return site
 }
 
 // splitHosts reads --panel-host: comma-separated, lower-cased, de-duplicated.

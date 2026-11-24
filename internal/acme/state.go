@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,6 +31,9 @@ type record struct {
 	NotAfter    time.Time `json:"not_after"`
 	LastAttempt time.Time `json:"last_attempt"`
 	LastResult  string    `json:"last_result"`
+	// Waiting are the site's aliases its last look left out of the
+	// certificate because they did not reach this server.
+	Waiting []string `json:"waiting,omitempty"`
 }
 
 type recordsData struct {
@@ -131,6 +135,23 @@ func (r *records) attempt(accountID, domain string, now time.Time) {
 			x.NotAfter = time.Time{}
 		}
 		x.Domain, x.LastAttempt, x.LastResult = domain, now.UTC(), "trying"
+	})
+}
+
+// waiting records the site's aliases that did not reach this server, and
+// saves the list only when that changed.
+func (r *records) waiting(accountID, domain string, waiting []string) {
+	if x, ok := r.get(accountID); ok && x.Domain == domain && slices.Equal(x.Waiting, waiting) {
+		return
+	}
+	r.change(accountID, func(x *record) {
+		if x.Domain != domain {
+			x.Domain, x.NotAfter = domain, time.Time{}
+		}
+		x.Waiting = slices.Clone(waiting)
+		if len(x.Waiting) == 0 {
+			x.Waiting = nil
+		}
 	})
 }
 

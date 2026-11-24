@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | whmcs-module | panel-shell | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | site-domains | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | whmcs-module | panel-shell | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -37,6 +37,15 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 installs LSPHP 8.4 if missing), suspend (403 from the broker's
                 own empty folder, no /home path in the vhost), a second
                 suspend, resume, and delete.
+  site-domains  A site's other domains and redirects: an alias and another
+                registered domain serve the site, a path redirect answers 301
+                with its Location, www redirects to the bare domain with its
+                path kept (ACME challenges excepted), another account cannot
+                take a domain, config-injection attempts are refused, one
+                certificate from Pebble names every domain that points here
+                (a domain left out of /etc/hosts stays http), a suspended
+                site answers 403 and redirects nothing, and a removed alias
+                leaves the listener and the next certificate.
   backups       Website backups with restic, off the server: an SFTP user
                 on the VM stands in for the storage server (a wrong host
                 key is refused), a WordPress site is backed up, its files
@@ -210,6 +219,26 @@ case "${1:-}" in
     transcript="$OUT/broker-site-actions-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/broker-site-actions.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  site-domains)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    # A broker left running by an earlier proof holds its binary open, so
+    # stop it before the copy replaces the file. Its state stays on disk.
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in hostbroker brokerdrive; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/site-domains.guest.sh" /opt/sifruno-proof/site-domains.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/site-domains.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/site-domains-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    status=0
+    "$HERE/vm.sh" ssh /opt/sifruno-proof/site-domains.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

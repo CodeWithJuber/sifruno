@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"sifruno/internal/acme"
 	"sifruno/internal/hostaccounts"
 )
 
@@ -31,7 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|cron|set-cron|log|usage|usage-all|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|domains|show-domains|secure|wordpress|public-html|delete|cron|set-cron|log|usage|usage-all|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -40,9 +41,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// which the broker allows up to four minutes on a busy host.
 	timeout := 60 * time.Second
 	switch global.Arg(0) {
-	case "wordpress":
+	case "wordpress", "secure":
+		// A certificate is asked for, validated and installed: the issue
+		// alone may take three minutes, the install six.
 		timeout = 12 * time.Minute
-	case "create", "web", "certificate", "delete", "state", "plan", "backup-target", "backups":
+	case "create", "web", "certificate", "domains", "delete", "state", "plan", "backup-target", "backups":
 		// A state change of a live site re-applies the site list too, and
 		// so does a plan change of its limits. A create writes the slice
 		// limits and may reload systemd first.
@@ -92,6 +95,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	kind := command.String("kind", "access", "access or error (log)")
 	var jobs multiFlag
 	command.Var(&jobs, "job", "A job as five cron fields, a space and the command (set-cron); repeat for several, omit all to remove every job")
+	inputFile := command.String("input-file", "", "JSON file with exactly aliases and redirects, as the broker takes them (domains)")
+	acmeDirectory := command.String("acme-directory", "", "ACME directory URL (secure)")
+	acmeCAFile := command.String("acme-ca-file", "", "PEM bundle trusted for the ACME server only (secure)")
+	acmeState := command.String("acme-state", "", "Private folder for the ACME account key (secure)")
+	acmeEmail := command.String("acme-email", "", "ACME account contact (secure)")
 	var keyFiles multiFlag
 	command.Var(&keyFiles, "key-file", "Public key file to install (ssh-keys); repeat for several, omit all to remove access. With certificate: the PEM private key, once")
 	if command.Parse(global.Args()[1:]) != nil || command.NArg() != 0 {
@@ -200,6 +208,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		result, err = certs.SetCertificate(ctx, *id, hostaccounts.CertificateInput{ExpectedRevision: *revision, CertPEM: string(chain), KeyPEM: string(key), Reason: *reason}, *actor)
+	case "show-domains", "domains":
+		domains, ok := service.(hostaccounts.SiteDomainsService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no domains surface")
+			return 1
+		}
+		if global.Arg(0) == "show-domains" {
+			result, err = domains.SiteDomains(ctx, *id)
+			break
+		}
+		set, readErr := readSiteDomains(*inputFile)
+		if readErr != nil {
+			fmt.Fprintln(stderr, "read the domains file:", readErr)
+			return 2
+		}
+		result, err = domains.SetSiteDomains(ctx, *id, hostaccounts.SiteDomainsInput{Aliases: set.Aliases, Redirects: set.Redirects, ExpectedRevision: *revision, Reason: *reason}, *actor)
+	case "secure":
+		// The panel's own certificate manager, with its reachability probe,
+		// against the given ACME server, installing through the broker.
+		certs, ok := service.(hostaccounts.CertificateService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no certificate surface")
+			return 1
+		}
+		result, err = secure(ctx, service, certs, *id, acme.Config{Email: *acmeEmail, Directory: *acmeDirectory, CAFile: *acmeCAFile, StateDir: *acmeState}, *actor)
 	case "wordpress":
 		wp, ok := service.(hostaccounts.WordPressService)
 		if !ok {

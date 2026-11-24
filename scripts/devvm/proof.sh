@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | wordpress-wizard | panel-shell | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | wordpress-wizard | panel-shell | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -32,6 +32,11 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 The WordPress install: dbhost creates the site's database,
                 the broker runs WP-CLI as the site user with the passwords
                 on stdin, and the site serves WordPress.
+  broker-site-actions
+                The site page's changes at the broker: PHP 8.3 to 8.4 (it
+                installs LSPHP 8.4 if missing), suspend (403 from the broker's
+                own empty folder, no /home path in the vhost), a second
+                suspend, resume, and delete.
   wordpress-wizard
                 The New website wizard end to end: the panel runs as sifpanel
                 with the broker and the MariaDB option file, a browser on this
@@ -151,6 +156,24 @@ case "${1:-}" in
     transcript="$OUT/broker-web-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/broker-web.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  broker-site-actions)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in hostbroker brokerdrive; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/broker-site-actions.guest.sh" /opt/sifruno-proof/broker-site-actions.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/broker-site-actions.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/broker-site-actions-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    status=0
+    "$HERE/vm.sh" ssh /opt/sifruno-proof/broker-site-actions.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

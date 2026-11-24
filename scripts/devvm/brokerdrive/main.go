@@ -31,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|backup-status|backup-target|backup|backups|restore|drill|prune [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -76,9 +76,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	user := command.String("user", "", "Storage server SFTP user (backup-target)")
 	path := command.String("path", "", "Repository folder on the storage server (backup-target)")
 	knownHostsFile := command.String("known-hosts-file", "", "ssh-keyscan output for the storage server (backup-target)")
-	// The repository password is shown once; it goes to this file, never
-	// to the output.
-	passwordOut := command.String("password-out", "", "File (0600) that receives the repository password when it is shown (backup-target)")
+	// The repository password is shown until it is confirmed saved; it goes
+	// to this file, never to the output.
+	passwordOut := command.String("password-out", "", "File (0600) that receives the repository password when it is shown (backup-target, backup-password)")
 	snapshot := command.String("snapshot", "", "Snapshot ID (restore)")
 	files := command.Bool("files", false, "Restore the files (restore)")
 	var databases multiFlag
@@ -185,7 +185,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		result = installed
-	case "backup-status", "backup-target", "backup", "backups", "restore", "drill", "prune":
+	case "backup-status", "backup-target", "backup-password", "backup-password-saved", "backup", "backups", "restore", "drill", "prune":
 		backups, ok := service.(hostaccounts.BackupService)
 		if !ok {
 			fmt.Fprintln(stderr, "this client has no backup surface")
@@ -211,10 +211,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 					fmt.Fprintln(stderr, "write the password file:", writeErr)
 					return 1
 				}
-				fmt.Fprintf(stderr, "repository password shown once: written to %s\n", *passwordOut)
+				fmt.Fprintf(stderr, "repository password shown (until it is confirmed saved): written to %s\n", *passwordOut)
 				saved.Password = ""
 			}
 			result = saved
+		case "backup-password":
+			if *passwordOut == "" {
+				fmt.Fprintln(stderr, "backup-password needs --password-out")
+				return 2
+			}
+			var shown hostaccounts.BackupPassword
+			shown, err = backups.ShowBackupPassword(ctx, hostaccounts.BackupPasswordInput{Reason: *reason}, *actor)
+			if err == nil {
+				if writeErr := os.WriteFile(*passwordOut, []byte(shown.Password+"\n"), 0600); writeErr != nil {
+					fmt.Fprintln(stderr, "write the password file:", writeErr)
+					return 1
+				}
+				fmt.Fprintf(stderr, "repository password shown again: written to %s\n", *passwordOut)
+			}
+			result = struct {
+				Written string `json:"written"`
+			}{*passwordOut}
+		case "backup-password-saved":
+			result, err = backups.ConfirmBackupPassword(ctx, hostaccounts.BackupPasswordInput{Reason: *reason}, *actor)
 		case "backup":
 			result, err = backups.BackupAccount(ctx, *id, hostaccounts.BackupInput{Databases: dbs, Reason: *reason}, *actor)
 		case "backups":

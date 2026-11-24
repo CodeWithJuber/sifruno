@@ -3,9 +3,11 @@
 # Proves website backups with restic, kept off the server, and the restore
 # drill, through the broker's own operations: an SFTP storage user on this
 # VM stands in for the storage server, a WordPress site is backed up,
-# broken (files deleted, a table dropped), restored, and serves again; the
-# drill passes; no password is in any process's arguments. Prints PASS/FAIL
-# per check.
+# broken (files deleted, a table dropped), restored, and serves again; a
+# 1 GiB sparse file in the site comes back sparse; the repository password
+# is shown until it is confirmed saved, then never again; the drill passes;
+# no password is in any process's arguments. Prints PASS/FAIL per check,
+# and SKIP for a part this broker state cannot show.
 set -uo pipefail
 
 BIN=/opt/sifruno-proof
@@ -118,18 +120,46 @@ else
   check "a target with the wrong host key is refused (no trust on first use)" grep -q 'backup connect step failed' "$WORK/bogus.err"
 fi
 check "the refused target made nothing on the storage server" test ! -e "$REPO"
+# The password is shown in two steps: until the admin confirms it is saved,
+# every target change answers it and it can be shown again. A broker whose
+# state an earlier run already confirmed cannot show this part.
+saved_before="$(drive backup-status | field '["password_saved"]')"
 target="$(drive backup-target --host 127.0.0.1 --port 22 --user "$STORE_USER" --path "$REPO" \
   --known-hosts-file "$PANEL/known_hosts" --password-out "$PANEL/repo-password" --reason 'Backup storage proof' 2>"$WORK/target.err")" ||
   { sed 's/^/  broker answered: /' "$WORK/target.err"; fail "the broker opens the target"; }
 check "the repository was made on the storage server" test "$(printf '%s' "$target" | field '["initialized"]')" = True
-check "the repository password was shown once (to a 0600 file), not printed" bash -c \
-  "grep -q 'shown once' $WORK/target.err && [ \"\$(stat -c %a $PANEL/repo-password)\" = 600 ] && [ \$(tr -d '\n' < $PANEL/repo-password | wc -c) -eq 43 ]"
 check "the repository belongs to the storage user" test "$(stat -c %U "$REPO/config")" = "$STORE_USER"
-again="$(drive backup-target --host 127.0.0.1 --port 22 --user "$STORE_USER" --path "$REPO" \
-  --known-hosts-file "$PANEL/known_hosts" --password-out "$PANEL/second-password" --reason 'Same target again' 2>"$WORK/again.err")"
-again_initialized="$(printf '%s' "$again" | field '["initialized"]' 2>/dev/null)"
-check "saving the same target again opens the repository and shows no password" bash -c \
-  "[ '$again_initialized' = False ] && [ ! -e $PANEL/second-password ] && ! grep -q 'shown once' $WORK/again.err"
+if [ "$saved_before" = True ]; then
+  echo "SKIP  the two-step password: an earlier run confirmed this broker's password saved; it needs a fresh broker state"
+else
+  check "the repository password was shown (to a 0600 file), not printed" bash -c \
+    "grep -q 'repository password shown' $WORK/target.err && [ \"\$(stat -c %a $PANEL/repo-password)\" = 600 ] && [ \$(tr -d '\n' < $PANEL/repo-password | wc -c) -eq 43 ]"
+  again="$(drive backup-target --host 127.0.0.1 --port 22 --user "$STORE_USER" --path "$REPO" \
+    --known-hosts-file "$PANEL/known_hosts" --password-out "$PANEL/second-password" --reason 'Same target again' 2>"$WORK/again.err")"
+  again_initialized="$(printf '%s' "$again" | field '["initialized"]' 2>/dev/null)"
+  check "saving the same target again opens the repository and, not yet confirmed, answers the same password" bash -c \
+    "[ '$again_initialized' = False ] && cmp -s $PANEL/repo-password $PANEL/second-password"
+  drive backup-password --password-out "$PANEL/shown-again" --reason 'The answer was lost' >/dev/null 2>"$WORK/shown.err"
+  check "a lost answer does not lose it: the broker shows the same password again" cmp -s "$PANEL/repo-password" "$PANEL/shown-again"
+  status="$(drive backup-status)"
+  status_saved="$(printf '%s' "$status" | field '["password_saved"]')"
+  check "the status says it is not confirmed yet and carries no password" bash -c \
+    "[ '$status_saved' = False ] && ! printf '%s' '$status' | grep -qF -f $PANEL/repo-password"
+  confirmed="$(drive backup-password-saved --reason 'Saved in the backup proof')"
+  check "the confirmation is recorded" test "$(printf '%s' "$confirmed" | field '["password_saved"]')" = True
+  if drive backup-password --password-out "$PANEL/after-confirm" --reason 'After the confirmation' >/dev/null 2>"$WORK/after-confirm.err"; then
+    fail "after the confirmation the broker no longer shows the password"
+  else
+    sed 's/^/  broker answered: /' "$WORK/after-confirm.err"
+    check "after the confirmation the broker no longer shows the password" bash -c "grep -q 'conflict' $WORK/after-confirm.err && [ ! -s $PANEL/after-confirm ]"
+  fi
+  third="$(drive backup-target --host 127.0.0.1 --port 22 --user "$STORE_USER" --path "$REPO" \
+    --known-hosts-file "$PANEL/known_hosts" --password-out "$PANEL/third-password" --reason 'Same target after the confirmation' 2>"$WORK/third.err")"
+  third_saved="$(printf '%s' "$third" | field '["status"]["password_saved"]' 2>/dev/null)"
+  check "a target change after the confirmation shows no password" bash -c \
+    "[ ! -e $PANEL/third-password ] && ! grep -q 'repository password shown' $WORK/third.err && [ '$third_saved' = True ]"
+fi
+check "the repository password file stayed root-only throughout" test "$(stat -c '%U %a' "$STATE/backup/password")" = "root 600"
 
 echo
 echo "## 4. A WordPress site through the broker and dbhost"
@@ -154,6 +184,16 @@ for _ in $(seq 1 300); do
 done
 check "the site serves its title before the backup" test "$ok" = yes
 public_inode="$(stat -c %i "/home/$SITE_USER/public_html")"
+# A sparse file the tenant makes: 1 GiB long, a few bytes of data in the
+# middle. It costs almost nothing under the quota and in the repository;
+# the restore must not write it out in full.
+SPARSE="/home/$SITE_USER/public_html/sparse.bin"
+MARKER=sifruno-sparse-marker
+runuser -u "$SITE_USER" -- truncate -s 1G "$SPARSE"
+printf '%s' "$MARKER" | runuser -u "$SITE_USER" -- dd of="$SPARSE" bs=1 seek=536870912 conv=notrunc status=none
+echo "  sparse.bin: $(stat -c %s "$SPARSE") bytes long, $(du -k "$SPARSE" | cut -f1) KiB on disk"
+check "the site holds a 1 GiB sparse file using under 64 MiB of disk" bash -c \
+  "[ \$(stat -c %s $SPARSE) -eq 1073741824 ] && [ \$(du -k $SPARSE | cut -f1) -lt 65536 ]"
 
 echo
 echo "## 5. Back it up"
@@ -184,6 +224,9 @@ check "the site no longer serves its title" bash -c "! curl -s -H 'Host: $DOMAIN
 
 echo
 echo "## 7. Restore the files and the database"
+# The broker refuses a restore whose snapshot (the sparse file counted at
+# its full 1 GiB) would not leave 5% of the disk, at least 2 GiB, free.
+echo "  staging disk: $(df -h --output=avail,size /var/lib/sifruno-restore | tail -1 | awk '{print $1 " free of " $2}')"
 sample_start
 start=$(date +%s)
 restored="$(drive restore --id "$id" --revision "$rev" --snapshot "$snap" --files --db "$DB" --reason 'Restore proof' 2>"$WORK/restore.err")"
@@ -205,6 +248,9 @@ check "the site serves its title again" test "$ok" = yes
 check "wp_options is back" bash -c "mysql --protocol=socket -uroot -N -e 'SHOW TABLES' $DB | grep -qx wp_options"
 check "the restored files belong to the site user" test "$(stat -c %U "/home/$SITE_USER/public_html/wp-load.php")" = "$SITE_USER"
 check "wp-config.php is the site user's and mode 0600 again" test "$(stat -c '%U %a' "/home/$SITE_USER/public_html/wp-config.php")" = "$SITE_USER 600"
+echo "  restored sparse.bin: $(stat -c %s "$SPARSE" 2>&1) bytes long, $(du -k "$SPARSE" 2>&1 | cut -f1) KiB on disk"
+check "the sparse file came back sparse (restic restore --sparse, then cp): 1 GiB long, under 64 MiB on disk, its data in place" bash -c \
+  "[ \$(stat -c %s $SPARSE) -eq 1073741824 ] && [ \$(du -k $SPARSE | cut -f1) -lt 65536 ] && [ \"\$(dd if=$SPARSE bs=1 skip=536870912 count=${#MARKER} status=none)\" = $MARKER ]"
 check "the home kept mode 0750 and public_html is the same folder" bash -c \
   "[ \"\$(stat -c '%U %a' /home/$SITE_USER)\" = '$SITE_USER 750' ] && [ \"\$(stat -c %i /home/$SITE_USER/public_html)\" = $public_inode ]"
 check "no temporary restore user is left in MariaDB" test "$(sql "SELECT COUNT(*) FROM mysql.user WHERE User LIKE 'sifruno\\_rst\\_%'")" = 0
@@ -227,10 +273,10 @@ echo "## 10. No password in any process argument"
 samples="$(grep -c '^--$' "$WORK/ps-samples.txt")"
 echo "  process-argument samples taken during the backup and the restore: $samples"
 check "no process argument held the repository, database or admin password" bash -c \
-  "[ $samples -gt 0 ] && ! grep -qF -f <(cat $PANEL/repo-password $PANEL/db-password $PANEL/admin-password) $WORK/ps-samples.txt"
+  "[ $samples -gt 0 ] && ! grep -qF -f <(for f in $STATE/backup/password $PANEL/db-password $PANEL/admin-password; do cat \$f; echo; done) $WORK/ps-samples.txt"
 check "restic and ssh ran during the samples" bash -c "grep -q 'restic' $WORK/ps-samples.txt && grep -q 'HostKeyAlias=sifruno-backup-target' $WORK/ps-samples.txt"
 check "the broker's answers hold no password" bash -c \
-  "! grep -qF -f <(cat $PANEL/repo-password $PANEL/db-password $PANEL/admin-password) $WORK/target.err $WORK/backup.err $WORK/restore.err $WORK/drill.err"
+  "! grep -qF -f <(for f in $STATE/backup/password $PANEL/db-password $PANEL/admin-password; do cat \$f; echo; done) $WORK/target.err $WORK/backup.err $WORK/restore.err $WORK/drill.err"
 
 echo
 echo "## 11. Clean up the proof site"

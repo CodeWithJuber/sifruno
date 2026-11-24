@@ -510,6 +510,8 @@ func TestFailureAtEachStepUndoesInReverse(t *testing.T) {
 		undoAcc []string
 		undoDB  []string
 		tech    string
+		why     string // the error's Why, when set
+		next    string // the start of its Next, when set
 	}{
 		{
 			name:   "account",
@@ -551,6 +553,22 @@ func TestFailureAtEachStepUndoesInReverse(t *testing.T) {
 			undoAcc: []string{"delete 0001 rev=2"},
 			undoDB:  []string{"drop-user example example_wp", "drop-db example example_wp"},
 			tech:    "install: Error: The site you have requested is not installed. password=[secret]",
+			why:     `The WordPress installer stopped at its "install" step.`,
+		},
+		{
+			name: "wordpress cache setting",
+			setup: func(f fixture) {
+				f.acc.installF = func(context.Context) error {
+					return &hostaccounts.InstallError{Step: "cache setting", Detail: "Error: ID not exist [id] cache-priv", Installed: true}
+				}
+			},
+			states: "account=undone web=undone ssl=skipped database=undone wordpress=failed",
+			step:   StepWordPress, what: "WordPress could not be installed.",
+			undoAcc: []string{"delete 0001 rev=2"},
+			undoDB:  []string{"drop-user example example_wp", "drop-db example example_wp"},
+			tech:    "cache setting: Error: ID not exist [id] cache-priv",
+			why:     `WordPress was installed, but its LiteSpeed Cache plugin could not be set up: the "cache setting" step failed.`,
+			next:    "The panel removes the new website again",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -569,6 +587,9 @@ func TestFailureAtEachStepUndoesInReverse(t *testing.T) {
 			}
 			if tc.tech != "" && e.Technical != tc.tech {
 				t.Fatalf("technical %q", e.Technical)
+			}
+			if (tc.why != "" && e.Why != tc.why) || !strings.HasPrefix(e.Next, tc.next) {
+				t.Fatalf("why %q next %q", e.Why, e.Next)
 			}
 			var undoAcc, undoDB []string
 			for _, c := range f.acc.calls {

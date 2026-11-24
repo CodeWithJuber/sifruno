@@ -603,7 +603,13 @@ func (j *run) wordpress(ctx context.Context) (string, *stepError) {
 		var install *hostaccounts.InstallError
 		if errors.As(err, &install) {
 			// Redact before quoting: %q escapes characters a password may hold.
-			return "", &stepError{why: fmt.Sprintf("The WordPress installer stopped at its %q step.", redact(install.Step, j.secrets...)), next: "Open Technical details to see where it stopped, fix the cause, then create the website again.", technical: scrub(install.Step+": "+install.Detail, j.secrets...)}
+			step := redact(install.Step, j.secrets...)
+			if install.Installed {
+				// WordPress itself works; the job still fails and its undo
+				// removes the new website, so it says both.
+				return "", &stepError{why: fmt.Sprintf("WordPress was installed, but its LiteSpeed Cache plugin could not be set up: the %q step failed.", step), next: "The panel removes the new website again, as it does when any step fails. Open Technical details to see why the cache step failed, fix the cause, then create the website again.", technical: scrub(install.Step+": "+install.Detail, j.secrets...)}
+			}
+			return "", &stepError{why: fmt.Sprintf("The WordPress installer stopped at its %q step.", step), next: "Open Technical details to see where it stopped, fix the cause, then create the website again.", technical: scrub(install.Step+": "+install.Detail, j.secrets...)}
 		}
 		return "", j.brokerFailure(err)
 	}

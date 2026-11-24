@@ -1,0 +1,52 @@
+{
+  "listeners": [
+    {"name": "http", "address": "*", "port": 80},
+    {"name": "https", "address": "*", "port": 443, "secure": true,
+     "cert_file": "/etc/sifruno/tls/listener.crt",
+     "key_file": "/etc/sifruno/tls/listener.key"}
+  ],
+  "sites": [
+    {
+      "name": "shop",
+      "username": "shopowner",
+      "group": "shopowner",
+      "domains": ["example.com", "example.net", "shop.example.com", "www.example.com"],
+      "doc_root": "/home/shopowner/public_html",
+      "php_version": "8.3",
+      "limits": {"php_children": 4},
+      "isolation": {"namespace": true, "cgroups": true},
+      "tls": {
+        "cert_file": "/etc/sifruno/tls/shop/cert.pem",
+        "key_file": "/etc/sifruno/tls/shop/key.pem",
+        "domains": ["example.com", "shop.example.com", "www.example.com"]
+      },
+      "redirects": [
+        {"path": "/old-page", "target": "https://example.com/new-page", "status": 301},
+        {"domain": "www.example.com", "target": "https://example.com", "status": 301},
+        {"path": "/blog/", "target": "https://blog.example.org/?from=shop&lang=en", "status": 302},
+        {"domain": "example.net", "target": "http://example.com:8080", "status": 302},
+        {"path": "/", "target": "https://example.com/start", "status": 302}
+      ]
+    },
+    {
+      "name": "paused",
+      "username": "pauseduser",
+      "group": "pauseduser",
+      "domains": ["paused.example.org", "www.paused.example.org"],
+      "doc_root": "/home/pauseduser/public_html",
+      "php_version": "8.2",
+      "suspended": true,
+      "limits": {"php_children": 4},
+      "isolation": {"namespace": true, "cgroups": true},
+      "tls": {
+        "cert_file": "/etc/sifruno/tls/paused/cert.pem",
+        "key_file": "/etc/sifruno/tls/paused/key.pem",
+        "domains": ["paused.example.org", "www.paused.example.org"]
+      },
+      "redirects": [
+        {"domain": "www.paused.example.org", "target": "https://paused.example.org", "status": 301},
+        {"path": "/old-page", "target": "https://paused.example.org/new-page", "status": 301}
+      ]
+    }
+  ]
+}

@@ -115,7 +115,11 @@ func renderServer(listeners []Listener, sites []site) []byte {
 			if l.Secure && v.TLS.CertFile == "" {
 				continue
 			}
-			kv(&b, "map", NamePrefix+v.Name+" "+strings.Join(v.Domains, ", "))
+			domains := v.Domains
+			if l.Secure {
+				domains = securedDomains(v)
+			}
+			kv(&b, "map", NamePrefix+v.Name+" "+strings.Join(domains, ", "))
 		}
 		b.WriteString("}\n")
 	}
@@ -191,7 +195,7 @@ func renderVhost(v site) []byte {
 	autoLoad := "0"
 	if !v.Suspended {
 		renderPHP(&b, v)
-		rules = denyRules
+		rules = append(append([]string(nil), denyRules...), redirectRules(v.Redirects)...)
 		autoLoad = "1"
 	}
 	renderCache(&b, v)

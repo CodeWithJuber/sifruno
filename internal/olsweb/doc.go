@@ -15,7 +15,8 @@
 //     the top level, so Sifruno never rewrites the administrator's file.
 //     A plain listener maps every site. A secure listener maps only the
 //     sites with their own certificate and is left out while there are
-//     none.
+//     none; for each it maps only the domains the certificate covers
+//     (TLS.Domains), so a domain it does not cover is served over http only.
 //   - conf/vhosts/sifruno-NAME/vhconf.conf: docRoot, index files, error and
 //     access logs in LogRoot/NAME/, the optional vhssl certificate, the
 //     site's own lsphp extprocessor (lsapi over uds://tmp/lshttpd/
@@ -24,7 +25,11 @@
 //     that uses it, namespace 2 and cgroups 2 when an active site asks for
 //     them, a static context that maps /.well-known/acme-challenge/ to
 //     ACMEChallengeDir, a "module cache" block, and a rewrite
-//     block with .htaccess autoload plus vhost-level deny rules. The cache
+//     block with .htaccess autoload plus vhost-level deny rules, then the
+//     site's redirects (redirect.go: a domain redirect is two RewriteCond
+//     lines, on the Host header and leaving the challenge path alone, and a
+//     RewriteRule; a path redirect is one RewriteRule; each [R=301|302,L]).
+//     The cache
 //     block turns LSCache on with the site's own store in
 //     CacheRoot/sifruno-NAME and the stock values written out, enableCache
 //     0 among them: a page is cached only when the site's response asks.
@@ -230,6 +235,9 @@
 //   - That OLS matches vhost rewrite rules against the decoded,
 //     normalised path, so that "%2e" spellings cannot bypass the deny rules.
 //     The rules were tested only with Go's regexp.
+//   - That a vhost-level RewriteCond on %{HTTP_HOST} with [NC] and one on
+//     %{REQUEST_URI} work as in Apache, and that a substitution without "?"
+//     keeps the query string; the site-domains dev VM proof runs them.
 //   - Whether a WebAdmin save keeps the include line; the 1.9.4 WebAdmin
 //     parser has include handling, the docs say it is unsupported.
 //   - That 256 MiB of address space is enough for lsphp 8.x with OPcache.

@@ -51,6 +51,11 @@ const (
 	MaxDomainsPerSite = 16
 	MaxPathBytes      = 200
 	maxLineBytes      = 8191
+	// MaxRedirectsPerSite bounds a site's redirects, domain and path ones
+	// together; MaxRedirectPathBytes and MaxRedirectTargetBytes bound each.
+	MaxRedirectsPerSite    = 100
+	MaxRedirectPathBytes   = 128
+	MaxRedirectTargetBytes = 256
 )
 
 // Defaults applied when a limit is zero in the spec.
@@ -104,6 +109,25 @@ type Site struct {
 	Limits     Limits    `json:"limits"`
 	Isolation  Isolation `json:"isolation"`
 	TLS        TLS       `json:"tls"`
+	// Redirects are rendered as the vhost's own rewrite rules, after the
+	// deny rules, for an active site only: a suspended site refuses every
+	// request and redirects none.
+	Redirects []Redirect `json:"redirects,omitempty"`
+}
+
+// Redirect answers requests with a 301 or 302 to Target. Exactly one of
+// Domain and Path is set.
+type Redirect struct {
+	// Domain sends every request for that one of the site's domains to
+	// Target, which is then a scheme and host only; the request's path and
+	// query are kept. ACME challenges for the domain are still served, so its
+	// certificate can renew.
+	Domain string `json:"domain,omitempty"`
+	// Path sends requests for exactly this path, on every domain of the
+	// site, to Target. A path without a trailing slash also matches with one.
+	Path   string `json:"path,omitempty"`
+	Target string `json:"target"`
+	Status int    `json:"status"`
 }
 
 // Limits are applied to the site's lsphp process group as rlimits and LSAPI
@@ -131,6 +155,10 @@ type Isolation struct {
 type TLS struct {
 	CertFile string `json:"cert_file,omitempty"`
 	KeyFile  string `json:"key_file,omitempty"`
+	// Domains are the site's domains the certificate covers; the secure
+	// listener maps only these, so a domain it does not cover is not served
+	// under it. Empty: it covers all of them.
+	Domains []string `json:"domains,omitempty"`
 }
 
 // ErrInvalid is wrapped by every validation error.

@@ -241,6 +241,12 @@ func validateSite(field string, in Site, workers int) (site, error) {
 			return site{}, fieldErr(field+".tls.key_file", "must differ from cert_file")
 		}
 	}
+	if err := checkCovered(field, in); err != nil {
+		return site{}, err
+	}
+	if err := checkRedirects(field, in.Domains, in.Redirects); err != nil {
+		return site{}, err
+	}
 	return v, nil
 }
 

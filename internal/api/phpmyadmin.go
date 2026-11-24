@@ -41,10 +41,11 @@ type siteDatabaseOpenBodyOut struct {
 type siteDatabaseOpenOutput struct{ Body siteDatabaseOpenBodyOut }
 
 const (
-	phpMyAdminNotSetUp = "phpMyAdmin is not set up on this server. It opens on the panel's own HTTPS address, on its own port: run Sifruno's installer (install.sh) with --panel-host to add it."
-	phpMyAdminNoData   = "This website has no database yet, so phpMyAdmin would have nothing to show. Create a database first."
-	phpMyAdminTooMany  = "Too many phpMyAdmin sign-ins are open on this server. Each ends one hour after it was opened; try again later."
-	phpMyAdminRecord   = "The panel could not record the phpMyAdmin sign-in, so it made none. Check that the panel's state folder can be written, then try again."
+	phpMyAdminNotSetUp       = "phpMyAdmin is not set up on this server. It opens on the panel's own HTTPS address, on its own port: run Sifruno's installer (install.sh) with --panel-host to add it."
+	phpMyAdminNoData         = "This website has no database yet, so phpMyAdmin would have nothing to show. Create a database first."
+	phpMyAdminTooMany        = "Too many phpMyAdmin sign-ins are open on this server. Each ends one hour after it was opened; try again later."
+	phpMyAdminTooManyForSite = "You already have 3 phpMyAdmin sign-ins open for this website, the most one person may have. Each ends one hour after it was opened: use a phpMyAdmin tab you already have open, or try again later."
+	phpMyAdminRecord         = "The panel could not record the phpMyAdmin sign-in, so it made none. Check that the panel's state folder can be written, then try again."
 )
 
 // registerSiteDatabasePhpMyAdmin adds the one click: a temporary database
@@ -80,8 +81,10 @@ func registerSiteDatabasePhpMyAdmin(a huma.API, o Options) {
 		if len(names) == 0 {
 			return nil, huma.Error409Conflict(phpMyAdminNoData)
 		}
-		h, err := o.PhpMyAdmin.Open(ctx, owner, names)
+		h, err := o.PhpMyAdmin.Open(phpmyadmin.WithActor(ctx, siteActor(ctx)), owner, names)
 		switch {
+		case errors.Is(err, phpmyadmin.ErrTooManyForOwner):
+			return nil, huma.Error429TooManyRequests(phpMyAdminTooManyForSite)
 		case errors.Is(err, phpmyadmin.ErrTooMany):
 			return nil, huma.Error429TooManyRequests(phpMyAdminTooMany)
 		case errors.Is(err, phpmyadmin.ErrNotRecorded):

@@ -56,6 +56,9 @@ const (
 	SweepEvery = time.Minute
 	// MaxLogins bounds the temporary users at one time; each click makes one.
 	MaxLogins = 100
+	// MaxLoginsPerOwner bounds the open temporary users of one hosting
+	// account for one actor, so no one can use up MaxLogins for everyone.
+	MaxLoginsPerOwner = 3
 	// MaxAdmissions bounds the admission cookies at one time; each redeemed
 	// code makes one.
 	MaxAdmissions = 4 * MaxLogins
@@ -67,6 +70,9 @@ const (
 var (
 	// ErrTooMany is returned when MaxLogins temporary users exist already.
 	ErrTooMany = errors.New("too many phpMyAdmin sign-ins are open")
+	// ErrTooManyForOwner is returned when the account already has
+	// MaxLoginsPerOwner open temporary users for this actor.
+	ErrTooManyForOwner = errors.New("this website has the most phpMyAdmin sign-ins open that one person may have")
 	// ErrCodeRefused covers a code that is unknown, used or expired: the
 	// answer never tells which.
 	ErrCodeRefused = errors.New("the code is unknown, used or expired")
@@ -114,6 +120,7 @@ type Login struct {
 type record struct {
 	User    string    `json:"user"`
 	Owner   string    `json:"owner"`
+	Actor   string    `json:"actor,omitempty"`
 	Expires time.Time `json:"expires_at"`
 }
 
@@ -208,6 +215,19 @@ func random(n int) ([]byte, error) {
 	return b, err
 }
 
+type actorKey struct{}
+
+// WithActor names who asks to open phpMyAdmin (the panel's actor for the
+// request), for MaxLoginsPerOwner.
+func WithActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, actorKey{}, actor)
+}
+
+func actorFrom(ctx context.Context) string {
+	actor, _ := ctx.Value(actorKey{}).(string)
+	return actor
+}
+
 // Open makes a temporary user with every privilege on databases, which must
 // all be owner's, and a code for it. The user is recorded before it is made,
 // so a crash in between leaves nothing the sweeper does not find.
@@ -242,12 +262,23 @@ func (s *Service) open(ctx context.Context, owner string, databases []string) (H
 	password := base64.RawURLEncoding.EncodeToString(secret)
 	code := base64.RawURLEncoding.EncodeToString(codeBytes)
 	now := s.cfg.Now()
-	login := record{User: user, Owner: owner, Expires: now.Add(s.cfg.LoginTTL).UTC().Truncate(time.Second)}
+	actor := actorFrom(ctx)
+	login := record{User: user, Owner: owner, Actor: actor, Expires: now.Add(s.cfg.LoginTTL).UTC().Truncate(time.Second)}
 
 	s.mu.Lock()
 	if len(s.logins) >= MaxLogins {
 		s.mu.Unlock()
 		return Handoff{}, ErrTooMany
+	}
+	open := 0
+	for _, r := range s.logins {
+		if r.Owner == owner && r.Actor == actor && now.Before(r.Expires) {
+			open++
+		}
+	}
+	if open >= MaxLoginsPerOwner {
+		s.mu.Unlock()
+		return Handoff{}, ErrTooManyForOwner
 	}
 	s.logins[user] = login
 	if err := s.flushLocked(); err != nil {

@@ -131,6 +131,7 @@ func TestOpenPhpMyAdminForOneWebsite(t *testing.T) {
 		text   string
 	}{
 		{phpmyadmin.ErrTooMany, 429, "Too many phpMyAdmin sign-ins"},
+		{phpmyadmin.ErrTooManyForOwner, 429, "already have 3 phpMyAdmin sign-ins open for this website"},
 		{phpmyadmin.ErrNotRecorded, 500, "could not record"},
 		{dbhost.ErrUnavailable, 503, "not answering"},
 		{errors.New("ERROR 1045 (28000): Access denied near 'IDENTIFIED BY 'x''"), 502, "temporary user"},

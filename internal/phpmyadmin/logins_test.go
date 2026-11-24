@@ -3,6 +3,7 @@ package phpmyadmin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -345,9 +346,9 @@ func TestOpenFailuresLeaveNothingBehind(t *testing.T) {
 	}
 	db.createErr = nil
 
-	// At most MaxLogins at once.
-	for len(s.logins) < MaxLogins {
-		if _, err := s.Open(ctx, "alpha", []string{"alpha_wp"}); err != nil {
+	// At most MaxLogins at once, from many accounts.
+	for i := 0; len(s.logins) < MaxLogins; i++ {
+		if _, err := s.Open(ctx, fmt.Sprintf("acct%d", i), []string{fmt.Sprintf("acct%d_wp", i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -437,5 +438,43 @@ func TestTheAdmissionCookieEndsWithItsLogin(t *testing.T) {
 	}
 	if _, err := New(Config{StateDir: t.TempDir(), Database: db}); err == nil {
 		t.Fatal("a service without the origin's port")
+	}
+}
+
+// One account and actor can hold at most MaxLoginsPerOwner open sign-ins,
+// so no one can use up the global limit; others are not affected.
+func TestEachOwnerAndActorHasALimit(t *testing.T) {
+	db := newFakeDatabase()
+	c := &clock{now: time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)}
+	s, dir := newTestService(t, db, c)
+	ctx := WithActor(context.Background(), "customer:alpha")
+	for i := 0; i < MaxLoginsPerOwner; i++ {
+		if _, err := s.Open(ctx, "alpha", []string{"alpha_wp"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := len(db.users)
+	if _, err := s.Open(ctx, "alpha", []string{"alpha_wp"}); !errors.Is(err, ErrTooManyForOwner) || len(db.users) != before {
+		t.Fatalf("over the limit: %v", err)
+	}
+	// Another actor on the same account, and another account, still open.
+	if _, err := s.Open(WithActor(context.Background(), "local-operator"), "alpha", []string{"alpha_wp"}); err != nil {
+		t.Fatalf("another actor: %v", err)
+	}
+	if _, err := s.Open(ctx, "beta", []string{"beta_wp"}); err != nil {
+		t.Fatalf("another account: %v", err)
+	}
+	// The limit survives a restart: the record holds the actor.
+	restarted, err := New(Config{StateDir: dir, Database: db, PublicPort: 8444, Now: c.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Open(ctx, "alpha", []string{"alpha_wp"}); !errors.Is(err, ErrTooManyForOwner) {
+		t.Fatalf("after a restart: %v", err)
+	}
+	// An expired sign-in no longer counts, even before the sweep.
+	c.Add(time.Hour)
+	if _, err := restarted.Open(ctx, "alpha", []string{"alpha_wp"}); err != nil {
+		t.Fatalf("after the hour: %v", err)
 	}
 }

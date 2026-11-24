@@ -351,7 +351,7 @@ func TestRootOnlySuspendedDir(t *testing.T) {
 		t.Fatal("fixture")
 	}
 	dir := filepath.Join(base, "suspended")
-	if e := ensureSuspendedDir(dir); e != nil {
+	if e := ensureEmptyRootDir(dir); e != nil {
 		t.Fatalf("make: %v", e)
 	}
 	info, e := os.Lstat(dir)
@@ -359,19 +359,19 @@ func TestRootOnlySuspendedDir(t *testing.T) {
 	if e != nil || !info.IsDir() || info.Mode().Perm() != 0755 || st == nil || st.Uid != 0 || st.Gid != 0 {
 		t.Fatalf("made %v", info)
 	}
-	if e := ensureSuspendedDir(dir); e != nil {
+	if e := ensureEmptyRootDir(dir); e != nil {
 		t.Fatalf("existing: %v", e)
 	}
 	if os.WriteFile(filepath.Join(dir, "index.html"), []byte("planted"), 0644) != nil {
 		t.Fatal("plant")
 	}
-	if ensureSuspendedDir(dir) == nil {
+	if ensureEmptyRootDir(dir) == nil {
 		t.Fatal("a directory that holds a file was accepted")
 	}
 	if os.Remove(filepath.Join(dir, "index.html")) != nil || os.Chmod(dir, 0777) != nil {
 		t.Fatal("chmod")
 	}
-	if ensureSuspendedDir(dir) == nil {
+	if ensureEmptyRootDir(dir) == nil {
 		t.Fatal("a directory anyone can write was accepted")
 	}
 }

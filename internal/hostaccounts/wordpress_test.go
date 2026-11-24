@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -181,8 +182,49 @@ func TestWordPressHTTPContract(t *testing.T) {
 	}
 	f.failure = "wp-fail"
 	rec = post(string(body))
-	var failure struct{ Error, Step, Detail string }
-	if rec.Code != 422 || json.Unmarshal(rec.Body.Bytes(), &failure) != nil || failure.Error != "install_failed" || failure.Step != "download" || strings.Contains(rec.Body.String(), in.DBPassword) {
+	var failure struct {
+		Error, Step, Detail string
+		Installed           *bool `json:"wordpress_installed"`
+	}
+	if rec.Code != 422 || json.Unmarshal(rec.Body.Bytes(), &failure) != nil || failure.Error != "install_failed" || failure.Step != "download" || failure.Installed == nil || *failure.Installed || strings.Contains(rec.Body.String(), in.DBPassword) {
 		t.Fatalf("failed install over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	// A step after core install says WordPress is installed, so a caller
+	// does not run the install again into its download step.
+	f.failure = "wp-fail-installed"
+	rec = post(string(body))
+	failure.Installed = nil
+	if rec.Code != 422 || json.Unmarshal(rec.Body.Bytes(), &failure) != nil || failure.Error != "install_failed" || failure.Step != "cache setting" || failure.Installed == nil || !*failure.Installed {
+		t.Fatalf("cache step failure over HTTP: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The client carries wordpress_installed into the InstallError it returns,
+// and the error's text says that WordPress is installed.
+func TestWordPressInstalledFlagThroughTheClient(t *testing.T) {
+	s, f := webStore(t)
+	a := liveSite(t, s, createFixture(t, s))
+	h := handler(s)
+	c := &client{configured: true, slow: &http.Client{Transport: previewRoundTrip(func(r *http.Request) (*http.Response, error) {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Result(), nil
+	})}}
+	install := func() *InstallError {
+		t.Helper()
+		_, err := c.InstallWordPress(context.Background(), a.ID, wordpressInput(a.Username, a.Revision), "test operator")
+		var failed *InstallError
+		if !errors.As(err, &failed) || !errors.Is(err, ErrInstallFailed) {
+			t.Fatalf("install through the client: %v", err)
+		}
+		return failed
+	}
+	f.failure = "wp-fail"
+	if failed := install(); failed.Step != "download" || failed.Installed || failed.Error() != "site download step failed" {
+		t.Fatalf("download failure: %+v %q", failed, failed.Error())
+	}
+	f.failure = "wp-fail-installed"
+	if failed := install(); failed.Step != "cache setting" || !failed.Installed || failed.Error() != "WordPress is installed; only its cache setting step failed" {
+		t.Fatalf("cache setting failure: %+v %q", failed, failed.Error())
 	}
 }

@@ -17,13 +17,22 @@ var ErrInstallFailed = errors.New("WordPress install failed")
 // InstallError says which step the broker ran as the site's user failed (a
 // WP-CLI step of the WordPress install, or the placeholder page), with the
 // end of what it printed (printable ASCII only, secrets removed, at most 512
-// bytes).
+// bytes). Installed says WordPress itself was installed before the step
+// failed (a LiteSpeed Cache step, or reading the version): the site works,
+// and running the install again stops at its download step, which finds
+// WordPress's files.
 type InstallError struct {
-	Step   string `json:"step"`
-	Detail string `json:"detail"`
+	Step      string `json:"step"`
+	Detail    string `json:"detail"`
+	Installed bool   `json:"wordpress_installed,omitempty"`
 }
 
-func (e *InstallError) Error() string        { return "site " + e.Step + " step failed" }
+func (e *InstallError) Error() string {
+	if e.Installed {
+		return "WordPress is installed; only its " + e.Step + " step failed"
+	}
+	return "site " + e.Step + " step failed"
+}
 func (e *InstallError) Is(target error) bool { return target == ErrInstallFailed }
 
 // WordPressInput installs WordPress into a live site. The passwords reach

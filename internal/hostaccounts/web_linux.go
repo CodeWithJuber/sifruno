@@ -96,17 +96,22 @@ func (n *linuxSystem) enableWeb(web *WebOptions) error {
 	if e := n.ensureChallengeDir(olsweb.ACMEChallengeDir, users); e != nil {
 		return e
 	}
-	return ensureSuspendedDir(olsweb.SuspendedDocRoot)
+	if e := ensureEmptyRootDir(olsweb.SuspendedDocRoot); e != nil {
+		return e
+	}
+	return ensureEmptyRootDir(siteHome)
 }
 
-// ensureSuspendedDir makes sure the directory every suspended vhost uses as
-// its vhRoot and docRoot exists, root's own and empty, so a suspended site's
-// config test depends on nothing its tenant controls. Like the challenge
-// directory it is made in /var/lib with mkdirat (root, 0755), so it takes
-// that directory's SELinux label, which OpenLiteSpeed may read. An existing
-// one must be root's, writable by no one else and empty; otherwise the
-// broker refuses to start the web operation.
-func ensureSuspendedDir(dir string) error {
+// ensureEmptyRootDir makes sure a directory exists, root's own and empty:
+// the one every suspended vhost uses as its vhRoot and docRoot, so a
+// suspended site's config test depends on nothing its tenant controls, and
+// siteHome, the HOME of what the broker runs as a site's user, so no tenant
+// file is read from there. Like the challenge directory it is made in
+// /var/lib with mkdirat (root, 0755), so it takes that directory's SELinux
+// label, which OpenLiteSpeed may read. An existing one must be root's,
+// writable by no one else and empty; otherwise the broker refuses to start
+// the web operation.
+func ensureEmptyRootDir(dir string) error {
 	if authority(filepath.Dir(dir)) != nil {
 		return ErrUnavailable
 	}

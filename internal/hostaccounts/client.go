@@ -407,9 +407,10 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 	}
 	if response.StatusCode != 200 {
 		var failure struct {
-			Error  string `json:"error"`
-			Step   string `json:"step"`
-			Detail string `json:"detail"`
+			Error     string `json:"error"`
+			Step      string `json:"step"`
+			Detail    string `json:"detail"`
+			Installed bool   `json:"wordpress_installed"`
 		}
 		if json.Unmarshal(b, &failure) != nil {
 			return ErrUnavailable
@@ -432,7 +433,7 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 		case "certificate_rejected":
 			return ErrCertificateRejected
 		case "install_failed":
-			return &InstallError{Step: failure.Step, Detail: installDetail([]byte(failure.Detail))}
+			return &InstallError{Step: failure.Step, Detail: installDetail([]byte(failure.Detail)), Installed: failure.Installed}
 		case "backup_failed":
 			return &BackupError{Step: backupDetail([]byte(failure.Step)), Detail: backupDetail([]byte(failure.Detail))}
 		default:

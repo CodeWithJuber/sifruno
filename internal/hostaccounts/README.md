@@ -17,8 +17,9 @@ network listener, passwords, free-form commands, deletion or rollback API exists
 
 Native execution requires preinstalled regular root-owned binaries at fixed
 paths: /usr/sbin/groupadd, useradd, usermod, userdel, nologin; /usr/bin/passwd,
-chage, kill (which runs only as an account's own user, see Processes) and
-systemctl (only `daemon-reload`, see Resource limits).
+chage, kill (which runs only as an account's own user, see Processes),
+systemctl (`daemon-reload`, see Resource limits, and `kill` of a site run's
+own unit) and systemd-run (a site run's transient service, see WordPress).
 Arguments are fixed typed options and validated account identity. Subprocesses
 have fixed credential-free locale/PATH, no shell and bounded output. Commands
 have15second deadlines within the broker request's45second overall deadline;
@@ -578,15 +579,45 @@ database would not.
   0644 file that the installer downloads; the broker checks its bytes
   against the release's sha512, pinned in code, before every install.
 - It runs with the site's own LSPHP CLI, as the account's user: its UID and
-  GID, no supplementary groups, a clean environment, in public_html. Go's
-  exec drops to that user before it changes directory. So the install can
-  write only what the tenant can already write; a tenant's own files can
-  change what it does, not what it may touch.
+  GID, no group but its own (the broker admits only an account that is in
+  no group), a clean environment, in public_html. So the install can write
+  only what the tenant can already write; a tenant's own files can change
+  what it does, not what it may touch.
+- The tenant controls code that WP-CLI loads (`wp-cli.yml` in public_html,
+  `wp-config.php`, mu-plugins), so each step runs bounded, inside the
+  account's own slice. The broker runs `/usr/bin/systemd-run --quiet --wait
+  --pipe --collect --unit=sifruno-site-<uid>-<16 random hex>.service
+  --slice=user-<uid>.slice --uid=<uid> --gid=<uid>
+  --working-directory=<public_html> --property=TasksMax=<plan's processes>
+  --property=RuntimeMaxSec=<seconds left> --property=KillMode=control-group
+  --property=KillSignal=SIGKILL --setenv=...` and the program. systemd
+  starts it as a transient service under the account's user slice, so the
+  plan's task, memory and CPU limits cover it and every process it starts,
+  and drops to the user before it enters public_html (`execute.c` at
+  systemd v252). When the program ends, systemd kills whatever is left in
+  the unit, a process that called setsid too, and systemd-run returns the
+  program's exit status. At the step's time limit the broker runs
+  `systemctl kill --signal=SIGKILL` on that unit name, which must match
+  `sifruno-site-<5 digits>-<16 hex>.service`; RuntimeMaxSec stops it even
+  if the broker is gone. systemd expands `$NAME` and `${NAME}` in a
+  service's arguments, so the broker doubles every `$`, which systemd turns
+  back into one. Not yet run on the dev VM (account-limits proof, section
+  8).
+- Its environment is `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `USER` and
+  `LOGNAME` (the account), `HOME=/var/lib/sifruno-site-home`,
+  `WP_CLI_CACHE_DIR=/dev/null` and `WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1`.
+  WP-CLI 2.12.0 uses HOME only for its global config
+  (`~/.wp-cli/config.yml`), its packages (`~/.wp-cli/packages`, whose
+  autoloader it loads) and its cache; the install needs none of them, so
+  HOME is an empty root-owned 0755 directory that the broker makes with the
+  web operation (and refuses to start that operation if it is not root's
+  and empty), and the cache is off (`/dev/null` turns it off without a
+  warning in WP-CLI's FileCache).
 - Steps: `core download` (en_US), `config create` with database host
   127.0.0.1 (sites run in a namespace container that does not see the
   MariaDB socket), `wp-config.php` set to 0600, `core install` with
-  `--skip-email`, then the LiteSpeed Cache plugin (step `cache plugin`),
-  then `core version` for the result.
+  `--skip-email`, then the LiteSpeed Cache plugin (steps `cache plugin` and
+  `cache setting`), then `core version` for the result.
 - LiteSpeed Cache is how WordPress asks OpenLiteSpeed's cache module to keep
   a page (see Websites). WP-CLI installs version 7.9.3, pinned in code, from
   wordpress.org as the site's user (`plugin install litespeed-cache
@@ -594,9 +625,11 @@ database would not.
   checksums for that version (`plugin verify-checksums`, which must print
   `Verified 1 of 1 plugins.`, because WP-CLI also answers success when it
   could not fetch the checksums), activates it, and turns its "Cache
-  Logged-in Users" off (`litespeed-option set cache-priv 0`), so a
-  signed-in visitor's pages are never cached. The broker itself fetches
-  nothing.
+  Logged-in Users" off (`litespeed-option set cache-priv false`, the form
+  of the plugin's own example in `cli/option.cls.php`), so a signed-in
+  visitor's pages are never cached. That command prints the key and the
+  value it stored; the step must print `cache-priv:` and `0`. The broker
+  itself fetches nothing.
 - The checks run under the broker lock; the install does not, so a slow
   download holds no other account. The account is marked busy meanwhile:
   a second install, a suspend, a web change and a delete get 409, because
@@ -608,7 +641,12 @@ database would not.
   step answers 422 `install_failed` with the step and the end of its output
   (printable ASCII, the passwords removed, at most 512 bytes). Whatever the
   step left in public_html stays there; installing again over an existing
-  WordPress fails at the download step.
+  WordPress fails at the download step. So the answer also has
+  `wordpress_installed`: true when a step after `core install` failed
+  (`cache plugin`, `cache setting` or `version`). WordPress then works and
+  only the cache plugin is not set up; do not install again, but set up
+  LiteSpeed Cache in WordPress (Plugins), or remove the site's files and
+  install again.
 
 ## Placeholder page
 

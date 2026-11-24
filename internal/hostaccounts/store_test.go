@@ -140,8 +140,11 @@ func (f *fakeNative) InstallWordPress(_ context.Context, r record, in WordPressI
 		f.wpStarted <- struct{}{}
 		<-f.wpGate
 	}
-	if f.failure == "wp-fail" {
+	switch f.failure {
+	case "wp-fail":
 		return WordPressResult{}, &InstallError{Step: "download", Detail: installDetail([]byte("Error: could not reach wordpress.org with "+in.DBPassword), in.DBPassword)}
+	case "wp-fail-installed":
+		return WordPressResult{}, &InstallError{Step: "cache setting", Detail: "Error: ID not exist [id] cache-priv", Installed: true}
 	}
 	return WordPressResult{Version: "6.8.3"}, nil
 }

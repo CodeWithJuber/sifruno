@@ -251,10 +251,11 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 			if errors.As(err, &failed) {
 				w.WriteHeader(422)
 				json.NewEncoder(w).Encode(struct {
-					Error  string `json:"error"`
-					Step   string `json:"step"`
-					Detail string `json:"detail"`
-				}{"install_failed", failed.Step, failed.Detail})
+					Error     string `json:"error"`
+					Step      string `json:"step"`
+					Detail    string `json:"detail"`
+					Installed bool   `json:"wordpress_installed"`
+				}{"install_failed", failed.Step, failed.Detail, failed.Installed})
 				return
 			}
 			if err != nil {

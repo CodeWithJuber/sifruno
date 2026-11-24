@@ -116,6 +116,23 @@ func (c *client) Delete(ctx context.Context, id string, in DeleteInput, actor st
 	return out, err
 }
 
+// AdoptPublicHTML asks the broker to record the account's current
+// public_html as its site folder. A 409 conflict answer means the folder is
+// missing, a link, or not the account's, or the revision moved; 503
+// recovery means what only root controls changed too. Either way nothing
+// changed.
+func (c *client) AdoptPublicHTML(ctx context.Context, id string, in AdoptInput, actor string) (Account, error) {
+	if !idPattern.MatchString(id) || !validAdopt(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	var out Account
+	err := c.request(ctx, "POST", "/v1/accounts/"+id+"/public-html", struct {
+		Input AdoptInput `json:"input"`
+		Actor string     `json:"actor"`
+	}{in, actor}, &out)
+	return out, err
+}
+
 // maxResponseBytes bounds every broker answer except the account list, whose
 // size grows with the inventory: one account is well under 8 KiB of JSON.
 const maxResponseBytes = 256 << 10

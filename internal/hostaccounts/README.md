@@ -109,7 +109,33 @@ or public_html. That concerns its own account only:
 - Other accounts' web changes do not judge the changed account's vhost
   (see the config test under Websites).
 
-The folder is fixed by the tenant putting it back.
+The folder is fixed by the tenant putting it back, or by an operator
+adopting the current one: `AdoptPublicHTML`
+(`POST /v1/accounts/{id}/public-html`, input `expected_revision` and
+`reason`).
+
+- Checked before anything is journaled: the revision, no WordPress install
+  running, and what only root controls (`VerifyAccount`; if that fails the
+  answer is 503 `recovery`, because a new folder would not fix it). With
+  the recorded folder in place there is nothing to adopt and nothing is
+  journaled.
+- The native step opens the homes directory, the home and public_html one
+  component at a time with `O_NOFOLLOW|O_DIRECTORY` and requires the
+  recorded home, owned by the account, and a public_html that is a
+  directory owned by the account and its group on the home's filesystem.
+  A missing folder, a link, a file or someone else's directory is refused
+  (409) with nothing changed. Then it sets both to 0750 with `fchmod` on
+  those handles. For a live site the web server's access is granted on the
+  new folder the same way as for a web change. Both steps touch only the
+  tenant's own directories and are safe to repeat.
+- The intent (action `adopt`, the target naming the directory as
+  `<device>:<inode>`) and the result are journaled and the revision goes
+  up by one. A restart between the two records the named directory.
+- An earlier broker journaled a conflict for these folder changes too. Such
+  a conflict still stops every mutation, as the journal says; adopting the
+  account's folder ends it `reconciled`, unchanged, before the adopt, once
+  what only root controls verifies again. No other conflict is resolved
+  this way.
 
 Portable tests use a typed fake solely for validation, serial reservation, durable
 audit and recovery logic; they cannot certify provisioning. Real shadow-utils,

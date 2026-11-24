@@ -35,6 +35,8 @@ type fakeNative struct {
 	missingPath string
 	// broken is the tenantBroken set of the last install.
 	broken map[string]bool
+	// adopts counts AdoptPublicHTML calls.
+	adopts int
 	// full and cheap count the two kinds of verification per username.
 	full, cheap map[string]int
 	keys        map[string][]string
@@ -313,6 +315,18 @@ func (f *fakeNative) Verify(ctx context.Context, r record) error {
 		return e
 	}
 	return f.VerifySiteFiles(r)
+}
+
+// AdoptPublicHTML returns the tenant's current public_html, as the native
+// step does after it checked it through handles; failure "adopt" stands for
+// a public_html that is missing, a link or not the account's.
+func (f *fakeNative) AdoptPublicHTML(_ context.Context, r record) (fileIdentity, error) {
+	f.adopts++
+	actual, ok := f.users[r.Account.Username]
+	if f.failure == "adopt" || !ok || actual.Ownership.Home != r.Ownership.Home {
+		return fileIdentity{}, ErrConflict
+	}
+	return actual.Ownership.Public, nil
 }
 
 // tenantMovesPublicHTML is what a tenant can do in its own home: rename

@@ -88,6 +88,12 @@ type nativeSystem interface {
 	// home and public_html recorded at create; it is idempotent and touches
 	// nothing else.
 	GrantWebAccess(context.Context, record) error
+	// AdoptPublicHTML returns the identity of the account's current
+	// public_html, opened without following links from the recorded home,
+	// after setting both to mode 0750 through those handles. ErrConflict:
+	// public_html is missing, a link, not a directory, not the account's,
+	// or on another filesystem; nothing changed.
+	AdoptPublicHTML(context.Context, record) (fileIdentity, error)
 	// ApplyWeb sets the account's quota and installs the full site list:
 	// written, tested, reloaded. A failed test restores the old files and
 	// the previous quota and returns ErrWebRejected. It must be safe to
@@ -256,7 +262,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -271,6 +277,8 @@ func (s *store) records() ([]record, error) {
 					validTarget = webDigestPattern.MatchString(r.Pending.Target) && validWebState(r.WebNext) && r.Pending.Target == webDigest(r.WebNext)
 				case "certificate":
 					validTarget = certificateDigestPattern.MatchString(r.Pending.Target) && validCertificateState(r.TLSNext) && r.Pending.Target == certificateDigest(r.TLSNext)
+				case "adopt":
+					_, validTarget = parsePublicTarget(r.Pending.Target)
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
@@ -414,6 +422,12 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				r.Actor, r.Reason = r.Pending.Actor, r.Pending.Reason
 				r.Pending = nil
 				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+					return ErrRecovery
+				}
+				continue
+			} else if r.Pending.Action == "adopt" {
+				// Metadata only: record the directory the intent named.
+				if s.finishAdopt(r) != nil {
 					return ErrRecovery
 				}
 				continue

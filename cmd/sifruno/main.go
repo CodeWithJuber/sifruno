@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -78,7 +79,8 @@ func run() error {
 	tlsCert := flag.String("tls-cert", "", "Certificate chain for --https-listen; without it a self-signed certificate is kept in the state directory")
 	tlsKey := flag.String("tls-key", "", "Private key for --tls-cert")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
-	pmaUpstream := flag.String("phpmyadmin-upstream", "", "Loopback IP:PORT of OpenLiteSpeed's phpMyAdmin listener (the installer's is 127.0.0.1:8090); with --accounts-socket it turns on Open phpMyAdmin on each website's Databases page. Empty turns it off")
+	pmaListen := flag.String("phpmyadmin-listen", "", "HTTPS address of phpMyAdmin's own origin, e.g. 0.0.0.0:8444: the --panel-host names and certificate of --https-listen on another port, serving phpMyAdmin only. It turns on Open phpMyAdmin on each website's Databases page; empty turns it off")
+	pmaUpstream := flag.String("phpmyadmin-upstream", "", "Loopback IP:PORT of OpenLiteSpeed's phpMyAdmin listener (the installer's is 127.0.0.1:8090); required with --phpmyadmin-listen")
 	pmaSocket := flag.String("phpmyadmin-socket", "/run/sifruno-panel/phpmyadmin.sock", "Unix socket on which phpMyAdmin's sign-in script redeems a one-time code; its folder must exist")
 	pmaUID := flag.Int("phpmyadmin-uid", -1, "User ID phpMyAdmin's PHP runs as (the installer's sifpma); the socket answers that user only")
 	flag.Parse()
@@ -300,6 +302,7 @@ func run() error {
 	var remoteServer *http.Server
 	var remoteListener net.Listener
 	var remoteHosts []string
+	var remoteTLS *tls.Config
 	var httpsNote string
 	if *httpsListen != "" {
 		hosts := splitHosts(*panelHosts)
@@ -310,7 +313,8 @@ func run() error {
 		if cerr != nil {
 			return cerr
 		}
-		listener, lerr := tls.Listen("tcp", *httpsListen, &tls.Config{Certificates: []tls.Certificate{cert.Certificate}, MinVersion: tls.VersionTLS12})
+		remoteTLS = &tls.Config{Certificates: []tls.Certificate{cert.Certificate}, MinVersion: tls.VersionTLS12}
+		listener, lerr := tls.Listen("tcp", *httpsListen, remoteTLS)
 		if lerr != nil {
 			return lerr
 		}
@@ -337,13 +341,26 @@ func run() error {
 	}
 	// phpMyAdmin: temporary database users for one website, handed to
 	// phpMyAdmin's sign-in script through a one-time code on a Unix socket
-	// only its PHP user is answered on, and the proxy to its listener.
+	// only its PHP user is answered on, and phpMyAdmin's own HTTPS origin,
+	// which proxies to its listener and serves nothing of the panel's.
 	var pma *phpmyadmin.Service
-	var pmaProxy *phpmyadmin.Proxy
-	var pmaListener net.Listener
-	if *pmaUpstream != "" {
+	var pmaListener, pmaOriginListener net.Listener
+	var pmaServer *http.Server
+	if *pmaUpstream != "" && *pmaListen == "" {
+		return errors.New("--phpmyadmin-upstream needs --phpmyadmin-listen: phpMyAdmin is served on its own HTTPS port, never the panel's")
+	}
+	if *pmaListen != "" {
 		if dbSvc == nil {
-			return errors.New("--phpmyadmin-upstream needs --accounts-socket: phpMyAdmin opens a website's databases")
+			return errors.New("--phpmyadmin-listen needs --accounts-socket: phpMyAdmin opens a website's databases")
+		}
+		if remoteTLS == nil {
+			return errors.New("--phpmyadmin-listen needs --https-listen and --panel-host: phpMyAdmin's origin uses the panel's host names and certificate")
+		}
+		_, pmaPort, perr := net.SplitHostPort(*pmaListen)
+		_, panelPort, _ := net.SplitHostPort(*httpsListen)
+		publicPort, nerr := strconv.Atoi(pmaPort)
+		if perr != nil || nerr != nil || publicPort < 1 || publicPort > 65535 || pmaPort == panelPort {
+			return errors.New("--phpmyadmin-listen must be an address with its own port, not --https-listen's, such as 0.0.0.0:8444")
 		}
 		if *pmaUID < 1 || *pmaUID == os.Getuid() || (*pmaUID >= 20000 && *pmaUID <= 60000) {
 			return errors.New("--phpmyadmin-uid must be the user ID phpMyAdmin's PHP runs as: not root, not the panel's own, and outside the hosting accounts' 20000 to 60000")
@@ -351,23 +368,32 @@ func run() error {
 		if !filepath.IsAbs(*pmaSocket) {
 			return errors.New("--phpmyadmin-socket must be an absolute path")
 		}
-		if pmaProxy, err = phpmyadmin.NewProxy(*pmaUpstream); err != nil {
-			return err
+		pmaProxy, perr := phpmyadmin.NewProxy(*pmaUpstream)
+		if perr != nil {
+			return perr
 		}
-		if pma, err = phpmyadmin.New(phpmyadmin.Config{StateDir: filepath.Join(dir, "phpmyadmin"), Database: dbSvc, LoginTTL: phpMyAdminLoginTTL()}); err != nil {
+		if pma, err = phpmyadmin.New(phpmyadmin.Config{StateDir: filepath.Join(dir, "phpmyadmin"), Database: dbSvc, PublicPort: publicPort, LoginTTL: phpMyAdminLoginTTL()}); err != nil {
 			return err
 		}
 		if pmaListener, err = phpmyadmin.ListenRedeem(*pmaSocket); err != nil {
 			return fmt.Errorf("phpMyAdmin's sign-in socket %s: %w", *pmaSocket, err)
 		}
 		defer pmaListener.Close()
+		if pmaOriginListener, err = tls.Listen("tcp", *pmaListen, remoteTLS); err != nil {
+			return err
+		}
+		defer pmaOriginListener.Close()
+		// Each request may take longer (an import or export): the origin
+		// extends its own deadlines.
+		pmaServer = &http.Server{Addr: *pmaListen, Handler: phpmyadmin.NewOrigin(pma, pmaProxy, remoteHosts), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+		servers = append(servers, pmaServer)
+		listeners = append(listeners, pmaOriginListener)
 	}
 	// A nil interface, not a nil *phpmyadmin.Service: the API reads nil as
 	// "phpMyAdmin is not set up".
 	var sitePhpMyAdmin api.PhpMyAdmin
-	var sitePhpMyAdminProxy http.Handler
 	if pma != nil {
-		sitePhpMyAdmin, sitePhpMyAdminProxy = pma, pmaProxy
+		sitePhpMyAdmin = pma
 	}
 	// A nil interface, not a nil *dbhost.LocalService: the API reads nil as
 	// "databases are not set up".
@@ -380,7 +406,7 @@ func run() error {
 	if certificates != nil {
 		siteCertificates = certificates
 	}
-	server.Handler = api.New(api.Options{Certificates: siteCertificates, PanelHosts: splitHosts(*panelHosts), Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, PhpMyAdmin: sitePhpMyAdmin, PhpMyAdminProxy: sitePhpMyAdminProxy, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	server.Handler = api.New(api.Options{Certificates: siteCertificates, PanelHosts: splitHosts(*panelHosts), Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, PhpMyAdmin: sitePhpMyAdmin, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
 	if remoteServer != nil {
 		// The same API, behind operator.Remote: only the panel's host names,
 		// only TLS, and only admin sessions.
@@ -433,7 +459,7 @@ func run() error {
 	}
 	fmt.Print(httpsNote)
 	if pma != nil {
-		fmt.Printf("phpMyAdmin through the panel at %s (OpenLiteSpeed listener %s, sign-ins last %s)\n", phpmyadmin.BasePath, *pmaUpstream, pma.LoginTTL())
+		fmt.Printf("phpMyAdmin on its own origin, HTTPS on %s for %s (OpenLiteSpeed listener %s, sign-ins last %s)\n", *pmaListen, strings.Join(remoteHosts, ", "), *pmaUpstream, pma.LoginTTL())
 	}
 	select {
 	case err = <-done:

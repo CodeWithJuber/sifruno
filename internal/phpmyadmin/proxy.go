@@ -12,18 +12,25 @@ import (
 	"time"
 )
 
-// The panel serves phpMyAdmin under BasePath by passing each request to
+// phpMyAdmin's origin (origin.go) passes each admitted request to
 // OpenLiteSpeed's loopback listener. The request loses what proves who the
-// person is to the panel (its session cookie, API tokens, the CSRF header)
-// and any forwarding header a client sent; the panel adds X-Forwarded-Proto
-// itself, which phpMyAdmin reads to mark its cookies Secure. The answer may
-// set cookies only for BasePath and never the panel's own, and loses headers
-// that would act beyond phpMyAdmin's pages: security policies (the panel sets
-// phpMyAdmin's), CORS, HSTS and Clear-Site-Data.
+// person is to the panel or to phpMyAdmin's origin (the panel's session
+// cookie, the admission cookie, API tokens, the CSRF header) and any
+// forwarding header a client sent; X-Forwarded-Proto is set here for a
+// request that came over TLS, and phpMyAdmin reads it to mark its cookies
+// Secure. Cookies are not kept apart by port, only by path, so the answer may
+// never set the panel's cookie, the admission cookie or a cookie for /api,
+// the panel's API. It also loses headers that would act beyond phpMyAdmin's
+// pages: security policies (the origin sets phpMyAdmin's), CORS, HSTS and
+// Clear-Site-Data.
 
 // PanelCookie is the panel's session cookie (internal/operator), which never
 // reaches phpMyAdmin and which phpMyAdmin may never set.
 const PanelCookie = "sifruno_operator"
+
+// AdmissionCookie lets a browser in to phpMyAdmin's origin. Its __Host-
+// prefix holds it to that exact origin, Secure, with Path=/ and no Domain.
+const AdmissionCookie = "__Host-sifruno_phpmyadmin"
 
 // MaxRequestBytes bounds a request body, an import's upload included.
 const MaxRequestBytes = 64 << 20
@@ -44,7 +51,7 @@ var strippedResponse = []string{
 	"Set-Cookie2", "Server", "X-Powered-By",
 }
 
-// Proxy passes the requests the panel admitted to phpMyAdmin's listener.
+// Proxy passes the requests phpMyAdmin's origin admitted to its listener.
 type Proxy struct {
 	rp *httputil.ReverseProxy
 }
@@ -106,12 +113,21 @@ func stripRequest(h http.Header, https bool) {
 	for _, name := range strippedRequest {
 		h.Del(name)
 	}
+	dropOurCookies(h)
+	if https {
+		h.Set("X-Forwarded-Proto", "https")
+	}
+}
+
+// dropOurCookies removes the panel's session cookie and the admission cookie
+// from a request's Cookie header and keeps the rest as sent.
+func dropOurCookies(h http.Header) {
 	cookies := []string{}
 	for _, line := range h.Values("Cookie") {
 		for _, part := range strings.Split(line, ";") {
 			part = strings.TrimSpace(part)
 			name, _, _ := strings.Cut(part, "=")
-			if part == "" || strings.TrimSpace(name) == PanelCookie {
+			if name = strings.TrimSpace(name); part == "" || name == PanelCookie || name == AdmissionCookie {
 				continue
 			}
 			cookies = append(cookies, part)
@@ -121,14 +137,11 @@ func stripRequest(h http.Header, https bool) {
 	if len(cookies) > 0 {
 		h.Set("Cookie", strings.Join(cookies, "; "))
 	}
-	if https {
-		h.Set("X-Forwarded-Proto", "https")
-	}
 }
 
-// filterResponse keeps only cookies for BasePath that are not the panel's,
-// drops the headers in strippedResponse, and turns a redirect to the
-// listener's own address into a path on the panel.
+// filterResponse keeps only the cookies phpMyAdmin may set, drops the
+// headers in strippedResponse, and turns a redirect to the listener's own
+// address into a path on phpMyAdmin's origin.
 func filterResponse(h http.Header, https bool, upstream string) {
 	lines := h.Values("Set-Cookie")
 	h.Del("Set-Cookie")
@@ -149,16 +162,20 @@ func filterResponse(h http.Header, https bool, upstream string) {
 }
 
 // allowedCookie is a Set-Cookie line as the browser may get it, or "" when
-// it must not be set: unreadable, the panel's cookie, or a prefixed name
-// whose rules a path below BasePath would break. The cookie's path is held
-// to BasePath and its domain to this host.
+// it must not be set: unreadable, the panel's or the admission cookie, a
+// prefixed name (only the origin sets those), or one for /api, which the
+// browser would also send to the panel's API on its own port. A missing path
+// becomes /, and the domain is always this host only.
 func allowedCookie(line string, https bool) string {
 	c, err := http.ParseSetCookie(line)
-	if err != nil || c.Name == PanelCookie || strings.HasPrefix(c.Name, "__Host-") || strings.HasPrefix(c.Name, "__Secure-") {
+	if err != nil || c.Name == PanelCookie || c.Name == AdmissionCookie || strings.HasPrefix(c.Name, "__Host-") || strings.HasPrefix(c.Name, "__Secure-") {
 		return ""
 	}
-	if !strings.HasPrefix(c.Path, BasePath) {
-		c.Path = BasePath
+	if !strings.HasPrefix(c.Path, "/") {
+		c.Path = "/"
+	}
+	if lower := strings.ToLower(c.Path); lower == "/api" || strings.HasPrefix(lower, "/api/") {
+		return ""
 	}
 	c.Domain = ""
 	if https {
@@ -167,8 +184,8 @@ func allowedCookie(line string, https bool) string {
 	return c.String()
 }
 
-// ServeHTTP passes a request the panel has admitted to phpMyAdmin. The
-// caller checks the session, the method and the path.
+// ServeHTTP passes a request phpMyAdmin's origin admitted to phpMyAdmin.
+// The origin checks the admission, the method and the path.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength > MaxRequestBytes {
 		WritePage(w, http.StatusRequestEntityTooLarge, "The upload is too large.", "phpMyAdmin takes at most 64 MB in one request.", "Import a smaller file, or split the SQL file into parts and import them one at a time.")
@@ -184,7 +201,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // to do next. The texts are the panel's own; they are escaped all the same.
 func WritePage(w http.ResponseWriter, status int, what, why, next string) {
 	h := w.Header()
-	h.Del("Set-Cookie")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")

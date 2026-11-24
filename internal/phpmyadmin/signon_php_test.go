@@ -40,7 +40,7 @@ func TestTheSignonScriptRedeemsACodeOnce(t *testing.T) {
 	if script == string(raw) {
 		t.Fatal("the script's socket and session paths were not found")
 	}
-	if err := os.WriteFile(filepath.Join(web, SignonScript), []byte(script), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(web, strings.TrimPrefix(SignonPath, "/")), []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,7 +70,7 @@ func TestTheSignonScriptRedeemsACodeOnce(t *testing.T) {
 		t.Helper()
 		var res *http.Response
 		for i := 0; i < 50; i++ {
-			req, _ := http.NewRequest("GET", "http://"+addr+"/"+SignonScript+query, nil)
+			req, _ := http.NewRequest("GET", "http://"+addr+SignonPath+query, nil)
 			req.Header.Set("X-Forwarded-Proto", "https")
 			if res, err = client.Do(req); err == nil {
 				break
@@ -95,11 +95,11 @@ func TestTheSignonScriptRedeemsACodeOnce(t *testing.T) {
 		user, password = name, u.password
 	}
 	res, body := get("?code=" + code)
-	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != BasePath+"index.php" {
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/index.php" {
 		t.Fatalf("redeem: %d %q %s", res.StatusCode, res.Header.Get("Location"), body)
 	}
 	cookie := res.Header.Get("Set-Cookie")
-	for _, want := range []string{"SifrunoPhpMyAdminSignon=", "path=" + BasePath, "secure", "HttpOnly", "SameSite=Strict"} {
+	for _, want := range []string{"SifrunoPhpMyAdminSignon=", "path=/;", "secure", "HttpOnly", "SameSite=Strict"} {
 		if !strings.Contains(cookie, want) {
 			t.Fatalf("cookie %q lacks %q", cookie, want)
 		}
@@ -128,5 +128,32 @@ func TestTheSignonScriptRedeemsACodeOnce(t *testing.T) {
 	}
 	if files, _ := filepath.Glob(filepath.Join(sessions, "sess_*")); len(files) != 1 {
 		t.Fatalf("session files after the refusals %q", files)
+	}
+
+	// The whole way, as a browser goes: phpMyAdmin's origin and the proxy in
+	// front of the script, which sets the admission cookie only after the
+	// script redeemed the code.
+	if err := os.WriteFile(filepath.Join(web, "index.php"), []byte("<?php echo 'phpMyAdmin index';"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := NewProxy(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := NewOrigin(s, proxy, []string{"panel.example.test"})
+	h, err = s.Open(context.Background(), "alpha", []string{"alpha_wp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := originRequest(origin, "GET", h.Path, nil)
+	admitted := admission(t, w)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/index.php" || admitted == nil {
+		t.Fatalf("through the origin: %d %q %v", w.Code, w.Header().Get("Location"), w.Result().Cookies())
+	}
+	if w := originRequest(origin, "GET", "/index.php", []*http.Cookie{admitted}); w.Code != 200 || w.Body.String() != "phpMyAdmin index" {
+		t.Fatalf("admitted: %d %s", w.Code, w.Body.String())
+	}
+	if w := originRequest(origin, "GET", h.Path, nil); w.Code != 403 || admission(t, w) != nil {
+		t.Fatalf("reused through the origin: %d", w.Code)
 	}
 }

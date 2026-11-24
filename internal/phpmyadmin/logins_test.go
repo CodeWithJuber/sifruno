@@ -92,7 +92,7 @@ func (c *clock) Add(d time.Duration) {
 func newTestService(t *testing.T, db Database, c *clock) (*Service, string) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "phpmyadmin")
-	s, err := New(Config{StateDir: dir, Database: db, Now: c.Now})
+	s, err := New(Config{StateDir: dir, Database: db, PublicPort: 8444, Now: c.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,9 +101,9 @@ func newTestService(t *testing.T, db Database, c *clock) (*Service, string) {
 
 func codeOf(t *testing.T, h Handoff) string {
 	t.Helper()
-	u, err := url.Parse(h.URL)
-	if err != nil || u.Path != BasePath+SignonScript || u.Host != "" || len(u.Query()) != 1 {
-		t.Fatalf("handoff URL %q", h.URL)
+	u, err := url.Parse(h.Path)
+	if err != nil || u.Path != SignonPath || u.Host != "" || len(u.Query()) != 1 {
+		t.Fatalf("handoff path %q", h.Path)
 	}
 	code := u.Query().Get("code")
 	if !codePattern.MatchString(code) {
@@ -134,8 +134,14 @@ func TestOpenMakesATemporaryUserForTheDatabasesGiven(t *testing.T) {
 		t.Fatalf("expiry: login %v code %v", h.LoginExpires, h.CodeExpires)
 	}
 	// The password is in neither the address nor the record.
-	if strings.Contains(h.URL, db.users[user].password) {
-		t.Fatal("the password is in the handoff URL")
+	if strings.Contains(h.Path, db.users[user].password) {
+		t.Fatal("the password is in the handoff path")
+	}
+	if got := s.SignonURL("panel.example.test", h); got != "https://panel.example.test:8444"+h.Path {
+		t.Fatalf("signon URL %q", got)
+	}
+	if got := s.SignonURL("2001:db8::1", h); got != "https://[2001:db8::1]:8444"+h.Path {
+		t.Fatalf("signon URL for an IPv6 address %q", got)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, stateFile))
 	if err != nil || !strings.Contains(string(raw), user) || !strings.Contains(string(raw), `"owner":"alpha"`) || strings.Contains(string(raw), db.users[user].password) {
@@ -198,7 +204,7 @@ func TestACodeWorksOnceAndForAMinute(t *testing.T) {
 	}
 
 	// A code whose user was swept is refused even inside its minute.
-	short, err := New(Config{StateDir: t.TempDir(), Database: db, Now: c.Now, LoginTTL: 30 * time.Second})
+	short, err := New(Config{StateDir: t.TempDir(), Database: db, PublicPort: 8444, Now: c.Now, LoginTTL: 30 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +272,7 @@ func TestSweepDropsExpiredAndUnrecordedUsers(t *testing.T) {
 		t.Fatal("a user that could not be dropped left the record")
 	}
 	db.dropErr = nil
-	restarted, err := New(Config{StateDir: dir, Database: db, Now: c.Now})
+	restarted, err := New(Config{StateDir: dir, Database: db, PublicPort: 8444, Now: c.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +295,7 @@ func TestSweepDropsExpiredAndUnrecordedUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.calls = nil
-	again, err := New(Config{StateDir: dir, Database: db, Now: c.Now})
+	again, err := New(Config{StateDir: dir, Database: db, PublicPort: 8444, Now: c.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,5 +366,76 @@ func TestOpenFailuresLeaveNothingBehind(t *testing.T) {
 		if _, err := fresh.Open(ctx, "alpha", []string{"alpha_wp"}); !errors.Is(err, ErrNotRecorded) || len(db.users) != before {
 			t.Fatalf("unwritable record: %v", err)
 		}
+	}
+}
+
+func TestTheAdmissionCookieEndsWithItsLogin(t *testing.T) {
+	db := newFakeDatabase()
+	c := &clock{now: time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)}
+	s, _ := newTestService(t, db, c)
+	h, err := s.Open(context.Background(), "alpha", []string{"alpha_wp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := codeOf(t, h)
+	user, ok := s.Peek(code)
+	if !ok || db.users[user].owner != "alpha" {
+		t.Fatalf("peek %q %v", user, ok)
+	}
+	// Peeking does not use the code up.
+	if _, err := s.Redeem(code); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Peek(code); ok {
+		t.Fatal("a redeemed code still peeks")
+	}
+	token, expires, err := s.Admit(user)
+	if err != nil || !expires.Equal(h.LoginExpires) || !codePattern.MatchString(token) {
+		t.Fatalf("admit %v %v", expires, err)
+	}
+	if !s.Admitted(token) {
+		t.Fatal("a fresh admission is refused")
+	}
+	for _, bad := range []string{"", strings.Repeat("A", 43), token + "A", code} {
+		if s.Admitted(bad) {
+			t.Fatalf("%q admitted", bad)
+		}
+	}
+	other, _, err := s.Admit(user)
+	if err != nil || other == token {
+		t.Fatal("two admissions share a value")
+	}
+	s.Revoke(other)
+	if s.Admitted(other) || !s.Admitted(token) {
+		t.Fatal("revoke ended the wrong admission")
+	}
+	if _, _, err := s.Admit("SifrunoPMA_ffffffffffffffffffff"); err == nil {
+		t.Fatal("an admission for a user with no login")
+	}
+
+	// The login expires: the admission ends with it, before the sweep too.
+	c.Add(time.Hour)
+	if s.Admitted(token) {
+		t.Fatal("the admission outlived its login")
+	}
+	if _, _, err := s.Admit(user); err == nil {
+		t.Fatal("an admission for an expired login")
+	}
+	if err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.admissions) != 0 {
+		t.Fatalf("admissions left after the sweep: %d", len(s.admissions))
+	}
+
+	// A swept login's code no longer peeks.
+	h, _ = s.Open(context.Background(), "alpha", []string{"alpha_wp"})
+	code = codeOf(t, h)
+	c.Add(61 * time.Second)
+	if _, ok := s.Peek(code); ok {
+		t.Fatal("an expired code peeks")
+	}
+	if _, err := New(Config{StateDir: t.TempDir(), Database: db}); err == nil {
+		t.Fatal("a service without the origin's port")
 	}
 }

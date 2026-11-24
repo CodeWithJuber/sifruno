@@ -60,11 +60,10 @@ type Options struct {
 	// PanelHosts are the panel's own --panel-host names, which no website
 	// may take as a domain.
 	PanelHosts []string
-	// PhpMyAdmin opens phpMyAdmin for a website, and PhpMyAdminProxy (an
-	// internal/phpmyadmin Proxy) serves it under /api/v1/phpmyadmin/. Nil
-	// answers 503 there and on the open route.
-	PhpMyAdmin      PhpMyAdmin
-	PhpMyAdminProxy http.Handler
+	// PhpMyAdmin opens phpMyAdmin for a website, on phpMyAdmin's own origin
+	// (internal/phpmyadmin): never this one. Nil answers 503 on the open
+	// route.
+	PhpMyAdmin PhpMyAdmin
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -278,11 +277,6 @@ func build(o Options) (http.Handler, *routeMux) {
 		if !customerScope(w, r, mux, o.Operator) {
 			return
 		}
-		// phpMyAdmin has its own admission and its own page policy.
-		if isPhpMyAdminPath(r.URL.Path) {
-			servePhpMyAdmin(w, r, o)
-			return
-		}
 		if remote && !remoteAdmitted(w, r, o.Operator, mux) {
 			return
 		}
@@ -393,6 +387,9 @@ func build(o Options) (http.Handler, *routeMux) {
 			}
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait))
 		}
+		// The host name the request came to, already checked: a panel host
+		// name over HTTPS (operator.Remote), else loopback.
+		r = r.WithContext(context.WithValue(r.Context(), requestHostKey{}, requestHost{name: host, remote: remote}))
 		mux.ServeHTTP(w, r)
 	})
 	return handler, mux

@@ -20,7 +20,7 @@ declare(strict_types=1);
 const SIFRUNO_REDEEM_SOCKET = '/run/sifruno-panel/phpmyadmin.sock';
 const SIFRUNO_SESSION_NAME = 'SifrunoPhpMyAdminSignon';
 const SIFRUNO_SESSION_PATH = '/var/lib/sifruno-phpmyadmin/sessions';
-const SIFRUNO_BASE = '/api/v1/phpmyadmin/';
+const SIFRUNO_BASE = '/';
 const SIFRUNO_AGAIN = "Go back to the website's Databases page in the panel and choose Open phpMyAdmin.";
 
 /** Answers with a page that says what happened, why and what to do next, and stops. */

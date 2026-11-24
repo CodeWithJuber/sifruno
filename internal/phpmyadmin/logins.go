@@ -15,8 +15,12 @@
 // sweeper drops expired users, ends their connections, and drops any
 // SifrunoPMA_ user the record does not hold (left by a crash).
 //
-// The panel serves phpMyAdmin under BasePath through the reverse proxy in
-// proxy.go, to OpenLiteSpeed's loopback listener.
+// phpMyAdmin has its own origin: the panel's host names on another HTTPS
+// port (origin.go), never the panel's. A phpMyAdmin page can therefore read
+// nothing from the panel, whose API refuses its Origin. A browser is let in
+// there by an admission cookie made when its code is redeemed, bound to the
+// temporary user and ending with it; the proxy in proxy.go passes admitted
+// requests to OpenLiteSpeed's loopback listener.
 package phpmyadmin
 
 import (
@@ -27,9 +31,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,12 +44,9 @@ import (
 )
 
 const (
-	// BasePath is where the panel serves phpMyAdmin. It sits under the panel
-	// session cookie's path (/api/v1), so the panel can check the session on
-	// every request; OpenLiteSpeed serves phpMyAdmin at the same path.
-	BasePath = "/api/v1/phpmyadmin/"
-	// SignonScript is the shipped sign-in script, relative to BasePath.
-	SignonScript = "sifruno-signon.php"
+	// SignonPath is the shipped sign-in script on phpMyAdmin's origin, where
+	// phpMyAdmin is served at the root.
+	SignonPath = "/sifruno-signon.php"
 
 	// LoginTTL is how long a temporary user lasts.
 	LoginTTL = time.Hour
@@ -53,6 +56,9 @@ const (
 	SweepEvery = time.Minute
 	// MaxLogins bounds the temporary users at one time; each click makes one.
 	MaxLogins = 100
+	// MaxAdmissions bounds the admission cookies at one time; each redeemed
+	// code makes one.
+	MaxAdmissions = 4 * MaxLogins
 
 	stateFile = "logins.json"
 	maxState  = 1 << 20
@@ -82,15 +88,18 @@ type Database interface {
 type Config struct {
 	StateDir string
 	Database Database
-	LoginTTL time.Duration
-	CodeTTL  time.Duration
-	Now      func() time.Time
+	// PublicPort is the port of phpMyAdmin's HTTPS origin.
+	PublicPort int
+	LoginTTL   time.Duration
+	CodeTTL    time.Duration
+	Now        func() time.Time
 }
 
 // Handoff is what the browser needs to open phpMyAdmin: the sign-in
-// script's address with the code, and when the code and the login end.
+// script's path with the code (SignonURL makes the address), and when the
+// code and the login end.
 type Handoff struct {
-	URL          string
+	Path         string
 	CodeExpires  time.Time
 	LoginExpires time.Time
 }
@@ -122,16 +131,21 @@ type Service struct {
 	cfg  Config
 	path string
 
-	mu      sync.Mutex
-	logins  map[string]record
-	codes   map[string]pending
-	sweepMu sync.Mutex
+	mu     sync.Mutex
+	logins map[string]record
+	codes  map[string]pending
+	// admissions maps an admission cookie's value to its temporary user.
+	admissions map[string]string
+	sweepMu    sync.Mutex
 }
 
 // New reads the record in StateDir, made 0700 if absent.
 func New(cfg Config) (*Service, error) {
 	if cfg.Database == nil || cfg.StateDir == "" {
 		return nil, errors.New("phpmyadmin: a database service and a state folder are required")
+	}
+	if cfg.PublicPort < 1 || cfg.PublicPort > 65535 {
+		return nil, errors.New("phpmyadmin: the port of phpMyAdmin's origin is required")
 	}
 	if cfg.LoginTTL <= 0 {
 		cfg.LoginTTL = LoginTTL
@@ -145,7 +159,7 @@ func New(cfg Config) (*Service, error) {
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return nil, err
 	}
-	s := &Service{cfg: cfg, path: filepath.Join(cfg.StateDir, stateFile), logins: map[string]record{}, codes: map[string]pending{}}
+	s := &Service{cfg: cfg, path: filepath.Join(cfg.StateDir, stateFile), logins: map[string]record{}, codes: map[string]pending{}, admissions: map[string]string{}}
 	raw, err := os.ReadFile(s.path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -259,7 +273,13 @@ func (s *Service) open(ctx context.Context, owner string, databases []string) (H
 	s.pruneCodesLocked(now)
 	s.codes[code] = pending{login: Login{User: user, Password: password, Expires: login.Expires}, expires: codeExpires}
 	s.mu.Unlock()
-	return Handoff{URL: BasePath + SignonScript + "?code=" + code, CodeExpires: codeExpires, LoginExpires: login.Expires}, nil
+	return Handoff{Path: SignonPath + "?code=" + code, CodeExpires: codeExpires, LoginExpires: login.Expires}, nil
+}
+
+// SignonURL is h's address on phpMyAdmin's origin for host, one of the
+// panel's host names.
+func (s *Service) SignonURL(host string, h Handoff) string {
+	return "https://" + net.JoinHostPort(host, strconv.Itoa(s.cfg.PublicPort)) + h.Path
 }
 
 // scrub keeps a database error's kind but takes the password out of its
@@ -284,6 +304,91 @@ func (s *Service) pruneCodesLocked(now time.Time) {
 	}
 }
 
+// liveLocked reports whether user's login is recorded and unexpired.
+func (s *Service) liveLocked(user string, now time.Time) (record, bool) {
+	r, ok := s.logins[user]
+	return r, ok && now.Before(r.Expires)
+}
+
+// Peek reports the temporary user a code would sign in as, without using the
+// code up: phpMyAdmin's origin admits the sign-in request that carries it.
+func (s *Service) Peek(code string) (string, bool) {
+	if !codePattern.MatchString(code) {
+		return "", false
+	}
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.codes[code]
+	if !ok || !now.Before(p.expires) {
+		return "", false
+	}
+	if _, live := s.liveLocked(p.login.User, now); !live {
+		return "", false
+	}
+	return p.login.User, true
+}
+
+// Admit makes an admission cookie's value for user's live login, after its
+// code was redeemed. It ends when the login does.
+func (s *Service) Admit(user string) (string, time.Time, error) {
+	raw, err := random(32)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, live := s.liveLocked(user, now)
+	if !live {
+		return "", time.Time{}, ErrCodeRefused
+	}
+	if len(s.admissions) >= MaxAdmissions {
+		s.pruneAdmissionsLocked(now)
+		if len(s.admissions) >= MaxAdmissions {
+			return "", time.Time{}, ErrTooMany
+		}
+	}
+	s.admissions[token] = user
+	return token, r.Expires, nil
+}
+
+// Admitted reports whether an admission cookie's value lets a browser in:
+// it was made here and its temporary user is still recorded and unexpired.
+func (s *Service) Admitted(token string) bool {
+	if !codePattern.MatchString(token) {
+		return false
+	}
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.admissions[token]
+	if !ok {
+		return false
+	}
+	if _, live := s.liveLocked(user, now); !live {
+		delete(s.admissions, token)
+		return false
+	}
+	return true
+}
+
+// Revoke ends an admission cookie's value, at sign-out.
+func (s *Service) Revoke(token string) {
+	s.mu.Lock()
+	delete(s.admissions, token)
+	s.mu.Unlock()
+}
+
+func (s *Service) pruneAdmissionsLocked(now time.Time) {
+	for token, user := range s.admissions {
+		if _, live := s.liveLocked(user, now); !live {
+			delete(s.admissions, token)
+		}
+	}
+}
+
 // Redeem hands out the login for code once. The code is gone after the first
 // attempt, whatever its outcome; an unknown, used or expired code, or one
 // whose temporary user has expired or was dropped, is ErrCodeRefused.
@@ -299,7 +404,7 @@ func (s *Service) Redeem(code string) (Login, error) {
 	if !ok || !now.Before(p.expires) {
 		return Login{}, ErrCodeRefused
 	}
-	if r, live := s.logins[p.login.User]; !live || !now.Before(r.Expires) {
+	if _, live := s.liveLocked(p.login.User, now); !live {
 		return Login{}, ErrCodeRefused
 	}
 	return p.login, nil
@@ -320,6 +425,7 @@ func (s *Service) Sweep(ctx context.Context) error {
 		}
 	}
 	s.pruneCodesLocked(now)
+	s.pruneAdmissionsLocked(now)
 	s.mu.Unlock()
 
 	var errs []error

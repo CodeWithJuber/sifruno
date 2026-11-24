@@ -24,14 +24,14 @@ $cfg['Servers'][$i]['auth_type'] = 'signon';
 $cfg['Servers'][$i]['SignonSession'] = 'SifrunoPhpMyAdminSignon';
 $cfg['Servers'][$i]['SignonCookieParams'] = [
     'lifetime' => 0,
-    'path' => '/api/v1/phpmyadmin/',
+    'path' => '/',
     'domain' => '',
     'secure' => $sifrunoHttps,
     'httponly' => true,
     'samesite' => 'Strict',
 ];
-$cfg['Servers'][$i]['SignonURL'] = '/api/v1/phpmyadmin/sifruno-signon.php';
-$cfg['Servers'][$i]['LogoutURL'] = '/api/v1/phpmyadmin/sifruno-signon.php?signed_out=1';
+$cfg['Servers'][$i]['SignonURL'] = '/sifruno-signon.php';
+$cfg['Servers'][$i]['LogoutURL'] = '/sifruno-signon.php?signed_out=1';
 $cfg['Servers'][$i]['AllowRoot'] = false;
 $cfg['Servers'][$i]['AllowNoPassword'] = false;
 // No configuration storage database: the temporary user cannot make one.

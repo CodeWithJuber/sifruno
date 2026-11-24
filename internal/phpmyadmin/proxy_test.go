@@ -38,8 +38,8 @@ func TestTheProxyStripsThePanelsCredentials(t *testing.T) {
 		if https {
 			origin = "https://panel.example.test:8443"
 		}
-		r := httptest.NewRequest("POST", origin+BasePath+"index.php?route=/sql", strings.NewReader("sql_query=SELECT+1"))
-		r.Header.Set("Cookie", PanelCookie+"=panel-session; phpMyAdmin=pma-session; pma_lang=en")
+		r := httptest.NewRequest("POST", origin+"/index.php?route=/sql", strings.NewReader("sql_query=SELECT+1"))
+		r.Header.Set("Cookie", PanelCookie+"=panel-session; phpMyAdmin=pma-session; pma_lang=en; "+AdmissionCookie+"=admitted")
 		r.Header.Add("Cookie", "SifrunoPhpMyAdminSignon=signon; "+PanelCookie+"=second")
 		r.Header.Set("Authorization", "Bearer sfr_token")
 		r.Header.Set("Proxy-Authorization", "Basic eA==")
@@ -57,7 +57,7 @@ func TestTheProxyStripsThePanelsCredentials(t *testing.T) {
 			t.Fatalf("https=%v: %d %s", https, w.Code, w.Body.String())
 		}
 		got := seen()
-		if got.URL.Path != BasePath+"index.php" || got.URL.RawQuery != "route=/sql" || got.Method != "POST" {
+		if got.URL.Path != "/index.php" || got.URL.RawQuery != "route=/sql" || got.Method != "POST" {
 			t.Fatalf("forwarded %s %s?%s", got.Method, got.URL.Path, got.URL.RawQuery)
 		}
 		if body, _ := io.ReadAll(got.Body); string(body) != "sql_query=SELECT+1" {
@@ -85,8 +85,8 @@ func TestTheProxyStripsThePanelsCredentials(t *testing.T) {
 	}
 
 	// Only the panel's cookie: no Cookie header at all.
-	r := httptest.NewRequest("GET", "http://127.0.0.1:8080"+BasePath, nil)
-	r.Header.Set("Cookie", PanelCookie+"=panel-session")
+	r := httptest.NewRequest("GET", "http://127.0.0.1:8080/", nil)
+	r.Header.Set("Cookie", PanelCookie+"=panel-session; "+AdmissionCookie+"=admitted")
 	s.ServeHTTP(httptest.NewRecorder(), r)
 	if v := seen().Header.Values("Cookie"); len(v) != 0 {
 		t.Fatalf("cookies %q", v)
@@ -97,11 +97,14 @@ func TestTheProxyFiltersWhatPhpMyAdminAnswers(t *testing.T) {
 	s, _, _ := upstreamFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		for _, line := range []string{
-			"phpMyAdmin=abc; path=/api/v1/phpmyadmin/; HttpOnly; SameSite=Strict",
-			"pma_lang=en; path=/; domain=example.test",
+			"phpMyAdmin=abc; path=/; HttpOnly; SameSite=Strict",
+			"pma_lang=en; domain=example.test",
 			PanelCookie + "=stolen; path=/api/v1; HttpOnly",
+			AdmissionCookie + "=forged; path=/; Secure",
 			"__Host-x=1; path=/; Secure",
-			"pmaUser-1=deleted; expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; path=/api/v1/phpmyadmin/",
+			"tossed=1; path=/api/v1",
+			"tossed2=1; path=/API",
+			"pmaUser-1=deleted; expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; path=/",
 			"not a cookie",
 		} {
 			h.Add("Set-Cookie", line)
@@ -117,11 +120,11 @@ func TestTheProxyFiltersWhatPhpMyAdminAnswers(t *testing.T) {
 		h.Set("Server", "LiteSpeed")
 		h.Set("X-Powered-By", "PHP/8.3")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Location", "http://"+r.Host+BasePath+"index.php?route=/")
+		h.Set("Location", "http://"+r.Host+"/index.php?route=/")
 		w.WriteHeader(http.StatusFound)
 	})
 	for _, https := range []bool{false, true} {
-		r := httptest.NewRequest("GET", "http://127.0.0.1:8080"+BasePath+SignonScript, nil)
+		r := httptest.NewRequest("GET", "http://127.0.0.1:8080"+SignonPath, nil)
 		if https {
 			r.TLS = &tls.ConnectionState{}
 		}
@@ -134,9 +137,9 @@ func TestTheProxyFiltersWhatPhpMyAdminAnswers(t *testing.T) {
 			secure = "; Secure"
 		}
 		want := []string{
-			"phpMyAdmin=abc; Path=/api/v1/phpmyadmin/; HttpOnly" + secure + "; SameSite=Strict",
-			"pma_lang=en; Path=/api/v1/phpmyadmin/" + secure,
-			"pmaUser-1=deleted; Path=/api/v1/phpmyadmin/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0" + secure,
+			"phpMyAdmin=abc; Path=/; HttpOnly" + secure + "; SameSite=Strict",
+			"pma_lang=en; Path=/" + secure,
+			"pmaUser-1=deleted; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0" + secure,
 		}
 		if !slices.Equal(cookies, want) {
 			t.Fatalf("https=%v cookies\n%q\nwant\n%q", https, cookies, want)
@@ -149,7 +152,7 @@ func TestTheProxyFiltersWhatPhpMyAdminAnswers(t *testing.T) {
 		if h.Get("X-Frame-Options") != "DENY" {
 			t.Fatal("phpMyAdmin's own X-Frame-Options was dropped")
 		}
-		if w.Code != http.StatusFound || h.Get("Location") != BasePath+"index.php?route=/" {
+		if w.Code != http.StatusFound || h.Get("Location") != "/index.php?route=/" {
 			t.Fatalf("redirect %d %q", w.Code, h.Get("Location"))
 		}
 	}
@@ -168,7 +171,7 @@ func TestTheProxyExplainsAFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1:8080"+BasePath, nil))
+	s.ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1:8080/", nil))
 	body := w.Body.String()
 	if w.Code != http.StatusBadGateway || !strings.Contains(body, "phpMyAdmin did not answer.") || !strings.Contains(body, "Next step:") || w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Fatalf("%d %s", w.Code, body)
@@ -176,7 +179,7 @@ func TestTheProxyExplainsAFailure(t *testing.T) {
 
 	// An upload over the limit is refused before it is sent.
 	s, _, seen := upstreamFixture(t, func(w http.ResponseWriter, r *http.Request) {})
-	r := httptest.NewRequest("POST", "http://127.0.0.1:8080"+BasePath+"index.php", strings.NewReader("x"))
+	r := httptest.NewRequest("POST", "http://127.0.0.1:8080/index.php", strings.NewReader("x"))
 	r.ContentLength = MaxRequestBytes + 1
 	w = httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -187,10 +190,9 @@ func TestTheProxyExplainsAFailure(t *testing.T) {
 
 func TestWritePageEscapes(t *testing.T) {
 	w := httptest.NewRecorder()
-	w.Header().Set("Set-Cookie", "x=1")
 	WritePage(w, 403, "A <b>", "B & C", `D "E"`)
 	body := w.Body.String()
-	if w.Code != 403 || strings.Contains(body, "<b>") || !strings.Contains(body, "A &lt;b&gt;") || !strings.Contains(body, "B &amp; C") || w.Header().Get("Set-Cookie") != "" {
+	if w.Code != 403 || strings.Contains(body, "<b>") || !strings.Contains(body, "A &lt;b&gt;") || !strings.Contains(body, "B &amp; C") || w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Fatalf("%d %s", w.Code, body)
 	}
 }

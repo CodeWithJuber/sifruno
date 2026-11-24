@@ -233,9 +233,9 @@ type snapshotWaitingNative struct {
 	wait bool
 }
 
-func (n *snapshotWaitingNative) Verify(ctx context.Context, r record) error {
+func (n *snapshotWaitingNative) VerifyAccount(ctx context.Context, r record) error {
 	if !n.wait {
-		return n.nativeSystem.Verify(ctx, r)
+		return n.nativeSystem.VerifyAccount(ctx, r)
 	}
 	<-ctx.Done()
 	return errors.Join(ErrUnavailable, ctx.Err())

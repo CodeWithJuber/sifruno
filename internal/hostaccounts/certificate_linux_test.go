@@ -38,7 +38,7 @@ func TestCertificateFilesNeedARootOwnedParent(t *testing.T) {
 	if e := n.StageCertificate(t.Context(), r, nil, nil); e != nil {
 		t.Fatalf("unstaging from a missing TLS root: %v", e)
 	}
-	if e := n.ApplyCertificate(t.Context(), r, b.state, nil); e != ErrRecovery {
+	if e := n.ApplyCertificate(t.Context(), r, b.state, nil, nil); e != ErrRecovery {
 		t.Fatalf("installing without a staged pair: %v", e)
 	}
 }

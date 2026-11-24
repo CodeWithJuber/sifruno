@@ -673,8 +673,8 @@ func olsContextVhost(context string) string {
 
 // installSites writes and tests the config, then reloads; a failed test puts
 // the old files back and returns ErrWebRejected (ErrRecovery if that fails).
-func (n *linuxSystem) installSites(ctx context.Context, sites []olsweb.Site) error {
-	return n.installWith(ctx, &configTxn{}, sites, "")
+func (n *linuxSystem) installSites(ctx context.Context, sites []olsweb.Site, tenantBroken map[string]bool) error {
+	return n.installWith(ctx, &configTxn{}, sites, "", tenantBroken)
 }
 
 // installWith completes t, which may already hold a site's certificate
@@ -682,14 +682,12 @@ func (n *linuxSystem) installSites(ctx context.Context, sites []olsweb.Site) err
 // test puts back everything t changed and returns the error (ErrRecovery if
 // that fails). touched names a vhost whose certificate t rewrote, so the
 // test judges it as changed even when its vhconf.conf bytes are the same.
-func (n *linuxSystem) installWith(ctx context.Context, t *configTxn, sites []olsweb.Site, touched string) error {
+// tenantBroken names vhosts the test does not judge (judgedVhosts).
+func (n *linuxSystem) installWith(ctx context.Context, t *configTxn, sites []olsweb.Site, touched string, tenantBroken map[string]bool) error {
 	defer t.close()
 	changed, e := n.writeSites(t, sites)
 	if e == nil {
-		if touched != "" {
-			changed[touched] = true
-		}
-		e = n.configTest(ctx, changed)
+		e = n.configTest(ctx, judgedVhosts(changed, touched, tenantBroken))
 	}
 	if e != nil {
 		if r := t.restore(); r != nil {
@@ -703,7 +701,27 @@ func (n *linuxSystem) installWith(ctx context.Context, t *configTxn, sites []ols
 	return nil
 }
 
-func (n *linuxSystem) ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site) error {
+// judgedVhosts is the set of broker vhosts the config test holds to errors
+// and warnings: those whose config this change rewrote, and touched, less
+// tenantBroken. The store names there the served sites of other accounts
+// whose tenant changed its home or public_html: what OpenLiteSpeed reports
+// for them comes from their tenant's files even when a render rewrote their
+// config, and must not reject another account's change. The site a change
+// is about is never among them.
+func judgedVhosts(changed map[string]bool, touched string, tenantBroken map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(changed)+1)
+	for name, wrote := range changed {
+		if wrote && !tenantBroken[name] {
+			out[name] = true
+		}
+	}
+	if touched != "" {
+		out[touched] = true
+	}
+	return out
+}
+
+func (n *linuxSystem) ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site, tenantBroken map[string]bool) error {
 	if n.webUID <= 0 || !validWebState(next) {
 		return ErrUnavailable
 	}
@@ -714,7 +732,7 @@ func (n *linuxSystem) ApplyWeb(ctx context.Context, r record, previous, next Web
 	if e := n.setQuota(ctx, r.Account.UID, next.QuotaMiB); e != nil {
 		return e
 	}
-	e := n.installSites(ctx, sites)
+	e := n.installSites(ctx, sites, tenantBroken)
 	if errors.Is(e, ErrWebRejected) {
 		// The broker owns its accounts' quotas: a rejected change goes back
 		// to the recorded one, and a first enable to none. A quota read back
@@ -726,9 +744,9 @@ func (n *linuxSystem) ApplyWeb(ctx context.Context, r record, previous, next Web
 	return e
 }
 
-func (n *linuxSystem) ApplySites(ctx context.Context, sites []olsweb.Site) error {
+func (n *linuxSystem) ApplySites(ctx context.Context, sites []olsweb.Site, tenantBroken map[string]bool) error {
 	if n.webUID <= 0 {
 		return ErrUnavailable
 	}
-	return n.installSites(ctx, sites)
+	return n.installSites(ctx, sites, tenantBroken)
 }

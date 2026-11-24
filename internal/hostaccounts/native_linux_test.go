@@ -3,6 +3,7 @@
 package hostaccounts
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -114,6 +115,60 @@ func TestDirectoryHandleRejectsSymlinkAndPinsMutation(t *testing.T) {
 	info, e := os.Stat(target)
 	if e != nil || info.Mode().Perm() != 0700 {
 		t.Fatal("symlink target changed")
+	}
+}
+
+// What the account's own user can do in its home shows in VerifySiteFiles
+// only; the home's object and owner, which the account checks and delete
+// read, stay the same. Runs as any user: the fixture is the caller's own.
+func TestSiteFilesAreTheTenantsToChange(t *testing.T) {
+	homes := t.TempDir()
+	home := filepath.Join(homes, "webacct")
+	public := filepath.Join(home, "public_html")
+	if os.Mkdir(home, 0750) != nil || os.Chmod(home, 0750) != nil || os.Mkdir(public, 0750) != nil || os.Chmod(public, 0750) != nil {
+		t.Fatal("fixture")
+	}
+	uid, gid := os.Getuid(), os.Getgid()
+	homeID, e1 := dirIdentity(home, uid, gid, 0750)
+	publicID, e2 := dirIdentity(public, uid, gid, 0750)
+	if e1 != nil || e2 != nil {
+		t.Fatal("fixture identity")
+	}
+	n := &linuxSystem{opts: BrokerOptions{HomesDir: homes}}
+	r := record{Account: Account{Username: "webacct", Home: home, PublicHTML: public, UID: uid, GID: gid}, Ownership: ownership{Home: homeID, Public: publicID}}
+	if e := n.VerifySiteFiles(r); e != nil {
+		t.Fatalf("the recorded folders: %v", e)
+	}
+	accountHome := func() {
+		t.Helper()
+		if id, e := dirIdentity(home, uid, gid, 0); e != nil || id != homeID {
+			t.Fatal("the home's identity, which only root can change, moved")
+		}
+	}
+	for name, change := range map[string]struct{ do, undo func() error }{
+		"home mode":          {func() error { return os.Chmod(home, 0755) }, func() error { return os.Chmod(home, 0750) }},
+		"public_html mode":   {func() error { return os.Chmod(public, 0700) }, func() error { return os.Chmod(public, 0750) }},
+		"public_html moved":  {func() error { return os.Rename(public, public+".old") }, func() error { return os.Rename(public+".old", public) }},
+		"public_html linked": {func() error { return errors.Join(os.Rename(public, public+".old"), os.Symlink(public+".old", public)) }, func() error { return errors.Join(os.Remove(public), os.Rename(public+".old", public)) }},
+		"public_html new": {func() error {
+			return errors.Join(os.Rename(public, public+".old"), os.Mkdir(public, 0750), os.Chmod(public, 0750))
+		}, func() error {
+			return errors.Join(os.Remove(public), os.Rename(public+".old", public))
+		}},
+	} {
+		if e := change.do(); e != nil {
+			t.Fatalf("%s: %v", name, e)
+		}
+		if n.VerifySiteFiles(r) == nil {
+			t.Fatalf("%s: the site folder check passed", name)
+		}
+		accountHome()
+		if e := change.undo(); e != nil {
+			t.Fatalf("%s undo: %v", name, e)
+		}
+		if e := n.VerifySiteFiles(r); e != nil {
+			t.Fatalf("%s put back: %v", name, e)
+		}
 	}
 }
 

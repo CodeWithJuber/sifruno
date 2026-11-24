@@ -83,8 +83,33 @@ stays nologin. Suspended sets account expiry to1970-01-02. It restricts PAM-awar
 account admission; existing processes, databases and mail remain unaffected, and
 a live site stops serving (see Websites). It does not establish full SSH or
 hosting suspension. External changes
-to UID/GID, tag, shell, home, lock/expiry or recorded directory identity require
-recovery. Existing file content inside public_html is not inventoried or restored.
+to UID/GID, tag, shell, the home directory object or its owner, lock/expiry or
+the ownership marker require recovery: only root can make them. Existing file
+content inside public_html is not inventoried or restored.
+
+### A tenant's own folders
+
+The account's user owns its home and can change what the broker recorded
+there: rename, replace or remove public_html, or change the mode of the home
+or public_html. That concerns its own account only:
+
+- It is not a conflict. Refresh checks only what root controls; the account
+  list shows `site_folder_changed` for the account and its state stays
+  active or suspended. Capability stays available.
+- Operations that write into those folders verify them first and answer 409
+  before anything is journaled: web, certificate and WordPress install.
+  A resume of a live site whose public_html is gone ends rejected (see
+  Websites).
+- Everything else verifies only what root controls, before and after the
+  intent: state changes (so the operator can suspend, suspend again and
+  resume), SFTP keys, plan and delete. Delete checks the home's object and
+  owner, not its mode, and removes it without following links. Restart
+  finishes their interrupted operations the same way, so a tenant cannot
+  keep one pending.
+- Other accounts' web changes do not judge the changed account's vhost
+  (see the config test under Websites).
+
+The folder is fixed by the tenant putting it back.
 
 Portable tests use a typed fake solely for validation, serial reservation, durable
 audit and recovery logic; they cannot certify provisioning. Real shadow-utils,
@@ -141,7 +166,13 @@ broker.
   `openlitespeed -t` is judged per vhost: a vhost whose config this change
   rewrote fails on an error or a warning, anything outside broker vhosts on
   an error, and a broker vhost the change did not touch is skipped, because
-  what it reports comes from its own tenant's files. If the test fails, the
+  what it reports comes from its own tenant's files. A served vhost of
+  another account whose tenant changed its folder (`site_folder_changed`)
+  is skipped even when this change rewrote it: a render rewrites every
+  vhost once after an upgrade changes the rendered form, and that tenant's
+  warning would otherwise reject every change of every account until the
+  folder was back. The site the change is about, and a suspended site,
+  are judged as above. If the test fails, the
   old files go back with their owner and mode. Then `systemctl reload
   lsws` restarts OpenLiteSpeed gracefully (its unit reloads with
   `lswsctrl restart`). The broker never edits `httpd_config.conf`: the
@@ -225,6 +256,11 @@ Limits for now:
   such an account ends `rejected` and the site stays suspended until the
   directory is back. A suspend does not depend on it (not yet run on the dev
   VM).
+- userdel refuses a user with a running process, such as an open SFTP
+  session, and the broker does not end them. A delete of such an account
+  stays pending, which stops every mutation until a later start finishes
+  it once the processes are gone. Ending the account's processes as a step
+  of delete is not built yet.
 
 ## Certificates
 
@@ -460,8 +496,9 @@ Limits for now:
 
 Every request checks every account's files: its passwd and group identity (from
 one cached parse, reused only while both files are the same objects with the
-same change times), its home and public_html identities, and its ownership
-marker. That check starts no process. The password-lock and expiry observation
+same change times), its home's identity and owner, and its ownership marker.
+That check starts no process. The account list also reads each home's mode
+and public_html, for `site_folder_changed`. The password-lock and expiry observation
 needs `passwd --status` and `chage --list`, two processes per account, and
 running it for all accounts on every request is what limited the broker to
 about a hundred. It now runs for the account an operation touches and for a

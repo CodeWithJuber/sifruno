@@ -58,6 +58,14 @@ type Account struct {
 	// carry it, so the accounts and journals written before this field need
 	// no change.
 	Web WebState `json:"web,omitzero"`
+	// SiteFolderChanged says the account's own user changed what the broker
+	// recorded in its home: public_html renamed, replaced or removed, or the
+	// mode of the home or public_html changed. It concerns this account
+	// alone: the broker refuses its web, certificate and WordPress changes
+	// until the folder is back, and holds up nothing else. Like Web, only
+	// the account list fills it in; the stored account and the journal's
+	// rows never carry it.
+	SiteFolderChanged bool `json:"site_folder_changed,omitempty"`
 }
 type CreateInput struct {
 	Username string `json:"username"`

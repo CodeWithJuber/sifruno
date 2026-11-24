@@ -63,7 +63,20 @@ type nativeSystem interface {
 	Plan(context.Context, string) (int, int, error)
 	Create(context.Context, record, func(ownership) error) (ownership, error)
 	RecoverCreate(context.Context, record, func(ownership) error) (ownership, error)
-	// VerifyIdentity is the part of Verify that starts no process.
+	// VerifyAccountIdentity checks, from files alone, what only root can
+	// change: the passwd and group identity, the home directory object and
+	// its owner, and the ownership marker. VerifyAccount adds the
+	// password-lock and expiry observation. A failure of either is a
+	// conflict that stops every mutation.
+	VerifyAccountIdentity(record) error
+	VerifyAccount(context.Context, record) error
+	// VerifySiteFiles checks what the account's own user can change: the
+	// home's mode and the public_html recorded at create. A failure concerns
+	// that account alone.
+	VerifySiteFiles(record) error
+	// VerifyIdentity is VerifyAccountIdentity and VerifySiteFiles; Verify
+	// adds the lock and expiry observation. Operations that write into the
+	// tenant's folders use these.
 	VerifyIdentity(record) error
 	Verify(context.Context, record) error
 	// SetSSHKeys installs exactly this canonical key set; empty removes it.
@@ -78,10 +91,13 @@ type nativeSystem interface {
 	// ApplyWeb sets the account's quota and installs the full site list:
 	// written, tested, reloaded. A failed test restores the old files and
 	// the previous quota and returns ErrWebRejected. It must be safe to
-	// repeat, and it does not depend on the tenant's files.
-	ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site) error
+	// repeat, and it does not depend on the tenant's files. tenantBroken
+	// names vhosts whose test reports must not decide the change (see
+	// store.tenantBroken); the same holds for ApplySites and
+	// ApplyCertificate.
+	ApplyWeb(ctx context.Context, r record, previous, next WebState, sites []olsweb.Site, tenantBroken map[string]bool) error
 	// ApplySites installs the full site list only, tested and reloaded.
-	ApplySites(context.Context, []olsweb.Site) error
+	ApplySites(ctx context.Context, sites []olsweb.Site, tenantBroken map[string]bool) error
 	// StageCertificate writes a checked chain and key as the site's staged
 	// pair, root-only, where OpenLiteSpeed does not read them; with both
 	// empty it removes the staged pair. It touches no tenant file.
@@ -90,7 +106,7 @@ type nativeSystem interface {
 	// by next, as the site's live certificate files and installs the full
 	// site list: written, tested, reloaded. A failed test restores the old
 	// files and returns ErrWebRejected. It must be safe to repeat.
-	ApplyCertificate(ctx context.Context, r record, next CertificateState, sites []olsweb.Site) error
+	ApplyCertificate(ctx context.Context, r record, next CertificateState, sites []olsweb.Site, tenantBroken map[string]bool) error
 	// InstallWordPress runs WP-CLI as the account's user into its live
 	// site; it changes only the tenant's files.
 	InstallWordPress(context.Context, record, WordPressInput) (WordPressResult, error)
@@ -263,7 +279,7 @@ func (s *store) records() ([]record, error) {
 			if !canonicalSSHKeys(r.SSHKeys) || (r.SSHKeysNext != "" && (r.Pending == nil || r.Pending.Action != "ssh_keys")) {
 				return ErrRecovery
 			}
-			if (r.Web.enabled() && !validWebState(r.Web)) || (!r.Web.enabled() && r.Web != WebState{}) || (r.WebNext != WebState{} && (r.Pending == nil || r.Pending.Action != "web")) || r.Account.Web != (WebState{}) {
+			if (r.Web.enabled() && !validWebState(r.Web)) || (!r.Web.enabled() && r.Web != WebState{}) || (r.WebNext != WebState{} && (r.Pending == nil || r.Pending.Action != "web")) || r.Account.Web != (WebState{}) || r.Account.SiteFolderChanged {
 				return ErrRecovery
 			}
 			if (r.TLS.installed() && !validCertificateState(r.TLS)) || (!r.TLS.installed() && r.TLS != CertificateState{}) || r.Account.Certificate != r.TLS || (r.TLSNext != CertificateState{} && (r.Pending == nil || r.Pending.Action != "certificate")) {
@@ -328,7 +344,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				// any other failure stays pending for the next start.
 				operation := *r.Pending
 				applyCtx, cancel := webContext(ctx)
-				e := s.native.ApplyWeb(applyCtx, r, r.Web, r.WebNext, webSites(items, ""))
+				e := s.native.ApplyWeb(applyCtx, r, r.Web, r.WebNext, webSites(items, ""), s.tenantBroken(items, r.Account.ID))
 				cancel()
 				switch {
 				case errors.Is(e, ErrWebRejected):
@@ -357,7 +373,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				// included, stays pending for the next start.
 				operation := *r.Pending
 				applyCtx, cancel := webContext(ctx)
-				e := s.native.ApplyCertificate(applyCtx, r, r.TLSNext, webSites(items, ""))
+				e := s.native.ApplyCertificate(applyCtx, r, r.TLSNext, webSites(items, ""), s.tenantBroken(items, r.Account.ID))
 				cancel()
 				switch {
 				case errors.Is(e, ErrWebRejected):
@@ -384,9 +400,11 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			} else if r.Pending.Action == "ssh_keys" {
 				// Finish the interrupted key write: the target set was durable
 				// before the file was touched, and installing it is idempotent.
+				// The key file is outside the home, so only what root controls
+				// is checked: the tenant's own folders cannot hold it pending.
 				current := r
 				current.Pending = nil
-				if s.native.Verify(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, splitSSHKeys(r.SSHKeysNext)) != nil {
+				if s.native.VerifyAccount(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, splitSSHKeys(r.SSHKeysNext)) != nil {
 					continue
 				}
 				operation := *r.Pending
@@ -399,15 +417,16 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					return ErrRecovery
 				}
 				continue
-			} else if s.native.Verify(ctx, targetRecord(r, r.Pending.Target)) != nil {
+			} else if s.native.VerifyAccount(ctx, targetRecord(r, r.Pending.Target)) != nil {
 				// A state change whose account verifies in its old state
 				// changed nothing: the broker stopped before the account
 				// changed, or after a rejected site list put it back and
 				// before that was journaled. It ends rejected, unchanged,
-				// so it does not block every account.
+				// so it does not block every account. Like the state change
+				// itself, this checks only what root controls.
 				current := r
 				current.Pending = nil
-				if r.Pending.Action == "state" && s.native.Verify(ctx, current) == nil {
+				if r.Pending.Action == "state" && s.native.VerifyAccount(ctx, current) == nil {
 					operation := *r.Pending
 					r.Pending = nil
 					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
@@ -462,7 +481,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				// the site list is idempotent. A config that now fails its
 				// test puts the account back and ends as rejected, unchanged;
 				// any other failure stays pending for the next start.
-				switch e := s.applySites(ctx, items); {
+				switch e := s.applySites(ctx, items, r.Account.ID); {
 				case errors.Is(e, ErrWebRejected):
 					if s.undoState(ctx, r) != nil {
 						continue
@@ -490,11 +509,16 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			}
 			continue
 		}
+		// Only what root controls makes a conflict, which stops every
+		// mutation. A tenant's own changes to its home or public_html are
+		// not checked here: they concern that account alone, which the
+		// account list shows (SiteFolderChanged) and the operations that
+		// write into those folders check for themselves.
 		var e error
 		if audited(i) {
-			e = s.native.Verify(ctx, r)
+			e = s.native.VerifyAccount(ctx, r)
 		} else {
-			e = s.native.VerifyIdentity(r)
+			e = s.native.VerifyAccountIdentity(r)
 		}
 		if e != nil {
 			if errors.Is(e, ErrUnavailable) {
@@ -648,7 +672,10 @@ func (s *store) setSSHKeys(ctx context.Context, id string, in SSHKeysInput, acto
 	if err != nil {
 		return SSHKeysResult{}, ErrRecovery
 	}
-	if s.native.Verify(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, canonical) != nil {
+	// The key file is outside the home, so this checks only what root
+	// controls: a tenant who changed its own folders can still get keys to
+	// put them right, and cannot leave this operation pending.
+	if s.native.VerifyAccount(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, canonical) != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return SSHKeysResult{}, ErrRecovery
 	}
@@ -884,11 +911,24 @@ func (s *store) list(ctx context.Context) ([]Account, error) {
 		}
 		// The settings applied now; an unfinished web change is not shown.
 		a.Web = r.Web
+		a.SiteFolderChanged = r.Pending == nil && s.native.VerifySiteFiles(r) != nil
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
 	return out, nil
 }
+
+// mutationReady refreshes and refuses every mutation while any account has
+// a pending record. Each is the broker's own: an operation it journaled and
+// has not finished, or a conflict over what only root can change. An
+// unfinished operation may have half-applied the OpenLiteSpeed config, which
+// every web change rewrites from every account's record, or a native change
+// the next start must finish from a known state, so nothing else may change
+// first. A tenant's folders cannot leave one behind: they make no conflict,
+// and the checks made after an intent is journaled read only what root
+// controls (a create's run before its user can act). What a tenant can
+// still do is keep a process running: userdel refuses such a user, so that
+// delete stays pending (README, Websites, "Limits for now").
 func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 	if ctx == nil {
 		return nil, ErrInvalid
@@ -1039,8 +1079,10 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
 	}
+	// Only what root controls: the tenant's own folders cannot make a
+	// suspend of its account, or any state change, stay pending.
 	next := targetRecord(r, in.State)
-	if s.native.Verify(ctx, next) != nil {
+	if s.native.VerifyAccount(ctx, next) != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
 	}
@@ -1053,7 +1095,7 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	if r.Web.enabled() {
 		live := append([]record(nil), items...)
 		live[index] = r
-		switch e := s.applySites(ctx, live); {
+		switch e := s.applySites(ctx, live, id); {
 		case errors.Is(e, ErrWebRejected):
 			if s.undoState(ctx, r) != nil {
 				_, _ = s.resultEvent(r, *r.Pending, "recovery_required")

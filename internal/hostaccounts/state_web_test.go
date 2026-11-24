@@ -302,7 +302,7 @@ func TestSuspendInterruptedAfterUndoEndsRejected(t *testing.T) {
 	}
 	if err == nil {
 		f.failure = "sites-reject"
-		if e := s.applySites(ctx, []record{r}); !errors.Is(e, ErrWebRejected) {
+		if e := s.applySites(ctx, []record{r}, r.Account.ID); !errors.Is(e, ErrWebRejected) {
 			err = e
 		}
 		f.failure = ""

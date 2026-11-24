@@ -93,7 +93,7 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 	}
 	applyCtx, cancel := webContext(ctx)
 	defer cancel()
-	switch e := s.native.ApplyCertificate(applyCtx, r, next, sites); {
+	switch e := s.native.ApplyCertificate(applyCtx, r, next, sites, s.tenantBroken(nextItems, id)); {
 	case errors.Is(e, ErrWebRejected):
 		operation := *r.Pending
 		r.Pending, r.TLSNext = nil, CertificateState{}

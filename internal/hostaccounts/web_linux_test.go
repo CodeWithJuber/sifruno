@@ -107,6 +107,35 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 	}
 }
 
+// A render that rewrites every vhost (once after an upgrade changes the
+// rendered form) still does not let a tenant who broke its own folder
+// reject another account's change: the store names that vhost, and the test
+// does not judge it. The change's own vhost is always judged.
+func TestJudgedVhostsLeaveOutBrokenTenants(t *testing.T) {
+	mine, other, broken := olsweb.NamePrefix+"uaaaa", olsweb.NamePrefix+"ubbbb", olsweb.NamePrefix+"ucccc"
+	everything := map[string]bool{mine: true, other: true, broken: true}
+	judged := judgedVhosts(everything, "", map[string]bool{broken: true})
+	if len(judged) != 2 || !judged[mine] || !judged[other] || judged[broken] {
+		t.Fatalf("judged %v", judged)
+	}
+	if got := judgedVhosts(map[string]bool{mine: false, other: true}, mine, nil); len(got) != 2 || !got[mine] || !got[other] {
+		t.Fatalf("a touched certificate is judged, an unwritten vhost is not: %v", got)
+	}
+	// The messages OpenLiteSpeed 1.9.4 printed on the dev VM after a tenant
+	// moved public_html away (time and process ID are placeholders).
+	out := "2026-11-23 00:00:00.000000 [WARN] [1] [config:server:vhosts:vhost:" + broken + "] configuration failed!\n" +
+		"2026-11-23 00:00:00.000000 [WARN] [1] Path for document root is not accessible: /home/brk55596/public_html/\n"
+	if olsTestPasses([]byte(out), 1, everything) {
+		t.Fatal("judged as rewritten, the broken tenant's vhost should fail the test")
+	}
+	if !olsTestPasses([]byte(out), 1, judged) {
+		t.Fatal("the broken tenant's vhost failed another account's change")
+	}
+	if olsTestPasses([]byte(out), 1, judgedVhosts(everything, "", nil)) {
+		t.Fatal("without the store naming it, the broken vhost is judged")
+	}
+}
+
 // The web server's access is written through handles that match the
 // identities recorded at create, so a tenant who swaps public_html gets a
 // refusal, not an ACL on whatever the swap points at.

@@ -125,7 +125,7 @@ func (n *linuxSystem) StageCertificate(_ context.Context, r record, chainPEM, ke
 // live cert.pem and key.pem and installs the config in the same transaction.
 // A missing or different staged pair is ErrRecovery: the operation stays
 // pending for a person, because the broker cannot know what to install.
-func (n *linuxSystem) ApplyCertificate(ctx context.Context, r record, next CertificateState, sites []olsweb.Site) error {
+func (n *linuxSystem) ApplyCertificate(ctx context.Context, r record, next CertificateState, sites []olsweb.Site, tenantBroken map[string]bool) error {
 	if n.webUID <= 0 || !idPattern.MatchString(r.Account.ID) || !validCertificateState(next) {
 		return ErrUnavailable
 	}
@@ -167,7 +167,7 @@ func (n *linuxSystem) ApplyCertificate(ctx context.Context, r record, next Certi
 	if certChanged || keyChanged {
 		touched = olsweb.NamePrefix + name
 	}
-	return n.installWith(ctx, t, sites, touched)
+	return n.installWith(ctx, t, sites, touched, tenantBroken)
 }
 
 // ensureListenerCertificate keeps a usable listener pair in the TLS root, or

@@ -26,10 +26,15 @@ type fakeNative struct {
 	refuseState string
 	// siteApplies counts ApplySites calls, failed ones included.
 	siteApplies int
-	// missingPath is a tenant path that is gone. ApplySites renders the site
-	// list as olsweb does and rejects it when any file names that path, as
-	// OpenLiteSpeed's config test warns for a vhost whose directory is gone.
+	// missingPath is a tenant path that is gone. ApplySites and ApplyWeb
+	// render the site list as olsweb does and reject it when any file names
+	// that path, as OpenLiteSpeed's config test warns for a vhost whose
+	// directory is gone, unless the store named that site's vhost as
+	// tenantBroken. That is the worst case, a render that rewrote every
+	// vhost: the native test also skips a vhost the change did not rewrite.
 	missingPath string
+	// broken is the tenantBroken set of the last install.
+	broken map[string]bool
 	// full and cheap count the two kinds of verification per username.
 	full, cheap map[string]int
 	keys        map[string][]string
@@ -71,8 +76,9 @@ func (f *fakeNative) StageCertificate(_ context.Context, r record, chainPEM, key
 
 // ApplyCertificate installs the staged pair the way the native system does:
 // read back, checked again and compared with the journaled leaf.
-func (f *fakeNative) ApplyCertificate(_ context.Context, r record, next CertificateState, sites []olsweb.Site) error {
+func (f *fakeNative) ApplyCertificate(_ context.Context, r record, next CertificateState, sites []olsweb.Site, tenantBroken map[string]bool) error {
 	f.certApply++
+	f.broken = tenantBroken
 	switch f.failure {
 	case "cert-before":
 		return ErrUnavailable
@@ -117,12 +123,16 @@ func (f *fakeNative) GrantWebAccess(_ context.Context, r record) error {
 	}
 	return nil
 }
-func (f *fakeNative) ApplyWeb(_ context.Context, r record, previous, next WebState, sites []olsweb.Site) error {
+func (f *fakeNative) ApplyWeb(_ context.Context, r record, previous, next WebState, sites []olsweb.Site, tenantBroken map[string]bool) error {
 	f.webApply++
+	f.broken = tenantBroken
 	switch f.failure {
 	case "web-before":
 		return ErrUnavailable
 	case "web-reject":
+		return ErrWebRejected
+	}
+	if f.namesMissingPath(sites, tenantBroken) {
 		return ErrWebRejected
 	}
 	if f.web == nil {
@@ -135,23 +145,38 @@ func (f *fakeNative) ApplyWeb(_ context.Context, r record, previous, next WebSta
 	}
 	return nil
 }
-func (f *fakeNative) ApplySites(_ context.Context, sites []olsweb.Site) error {
+func (f *fakeNative) ApplySites(_ context.Context, sites []olsweb.Site, tenantBroken map[string]bool) error {
 	f.siteApplies++
+	f.broken = tenantBroken
 	switch f.failure {
 	case "sites":
 		return ErrUnavailable
 	case "sites-reject":
 		return ErrWebRejected
 	}
-	if f.missingPath != "" {
-		for _, data := range renderAtHomeRoot(sites) {
-			if strings.Contains(string(data), f.missingPath) {
-				return ErrWebRejected
-			}
-		}
+	if f.namesMissingPath(sites, tenantBroken) {
+		return ErrWebRejected
 	}
 	f.sites = append([]olsweb.Site(nil), sites...)
 	return nil
+}
+
+// namesMissingPath reports whether a vhost the test judges names
+// missingPath. The server fragment names every home as a vhRoot, so the
+// vhosts are rendered one at a time.
+func (f *fakeNative) namesMissingPath(sites []olsweb.Site, tenantBroken map[string]bool) bool {
+	if f.missingPath == "" {
+		return false
+	}
+	for _, site := range sites {
+		if tenantBroken[olsweb.NamePrefix+site.Name] {
+			continue
+		}
+		if strings.Contains(string(renderAtHomeRoot([]olsweb.Site{site})[olsweb.VhostConfigPath(site.Name)]), f.missingPath) {
+			return true
+		}
+	}
+	return false
 }
 
 // renderAtHomeRoot renders a site list as the broker installs it. The
@@ -239,30 +264,66 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 	delete(f.staged, r.Account.Username)
 	return nil
 }
-func (f *fakeNative) VerifyIdentity(r record) error {
+
+// The fake's ownership.Public stands for the folder a tenant may rename,
+// replace or chmod; everything else in a record (tag, IDs, home, marker,
+// and f.changed for any of them) only root can change.
+func (f *fakeNative) VerifyAccountIdentity(r record) error {
 	if f.cheap != nil {
 		f.cheap[r.Account.Username]++
 	}
 	actual, ok := f.users[r.Account.Username]
-	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || r.Ownership != actual.Ownership {
+	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || r.Ownership.Home != actual.Ownership.Home || r.Ownership.Marker != actual.Ownership.Marker {
 		return ErrRecovery
 	}
 	return nil
 }
 
-// Verify adds the state observation, standing in for the lock and expiry
-// check that the native system makes with passwd and chage. Like that check,
-// it compares only an active or suspended state, so a delete's empty target
-// state passes.
-func (f *fakeNative) Verify(_ context.Context, r record) error {
+// VerifyAccount adds the state observation, standing in for the lock and
+// expiry check that the native system makes with passwd and chage. Like
+// that check, it compares only an active or suspended state, so a delete's
+// empty target state passes.
+func (f *fakeNative) VerifyAccount(_ context.Context, r record) error {
 	if f.full != nil {
 		f.full[r.Account.Username]++
 	}
 	actual, ok := f.users[r.Account.Username]
-	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || (r.Account.State != "" && actual.Account.State != r.Account.State) || r.Ownership != actual.Ownership {
+	if !ok || f.changed || actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || (r.Account.State != "" && actual.Account.State != r.Account.State) || r.Ownership.Home != actual.Ownership.Home || r.Ownership.Marker != actual.Ownership.Marker {
 		return ErrRecovery
 	}
 	return nil
+}
+
+func (f *fakeNative) VerifySiteFiles(r record) error {
+	if actual, ok := f.users[r.Account.Username]; !ok || r.Ownership.Public != actual.Ownership.Public {
+		return ErrRecovery
+	}
+	return nil
+}
+
+func (f *fakeNative) VerifyIdentity(r record) error {
+	if e := f.VerifyAccountIdentity(r); e != nil {
+		return e
+	}
+	return f.VerifySiteFiles(r)
+}
+
+func (f *fakeNative) Verify(ctx context.Context, r record) error {
+	if e := f.VerifyAccount(ctx, r); e != nil {
+		return e
+	}
+	return f.VerifySiteFiles(r)
+}
+
+// tenantMovesPublicHTML is what a tenant can do in its own home: rename
+// public_html away and make a new one. The broker sees another directory
+// than the one it recorded, and OpenLiteSpeed warns for a vhost that names
+// the old path (missingPath models the warning).
+func tenantMovesPublicHTML(f *fakeNative, username string) {
+	actual := f.users[username]
+	actual.Ownership.Public.Ino += 7
+	f.users[username] = actual
+	f.missingPath = olsweb.HomeRoot + "/" + username + "/public_html"
 }
 func (f *fakeNative) VerifySSHKeys(r record, canonical []string) error {
 	if f.failure == "keys-drift" {

@@ -752,23 +752,22 @@ func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(
 	return r.Ownership, nil
 }
 
-// VerifyIdentity checks everything about a managed account that files alone
-// show: the passwd and group identity, the recorded home and public_html
-// objects, and the ownership marker. It starts no process, so the store can
-// run it for every account on every request.
-func (n *linuxSystem) VerifyIdentity(r record) error {
+// VerifyAccountIdentity checks what files alone show about a managed account
+// and only root can change: the passwd and group identity, the recorded home
+// directory object and its owner, and the ownership marker. The home sits in
+// the root-owned homes directory, so its account cannot replace it or give
+// it away; its mode is the account's own to change and is checked by
+// VerifySiteFiles. It starts no process, so the store can run it for every
+// account on every request.
+func (n *linuxSystem) VerifyAccountIdentity(r record) error {
 	if authority(n.opts.HomesDir) != nil {
 		return ErrRecovery
 	}
 	if _, e := n.identity(r); e != nil {
 		return e
 	}
-	home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750)
+	home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
 	if e != nil || home != r.Ownership.Home {
-		return ErrRecovery
-	}
-	pub, e := dirIdentity(r.Account.PublicHTML, r.Account.UID, r.Account.GID, 0750)
-	if e != nil || pub != r.Ownership.Public {
 		return ErrRecovery
 	}
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
@@ -778,9 +777,42 @@ func (n *linuxSystem) VerifyIdentity(r record) error {
 	return nil
 }
 
-// Verify adds the password-lock and expiry observation, which needs the
-// passwd and chage utilities. The store runs it for the account an operation
-// touches and for a rotating batch, not for every account on every request.
+// VerifySiteFiles checks what the account's own user can change in its home:
+// the home's mode 0750, and public_html as the directory recorded at create,
+// not a link, owned by the account, mode 0750. It only reads.
+func (n *linuxSystem) VerifySiteFiles(r record) error {
+	if _, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750); e != nil {
+		return ErrRecovery
+	}
+	pub, e := dirIdentity(r.Account.PublicHTML, r.Account.UID, r.Account.GID, 0750)
+	if e != nil || pub != r.Ownership.Public {
+		return ErrRecovery
+	}
+	return nil
+}
+
+// VerifyIdentity is everything files alone show: VerifyAccountIdentity and
+// VerifySiteFiles.
+func (n *linuxSystem) VerifyIdentity(r record) error {
+	if e := n.VerifyAccountIdentity(r); e != nil {
+		return e
+	}
+	return n.VerifySiteFiles(r)
+}
+
+// VerifyAccount adds the password-lock and expiry observation, which needs
+// the passwd and chage utilities, to VerifyAccountIdentity. The store runs it
+// for the account an operation touches and for a rotating batch, not for
+// every account on every request.
+func (n *linuxSystem) VerifyAccount(ctx context.Context, r record) error {
+	if e := n.VerifyAccountIdentity(r); e != nil {
+		return e
+	}
+	return n.admission(ctx, r)
+}
+
+// Verify is VerifyAccount with VerifySiteFiles, for an operation that writes
+// into the account's folders.
 func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 	if e := n.VerifyIdentity(r); e != nil {
 		return e
@@ -837,7 +869,10 @@ func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 		if !info.IsDir() || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
 			return ErrRecovery
 		}
-		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750)
+		// The recorded object and its owner, which only root can change; not
+		// its mode, which the account may have changed. RemoveAll does not
+		// follow links inside it.
+		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
 		if e != nil || home != r.Ownership.Home {
 			return ErrRecovery
 		}
@@ -1028,10 +1063,12 @@ func syncDirectory(path string) error {
 	return nil
 }
 
+// SetState checks only what root controls, before and after: a suspend must
+// not depend on anything the account's own user can change.
 func (n *linuxSystem) SetState(ctx context.Context, r record, state string) error {
 	current := r
 	current.Pending = nil
-	if e := n.Verify(ctx, current); e != nil {
+	if e := n.VerifyAccount(ctx, current); e != nil {
 		return e
 	}
 	expiry := ""
@@ -1041,5 +1078,5 @@ func (n *linuxSystem) SetState(ctx context.Context, r record, state string) erro
 	if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", expiry, "--lock", "--", r.Account.Username); e != nil {
 		return e
 	}
-	return n.Verify(ctx, targetRecord(r, state))
+	return n.VerifyAccount(ctx, targetRecord(r, state))
 }

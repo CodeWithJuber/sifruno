@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"sifruno/internal/olsweb"
 )
 
 // ErrWebRejected means the new OpenLiteSpeed config failed its test (or the
@@ -96,7 +98,7 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 	}
 	applyCtx, cancel := webContext(ctx)
 	defer cancel()
-	switch e := s.native.ApplyWeb(applyCtx, r, previous, want, sites); {
+	switch e := s.native.ApplyWeb(applyCtx, r, previous, want, sites, s.tenantBroken(next, id)); {
 	case errors.Is(e, ErrWebRejected):
 		operation := *r.Pending
 		r.Pending, r.WebNext = nil, WebState{}
@@ -120,16 +122,47 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 	return WebResult{Account: r.Account, Web: want}, nil
 }
 
-// applySitesWithout installs every live site except the given account's.
+// applySitesWithout installs every live site except the given account's,
+// for a change to that account.
 func (s *store) applySitesWithout(ctx context.Context, items []record, id string) error {
 	applyCtx, cancel := webContext(ctx)
 	defer cancel()
-	return s.native.ApplySites(applyCtx, webSites(items, id))
+	return s.native.ApplySites(applyCtx, webSites(items, id), s.tenantBroken(items, id))
 }
 
-// applySites installs every live site, each as its account's state says.
-func (s *store) applySites(ctx context.Context, items []record) error {
-	return s.applySitesWithout(ctx, items, "")
+// applySites installs every live site, each as its account's state says,
+// for a change to the account named by subject.
+func (s *store) applySites(ctx context.Context, items []record, subject string) error {
+	applyCtx, cancel := webContext(ctx)
+	defer cancel()
+	return s.native.ApplySites(applyCtx, webSites(items, ""), s.tenantBroken(items, subject))
+}
+
+// tenantBroken names the vhosts (by their directory name, as the config
+// test reports them) of live, served sites whose tenant changed what the
+// broker recorded in its home, other than the site of the account the
+// change is about. OpenLiteSpeed warns for a vhost whose public_html is
+// gone, and what it reports for these comes from their tenant's own files,
+// so it must not decide another account's change. The config test already
+// skips a vhost whose config the change did not rewrite; this also covers a
+// render that rewrites every vhost, which happens once after an upgrade
+// changes the rendered form, and would otherwise reject every change for
+// every account until that tenant put its folder back. A suspended site
+// names no tenant path, so it is judged as always, and so is the subject's
+// own site.
+func (s *store) tenantBroken(items []record, subject string) map[string]bool {
+	byName := make(map[string]record, len(items))
+	for _, r := range items {
+		byName[siteName(r.Account.ID)] = r
+	}
+	out := map[string]bool{}
+	for _, site := range webSites(items, subject) {
+		r := byName[site.Name]
+		if !site.Suspended && s.native.VerifySiteFiles(r) != nil {
+			out[olsweb.NamePrefix+site.Name] = true
+		}
+	}
+	return out
 }
 
 // undoState puts an account back into the state it had before the state

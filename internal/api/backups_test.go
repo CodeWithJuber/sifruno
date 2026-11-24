@@ -50,6 +50,12 @@ func (b *backupBroker) SetBackupTarget(_ context.Context, in hostaccounts.Backup
 	b.password = ""
 	return res, nil
 }
+func (b *backupBroker) ShowBackupPassword(context.Context, hostaccounts.BackupPasswordInput, string) (hostaccounts.BackupPassword, error) {
+	return hostaccounts.BackupPassword{}, hostaccounts.ErrConflict
+}
+func (b *backupBroker) ConfirmBackupPassword(context.Context, hostaccounts.BackupPasswordInput, string) (hostaccounts.BackupStatus, error) {
+	return b.BackupStatus(context.Background())
+}
 func (b *backupBroker) BackupAccount(_ context.Context, _ string, in hostaccounts.BackupInput, _ string) (hostaccounts.Snapshot, error) {
 	if b.gate != nil {
 		<-b.gate

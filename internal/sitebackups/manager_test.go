@@ -38,6 +38,12 @@ func (b *fakeBroker) BackupStatus(context.Context) (hostaccounts.BackupStatus, e
 func (b *fakeBroker) SetBackupTarget(context.Context, hostaccounts.BackupTargetInput, string) (hostaccounts.BackupTargetResult, error) {
 	return hostaccounts.BackupTargetResult{}, nil
 }
+func (b *fakeBroker) ShowBackupPassword(context.Context, hostaccounts.BackupPasswordInput, string) (hostaccounts.BackupPassword, error) {
+	return hostaccounts.BackupPassword{}, hostaccounts.ErrConflict
+}
+func (b *fakeBroker) ConfirmBackupPassword(context.Context, hostaccounts.BackupPasswordInput, string) (hostaccounts.BackupStatus, error) {
+	return hostaccounts.BackupStatus{Ready: true, Configured: b.configured, PasswordSaved: true}, nil
+}
 func (b *fakeBroker) BackupAccount(_ context.Context, id string, in hostaccounts.BackupInput, actor string) (hostaccounts.Snapshot, error) {
 	b.record("backup " + id[:1] + " [" + strings.Join(in.Databases, ",") + "] " + actor)
 	if b.backupErr != nil {

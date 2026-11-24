@@ -31,7 +31,8 @@ type backupEngine interface {
 	// do not exist yet, and returns the public key; ready says restic
 	// matches its pin and the tools it needs are in place.
 	Status(ctx context.Context) (publicKey string, ready bool, err error)
-	// Password reads the repository password, to show it once.
+	// Password reads the repository password, to show it until the admin
+	// confirms it is saved.
 	Password() (string, error)
 	// SetTarget opens the target's repository with the broker's password,
 	// or makes one there, before the target's host keys replace the old.
@@ -46,11 +47,14 @@ type backupEngine interface {
 	Cleanup(ctx context.Context, l backupLeftover) error
 }
 
-// storedTarget is the configured target and whether the repository
-// password was shown.
+// storedTarget is the configured target and whether the admin confirmed
+// saving the repository password. Until then the panel may ask for the
+// password again. The key is password_shown because a broker before the
+// confirmation step showed the password once and set it then; such a
+// broker's password counts as saved.
 type storedTarget struct {
 	Target        BackupTarget `json:"target"`
-	PasswordShown bool         `json:"password_shown"`
+	PasswordSaved bool         `json:"password_shown"`
 	Actor         string       `json:"actor"`
 	Reason        string       `json:"reason"`
 	UpdatedAt     time.Time    `json:"updated_at"`
@@ -119,6 +123,42 @@ func (s *store) target() (storedTarget, bool, error) {
 		return storedTarget{}, false, ErrUnavailable
 	}
 	return t, found, nil
+}
+
+// updateTarget changes the stored target in one transaction, so a target
+// change and a confirmation that the password is saved cannot undo each
+// other.
+func (s *store) updateTarget(change func(cur storedTarget, found bool) (storedTarget, error)) (storedTarget, error) {
+	var out storedTarget
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b, e := tx.CreateBucketIfNotExists(backupBucket)
+		if e != nil {
+			return ErrUnavailable
+		}
+		var cur storedTarget
+		found := false
+		if raw := b.Get([]byte("target")); raw != nil {
+			if json.Unmarshal(raw, &cur) != nil || !validStoredTarget(cur.Target) {
+				return ErrUnavailable
+			}
+			found = true
+		}
+		next, e := change(cur, found)
+		if e != nil {
+			return e
+		}
+		raw, e := json.Marshal(next)
+		if e != nil {
+			return ErrUnavailable
+		}
+		out = next
+		return b.Put([]byte("target"), raw)
+	})
+	var failed *BackupError
+	if err != nil && !errors.As(err, &failed) && !errors.Is(err, ErrConflict) {
+		return storedTarget{}, ErrUnavailable
+	}
+	return out, err
 }
 
 func (s *store) leftovers() ([]backupLeftover, error) {
@@ -301,12 +341,64 @@ func (s *store) backupStatus(ctx context.Context) (BackupStatus, error) {
 	if err != nil {
 		return BackupStatus{}, err
 	}
-	status := BackupStatus{Ready: ready, PublicKey: key, Configured: found}
+	status := BackupStatus{Ready: ready, PublicKey: key, Configured: found, PasswordSaved: found && t.PasswordSaved}
 	if found {
 		target := t.Target
 		status.Target = &target
 	}
 	return status, nil
+}
+
+// showBackupPassword reads the repository password again, only while a
+// target is set and the admin has not confirmed saving it. It does not
+// wait for a running backup. The password stays in the broker's root-only
+// file; this answer is its only copy outside it.
+func (s *store) showBackupPassword(ctx context.Context, in BackupPasswordInput, actor string) (BackupPassword, error) {
+	if ctx == nil || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return BackupPassword{}, ErrInvalid
+	}
+	if s.backup == nil {
+		return BackupPassword{}, ErrUnavailable
+	}
+	t, found, err := s.target()
+	if err != nil {
+		return BackupPassword{}, err
+	}
+	if !found {
+		return BackupPassword{}, &BackupError{Step: "target", Detail: "no backup storage is set up"}
+	}
+	if t.PasswordSaved {
+		return BackupPassword{}, ErrConflict
+	}
+	s.backupKeyMu.Lock()
+	defer s.backupKeyMu.Unlock()
+	password, err := s.backup.Password()
+	if err != nil {
+		return BackupPassword{}, err
+	}
+	return BackupPassword{Password: password}, nil
+}
+
+// confirmBackupPassword records that the admin saved the repository
+// password: from then on no answer carries it. Confirming twice is fine.
+func (s *store) confirmBackupPassword(ctx context.Context, in BackupPasswordInput, actor string) (BackupStatus, error) {
+	if ctx == nil || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return BackupStatus{}, ErrInvalid
+	}
+	if s.backup == nil {
+		return BackupStatus{}, ErrUnavailable
+	}
+	_, err := s.updateTarget(func(cur storedTarget, found bool) (storedTarget, error) {
+		if !found {
+			return storedTarget{}, &BackupError{Step: "target", Detail: "no backup storage is set up"}
+		}
+		cur.PasswordSaved = true
+		return cur, nil
+	})
+	if err != nil {
+		return BackupStatus{}, err
+	}
+	return s.backupStatus(ctx)
 }
 
 func (s *store) setBackupTarget(ctx context.Context, in BackupTargetInput, actor string) (BackupTargetResult, error) {
@@ -343,21 +435,25 @@ func (s *store) setBackupTarget(ctx context.Context, in BackupTargetInput, actor
 		return BackupTargetResult{}, err
 	}
 	result := BackupTargetResult{Initialized: initialized}
-	if !old.PasswordShown {
+	if !old.PasswordSaved {
 		if result.Password, err = s.backup.Password(); err != nil {
 			return BackupTargetResult{}, err
 		}
 	}
-	// The password counts as shown once this answer is written: it is not
-	// kept anywhere the panel can ask for it again.
-	if err = s.writeBackup("target", storedTarget{Target: t, PasswordShown: true, Actor: actor, Reason: in.Reason, UpdatedAt: time.Now().UTC()}); err != nil {
+	// Writing this answer does not count as the admin having the password:
+	// a dropped answer would lose it. It stays available until the admin
+	// confirms saving it, which a target change keeps.
+	saved, err := s.updateTarget(func(cur storedTarget, found bool) (storedTarget, error) {
+		return storedTarget{Target: t, PasswordSaved: found && cur.PasswordSaved, Actor: actor, Reason: in.Reason, UpdatedAt: time.Now().UTC()}, nil
+	})
+	if err != nil {
 		return BackupTargetResult{}, err
 	}
 	key, ready, err := s.backupKey(work)
 	if err != nil {
 		return BackupTargetResult{}, err
 	}
-	result.Status = BackupStatus{Ready: ready, PublicKey: key, Configured: true, Target: &t}
+	result.Status = BackupStatus{Ready: ready, PublicKey: key, Configured: true, Target: &t, PasswordSaved: saved.PasswordSaved}
 	return result, nil
 }
 

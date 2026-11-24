@@ -327,6 +327,22 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 			}
 			result, err := s.setBackupTarget(ctx, in.Input, in.Actor)
 			answerBackup(w, result, err)
+		case r.Method == "POST" && (r.URL.Path == "/v1/backup/password" || r.URL.Path == "/v1/backup/password-saved"):
+			var in struct {
+				Input BackupPasswordInput `json:"input"`
+				Actor string              `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if r.URL.Path == "/v1/backup/password" {
+				result, err := s.showBackupPassword(ctx, in.Input, in.Actor)
+				answerBackup(w, result, err)
+				return
+			}
+			result, err := s.confirmBackupPassword(ctx, in.Input, in.Actor)
+			answerBackup(w, result, err)
 		case r.Method == "POST" && r.URL.Path == "/v1/backup/prune":
 			var in struct {
 				Input PruneInput `json:"input"`

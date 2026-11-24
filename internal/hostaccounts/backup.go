@@ -128,21 +128,35 @@ type BackupTarget struct {
 
 // BackupStatus is what the Backup storage page shows. PublicKey is the
 // broker's own key, to install on the storage server; Ready says restic is
-// installed and matches its pin.
+// installed and matches its pin. PasswordSaved says the admin confirmed
+// saving the repository password; it never carries the password.
 type BackupStatus struct {
-	Ready      bool          `json:"ready"`
-	PublicKey  string        `json:"public_key"`
-	Configured bool          `json:"configured"`
-	Target     *BackupTarget `json:"target,omitempty"`
+	Ready         bool          `json:"ready"`
+	PublicKey     string        `json:"public_key"`
+	Configured    bool          `json:"configured"`
+	Target        *BackupTarget `json:"target,omitempty"`
+	PasswordSaved bool          `json:"password_saved"`
 }
 
 // BackupTargetResult answers a target change. Password is the repository
-// password, filled in exactly once: the first time a repository is made or
-// confirmed. Without it the backups cannot be restored anywhere else.
+// password, filled in until the admin confirms it is saved. Without it the
+// backups cannot be restored anywhere else.
 type BackupTargetResult struct {
 	Status      BackupStatus `json:"status"`
 	Initialized bool         `json:"initialized"`
 	Password    string       `json:"password,omitempty"`
+}
+
+// BackupPasswordInput asks for the repository password again, or confirms
+// the admin saved it.
+type BackupPasswordInput struct {
+	Reason string `json:"reason"`
+}
+
+// BackupPassword is the repository password, given only while a target is
+// set and the admin has not yet confirmed saving it.
+type BackupPassword struct {
+	Password string `json:"password"`
 }
 
 // BackupInput backs up an account's home and the databases the panel names.
@@ -212,6 +226,8 @@ type PruneResult struct {
 type BackupService interface {
 	BackupStatus(ctx context.Context) (BackupStatus, error)
 	SetBackupTarget(ctx context.Context, in BackupTargetInput, actor string) (BackupTargetResult, error)
+	ShowBackupPassword(ctx context.Context, in BackupPasswordInput, actor string) (BackupPassword, error)
+	ConfirmBackupPassword(ctx context.Context, in BackupPasswordInput, actor string) (BackupStatus, error)
 	BackupAccount(ctx context.Context, id string, in BackupInput, actor string) (Snapshot, error)
 	ListBackups(ctx context.Context, id string) ([]Snapshot, error)
 	RestoreAccount(ctx context.Context, id string, in RestoreInput, actor string) (RestoreResult, error)

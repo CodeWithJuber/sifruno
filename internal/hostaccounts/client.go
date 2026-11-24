@@ -233,6 +233,35 @@ func (c *client) SetBackupTarget(ctx context.Context, in BackupTargetInput, acto
 	return out, err
 }
 
+// ShowBackupPassword reads the repository password again. The broker gives
+// it only while a target is set and the admin has not confirmed saving it;
+// after that it answers ErrConflict.
+func (c *client) ShowBackupPassword(ctx context.Context, in BackupPasswordInput, actor string) (BackupPassword, error) {
+	if !validText(in.Reason, 500) || !validText(actor, 120) {
+		return BackupPassword{}, ErrInvalid
+	}
+	var out BackupPassword
+	err := c.send(ctx, c.http, "POST", "/v1/backup/password", struct {
+		Input BackupPasswordInput `json:"input"`
+		Actor string              `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
+// ConfirmBackupPassword records that the admin saved the repository
+// password; no later answer carries it.
+func (c *client) ConfirmBackupPassword(ctx context.Context, in BackupPasswordInput, actor string) (BackupStatus, error) {
+	if !validText(in.Reason, 500) || !validText(actor, 120) {
+		return BackupStatus{}, ErrInvalid
+	}
+	var out BackupStatus
+	err := c.send(ctx, c.http, "POST", "/v1/backup/password-saved", struct {
+		Input BackupPasswordInput `json:"input"`
+		Actor string              `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
 // BackupAccount backs up the account's home and the named databases.
 func (c *client) BackupAccount(ctx context.Context, id string, in BackupInput, actor string) (Snapshot, error) {
 	if !idPattern.MatchString(id) || !validBackupInput(in, actor) {

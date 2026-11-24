@@ -350,25 +350,69 @@ func restoreInput(a Account) RestoreInput {
 	return RestoreInput{ExpectedRevision: a.Revision, Snapshot: strings.Repeat("d", 64), Files: true, Databases: []string{a.Username + "_wp"}, Reason: "Restore the site"}
 }
 
-func TestBackupPasswordIsShownOnce(t *testing.T) {
+// The repository password stays available until the admin confirms saving
+// it, so a dropped answer does not lose it; after that no answer carries it.
+func TestBackupPasswordStaysUntilSaved(t *testing.T) {
 	s, _ := backupStore(t)
 	ctx := context.Background()
+	why := BackupPasswordInput{Reason: "Backup storage page"}
 	status, err := s.backupStatus(ctx)
-	if err != nil || status.Configured || status.Target != nil || !status.Ready || status.PublicKey == "" {
+	if err != nil || status.Configured || status.Target != nil || !status.Ready || status.PublicKey == "" || status.PasswordSaved {
 		t.Fatalf("status before a target: %+v %v", status, err)
 	}
+	var failed *BackupError
+	if _, err := s.showBackupPassword(ctx, why, "test operator"); !errors.As(err, &failed) || failed.Step != "target" {
+		t.Fatalf("the password before a target: %v", err)
+	}
+	if _, err := s.confirmBackupPassword(ctx, why, "test operator"); !errors.As(err, &failed) || failed.Step != "target" {
+		t.Fatalf("a confirmation before a target: %v", err)
+	}
 	first := configureTarget(t, s)
-	if first.Password != "repository-password-fixture" || !first.Initialized || !first.Status.Configured || first.Status.Target.Host != "backup.example.test" {
+	if first.Password != "repository-password-fixture" || !first.Initialized || !first.Status.Configured || first.Status.Target.Host != "backup.example.test" || first.Status.PasswordSaved {
 		t.Fatalf("first target: %+v", first)
 	}
-	second := configureTarget(t, s)
-	if second.Password != "" {
-		t.Fatal("the repository password was shown a second time")
+	// The answer was lost: the admin can still read the password, and
+	// saving the target again shows it again.
+	got, err := s.showBackupPassword(ctx, why, "test operator")
+	if err != nil || got.Password != "repository-password-fixture" {
+		t.Fatalf("the password again: %+v %v", got, err)
+	}
+	if second := configureTarget(t, s); second.Password != "repository-password-fixture" {
+		t.Fatal("an unconfirmed password must be shown again")
 	}
 	status, err = s.backupStatus(ctx)
 	raw, _ := json.Marshal(status)
-	if err != nil || !status.Configured || strings.Contains(string(raw), "repository-password-fixture") {
-		t.Fatalf("status after a target: %s %v", raw, err)
+	if err != nil || !status.Configured || status.PasswordSaved || strings.Contains(string(raw), "repository-password-fixture") {
+		t.Fatalf("status before the confirmation: %s %v", raw, err)
+	}
+	if _, err := s.confirmBackupPassword(ctx, BackupPasswordInput{Reason: "a\nb"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an invalid reason: %v", err)
+	}
+	status, err = s.confirmBackupPassword(ctx, why, "test operator")
+	if err != nil || !status.PasswordSaved || !status.Configured {
+		t.Fatalf("confirm: %+v %v", status, err)
+	}
+	if status, err = s.confirmBackupPassword(ctx, why, "test operator"); err != nil || !status.PasswordSaved {
+		t.Fatalf("a second confirmation: %+v %v", status, err)
+	}
+	if _, err := s.showBackupPassword(ctx, why, "test operator"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("the password after the confirmation: %v", err)
+	}
+	third := configureTarget(t, s)
+	if third.Password != "" || !third.Status.PasswordSaved {
+		t.Fatalf("a target change after the confirmation: %+v", third)
+	}
+	status, err = s.backupStatus(ctx)
+	raw, _ = json.Marshal(status)
+	if err != nil || !status.PasswordSaved || strings.Contains(string(raw), "repository-password-fixture") {
+		t.Fatalf("status after the confirmation: %s %v", raw, err)
+	}
+	// A broker that showed the password once under the old rule stored
+	// password_shown true: that counts as saved.
+	var stored map[string]any
+	s.readBackup("target", &stored)
+	if stored["password_shown"] != true {
+		t.Fatalf("stored target %v", stored)
 	}
 	bad := targetInput()
 	bad.Host = "-oProxyCommand=x"
@@ -672,8 +716,21 @@ func TestBackupHTTPContract(t *testing.T) {
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &result) != nil || result.Password == "" {
 		t.Fatalf("target over HTTP: %d %s", rec.Code, rec.Body)
 	}
-	if rec := call("GET", "/v1/backup", ""); rec.Code != 200 || strings.Contains(rec.Body.String(), result.Password) {
+	if rec := call("GET", "/v1/backup", ""); rec.Code != 200 || strings.Contains(rec.Body.String(), result.Password) || !strings.Contains(rec.Body.String(), `"password_saved":false`) {
 		t.Fatalf("status over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	reason, _ := json.Marshal(map[string]any{"actor": "test operator", "input": BackupPasswordInput{Reason: "Backup storage page"}})
+	if rec := call("POST", "/v1/backup/password", strings.Replace(string(reason), `"reason"`, `"show":true,"reason"`, 1)); rec.Code != 400 {
+		t.Fatalf("an unknown key must be refused: %d", rec.Code)
+	}
+	if rec := call("POST", "/v1/backup/password", string(reason)); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"password":"`+result.Password+`"`) {
+		t.Fatalf("the password again over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call("POST", "/v1/backup/password-saved", string(reason)); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"password_saved":true`) || strings.Contains(rec.Body.String(), result.Password) {
+		t.Fatalf("confirm over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call("POST", "/v1/backup/password", string(reason)); rec.Code != 409 || strings.Contains(rec.Body.String(), result.Password) {
+		t.Fatalf("the password after the confirmation over HTTP: %d %s", rec.Code, rec.Body)
 	}
 	backup, _ := json.Marshal(map[string]any{"actor": "scheduler", "input": BackupInput{Databases: []string{"fixtureacct_wp"}, Reason: "Nightly backup"}})
 	if rec := call("POST", "/v1/accounts/"+a.ID+"/backup", string(backup)); rec.Code != 200 {

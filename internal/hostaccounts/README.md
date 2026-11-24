@@ -484,8 +484,10 @@ Each operation is fixed and typed; nothing goes through a shell.
 
 | Route | Operation |
 | --- | --- |
-| `GET /v1/backup` | The broker's public key, whether restic is ready, the target. The first call makes the key pair and the repository password. |
+| `GET /v1/backup` | The broker's public key, whether restic is ready, the target, whether the admin confirmed saving the password (`password_saved`). The first call makes the key pair and the repository password. |
 | `POST /v1/backup/target` | `host`, `port`, `user`, `path`, `known_hosts`, `reason`. Opens the repository there with the broker's password, or makes one. |
+| `POST /v1/backup/password` | `reason`. The repository password, only while a target is set and the password is not confirmed saved (409 after). |
+| `POST /v1/backup/password-saved` | `reason`. Records that the admin saved the password. |
 | `POST /v1/accounts/{id}/backup` | `databases`, `reason`. The account's home and the named databases, as one snapshot. |
 | `GET /v1/accounts/{id}/backups` | The account's snapshots, newest first. |
 | `POST /v1/accounts/{id}/restore` | `expected_revision`, `snapshot`, `files`, `databases`, `reason`. |
@@ -508,9 +510,13 @@ Secrets stay with the broker, in `<state>/backup/` (root, 0700):
 - `ssh_key`: an ed25519 key made in Go (0600). The panel shows its public
   half for the admin to install on the storage server.
 - `password`: the repository password, 32 random bytes (0600). restic reads
-  it through `RESTIC_PASSWORD_FILE`; it is never an argument. The target
-  change that first opens or makes a repository returns it once, so the
-  admin can save it; no later answer carries it.
+  it through `RESTIC_PASSWORD_FILE`; it is never an argument. It is shown
+  in two steps, so a lost answer does not lose it: every target change
+  answers it, and `POST /v1/backup/password` reads it again, until the admin
+  confirms with `POST /v1/backup/password-saved`. From then on no answer
+  carries it. The file stays root 0600 throughout; the confirmation is the
+  stored target's `password_shown` flag, which a broker before this step
+  set when it showed the password once.
 - `known_hosts`: the storage server's keys, from the admin (ssh-keyscan
   output), under the fixed alias `sifruno-backup-target`. There is no trust
   on first use. A new target is tried with `known_hosts.next` and replaces

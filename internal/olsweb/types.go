@@ -20,6 +20,11 @@ const (
 	// vhost maps /.well-known/acme-challenge/ to it; tokens are random, so
 	// one directory serves all sites.
 	ACMEChallengeDir = "/var/lib/sifruno-acme"
+	// SuspendedDocRoot is the vhRoot and docRoot of every suspended site: an
+	// empty directory owned by root, outside every home, which the root
+	// broker makes. A suspended vhost names no path its tenant controls, so
+	// the tenant cannot make its config test fail and keep the site serving.
+	SuspendedDocRoot = "/var/lib/sifruno-suspended"
 	// NamePrefix starts every virtual host, listener and external app name
 	// Sifruno emits, so they never collide with the administrator's own.
 	NamePrefix = "sifruno-"

@@ -252,3 +252,44 @@ func TestRootOnlyChallengeDir(t *testing.T) {
 		t.Fatal("a missing controller user was accepted")
 	}
 }
+
+// The broker makes the suspended sites' directory, root's and empty, when it
+// is missing, accepts it as it is, and refuses one that holds anything or
+// that others can write.
+func TestRootOnlySuspendedDir(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes a root-owned directory under a root-owned parent")
+	}
+	base, e := os.MkdirTemp("/etc", "sifruno-test-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	if os.Chmod(base, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	dir := filepath.Join(base, "suspended")
+	if e := ensureSuspendedDir(dir); e != nil {
+		t.Fatalf("make: %v", e)
+	}
+	info, e := os.Lstat(dir)
+	st, _ := info.Sys().(*syscall.Stat_t)
+	if e != nil || !info.IsDir() || info.Mode().Perm() != 0755 || st == nil || st.Uid != 0 || st.Gid != 0 {
+		t.Fatalf("made %v", info)
+	}
+	if e := ensureSuspendedDir(dir); e != nil {
+		t.Fatalf("existing: %v", e)
+	}
+	if os.WriteFile(filepath.Join(dir, "index.html"), []byte("planted"), 0644) != nil {
+		t.Fatal("plant")
+	}
+	if ensureSuspendedDir(dir) == nil {
+		t.Fatal("a directory that holds a file was accepted")
+	}
+	if os.Remove(filepath.Join(dir, "index.html")) != nil || os.Chmod(dir, 0777) != nil {
+		t.Fatal("chmod")
+	}
+	if ensureSuspendedDir(dir) == nil {
+		t.Fatal("a directory anyone can write was accepted")
+	}
+}

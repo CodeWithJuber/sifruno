@@ -170,7 +170,18 @@ unchanged (422), and after any other failure the user is kept.
 A state change of an account with a live site rewrites the site list too: a
 suspended account's site stays in the config marked suspended, so
 OpenLiteSpeed answers 403 for every request (ACME challenges included), and
-an active one serves again. The account changes first, as it does without a
+an active one serves again. A suspended site's vhRoot and docRoot are
+`/var/lib/sifruno-suspended`, not the tenant's home: an empty directory,
+root-owned 0755, that the broker makes with `mkdirat` when the web operation
+starts, so it keeps `/var/lib`'s SELinux label like the challenge directory.
+If it holds anything or others can write it, the web operation does not
+start. Every path a suspended vhost names (that directory, its logs, its
+certificate, the challenge directory) is outside every home, so its config
+test depends on nothing the tenant controls: a tenant who moves
+`public_html` away cannot make their own suspend end rejected. Resumed, the
+site gets its own home and `public_html` back.
+
+In a state change the account changes first, as it does without a
 site; then the list is installed under the web operation's four-minute
 limit. If that config fails its test, the old files go back, the account is
 put back into the state it had, and the change is journaled as `rejected`
@@ -197,11 +208,11 @@ Limits for now:
 - A state change of an account with a live site needs the web operation on,
   as its delete does, and is refused (503) before anything is journaled
   without it.
-- The config test counts the suspended site's own vhost as changed, and
-  OpenLiteSpeed 1.9.4 warns for a vhost whose tenant moved `public_html`
-  away. A suspend of such an account is therefore expected to end
-  `rejected`, leaving it active until the directory is back (not yet run on
-  the dev VM). Delete is not affected, because it takes the vhost out.
+- A resume counts the site's own vhost as changed, and OpenLiteSpeed 1.9.4
+  warns for a vhost whose tenant moved `public_html` away, so a resume of
+  such an account ends `rejected` and the site stays suspended until the
+  directory is back. A suspend does not depend on it (not yet run on the dev
+  VM).
 
 ## Certificates
 

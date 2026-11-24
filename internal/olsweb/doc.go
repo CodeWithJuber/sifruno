@@ -8,8 +8,9 @@
 // Paths are relative to ServerRoot (/usr/local/lsws):
 //
 //   - conf/sifruno.conf: one virtualhost block per site (vhRoot is the
-//     user's home, setUIDMode 2 with user and group set to the account,
-//     restrained 1, enableScript 0 when suspended) and the Sifruno listeners
+//     user's home, or SuspendedDocRoot when suspended, setUIDMode 2 with
+//     user and group set to the account, restrained 1, enableScript 0 when
+//     suspended) and the Sifruno listeners
 //     with their map lines. httpd_config.conf includes it with one line at
 //     the top level, so Sifruno never rewrites the administrator's file.
 //     A plain listener maps every site. A secure listener maps only the
@@ -25,7 +26,10 @@
 //     ACMEChallengeDir, and a rewrite
 //     block with .htaccess autoload plus vhost-level deny rules. A suspended
 //     site has no extprocessor or handler, autoLoadHtaccess 0 and one rule
-//     answering 403 to everything, challenges included.
+//     answering 403 to everything, challenges included. Its docRoot is
+//     SuspendedDocRoot, so no path it names is under the tenant's home and
+//     the tenant cannot make its config test fail; SuspendedDocRoot must
+//     exist before such a render is tested.
 //
 // # Certificates
 //

@@ -78,12 +78,12 @@ func renderServer(listeners []Listener, sites []site) []byte {
 	b.WriteString(header)
 	b.WriteString("# Included from httpd_config.conf by: include " + pathpkg.Join(ServerRoot, ServerConfigPath) + "\n")
 	for _, v := range sites {
-		enableScript := "1"
+		enableScript, vhRoot := "1", pathpkg.Join(HomeRoot, v.Username)+"/"
 		if v.Suspended {
-			enableScript = "0"
+			enableScript, vhRoot = "0", SuspendedDocRoot+"/"
 		}
 		b.WriteString("\nvirtualhost " + NamePrefix + v.Name + " {\n")
-		kv(&b, "vhRoot", pathpkg.Join(HomeRoot, v.Username)+"/")
+		kv(&b, "vhRoot", vhRoot)
 		kv(&b, "configFile", pathpkg.Join(ServerRoot, VhostConfigPath(v.Name)))
 		// restrained keeps static files and symlinks inside vhRoot (the home).
 		kv(&b, "allowSymbolLink", "1")
@@ -125,16 +125,19 @@ func renderServer(listeners []Listener, sites []site) []byte {
 // renderVhost writes one site's vhconf.conf. A suspended site keeps its logs
 // and certificate but has no PHP handler and refuses every request, ACME
 // challenges included, because its vhost-level rule runs before any context.
+// Its docRoot is SuspendedDocRoot, not the tenant's: every path a suspended
+// vhost names (docRoot, logs, certificate, challenge directory) is outside
+// every home, so nothing its tenant does can make its config test fail.
 func renderVhost(v site) []byte {
 	var b bytes.Buffer
 	logDir := pathpkg.Join(LogRoot, v.Name)
-	state := "active"
+	state, docRoot := "active", v.DocRoot+"/"
 	if v.Suspended {
-		state = "suspended"
+		state, docRoot = "suspended", SuspendedDocRoot+"/"
 	}
 	b.WriteString(header)
 	b.WriteString("# Site " + v.Name + " (" + state + "), user " + v.Username + ", PHP " + v.PHPVersion + "\n\n")
-	kv0(&b, "docRoot", v.DocRoot+"/")
+	kv0(&b, "docRoot", docRoot)
 	if !v.Suspended {
 		// 2 enables the feature for this vhost; it applies only when the
 		// server-level value is not 0 (httpvhost.cpp, httpserver.cpp).
@@ -248,7 +251,9 @@ func renderPHP(b *bytes.Buffer, v site) {
 // The context's own rewrite block with enable 0 stops OpenLiteSpeed from
 // applying a parent context's rules, the tenant's .htaccess among them, and
 // from running rules of a .htaccess in the challenge directory. The
-// vhost-level rules still run first, and none of them matches this path.
+// vhost-level rules still run first: none of an active site's deny rules
+// matches this path, and a suspended site's rule refuses it like every other
+// path.
 func renderACMEChallenge(b *bytes.Buffer) {
 	b.WriteString("\ncontext " + acmeChallengeURI + " {\n")
 	kv(b, "location", ACMEChallengeDir+"/")

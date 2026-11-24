@@ -92,7 +92,51 @@ func (n *linuxSystem) enableWeb(web *WebOptions) error {
 	if n.webUID <= 0 {
 		return ErrUnavailable
 	}
-	return n.ensureChallengeDir(olsweb.ACMEChallengeDir, users)
+	if e := n.ensureChallengeDir(olsweb.ACMEChallengeDir, users); e != nil {
+		return e
+	}
+	return ensureSuspendedDir(olsweb.SuspendedDocRoot)
+}
+
+// ensureSuspendedDir makes sure the directory every suspended vhost uses as
+// its vhRoot and docRoot exists, root's own and empty, so a suspended site's
+// config test depends on nothing its tenant controls. Like the challenge
+// directory it is made in /var/lib with mkdirat (root, 0755), so it takes
+// that directory's SELinux label, which OpenLiteSpeed may read. An existing
+// one must be root's, writable by no one else and empty; otherwise the
+// broker refuses to start the web operation.
+func ensureSuspendedDir(dir string) error {
+	if authority(filepath.Dir(dir)) != nil {
+		return ErrUnavailable
+	}
+	parent, e := openRootDir(filepath.Dir(dir))
+	if e != nil {
+		return ErrUnavailable
+	}
+	defer parent.Close()
+	name := filepath.Base(dir)
+	created := false
+	if e := unix.Mkdirat(int(parent.Fd()), name, 0755); e == nil {
+		created = true
+	} else if !errors.Is(e, unix.EEXIST) {
+		return ErrUnavailable
+	}
+	d, e := openDirectoryAt(int(parent.Fd()), name)
+	if e != nil {
+		return ErrUnavailable
+	}
+	defer d.Close()
+	if created && (unix.Fchown(int(d.Fd()), 0, 0) != nil || unix.Fchmod(int(d.Fd()), 0755) != nil) {
+		return ErrUnavailable
+	}
+	owner, group, mode, e := ownerOfHandle(d)
+	if e != nil || owner != 0 || mode&0002 != 0 || (mode&0020 != 0 && group != 0) {
+		return ErrUnavailable
+	}
+	if names, e := d.Readdirnames(1); len(names) != 0 || !errors.Is(e, io.EOF) {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 // ensureChallengeDir makes sure the directory every vhost maps

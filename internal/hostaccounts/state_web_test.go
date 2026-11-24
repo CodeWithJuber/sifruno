@@ -69,12 +69,16 @@ func TestSuspendStopsTheLiveSiteAndResumeServesIt(t *testing.T) {
 	if after.Pending != nil || after.Account != got || after.Web != r.Web || after.HistorySequence != r.HistorySequence+2 {
 		t.Fatalf("record after suspend %+v", after)
 	}
-	// Rendered, that site refuses every request. (The fixture's homes are in
-	// a temporary directory; olsweb wants the real homes root.)
-	site.DocRoot = olsweb.HomeRoot + "/" + site.Username + "/public_html"
-	files, err := olsweb.Render(webServer([]olsweb.Site{site}))
-	if err != nil || !strings.Contains(string(files[olsweb.VhostConfigPath(site.Name)]), "RewriteRule .* - [F,L]\n") {
-		t.Fatalf("the suspended site's config does not refuse every request: %v", err)
+	// Rendered, that site refuses every request and names no path under the
+	// homes root, so its config test depends on nothing the tenant controls.
+	files := renderAtHomeRoot([]olsweb.Site{site})
+	if !strings.Contains(string(files[olsweb.VhostConfigPath(site.Name)]), "RewriteRule .* - [F,L]\n") {
+		t.Fatal("the suspended site's config does not refuse every request")
+	}
+	for path, data := range files {
+		if strings.Contains(string(data), olsweb.HomeRoot+"/") {
+			t.Fatalf("the suspended site's %s names a path under the homes root:\n%s", path, data)
+		}
 	}
 
 	// A suspended site stays suspended when another account's site goes live.
@@ -95,6 +99,29 @@ func TestSuspendStopsTheLiveSiteAndResumeServesIt(t *testing.T) {
 	}
 	if resumed.State != "active" || resumed.Revision != got.Revision+1 || siteOf(t, f.sites, r.Account.ID).Suspended || f.siteApplies != 2 {
 		t.Fatalf("after resume: %+v, %d installs, sites %+v", resumed, f.siteApplies, f.sites)
+	}
+}
+
+// A tenant who moves public_html away cannot defeat their own suspension:
+// the suspended vhost does not name it, so the config test passes. A resume
+// names it again and ends rejected, leaving the site suspended.
+func TestSuspendSucceedsWhilePublicHTMLIsMissing(t *testing.T) {
+	s, f := webStore(t)
+	before := liveFixture(t, s)
+	f.missingPath = olsweb.HomeRoot + "/" + before.Account.Username + "/public_html"
+	got, err := suspend(s, before)
+	if err != nil {
+		t.Fatalf("suspend while public_html is missing: %v", err)
+	}
+	after := recordFor(t, s, before.Account.ID)
+	if got.State != "suspended" || after.Pending != nil || f.users[before.Account.Username].Account.State != "suspended" || !siteOf(t, f.sites, before.Account.ID).Suspended {
+		t.Fatalf("suspend while public_html is missing did not stop the site: %+v", after)
+	}
+	if _, err := s.setState(context.Background(), before.Account.ID, StateInput{State: "active", ExpectedRevision: got.Revision, Reason: "Paid"}, "test operator"); !errors.Is(err, ErrWebRejected) {
+		t.Fatalf("resume while public_html is missing: %v", err)
+	}
+	if f.users[before.Account.Username].Account.State != "suspended" || !siteOf(t, f.sites, before.Account.ID).Suspended || recordFor(t, s, before.Account.ID).Account != after.Account {
+		t.Fatal("a rejected resume served the site or changed the account")
 	}
 }
 

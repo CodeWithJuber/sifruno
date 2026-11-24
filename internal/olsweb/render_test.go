@@ -163,7 +163,7 @@ func TestRenderShape(t *testing.T) {
 	if strings.Contains(httpsBlock, "sifruno-legacy") || strings.Contains(httpsBlock, "sifruno-paused") || !strings.Contains(httpsBlock, "sifruno-blog example.com") {
 		t.Errorf("https listener must map only sites with their own certificate:\n%s", httpsBlock)
 	}
-	if !strings.Contains(server, "virtualhost sifruno-paused {\n  vhRoot                  /home/pauseduser/\n  configFile              /usr/local/lsws/conf/vhosts/sifruno-paused/vhconf.conf\n  allowSymbolLink         1\n  enableScript            0\n") {
+	if !strings.Contains(server, "virtualhost sifruno-paused {\n  vhRoot                  /var/lib/sifruno-suspended/\n  configFile              /usr/local/lsws/conf/vhosts/sifruno-paused/vhconf.conf\n  allowSymbolLink         1\n  enableScript            0\n") {
 		t.Error("suspended vhost does not disable scripts")
 	}
 	for _, forbidden := range []string{"extprocessor", "scripthandler", "lsphp", "namespace", "autoLoadHtaccess        1"} {
@@ -192,6 +192,39 @@ func TestRenderShape(t *testing.T) {
 	shop := string(files[VhostConfigPath("shop")])
 	if !strings.Contains(shop, "uds://tmp/lshttpd/sifruno-shop.sock") || !strings.Contains(blog, "uds://tmp/lshttpd/sifruno-blog.sock") {
 		t.Error("sites do not get their own lsphp socket")
+	}
+}
+
+// A suspended site names no path under the homes root, neither in its
+// vhconf.conf nor in its virtualhost block: its config test then depends on
+// nothing the tenant controls. Resumed, the same site renders its own home
+// and document root again.
+func TestSuspendedSiteNamesNoTenantPath(t *testing.T) {
+	render := func(suspended bool) (vhost, block string) {
+		t.Helper()
+		s := baseServer()
+		s.Sites[2].Suspended = suspended
+		files, err := Render(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := string(files[ServerConfigPath])
+		block = server[strings.Index(server, "virtualhost sifruno-paused {"):]
+		block = block[:strings.Index(block, "\n}\n")]
+		return string(files[VhostConfigPath("paused")]), block
+	}
+	vhost, block := render(true)
+	for name, text := range map[string]string{"vhconf.conf": vhost, "virtualhost block": block} {
+		if strings.Contains(text, HomeRoot+"/") || strings.Contains(text, "public_html") {
+			t.Errorf("suspended %s names a path in the tenant's home:\n%s", name, text)
+		}
+	}
+	if !strings.Contains(vhost, "\ndocRoot                   /var/lib/sifruno-suspended/\n") || !strings.Contains(block, "\n  vhRoot                  /var/lib/sifruno-suspended/\n") {
+		t.Errorf("suspended site does not use SuspendedDocRoot:\n%s\n%s", block, vhost)
+	}
+	vhost, block = render(false)
+	if !strings.Contains(vhost, "\ndocRoot                   /home/pauseduser/public_html/\n") || !strings.Contains(block, "\n  vhRoot                  /home/pauseduser/\n") || strings.Contains(vhost+block, SuspendedDocRoot) {
+		t.Errorf("resumed site does not use its own home again:\n%s\n%s", block, vhost)
 	}
 }
 

@@ -26,6 +26,10 @@ type fakeNative struct {
 	refuseState string
 	// siteApplies counts ApplySites calls, failed ones included.
 	siteApplies int
+	// missingPath is a tenant path that is gone. ApplySites renders the site
+	// list as olsweb does and rejects it when any file names that path, as
+	// OpenLiteSpeed's config test warns for a vhost whose directory is gone.
+	missingPath string
 	// full and cheap count the two kinds of verification per username.
 	full, cheap map[string]int
 	keys        map[string][]string
@@ -139,8 +143,31 @@ func (f *fakeNative) ApplySites(_ context.Context, sites []olsweb.Site) error {
 	case "sites-reject":
 		return ErrWebRejected
 	}
+	if f.missingPath != "" {
+		for _, data := range renderAtHomeRoot(sites) {
+			if strings.Contains(string(data), f.missingPath) {
+				return ErrWebRejected
+			}
+		}
+	}
 	f.sites = append([]olsweb.Site(nil), sites...)
 	return nil
+}
+
+// renderAtHomeRoot renders a site list as the broker installs it. The
+// fixture's homes are in a temporary directory and olsweb wants the real
+// homes root, so each document root moves to /home/<user>/public_html.
+func renderAtHomeRoot(sites []olsweb.Site) map[string][]byte {
+	real := make([]olsweb.Site, len(sites))
+	for i, site := range sites {
+		site.DocRoot = olsweb.HomeRoot + "/" + site.Username + "/public_html"
+		real[i] = site
+	}
+	files, err := olsweb.Render(webServer(real))
+	if err != nil {
+		panic(err)
+	}
+	return files
 }
 
 func (f *fakeNative) GuardState(string) error   { return nil }

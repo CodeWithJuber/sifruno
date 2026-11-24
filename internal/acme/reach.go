@@ -85,7 +85,11 @@ var notPublic = []netip.Prefix{
 	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, the broadcast address among them
 	netip.MustParsePrefix("::/96"),           // IPv4-compatible, deprecated
 	netip.MustParsePrefix("100::/64"),        // discard only
+	netip.MustParsePrefix("64:ff9b:1::/48"),  // local-use NAT64 (RFC 8215), translated inside a network
+	netip.MustParsePrefix("2001::/23"),       // IETF protocol assignments, Teredo (2001::/32) among them
 	netip.MustParsePrefix("2001:db8::/32"),   // documentation
+	netip.MustParsePrefix("2002::/16"),       // 6to4: an IPv4 address in bits 16-48, relayed
+	netip.MustParsePrefix("3fff::/20"),       // documentation (RFC 9637)
 	netip.MustParsePrefix("fec0::/10"),       // site-local, deprecated
 }
 

@@ -28,6 +28,9 @@ func TestPublicAddress(t *testing.T) {
 		"::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:169.254.169.254", "::ffff:100.64.0.1", // IPv4-mapped
 		"64:ff9b::7f00:1", "64:ff9b::a00:1", "64:ff9b::c0a8:101", // NAT64 of loopback and private
 		"::127.0.0.1", "::10.0.0.1", // IPv4-compatible
+		"2002:7f00:1::1", "2002:a00:1::1", // 6to4 of loopback and private
+		"2001:0:4136:e378:8000:63bf:3fff:fdd2", "2001:2::1", // Teredo, benchmarking
+		"64:ff9b:1::a00:1", "3fff::1", // local-use NAT64, documentation
 	}
 	for _, s := range refused {
 		if publicAddress(netip.MustParseAddr(s), false) {

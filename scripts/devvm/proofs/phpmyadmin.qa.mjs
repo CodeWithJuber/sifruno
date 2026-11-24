@@ -1,29 +1,32 @@
 // Browser checks for phpMyAdmin's one-click sign-in, run by `proof.sh
 // phpmyadmin` against a panel in the dev VM that runs as sifpanel with the
-// real broker, MariaDB and phpMyAdmin behind OpenLiteSpeed. It makes two PHP
-// sites with a database each, opens phpMyAdmin from the first one's
-// Databases tab, and asks the VM (phpmyadmin.guest.sh) to check the
-// temporary user and, later, that it expired. The panel's access key is read
-// from the seeded state and never printed; the admin's password, its
-// authenticator key and the sites' database passwords exist only here.
-//   node phpmyadmin.qa.mjs <origin> <state-dir> <out-dir> <domain> <vm.sh>
-//     <guest-dir> [chrome-executable]
+// real broker, MariaDB and phpMyAdmin behind OpenLiteSpeed. The panel has
+// three addresses, each reached through an SSH forward: loopback (first-run
+// setup with the access key), HTTPS for panel.proof.test (the admin), and
+// phpMyAdmin's own HTTPS origin on another port. It makes two PHP sites with
+// a database each, opens phpMyAdmin from the first one's Databases tab, and
+// asks the VM (phpmyadmin.guest.sh) to check the temporary user and, later,
+// that it expired. The access key is read from the seeded state and never
+// printed; the admin's password, its authenticator key and the sites'
+// database passwords exist only here.
+//   node phpmyadmin.qa.mjs <loopback-origin> <panel-origin> <phpmyadmin-origin>
+//     <state-dir> <out-dir> <domain> <vm.sh> <guest-dir> [chrome-executable]
 import { createHmac, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 
-const [origin, stateDir, outDir, domain, vmsh, guestDir, chrome] = process.argv.slice(2);
+const [loopback, panelOrigin, pmaOrigin, stateDir, outDir, domain, vmsh, guestDir, chrome] = process.argv.slice(2);
 mkdirSync(outDir, { recursive: true });
 const guest = "/opt/sifruno-proof/phpmyadmin.guest.sh";
+const admissionCookie = "__Host-sifruno_phpmyadmin";
 const key = readFileSync(join(stateDir, "operator/access.key"), "utf8").trim();
 const panelPassword = `qa ${randomBytes(12).toString("hex")}`;
 const checks = [];
 const errors = [];
 const check = (name, ok, detail = "") => { checks.push({ name, ok: Boolean(ok) }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${!ok && detail ? ` (${detail})` : ""}`); };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const base = "/api/v1/phpmyadmin/";
 
 // RFC 6238 with the panel's parameters, to act as the admin's authenticator app.
 function base32(s) {
@@ -53,25 +56,27 @@ function guestStep(args) {
   }
 }
 
-const browser = await chromium.launch({ headless: true, ...(chrome ? { executablePath: chrome } : {}) });
+const host = new URL(panelOrigin).hostname;
+const browser = await chromium.launch({ headless: true, args: [`--host-resolver-rules=MAP ${host} 127.0.0.1`], ...(chrome ? { executablePath: chrome } : {}) });
 try {
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  // The certificate is the panel's self-signed one.
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
   page.on("console", (m) => { if (m.type() === "error" && !/\b(401|409|422)\b/.test(m.text())) errors.push(`console: ${m.text()}`); });
   const signonURLs = [];
-  ctx.on("request", (r) => { if (r.url().includes("sifruno-signon.php?code=")) signonURLs.push(r.url()); });
+  ctx.on("request", (r) => { if (r.url().includes("/sifruno-signon.php?code=")) signonURLs.push(r.url()); });
 
-  console.log("## Browser: without a panel sign-in, phpMyAdmin does not open");
-  const stranger = await browser.newContext();
+  console.log("## Browser: phpMyAdmin's origin without a code or an admission");
+  const stranger = await browser.newContext({ ignoreHTTPSErrors: true });
   const anon = await stranger.newPage();
-  const anonAnswer = await anon.goto(origin + base);
-  check("the panel answers 401 with a page that says to sign in", anonAnswer?.status() === 401 && (await anon.locator("h1").innerText()) === "You are not signed in to the panel.");
-  await anon.screenshot({ path: join(outDir, "1440-phpmyadmin-not-signed-in.png") });
+  const anonAnswer = await anon.goto(`${pmaOrigin}/index.php`);
+  check("phpMyAdmin's origin answers 401 with a page that says to open phpMyAdmin from the panel", anonAnswer?.status() === 401 && (await anon.locator("h1").innerText()) === "phpMyAdmin needs a new sign-in.");
+  await anon.screenshot({ path: join(outDir, "1440-phpmyadmin-no-admission.png") });
   await stranger.close();
 
-  console.log("## Browser: first-run setup and sign-in");
-  await page.goto(origin + "/websites");
+  console.log("## Browser: first-run setup on the server's loopback address, then the admin over HTTPS");
+  await page.goto(loopback + "/websites");
   await page.getByTestId("setup-key").waitFor();
   await page.getByLabel("Access key", { exact: true }).fill(key);
   await page.getByRole("button", { name: "Continue", exact: true }).click();
@@ -83,10 +88,19 @@ try {
   await page.getByTestId("setup-code").waitFor();
   const secret = (await page.getByTestId("setup-secret").innerText()).replace(/\s+/g, "");
   await page.getByLabel("6-digit code from the app", { exact: true }).fill(totp(secret));
-  const setupStep = step();
+  let lastStep = step();
   await page.getByRole("button", { name: "Create admin account", exact: true }).click();
   await page.getByTestId("signed-in-as").waitFor({ timeout: 180_000 });
-  check("the admin signs in to the panel", true);
+  check("the admin account is made on the server", true);
+  // Each sign-in needs a code from a later 30-second step than the last one.
+  const signIn = async () => {
+    while (step() <= lastStep) await sleep(1000);
+    lastStep = step();
+    await page.goto(panelOrigin + "/");
+    return page.evaluate(async ({ password, code }) => (await fetch("/api/v1/session/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "admin", password, totp_code: code }) })).status,
+      { password: panelPassword, code: totp(secret) });
+  };
+  check("the admin signs in over HTTPS", (await signIn()) === 200);
 
   console.log("## Two PHP sites, each with its own database");
   const sites = [];
@@ -99,7 +113,7 @@ try {
       return { status: r.status, body: await r.json() };
     }, { name, dbPassword });
     const jobId = made.body?.job?.id;
-    check(`the wizard starts ${name}`, made.status === 202 || made.status === 201 || made.status === 200, `${made.status} ${JSON.stringify(made.body).slice(0, 200)}`);
+    check(`the wizard starts ${name}`, made.status === 202, `${made.status} ${JSON.stringify(made.body).slice(0, 200)}`);
     let job;
     const started = Date.now();
     while (jobId && Date.now() - started < 15 * 60 * 1000) {
@@ -112,67 +126,78 @@ try {
     sites.push({ domain: name, user: job?.username, id: job?.result?.account_id });
   }
   const [a, b] = sites;
+  // A fresh 15-minute panel session for the click.
+  check("the admin signs in again", (await signIn()) === 200);
 
-  // The panel's sign-in lasts 15 minutes and the sites took a while: sign
-  // in again, with a code from a later 30-second step than the last one.
-  while (step() <= setupStep) await sleep(1000);
-  const relogin = await page.evaluate(async ({ password, code }) => {
-    const r = await fetch("/api/v1/session/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "admin", password, totp_code: code }) });
-    return r.status;
-  }, { password: panelPassword, code: totp(secret) });
-  check("the admin signs in again for a fresh 15-minute session", relogin === 200, String(relogin));
+  console.log("## The panel's origin no longer serves phpMyAdmin");
+  const onPanel = await page.evaluate(async () => (await fetch("/api/v1/phpmyadmin/")).status);
+  check("the panel answers 404 for /api/v1/phpmyadmin/ to a signed-in admin", onPanel === 404, String(onPanel));
 
   console.log(`## Browser: Open phpMyAdmin on ${a.domain}'s Databases tab`);
-  await page.goto(`${origin}/websites/sites/${a.id}/databases`);
+  await page.goto(`${panelOrigin}/websites/sites/${a.id}/databases`);
   const button = page.getByTestId("open-phpmyadmin");
   await button.waitFor({ timeout: 30000 });
   check("the Databases tab has an Open phpMyAdmin button", (await button.innerText()).includes("Open phpMyAdmin") && !(await button.isDisabled()));
-  check("it says phpMyAdmin opens signed in to this website's databases only", (await page.getByTestId("open-phpmyadmin-hint").innerText()).includes("this website's databases only"));
+  check("it says phpMyAdmin opens on its own address, for this website's databases only", (await page.getByTestId("open-phpmyadmin-hint").innerText()).includes("phpMyAdmin's own address, signed in to this website's databases only"));
   await page.screenshot({ path: join(outDir, "1440-databases-tab.png"), fullPage: true });
   const [tab] = await Promise.all([ctx.waitForEvent("page"), button.click()]);
   const tabErrors = [];
   tab.on("console", (m) => { if (m.type() === "error") tabErrors.push(m.text()); });
   tab.on("pageerror", (e) => tabErrors.push(e.message));
-  await tab.waitForURL((u) => u.pathname === `${base}index.php`, { timeout: 60000 });
+  await tab.waitForURL((u) => u.origin === pmaOrigin && u.pathname === "/index.php", { timeout: 60000 });
   await tab.locator("#pma_navigation_tree").waitFor({ timeout: 60000 });
   await tab.waitForLoadState("networkidle").catch(() => {});
-  check("one click lands in phpMyAdmin, signed in (its database tree, no login form)", (await tab.locator("#input_username").count()) === 0);
+  check("one click lands in phpMyAdmin on its own origin, signed in (its database tree, no login form)", (await tab.locator("#input_username").count()) === 0);
   check("the new tab has no opener", await tab.evaluate(() => window.opener === null));
-  check("the sign-in link was opened once, with a code", signonURLs.length === 1 && /\?code=[A-Za-z0-9_-]{43}$/.test(signonURLs[0]), String(signonURLs.length));
-  check("the address bar shows no code once signed in", !tab.url().includes("code="));
+  check("the sign-in link was on phpMyAdmin's origin, opened once, with a code", signonURLs.length === 1 && signonURLs[0].startsWith(`${pmaOrigin}/sifruno-signon.php?code=`) && /\?code=[A-Za-z0-9_-]{43}$/.test(signonURLs[0]), signonURLs.join(" "));
   const tree = (await tab.locator("#pma_navigation_tree").innerText()).replace(/\s+/g, " ");
   console.log(`  phpMyAdmin's database tree: ${tree.slice(0, 300)}`);
   check(`it lists ${a.user}_wp`, tree.includes(`${a.user}_wp`));
   check(`it does not list ${b.user}_wp, the other website's`, !tree.includes(`${b.user}_wp`));
   const csp = await tab.evaluate(async () => (await fetch(location.href)).headers.get("content-security-policy"));
-  check("phpMyAdmin's pages get phpMyAdmin's policy from the panel", csp?.includes("'unsafe-eval'") && csp.includes("frame-ancestors 'none'"), csp ?? "none");
-  const panelCSP = await page.evaluate(async () => (await fetch("/api/v1/session")).headers.get("content-security-policy"));
-  check("the panel's own routes keep their strict policy", panelCSP?.includes("script-src 'self';") && !panelCSP.includes("unsafe"), panelCSP ?? "none");
-  const cookies = await ctx.cookies(origin);
-  const stray = cookies.filter((c) => c.name !== "sifruno_operator" && !c.path.startsWith(base));
-  check("phpMyAdmin's cookies stay under /api/v1/phpmyadmin/ and the panel keeps one session cookie", stray.length === 0 && cookies.filter((c) => c.name === "sifruno_operator").length === 1, cookies.map((c) => `${c.name}@${c.path}`).join(" "));
+  check("phpMyAdmin's pages may connect and post only to their own origin", csp?.includes("connect-src 'self'") && csp.includes("form-action 'self'") && csp.includes("frame-ancestors 'none'"), csp ?? "none");
   check("no script or style was blocked on phpMyAdmin's page", !tabErrors.some((t) => /Content Security Policy/i.test(t)), tabErrors.slice(0, 2).join(" | "));
-  await tab.setViewportSize({ width: 1440, height: 900 });
+  const pmaCookies = await ctx.cookies(pmaOrigin);
+  const admission = pmaCookies.find((c) => c.name === admissionCookie);
+  check("the admission cookie is __Host-, HttpOnly, Secure, SameSite=Strict, Path=/, ending within the hour",
+    admission && admission.httpOnly && admission.secure && admission.sameSite === "Strict" && admission.path === "/" && admission.expires > Date.now() / 1000 && admission.expires <= Date.now() / 1000 + 3600,
+    JSON.stringify(admission ?? {}));
+  check("the panel's session cookie stays on /api/v1", (await ctx.cookies(panelOrigin)).filter((c) => c.name === "sifruno_operator").every((c) => c.path === "/api/v1"));
   await tab.screenshot({ path: join(outDir, "1440-phpmyadmin-signed-in.png") });
 
-  console.log("## Browser: the same link again");
+  console.log("## phpMyAdmin's origin cannot use the panel's API");
+  const fromTab = await tab.evaluate(async (url) => {
+    try { const r = await fetch(url, { credentials: "include" }); return `answered ${r.status}`; } catch (e) { return `blocked: ${e.name}`; }
+  }, `${panelOrigin}/api/v1/session`);
+  check("a fetch from a phpMyAdmin page to the panel's API gets nothing", fromTab.startsWith("blocked"), fromTab);
+  const withOrigin = await ctx.request.get(`${panelOrigin}/api/v1/session`, { headers: { Origin: pmaOrigin, "Sec-Fetch-Site": "same-site" } });
+  const without = await ctx.request.get(`${panelOrigin}/api/v1/session`);
+  check("the panel refuses its API to a request from phpMyAdmin's origin, cookie and all (403)", withOrigin.status() === 403 && without.status() === 200, `${withOrigin.status()} / ${without.status()}`);
+  const post = await ctx.request.post(`${panelOrigin}/api/v1/websites/sites/${a.id}/databases/phpmyadmin`, { headers: { Origin: pmaOrigin, "Content-Type": "application/json" }, data: "{}" });
+  check("and refuses a change from there too", post.status() === 403, String(post.status()));
+  check("there are no CORS headers on the panel's answer", !withOrigin.headers()["access-control-allow-origin"]);
+  const apiThere = await ctx.request.get(`${pmaOrigin}/api/v1/session`);
+  check("phpMyAdmin's origin answers 404 for the panel's API path", apiThere.status() === 404, String(apiThere.status()));
+
+  console.log("## Browser: the same link again, and the admission cookie alone");
   const again = await ctx.newPage();
-  const reused = await again.goto(signonURLs[0] ?? `${origin}${base}sifruno-signon.php?code=${"A".repeat(43)}`);
+  const reused = await again.goto(signonURLs[0] ?? `${pmaOrigin}/sifruno-signon.php?code=${"A".repeat(43)}`);
   check("a used code is refused (403, and says to open phpMyAdmin again)", reused?.status() === 403 && (await again.locator("h1").innerText()) === "This phpMyAdmin link no longer works.");
   await again.screenshot({ path: join(outDir, "1440-phpmyadmin-code-reused.png") });
-  await again.close();
+  const alone = await again.goto(`${pmaOrigin}/index.php`);
+  await again.locator("#pma_navigation_tree").waitFor({ timeout: 30000 }).catch(() => {});
+  check("the admission cookie alone, with no code, lets the browser back in", alone?.status() === 200 && (await again.locator("#pma_navigation_tree").count()) === 1);
 
   console.log("## VM: the temporary user and its password");
   check("the VM's checks of the temporary user pass", guestStep(`check ${guestDir} ${a.user} ${b.user}`));
 
   console.log("## VM: the temporary user expires (proof build: 2 minutes)");
   check("the VM sees the sweeper drop it", guestStep("expire"));
+  const after = await again.goto(`${pmaOrigin}/index.php`);
+  check("then the admission cookie no longer lets the browser in (401)", after?.status() === 401 && (await again.locator("h1").innerText()) === "phpMyAdmin needs a new sign-in.");
+  await again.screenshot({ path: join(outDir, "1440-phpmyadmin-expired.png") });
   await tab.reload();
-  await tab.waitForLoadState("load");
-  const ended = (await tab.locator("h1").first().innerText().catch(() => "")).trim();
-  console.log(`  phpMyAdmin after the expiry: ${tab.url()} "${ended}"`);
-  check("phpMyAdmin then sends the browser to the sign-in script, which asks for a new sign-in", new URL(tab.url()).pathname === `${base}sifruno-signon.php` && ended === "phpMyAdmin needs a new sign-in.");
-  await tab.screenshot({ path: join(outDir, "1440-phpmyadmin-expired.png") });
+  check("the open phpMyAdmin tab asks for a new sign-in too", (await tab.locator("h1").first().innerText().catch(() => "")).trim() === "phpMyAdmin needs a new sign-in.");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();

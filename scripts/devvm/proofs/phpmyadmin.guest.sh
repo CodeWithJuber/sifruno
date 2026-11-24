@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # Runs inside the dev VM as root (proof.sh phpmyadmin copies it in).
 #   phpmyadmin.guest.sh install               run the installer's phpMyAdmin step twice
-#   phpmyadmin.guest.sh start DIR PORT        start the broker and the panel (a proof build
-#                                             whose temporary users last 2 minutes) and a
-#                                             sampler of every process's arguments
+#   phpmyadmin.guest.sh start DIR LOOP PANEL PMA
+#                                             start the broker, a sampler of every process's
+#                                             arguments and the panel (a proof build whose
+#                                             temporary users last 2 minutes): loopback on
+#                                             LOOP, HTTPS for panel.proof.test on PANEL, and
+#                                             phpMyAdmin's own HTTPS origin on PMA
 #   phpmyadmin.guest.sh check DIR USER OTHER  after the browser opened phpMyAdmin for USER's
 #                                             website: the temporary user, its grants, its
 #                                             password nowhere but phpMyAdmin's session
 #   phpmyadmin.guest.sh expire                wait for the sweeper to drop the temporary user
 # The installer's step comes from this release's install.sh, with the
 # release's phpmyadmin/ files beside it in /opt/sifruno-proof/install. The
-# panel runs as sifpanel on 127.0.0.1:PORT, which the host reaches through
-# an SSH forward. Prints PASS/FAIL per check; exits with the failure count.
+# panel runs as sifpanel on 127.0.0.1 only, and the host reaches its three
+# ports through SSH forwards. Prints PASS/FAIL per check; exits with the
+# failure count.
 set -uo pipefail
 
 BIN=/opt/sifruno-proof
@@ -22,6 +26,7 @@ LSWS=/usr/local/lsws
 PMA_DIR=/usr/local/lib/sifruno/phpmyadmin
 PMA_STATE=/var/lib/sifruno-phpmyadmin
 PANEL_RUN=/run/sifruno-panel
+PANEL_HOST=panel.proof.test
 fails=0
 
 pass() { printf 'PASS  %s\n' "$1"; }
@@ -63,18 +68,20 @@ case "${1:-}" in
     echo "  listening on 8090: $(ss -ltnp | awk '$4 ~ /:8090$/ {print $4}' | paste -sd ' ')"
     check "OpenLiteSpeed listens for phpMyAdmin on 127.0.0.1:8090 only" bash -c "[ \"\$(ss -ltn | awk '\$4 ~ /:8090\$/ {print \$4}' | paste -sd ' ')\" = 127.0.0.1:8090 ]"
     answer() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://127.0.0.1:8090$1"; }
-    got="$(answer /api/v1/phpmyadmin/)"
-    echo "  GET /api/v1/phpmyadmin/ on the listener: $got"
-    check "phpMyAdmin with no sign-in sends the browser to the sign-in script" test "$got" = "302 http://127.0.0.1:8090/api/v1/phpmyadmin/sifruno-signon.php"
-    got="$(curl -s -w ' %{http_code}' "http://127.0.0.1:8090/api/v1/phpmyadmin/sifruno-signon.php")"
+    got="$(answer /)"
+    echo "  GET / on the listener: $got"
+    check "phpMyAdmin (at the root) with no sign-in sends the browser to the sign-in script" test "$got" = "302 http://127.0.0.1:8090/sifruno-signon.php"
+    got="$(curl -s -w ' %{http_code}' "http://127.0.0.1:8090/sifruno-signon.php")"
     check "the sign-in script without a code asks for a new sign-in (401)" bash -c "[[ \"\$0\" == *'phpMyAdmin needs a new sign-in.'*' 401' ]]" "$got"
-    for path in / /api/v1/phpmyadmin/libraries/classes/Version.php /api/v1/phpmyadmin/vendor/autoload.php /api/v1/phpmyadmin/templates/login/form.twig /api/v1/phpmyadmin/config.inc.php /api/v1/phpmyadmin/composer.json /api/v1/phpmyadmin/.rtlcssrc.json; do
+    for path in /api/v1/session /API/x /libraries/classes/Version.php /vendor/autoload.php /templates/login/form.twig /config.inc.php /composer.json /.rtlcssrc.json; do
       check "the listener refuses $path (403)" test "$(answer "$path")" = "403 "
     done
     ;;
   start)
     dir="$2"
     port="$3"
+    panel="$4"
+    pma="$5"
     ols_user="$(awk '$1=="user"{print $2; exit}' "$LSWS/conf/httpd_config.conf")"
     systemctl stop sifruno-broker-proof 2>/dev/null
     systemctl reset-failed sifruno-broker-proof 2>/dev/null
@@ -92,11 +99,19 @@ case "${1:-}" in
     echo $! > "$dir/sampler.pid"
     runuser -u sifpanel -- sh -c "nohup ./sifruno --listen 127.0.0.1:$port --sites-listen '' --state ./state --ui ./dist \
       --accounts-socket $SOCKET --db-defaults-file /var/lib/sifpanel/db-admin.cnf \
+      --https-listen 127.0.0.1:$panel --panel-host $PANEL_HOST --phpmyadmin-listen 127.0.0.1:$pma \
       --phpmyadmin-upstream 127.0.0.1:8090 --phpmyadmin-uid $(id -u sifpma) --phpmyadmin-test-login-ttl 2m > panel.log 2>&1 &"
     for _ in $(seq 1 90); do curl -fs -o /dev/null "http://127.0.0.1:$port/" && break; sleep 2; done
     check "the panel answers on 127.0.0.1:$port as sifpanel" bash -c "curl -fs -o /dev/null http://127.0.0.1:$port/ && [ \"\$(ps -o user= -p \$(pgrep -x sifruno | head -1))\" = sifpanel ]"
-    check "the panel says it serves phpMyAdmin, with 2-minute proof sign-ins" grep -q 'phpMyAdmin through the panel at /api/v1/phpmyadmin/ (OpenLiteSpeed listener 127.0.0.1:8090, sign-ins last 2m0s)' "$dir/panel.log"
+    check "the panel says phpMyAdmin has its own origin, with 2-minute proof sign-ins" grep -qF "phpMyAdmin on its own origin, HTTPS on 127.0.0.1:$pma for $PANEL_HOST (OpenLiteSpeed listener 127.0.0.1:8090, sign-ins last 2m0s)" "$dir/panel.log"
     check "its sign-in socket is in $PANEL_RUN" test -S "$PANEL_RUN/phpmyadmin.sock"
+    # The same certificate as the panel's HTTPS listener, on another port.
+    fp() { openssl s_client -connect "127.0.0.1:$1" -servername "$PANEL_HOST" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null; }
+    check "phpMyAdmin's origin serves the panel's certificate" bash -c "[ -n \"\$0\" ] && [ \"\$0\" = \"\$1\" ]" "$(fp "$panel")" "$(fp "$pma")"
+    https() { curl -sk -o /dev/null -w '%{http_code}' --resolve "$PANEL_HOST:$1:127.0.0.1" "https://$PANEL_HOST:$1$2"; }
+    check "phpMyAdmin's origin answers 404 for the panel's API" test "$(https "$pma" /api/v1/session)" = 404
+    check "it answers 401 to a browser with no code and no admission" test "$(https "$pma" /index.php)" = 401
+    check "it answers only for the panel's host name (421)" test "$(curl -sk -o /dev/null -w '%{http_code}' "https://127.0.0.1:$pma/index.php")" = 421
     ;;
   check)
     dir="$2"
@@ -145,7 +160,7 @@ case "${1:-}" in
     check "no connection of a temporary user is left" test "$(sql "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER LIKE 'SifrunoPMA\\_%'")" = 0
     ;;
   *)
-    echo "usage: phpmyadmin.guest.sh install | start DIR PORT | check DIR USER OTHER | expire" >&2
+    echo "usage: phpmyadmin.guest.sh install | start DIR LOOP PANEL PMA | check DIR USER OTHER | expire" >&2
     exit 2
     ;;
 esac

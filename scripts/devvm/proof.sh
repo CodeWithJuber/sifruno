@@ -92,13 +92,17 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
   phpmyadmin    One-click phpMyAdmin: this release's installer step runs twice
                 (the second changes nothing) and OpenLiteSpeed serves
                 phpMyAdmin on 127.0.0.1:8090 only; the panel (a proof build
-                whose temporary users last 2 minutes) runs as sifpanel; a
-                browser on this host makes two PHP sites with a database each,
-                clicks Open phpMyAdmin on the first one's Databases tab and
-                lands in phpMyAdmin signed in, listing that site's database
-                and not the other's; the used link is refused; the VM checks
-                the temporary user's grants, that its password is in no
-                process argument or log, and that the sweeper drops it. Needs
+                whose temporary users last 2 minutes) runs as sifpanel with
+                its HTTPS listener and phpMyAdmin's own HTTPS origin on
+                another port; a browser on this host makes two PHP sites with
+                a database each, clicks Open phpMyAdmin on the first one's
+                Databases tab and lands in phpMyAdmin on its own origin,
+                signed in, listing that site's database and not the other's;
+                the panel no longer serves phpMyAdmin and refuses its API to
+                phpMyAdmin's origin; the used link is refused; the admission
+                cookie alone works until the temporary user expires; the VM
+                checks the user's grants, that its password is in no process
+                argument or log, and that the sweeper drops it. Needs
                 Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the
                 web packages, and files.phpmyadmin.net from the VM.
   whmcs-module  The WHMCS module (integrations/whmcs) with the VM's lsphp
@@ -442,11 +446,16 @@ case "${1:-}" in
     ;;
   phpmyadmin)
     stage="$(mktemp -d)"
-    tunnel=""
-    trap 'if [ -n "$tunnel" ]; then kill "$tunnel" 2>/dev/null; fi; rm -rf -- "$stage"' EXIT
+    tunnels=()
+    trap 'kill "${tunnels[@]}" 2>/dev/null; rm -rf -- "$stage"' EXIT
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
     guest="/var/lib/sifpanel/phpmyadmin-$stamp"
-    port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+    # Three free ports: the panel's loopback address (first-run setup), its
+    # HTTPS listener for panel.proof.test, and phpMyAdmin's own HTTPS origin.
+    read -r port panel pma < <(python3 -c 'import socket
+s = [socket.socket() for _ in range(3)]
+for x in s: x.bind(("127.0.0.1", 0))
+print(*[x.getsockname()[1] for x in s])')
     # The panel is a proof build: only the sifruno_proof tag gives it
     # --phpmyadmin-test-login-ttl, which a release binary does not have.
     (cd "$REPO" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -buildvcs=false -tags sifruno_proof -o "$stage/sifruno" ./cmd/sifruno)
@@ -474,15 +483,19 @@ case "${1:-}" in
     run="$OUT/phpmyadmin-$stamp"
     transcript="$run.txt"
     domain="pma$(date +%s | tail -c 6).proof.test"
-    "$HERE/vm.sh" forward "$port" &
-    tunnel=$!
+    # The guest listens on 127.0.0.1 only; each port is forwarded as itself,
+    # so every Origin the browser sends matches the panel's own.
+    for p in "$port" "$panel" "$pma"; do
+      "$HERE/vm.sh" forward "$p" &
+      tunnels+=("$!")
+    done
     # Steps run inside the pipe to tee (a subshell), so a failure leaves a
     # marker file rather than a variable.
     {
       "$HERE/vm.sh" ssh "/opt/sifruno-proof/phpmyadmin.guest.sh install" || touch "$stage/failed"
-      "$HERE/vm.sh" ssh "/opt/sifruno-proof/phpmyadmin.guest.sh start $guest $port" || touch "$stage/failed"
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/phpmyadmin.guest.sh start $guest $port $panel $pma" || touch "$stage/failed"
       for _ in $(seq 30); do curl -fs -o /dev/null "http://127.0.0.1:$port/" && break; sleep 1; done
-      (cd "$REPO" && node scripts/devvm/proofs/phpmyadmin.qa.mjs "http://127.0.0.1:$port" "$stage/state" "$run" "$domain" \
+      (cd "$REPO" && node scripts/devvm/proofs/phpmyadmin.qa.mjs "http://127.0.0.1:$port" "https://panel.proof.test:$panel" "https://panel.proof.test:$pma" "$stage/state" "$run" "$domain" \
         "$HERE/vm.sh" "$guest" "${SIFRUNO_PROOF_CHROME:-}") || touch "$stage/failed"
     } 2>&1 | tee "$transcript"
     echo "Transcript: $transcript (screenshots in $run/)"

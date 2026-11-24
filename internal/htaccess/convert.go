@@ -74,6 +74,8 @@ type Realm struct {
 // Hosts kind is none; Realm, when set, asks for a password after the host
 // check passes.
 type FolderRule struct {
+	// File is the .htaccess the rule came from, set by ConvertSite.
+	File  string   `json:"file,omitempty"`
 	Path  string   `json:"path"`
 	Hosts Hosts    `json:"hosts"`
 	Allow []string `json:"allow,omitempty"`
@@ -796,10 +798,13 @@ func ConvertSite(site SiteResult) SiteConversion {
 	out := SiteConversion{Rules: []FolderRule{}}
 	for _, cause := range site.Causes {
 		switch cause {
-		case CauseAccessControl:
 		case CauseSymlinkNotFollowed, CauseScanTruncated, CauseUnreadableDir:
 			out.Refused = append(out.Refused, FileRefusal{Reason: causeReason[cause]})
 		}
+	}
+	// A verdict no file accounts for is not one this function can judge.
+	if site.Verdict != VerdictNative && !slices.ContainsFunc(site.Files, func(f FileResult) bool { return f.Verdict != VerdictNative }) && len(out.Refused) == 0 {
+		out.Refused = append(out.Refused, FileRefusal{Reason: "the scan found rules no file holds"})
 	}
 	for _, f := range site.Files {
 		switch {
@@ -812,7 +817,9 @@ func ConvertSite(site SiteResult) SiteConversion {
 				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Reason: "access rules for the whole site, which this server does not convert"})
 				continue
 			}
-			out.Rules = append(out.Rules, *f.Conversion.Rule)
+			rule := *f.Conversion.Rule
+			rule.File = f.Path
+			out.Rules = append(out.Rules, rule)
 		case convertible(f) && f.Conversion != nil:
 			out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: f.Conversion.Line, Reason: f.Conversion.Refused})
 		default:

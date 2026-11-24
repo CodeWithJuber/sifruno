@@ -137,6 +137,16 @@ func sortedOnce(list []string) bool {
 	return true
 }
 
+// CheckFolders validates the protected folders of the site named name
+// exactly as Validate does, so a caller can refuse them before it stores
+// them. A FieldError names the field as site.folders[i]...
+func CheckFolders(name string, folders []Folder) error {
+	if !siteNamePattern.MatchString(name) {
+		return fieldErr("site.name", "must match %s", siteNamePattern)
+	}
+	return checkFolders("site", name, folders)
+}
+
 // checkFolders validates a site's protected folders: sorted by path, each
 // once, none inside another (their regex contexts would overlap), each with
 // one consistent rule.

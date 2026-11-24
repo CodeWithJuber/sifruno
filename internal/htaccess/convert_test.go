@@ -240,6 +240,17 @@ func TestConvertSite(t *testing.T) {
 			t.Fatalf("%+v", got)
 		}
 	})
+	t.Run("verdict without a file", func(t *testing.T) {
+		if got := ConvertSite(SiteResult{Verdict: VerdictCompat, Causes: []string{CauseAccessControl}}); got.Native {
+			t.Fatalf("%+v", got)
+		}
+	})
+	t.Run("rule names its file", func(t *testing.T) {
+		got := ConvertSite(siteOf(map[string]string{"a/.htaccess": "Deny from all\n"}))
+		if !got.Native || len(got.Rules) != 1 || got.Rules[0].File != "a/.htaccess" {
+			t.Fatalf("%+v", got)
+		}
+	})
 	t.Run("site causes", func(t *testing.T) {
 		site := siteOf(map[string]string{"a/.htaccess": "Deny from all\n"})
 		site.SymlinkedDirs = []string{"x"}

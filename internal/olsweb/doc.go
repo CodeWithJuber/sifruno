@@ -251,7 +251,6 @@
 //     location template, "$DOC_ROOT$0", as root: a tenant who makes a "$0"
 //     folder in its public_html can turn its own protected files into 404s,
 //     never open them.
-//
 //   - The exact bytes Render produces have not been loaded by OpenLiteSpeed
 //     from this package's tests; the tests check them against the grammar
 //     above, not against a server.

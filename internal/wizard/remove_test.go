@@ -137,6 +137,23 @@ func TestRemoveSiteSaysWhenTheAccountWasBusy(t *testing.T) {
 	}
 }
 
+// A delete the broker stopped before anything was removed, for another
+// reason than a busy user, says nothing was removed rather than that the
+// panel cannot tell, and leaves the database alone.
+func TestRemoveSiteSaysWhenTheDeleteStoppedBeforeRemoving(t *testing.T) {
+	f, _, a := removable(t)
+	f.acc.accounts[0].State = "suspended"
+	f.acc.delErr = hostaccounts.ErrDeleteStopped
+	_, err := f.runner.RemoveSite(context.Background(), a.ID, "example.com", a.Revision, "local-operator")
+	failure := removeFailure(t, err, ErrUnavailable)
+	if !strings.Contains(failure.Why, "before anything was removed") || strings.Contains(failure.Why, "cannot tell") || len(failure.Removed) != 0 {
+		t.Fatalf("stopped delete %+v", failure)
+	}
+	if len(f.dbs.calls) != 0 || len(f.runner.Succeeded()) != 1 {
+		t.Fatalf("a stopped delete went on: %q, sites %+v", f.dbs.calls, f.runner.Succeeded())
+	}
+}
+
 // An active site whose delete is refused because its processes kept
 // running is suspended (that ends them and keeps the site off) and its
 // delete asked once more, at the revision the suspend left. The result

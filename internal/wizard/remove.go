@@ -333,6 +333,8 @@ func accountNotDeleted(err error) (why string, unsure bool, reason error) {
 		return "The account service refused the delete as invalid.", false, ErrInvalid
 	case errors.Is(err, hostaccounts.ErrRecovery):
 		return "The account service stopped part-way through deleting the hosting account and needs a check before anything else changes.", true, ErrUnavailable
+	case errors.Is(err, hostaccounts.ErrDeleteStopped):
+		return "The account service stopped the delete before anything was removed, because ending the account's running processes failed or took too long. The hosting account and its website are as they were. Try the delete again.", false, ErrUnavailable
 	default:
 		return "The account service did not answer, so the panel cannot tell whether the hosting account was deleted.", true, ErrUnavailable
 	}

@@ -148,6 +148,47 @@ func (n *linuxSystem) reloadSystemd(ctx context.Context) error {
 	return e
 }
 
+// sliceLoaded reports whether systemd has the account's user slice in
+// memory. systemd reads a unit's configuration, drop-ins included, when the
+// unit is first referenced, and a reload is needed only to change a unit
+// that is already loaded (systemd.unit(5), "Unit Garbage Collection", at
+// v252). `systemctl list-units --all` shows the units systemd has in memory
+// and loads none (systemctl(1), list-units). A brand-new account's slice is
+// usually not loaded, so its create skips the slow reload; an active slice,
+// or a deleted account's slice that a reused UID finds still loaded, gets
+// it.
+func (n *linuxSystem) sliceLoaded(ctx context.Context, uid int) (bool, error) {
+	if e := n.limitsUID(uid); e != nil {
+		return false, e
+	}
+	name := "user-" + strconv.Itoa(uid) + ".slice"
+	out, e := n.command(ctx, systemctl, "list-units", "--all", "--plain", "--no-legend", "--full", "--", name)
+	if e != nil {
+		return false, e
+	}
+	return sliceListed(out, name), nil
+}
+
+// sliceListed reads list-units' output: one unit per line, its name first
+// (after a status bullet, if one is printed despite --plain).
+func sliceListed(out []byte, name string) bool {
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) > 0 && (f[0] == name || len(f) > 1 && f[1] == name) {
+			return true
+		}
+	}
+	return false
+}
+
+// reloadIfLoaded reloads systemd unless the account's slice is certainly
+// not loaded; when list-units fails, it reloads.
+func (n *linuxSystem) reloadIfLoaded(ctx context.Context, uid int) error {
+	if loaded, e := n.sliceLoaded(ctx, uid); e == nil && !loaded {
+		return nil
+	}
+	return n.reloadSystemd(ctx)
+}
+
 func (n *linuxSystem) ApplyLimits(ctx context.Context, uid int, l AccountLimits) error {
 	if ctx == nil || ctx.Err() != nil {
 		return ErrUnavailable
@@ -163,9 +204,10 @@ func (n *linuxSystem) ApplyLimits(ctx context.Context, uid int, l AccountLimits)
 	if _, e := n.writeLimits(units, uid, l); e != nil {
 		return e
 	}
-	// Reloaded even when the file was already right: an earlier write whose
-	// reload failed left it unloaded.
-	return n.reloadSystemd(ctx)
+	// A loaded slice is reloaded even when the file was already right: an
+	// earlier write whose reload failed left it unloaded. A slice systemd
+	// has not loaded reads the file when it is first referenced.
+	return n.reloadIfLoaded(ctx, uid)
 }
 
 func (n *linuxSystem) VerifyLimits(uid int, l AccountLimits) error {

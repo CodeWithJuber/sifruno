@@ -70,10 +70,12 @@ func (c *client) Create(ctx context.Context, in CreateInput, actor string) (Acco
 		return Account{}, ErrInvalid
 	}
 	var out Account
-	err := c.request(ctx, "POST", "/v1/accounts", struct {
+	// A create writes the account's slice limits and may reload systemd,
+	// which can take minutes on a busy host, so it has the slow limit.
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts", struct {
 		Input CreateInput `json:"input"`
 		Actor string      `json:"actor"`
-	}{in, actor}, &out)
+	}{in, actor}, &out, maxResponseBytes)
 	return out, err
 }
 func (c *client) SetState(ctx context.Context, id string, in StateInput, actor string) (Account, error) {

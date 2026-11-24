@@ -90,6 +90,12 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				writeError(w, ErrInvalid)
 				return
 			}
+			// The slice limits, the systemd reload and the user's creation
+			// run on their own limit, not this request's.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
 			item, err := s.create(ctx, in.Input, in.Actor)
 			if err != nil {
 				writeError(w, err)

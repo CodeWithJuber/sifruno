@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 	"sifruno/internal/olsweb"
@@ -18,10 +19,19 @@ import (
 // The fake's slice drop-ins: ApplyLimits writes (unless told to fail first)
 // and reloads, RemoveLimits removes, SyncLimits writes the wanted set and
 // removes the rest, each validating the UID as the native system does.
-func (f *fakeNative) ApplyLimits(_ context.Context, uid int, l AccountLimits) error {
+func (f *fakeNative) ApplyLimits(ctx context.Context, uid int, l AccountLimits) error {
 	f.limitsLog = append(f.limitsLog, fmt.Sprintf("apply %d %+v", uid, l))
 	if !validLimitUID(uid) || !validLimits(l) {
 		return ErrInvalid
+	}
+	// limitsDelay is a slow systemd reload: the native system gives up, as
+	// its commands do, when its context ends first.
+	if f.limitsDelay > 0 {
+		select {
+		case <-time.After(f.limitsDelay):
+		case <-ctx.Done():
+			return ErrUnavailable
+		}
 	}
 	if f.failLimits > 0 {
 		f.failLimits--
@@ -337,6 +347,30 @@ func TestDeleteRemovesLimits(t *testing.T) {
 	}
 	if _, ok := f.dropIns[b.UID]; ok || len(f.dropIns) != 0 {
 		t.Fatalf("drop-ins after the start: %+v", f.dropIns)
+	}
+}
+
+// A slow limits step (a systemd reload on a busy host) does not make a
+// create fail at the caller's limit: the slice limits and the user's
+// creation run on the web operation's own limit, and the account is made.
+func TestSlowLimitsDoNotFailCreateAtTheRequestLimit(t *testing.T) {
+	s, f, _ := setupStore(t)
+	f.limitsDelay = 300 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	a, err := s.create(ctx, CreateInput{Username: "slowlimits", Domain: "slow.test", Reason: "Slow reload"}, "test operator")
+	if err != nil || a.State != "active" || a.Limits != DefaultLimits {
+		t.Fatalf("create with a slow limits step: %+v %v", a, err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the caller's limit did not pass during the create")
+	}
+	if got, ok := f.dropIns[a.UID]; !ok || got != DefaultLimits {
+		t.Fatalf("drop-in %+v %v", got, ok)
+	}
+	accounts, err := s.list(context.Background())
+	if err != nil || len(accounts) != 1 || accounts[0].ID != a.ID || accounts[0].State != "active" {
+		t.Fatalf("list after the create: %+v %v", accounts, err)
 	}
 }
 

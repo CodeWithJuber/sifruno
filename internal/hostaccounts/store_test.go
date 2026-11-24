@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -79,6 +80,8 @@ type fakeNative struct {
 	// cachesRemoved lists the IDs whose LSCache store RemoveSiteCache took
 	// away; failure "cache-remove" makes it fail instead.
 	cachesRemoved []string
+	// limitsDelay makes every ApplyLimits take this long, as a slow reload.
+	limitsDelay time.Duration
 }
 
 func (f *fakeNative) EndProcesses(_ context.Context, r record) error {
@@ -257,7 +260,8 @@ func fakeOwned(r record) ownership {
 }
 func (f *fakeNative) Create(ctx context.Context, r record, persist func(ownership) error) (ownership, error) {
 	f.calls++
-	if f.failure == "before" {
+	// The native create's commands refuse to start once their context ended.
+	if f.failure == "before" || ctx.Err() != nil {
 		return ownership{}, ErrUnavailable
 	}
 	owned := fakeOwned(r)

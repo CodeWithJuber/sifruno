@@ -20,8 +20,8 @@ network listener, passwords, free-form commands, deletion or rollback API exists
 Native execution requires preinstalled regular root-owned binaries at fixed
 paths: /usr/sbin/groupadd, useradd, usermod, userdel, nologin; /usr/bin/passwd,
 chage, kill (which runs only as an account's own user, see Processes),
-systemctl (`daemon-reload`, see Resource limits, and `kill` of a site run's
-own unit) and systemd-run (a site run's transient service, see WordPress).
+systemctl (`daemon-reload` and `list-units` of one slice, see Resource
+limits, and `kill` of a site run's own unit) and systemd-run (a site run's transient service, see WordPress).
 Arguments are fixed typed options and validated account identity. Subprocesses
 have fixed credential-free locale/PATH, no shell and bounded output. Commands
 have15second deadlines within the broker request's45second overall deadline;
@@ -266,17 +266,27 @@ Where they apply:
 - User slice. The broker writes
   `/etc/systemd/system/user-<uid>.slice.d/50-sifruno-limits.conf`
   (`[Slice]` `TasksMax=`, `MemoryMax=<n>M`, `CPUQuota=<n>%`; root, 0644)
-  and runs `/usr/bin/systemctl daemon-reload`. pam_systemd puts every PAM
+  and, when the slice is loaded, runs `/usr/bin/systemctl daemon-reload`
+  (below). pam_systemd puts every PAM
   session of the user (SFTP, cron, `runuser`) in a scope under
   `user-<uid>.slice`, with `user@<uid>.service`; a slice's limits bound
   everything below it. The path is built only from a UID in the account
   range (never 0, a system user or the controller), reached through
   directory handles opened without following links from the root-owned
   unit directory, and the file is written beside its target and renamed.
-  systemd reads drop-ins when it loads a unit or reloads, so the broker
-  reloads after each write; a reload rereads every unit file and reruns the
-  generators, so it runs once per account change and once at start, not
-  per request.
+  systemd reads a unit's configuration, drop-ins included, when the unit
+  is first referenced, and a reload is needed only for a unit already in
+  memory (systemd.unit(5), "Unit Garbage Collection", v252). So after a
+  write the broker asks `systemctl list-units --all --plain --no-legend
+  --full -- user-<uid>.slice`, which lists the units systemd has in memory
+  and loads none (systemctl(1), list-units), and runs `daemon-reload` only
+  when the slice is listed or the question fails: for a plan change of an
+  active slice, and for a reused UID whose slice is still loaded, but not
+  for a brand-new account. A reload rereads every unit file and reruns the
+  generators, which on a busy host can take longer than a request, so the
+  create's root steps (the drop-in, the reload, useradd and the home) run
+  on the web operation's own four-minute limit, not the request's 45
+  seconds, as a plan change does.
 - PHP. Read from the OpenLiteSpeed 1.9.4 source, not yet run (the
   account-limits proof, section 6, checks it): OpenLiteSpeed can put lsphp
   in the user's slice. The server's `cgroups` in `CGIRLimit` is 0

@@ -11,6 +11,30 @@ import (
 	"testing"
 )
 
+// list-units names a loaded slice first on its line; any other unit, or no
+// line, is not that slice.
+func TestSliceListed(t *testing.T) {
+	name := "user-20001.slice"
+	for out, want := range map[string]bool{
+		"user-20001.slice loaded active active User Slice of UID 20001\n":   true,
+		"user-20001.slice loaded inactive dead User Slice of UID 20001\n":   true,
+		"● user-20001.slice loaded failed failed User Slice of UID 20001\n": true,
+		"": false,
+		"user-200011.slice loaded active active User Slice of UID 200011\n": false,
+		"0 loaded units listed.\n": false,
+	} {
+		if got := sliceListed([]byte(out), name); got != want {
+			t.Errorf("%q: %v", out, got)
+		}
+	}
+	n := &linuxSystem{opts: BrokerOptions{ControllerUID: 20500}}
+	for _, uid := range []int{0, 999, 20500, 60001} {
+		if _, e := n.sliceLoaded(context.Background(), uid); !errors.Is(e, ErrInvalid) {
+			t.Fatalf("UID %d: %v", uid, e)
+		}
+	}
+}
+
 // Only a UID in the account range that is not the controller's names a
 // drop-in; the native operations refuse every other before touching a file.
 func TestLimitsRefuseUIDsOutsideTheAccountRange(t *testing.T) {

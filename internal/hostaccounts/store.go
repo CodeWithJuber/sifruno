@@ -1194,11 +1194,18 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 			return Account{}, ErrRecovery
 		}
 	}
+	// The slow root steps (the slice limits, which may reload systemd, then
+	// useradd and the home) run on the web operation's own limit, not the
+	// caller's: a systemd reload alone can outlast a request on a busy host,
+	// and once the intent is journaled a caller that gives up must not leave
+	// a half-made user for recovery.
+	rootCtx, cancel := webContext(ctx)
+	defer cancel()
 	// The account's limits are in place before its user exists, so nothing
 	// it runs ever starts without them. A failure refuses the create before
 	// anything is journaled: the drop-in names only this unused UID, and the
 	// next create of it, or the broker's next start, rewrites it.
-	if s.native.ApplyLimits(ctx, uid, DefaultLimits) != nil {
+	if s.native.ApplyLimits(rootCtx, uid, DefaultLimits) != nil {
 		return Account{}, ErrUnavailable
 	}
 	var id [16]byte
@@ -1213,7 +1220,7 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	if err != nil {
 		return Account{}, ErrRecovery
 	}
-	owned, err := s.native.Create(ctx, r, func(owned ownership) error { r.Ownership = owned; return s.save(r) })
+	owned, err := s.native.Create(rootCtx, r, func(owned ownership) error { r.Ownership = owned; return s.save(r) })
 	if err != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
@@ -1223,7 +1230,7 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	r.Account.UpdatedAt = time.Now().UTC()
 	r.Actor, r.Reason = actor, in.Reason
 	operation := *r.Pending
-	if s.native.Verify(ctx, r) != nil {
+	if s.native.Verify(rootCtx, r) != nil {
 		_, _ = s.resultEvent(r, operation, "recovery_required")
 		return Account{}, ErrRecovery
 	}

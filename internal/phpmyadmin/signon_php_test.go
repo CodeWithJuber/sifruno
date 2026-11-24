@@ -121,7 +121,8 @@ func TestTheSignonScriptRedeemsACodeOnce(t *testing.T) {
 	if res.StatusCode != http.StatusForbidden || !strings.Contains(body, "This phpMyAdmin link no longer works.") || res.Header.Get("Set-Cookie") != "" {
 		t.Fatalf("reused code: %d %s", res.StatusCode, body)
 	}
-	for query, status := range map[string]int{"": 401, "?code=short": 400, "?code=" + strings.Repeat("A", 43): 403, "?signed_out=1": 200} {
+	for query, status := range map[string]int{"": 401, "?code=short": 400, "?code=" + strings.Repeat("A", 43): 403, "?signed_out=1": 200,
+		"?code=" + strings.Repeat("A", 43) + "&code=" + strings.Repeat("B", 43): 400, "?code[]=" + strings.Repeat("A", 43): 400, "?code%5B0%5D=x&code=" + strings.Repeat("A", 43): 400} {
 		if res, body := get(query); res.StatusCode != status || !strings.Contains(body, "Next step:") {
 			t.Fatalf("%q: %d %s", query, res.StatusCode, body)
 		}

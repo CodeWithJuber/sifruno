@@ -119,6 +119,22 @@ func TestACodeLetsTheBrowserInUntilItsLoginEnds(t *testing.T) {
 	if w.Code != 403 || !strings.Contains(w.Body.String(), "This phpMyAdmin link no longer works.") || admission(t, w) != nil || len(script.passed) != before {
 		t.Fatalf("reused code: %d %s", w.Code, w.Body.String())
 	}
+	// Two codes, a code array or a query Go cannot read: refused before
+	// phpMyAdmin, so Go and PHP never read different codes.
+	h2, err := s.Open(context.Background(), "alpha", []string{"alpha_wp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{h2.Path + "&code=" + strings.Repeat("A", 43), SignonPath + "?code=" + strings.Repeat("A", 43) + "&" + strings.TrimPrefix(h2.Path, SignonPath+"?"),
+		h2.Path + "&code[]=x", h2.Path + ";code=x"} {
+		if w := originRequest(o, "GET", query, nil); w.Code != 400 || admission(t, w) != nil || len(script.passed) != before {
+			t.Fatalf("%s: %d", query, w.Code)
+		}
+	}
+	if _, ok := s.Peek(strings.TrimPrefix(h2.Path, SignonPath+"?code=")); !ok {
+		t.Fatal("a refused request used up the code")
+	}
+
 	// A forged cookie is refused and cleared.
 	w = originRequest(o, "GET", "/index.php", []*http.Cookie{{Name: AdmissionCookie, Value: strings.Repeat("A", 43)}})
 	if w.Code != 401 || !strings.Contains(w.Header().Get("Set-Cookie"), AdmissionCookie+"=;") {

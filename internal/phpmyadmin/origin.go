@@ -3,6 +3,7 @@ package phpmyadmin
 import (
 	"net"
 	"net/http"
+	"net/url"
 	pathpkg "path"
 	"strings"
 	"time"
@@ -104,7 +105,13 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(requestWait))
 
 	if p == SignonPath {
-		q := r.URL.Query()
+		// Go and PHP must read the same code: a query Go cannot parse, a
+		// second code or a code[...] array is refused, as the script does.
+		q, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil || len(q["code"]) > 1 || hasCodeArray(q) {
+			WritePage(w, http.StatusBadRequest, "This phpMyAdmin link is not valid.", "It carries its code in a form the panel never makes.", againNext)
+			return
+		}
 		if q.Has("signed_out") {
 			// phpMyAdmin's sign-out: the script ends its session, and the
 			// admission ends here.
@@ -133,6 +140,16 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o.proxy.ServeHTTP(w, r)
+}
+
+// hasCodeArray reports a parameter PHP would read as part of a code array.
+func hasCodeArray(q url.Values) bool {
+	for name := range q {
+		if strings.HasPrefix(name, "code[") {
+			return true
+		}
+	}
+	return false
 }
 
 // clearAdmission removes the admission cookie from the browser.

@@ -115,6 +115,19 @@ function sifruno_redeem(string $code): array
     return ['user' => $user, 'password' => $password, 'expires_at' => $expires];
 }
 
+// The panel's phpMyAdmin origin and this script must read the same code:
+// a second code, or a code[...] array, is refused here as it is there.
+$codeParameters = 0;
+foreach (explode('&', (string) ($_SERVER['QUERY_STRING'] ?? '')) as $pair) {
+    $name = urldecode(explode('=', $pair, 2)[0]);
+    if ($name === 'code' || str_starts_with($name, 'code[')) {
+        $codeParameters++;
+    }
+}
+if ($codeParameters > 1 || is_array($_GET['code'] ?? null)) {
+    sifruno_page(400, 'This phpMyAdmin link is not valid.', 'It carries its code in a form the panel never makes.', SIFRUNO_AGAIN);
+}
+
 if (isset($_GET['signed_out'])) {
     sifruno_sign_out();
     sifruno_page(200, 'You signed out of phpMyAdmin.', 'phpMyAdmin no longer holds a login in this browser. The temporary database user ends within the hour.', 'To open phpMyAdmin again, ' . lcfirst(SIFRUNO_AGAIN) . ' You can close this tab.');

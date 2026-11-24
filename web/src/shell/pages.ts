@@ -57,8 +57,9 @@ export const pages: readonly Page[] = [
   { id: "static-files", path: "/websites/static/files", label: "Static site files (old)", title: "Static site files (old)", subtitle: "Files of the websites made with the old static-file model.", icon: Folder, testId: "nav-static-files", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/static\/files$/ },
   { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },
   { id: "activity", path: "/activity", label: "Activity", title: "Activity", subtitle: "Recent changes to website files, and how to recover them.", icon: History, testId: "nav-trail", audience: "private", group: "main" },
-  // A customer's own page: its login and its websites.
-  { id: "account", path: "/account", label: "Account", title: "Account", subtitle: "Your login and the websites it manages.", icon: UserRound, testId: "nav-account", audience: "private", group: "main", needs: ["GET /api/v1/session", ...websitesRead] },
+  // The signed-in person's own login: its password and authenticator app,
+  // and for a customer the websites it manages. Admins and customers both.
+  { id: "account", path: "/account", label: "Account", title: "Account", subtitle: "Your login, its password and its authenticator app.", icon: UserRound, testId: "nav-account", audience: "private", group: "main", needs: ["GET /api/v1/session", ...websitesRead] },
   // Where a customer lands from its setup link. It needs no session.
   { id: "setup", path: "/setup", label: "Set up your login", title: "Set up your login", subtitle: "Choose a password and connect an authenticator app.", icon: ShieldCheck, testId: "nav-setup", audience: "private", group: "main", pattern: /^\/setup$/ },
   { id: "customers", path: "/customers", label: "Customers", title: "Customers", subtitle: "Who can sign in to manage which websites.", icon: Users, testId: "nav-customers", audience: "private", group: "admin" },
@@ -84,7 +85,7 @@ export function pageById(id: PageId): Page {
 // A customer (a site owner) sees Home, Websites with each website's tabs, and
 // Account (plan, "Panel ka dhancha"); so does an admin viewing the panel as
 // a customer. The server decides what a customer may do; this only shapes
-// the menu and keeps admin pages out of the way.
+// the menu and keeps admin pages out of the way. Admins see Account too.
 export type MenuRole = "admin" | "customer";
 
 export function customerPage(p: Page): boolean {
@@ -93,5 +94,5 @@ export function customerPage(p: Page): boolean {
 
 export function visiblePages(publicPreview: boolean, role: MenuRole = "admin"): Page[] {
   return pages.filter((p) => !p.pattern && (p.audience === "both" || (publicPreview ? p.audience === "preview" : p.audience === "private"))
-    && (role === "customer" ? customerPage(p) : p.id !== "account"));
+    && (role !== "customer" || customerPage(p)));
 }

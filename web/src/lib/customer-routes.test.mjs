@@ -95,6 +95,26 @@ test("a restricted session may use only the routes it lists", () => {
   assert.equal(auth.allows({ ...admin, view_as: "alice", routes: [] }, route), false, "an admin viewing as a customer is restricted");
 });
 
+test("Account's own-login changes use routes open to customers, with the session's CSRF token", async () => {
+  const routes = ["POST /api/v1/session/password", "POST /api/v1/session/authenticator/begin", "POST /api/v1/session/authenticator/finish"];
+  for (const route of routes) assert.equal(table[route], "customerOpen", route);
+  const original = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    sent.push({ route: `${init.method} ${url}`, csrf: init.headers["X-CSRF-Token"], fields: Object.keys(JSON.parse(init.body)).sort() });
+    const answer = url.endsWith("/password") ? { other_sessions_ended: 2 } : url.endsWith("/begin") ? { secret: "A".repeat(32), otpauth_uri: "otpauth://totp/Sifruno:alice?secret=x", expires_at: "2026-11-24T10:10:00Z" } : { changed: true };
+    return new Response(JSON.stringify(answer), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    assert.equal((await auth.changeOwnPassword("t".repeat(43), "old words here", "123456", "new words here!")).other_sessions_ended, 2);
+    assert.equal((await auth.beginAuthenticatorChange("t".repeat(43), "old words here", "123456")).secret, "A".repeat(32));
+    assert.equal((await auth.finishAuthenticatorChange("t".repeat(43), "654321")).changed, true);
+  } finally { globalThis.fetch = original; }
+  assert.deepEqual(sent.map((s) => s.route), routes);
+  assert.ok(sent.every((s) => s.csrf === "t".repeat(43)));
+  assert.deepEqual(sent.map((s) => s.fields.join(",")), ["current_password,new_password,totp_code", "current_password,totp_code", "totp_code"]);
+});
+
 test("the session's routes are checked when it is read", async () => {
   const original = globalThis.fetch;
   const answer = (value) => async () => new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });

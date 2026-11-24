@@ -68,7 +68,7 @@ try {
   await page.goto(origin + "/");
   await page.getByRole("heading", { name: "Server monitoring" }).waitFor();
   const topLevel = await page.locator('[data-slot="sidebar-menu-button"]').count();
-  check("sidebar has 7 top-level items", topLevel === 7, `found ${topLevel}`);
+  check("sidebar has 8 top-level items", topLevel === 8, `found ${topLevel}`);
   check("no Compatibility or Platforms in menu", (await page.getByTestId("nav-evidence").count()) + (await page.getByTestId("nav-platform").count()) === 0);
   check("home has no horizontal overflow at 1440", await noOverflow(page));
   await page.screenshot({ path: join(outDir, "1440-light-home.png") });

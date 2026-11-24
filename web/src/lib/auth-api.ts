@@ -89,6 +89,17 @@ export const viewAsCustomer = (csrf: string, username: string) =>
 export const endViewAs = (csrf: string) =>
   request("/api/v1/session/view-as/end", validSession, { method: "POST", body: {}, csrf });
 
+// The signed-in person's own login: a new password, or a new authenticator
+// app. Each needs the current password and a current code; the server limits
+// wrong tries like sign-ins.
+export const changeOwnPassword = (csrf: string, current_password: string, totp_code: string, new_password: string) =>
+  request("/api/v1/session/password", (v): v is { other_sessions_ended: number } => object(v) && Number.isInteger(v.other_sessions_ended) && (v.other_sessions_ended as number) >= 0,
+    { method: "POST", body: { current_password, totp_code, new_password }, csrf });
+export const beginAuthenticatorChange = (csrf: string, current_password: string, totp_code: string) =>
+  request("/api/v1/session/authenticator/begin", validSecret, { method: "POST", body: { current_password, totp_code }, csrf });
+export const finishAuthenticatorChange = (csrf: string, totp_code: string) =>
+  request("/api/v1/session/authenticator/finish", (v): v is { changed: true } => object(v) && v.changed === true, { method: "POST", body: { totp_code }, csrf });
+
 // Whether a session reaches only one customer's websites: a customer's own,
 // or an admin's while it views as a customer.
 export const restricted = (session: AuthSession | null) => Boolean(session && (session.role === "customer" || session.view_as));

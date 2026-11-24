@@ -187,7 +187,8 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	s.web = web
 	// Backups need no option: each operation checks restic's pin and its
 	// tools when it runs, and answers unavailable without them.
-	s.backup = newResticEngine(s.opts.StateDir)
+	engine := newResticEngine(s.opts.StateDir)
+	s.backup = engine
 	// What an interrupted restore or drill left (its staging folder holds a
 	// temporary MariaDB password) goes before the socket accepts requests.
 	// A failure does not stop the broker: each backup operation tries again
@@ -197,6 +198,13 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 		fmt.Fprintln(os.Stderr, "sifruno broker: what an interrupted backup restore or drill left could not all be removed at start (MariaDB may not be running yet); the next backup operation tries again first")
 	}
 	cancelCleaning()
+	// Migrations share the backup engine's runner and staging. An expired
+	// migration's key, or a folder no record names, goes before the socket
+	// accepts requests; each migration operation sweeps again.
+	s.migrate = newMigrator(s.opts.StateDir, engine)
+	if s.sweepMigrationsAtStart() != nil {
+		fmt.Fprintln(os.Stderr, "sifruno broker: an expired migration's key could not be removed at start; the next migration operation tries again")
+	}
 	// Every account's limits go to its slice drop-in before the socket
 	// accepts requests: accounts made before limits were recorded get the
 	// defaults, and a deleted account's leftover goes. A failure does not

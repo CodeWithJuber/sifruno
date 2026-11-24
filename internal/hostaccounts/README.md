@@ -1180,6 +1180,97 @@ operation, which admits `xfs_quota` and knows the web server's user.
   files written after it are read. Usage reads run one at a time; a counter
   is saved only while its account exists, and delete removes it.
 
+## Migration
+
+Migration v1 (docs/PRODUCT-PLAN.md, Phase 1) moves one website account
+from a cPanel server, over root SSH, into a Sifruno account of the same
+name. Mail and DNS stay on the old server. The panel's website job
+(`internal/wizard`, kind `migration`) drives it; the broker does every
+root step. The design, with the owner's choices recorded from Jev on
+2026-11-24:
+
+- Source access. `POST /v1/migrations` (`host`, `port`, `reason`) makes a
+  new ed25519 key for this migration only, in `<state>/migrate/<id>/`
+  (root 0700, key 0600), and reads the source's host keys with
+  `ssh-keyscan`. Nothing is trusted yet. The panel shows each key's SHA-256
+  fingerprint and a one-line command the admin runs as root on the old
+  server: it appends `restrict <key> sifruno-migration-<id>` to
+  `/root/.ssh/authorized_keys` (Jev: admin pastes the line, 0.88, over
+  typing the root password once). Sifruno never sees a source password.
+  `POST /v1/migrations/{id}/host-key` (`fingerprint`, `reason`) pins the
+  offered key whose fingerprint the admin compared with the old server's
+  own (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`); before that no
+  command runs there. A migration lives 24 hours, at most 16 at a time;
+  an expired one, or a folder no record names, is removed at start and by
+  every migration operation.
+- Every source command is fixed: `internal/cpsource` builds it from fixed
+  words and names that passed strict patterns, and cites cPanel's public
+  API page for each (`whmapi1 listaccts`, `domainuserdata`,
+  `php_get_vhost_versions`; `uapi Mysql list_databases`, `list_users`);
+  `crontab -l -u`; SQL to the source's MariaDB on standard input (`SHOW
+  CREATE USER` for each user's `mysql_native_password` hash, the
+  `mysql.db` grant table); the dump tool. ssh runs as
+  `/usr/bin/ssh -F /dev/null -T` with `BatchMode`,
+  `StrictHostKeyChecking=yes`, only the migration's key and known_hosts
+  under the alias `sifruno-migration-source`, no agent, no password
+  prompt, no forwarding, as root.
+- `GET /v1/migrations/{id}/accounts` lists the source's accounts;
+  `POST /v1/migrations/{id}/plan` (`username`, `reason`) reads one: its
+  domain, home and document root (which must be `<home>/public_html`), PHP
+  package, databases and users (which must carry the `<user>_` prefix),
+  each user's hash and grants, its crontab, and the tier. For the tier
+  rsync fetches only the `.htaccess` files of the home and public_html into
+  a root-only staging folder, and `internal/htaccess` scans them there.
+  The answer carries the hashes: the panel hands them to its database
+  service on standard input and records none.
+- Tier (Jev: refuse what is not Native, 0.96, over converting access rules
+  to OpenLiteSpeed or turning on the Apache tier here). Only OpenLiteSpeed
+  serves hosted accounts today. A site whose `.htaccess` holds anything
+  OpenLiteSpeed would ignore (access control, a password folder, a deny
+  rule, an unknown directive, or a `.htaccess` in the home above
+  public_html) is not put live, not even on the preview: OpenLiteSpeed
+  would open the protected folder. The panel stops before it creates
+  anything, and `migrate-files` scans the copied files again and refuses
+  before they reach the home.
+- `POST /v1/accounts/{id}/migrate-files` (`migration`,
+  `expected_revision`, `reason`) copies as a restore does. The account must
+  be active, at its revision, and its name the source account's; the
+  broker reads the source's home itself. rsync runs as root into a fresh
+  staging folder under `/var/lib/sifruno-restore` (root 0700), with
+  `--chown` to the site's user, setuid and setgid bits dropped, no device
+  or special files, one filesystem, and the mail, settings, logs, `.ssh`,
+  `ssl` and cache folders of a cPanel home left out. The staged home and
+  public_html get the modes the broker records (0750); a public_html that
+  is a link is refused. Then the staging folder becomes root:<site group>
+  0750 and `cp` runs as the site's user, exactly as the restore's copy
+  does, and the web server's access is granted again. Root writes nothing
+  into a path the tenant controls, and the tenant never holds the key.
+- `POST /v1/accounts/{id}/migrate-database` (`migration`, `database`,
+  `expected_revision`, `reason`): the database must exist here (the panel
+  made it, with the same name, and the user with the same hash, so
+  wp-config.php needs no edit), be listed on the source under the account,
+  and hold no view, trigger, routine or event there. The dump streams over
+  SSH into the staging folder under the same 32 GiB cap and disk margin as
+  a backup, and loads as the site's user through the restore's temporary
+  MariaDB user. Every table's rows are then counted on both sides (the
+  source after its dump); the answer lists them, and the panel reports a
+  difference.
+- `POST /v1/migrations/{id}/finish` (`reason`) removes the key's line from
+  the source (`sed` on the line ending in `sifruno-migration-<id>`), proves
+  it by a sign-in that is then refused with `Permission denied`, and
+  removes the local folder and record whatever the source answered; the
+  answer says when the line must be removed by hand.
+- A failed step answers 422 `migration_failed` with the step (`connect`,
+  `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `database`,
+  `dump`, `import`, `compare`, `remove_key`) and the end of its output.
+  Copies run one at a time with backups (they share the staging root and
+  the temporary users), and their root-side leftovers go through the
+  backup leftover list.
+
+Not in v1: IPv6 source addresses, the site's own certificate (the copy
+runs over http until DNS points here), parked and addon domains (listed,
+not added), and the Compat tier.
+
 ## Verification cost
 
 Every request checks every account's files: its passwd and group identity (from

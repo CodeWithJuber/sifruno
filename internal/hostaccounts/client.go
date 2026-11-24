@@ -442,6 +442,8 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			return &InstallError{Step: failure.Step, Detail: installDetail([]byte(failure.Detail)), Installed: failure.Installed}
 		case "backup_failed":
 			return &BackupError{Step: backupDetail([]byte(failure.Step)), Detail: backupDetail([]byte(failure.Detail))}
+		case "migration_failed":
+			return &MigrationError{Step: installDetail([]byte(failure.Step)), Detail: installDetail([]byte(failure.Detail))}
 		default:
 			return ErrUnavailable
 		}

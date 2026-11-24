@@ -31,6 +31,10 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 			// ".../files/delete" also ends like an account delete. Each runs
 			// the file helper as the account's user, on its own limit.
 			serveFiles(w, r, s)
+		case migrateRoute(r.URL.Path):
+			// Migration (http_migrate.go): reading a cPanel server and
+			// copying one of its accounts here.
+			serveMigrate(ctx, w, r, s)
 		case r.Method == "GET" && r.URL.Path == "/v1/web-preview":
 			if r.URL.ForceQuery || r.URL.RawPath != "" {
 				writeError(w, ErrInvalid)

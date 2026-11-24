@@ -206,6 +206,12 @@ type store struct {
 	// backupKeyMu guards making the backup key and password, so reading
 	// the backup status never waits for backupMu.
 	backupKeyMu sync.Mutex
+	// migrate holds migrations' keys and runs their programs (nil: off).
+	// migrateMu lets one migration operation read or change migration
+	// records and the source at a time; a copy holds it only while it
+	// reads the source, then takes backupMu, as a restore does.
+	migrate   migrateEngine
+	migrateMu sync.Mutex
 	// usageMu lets one usage read run at a time, outside mu: it reads logs,
 	// which takes a moment, and keeps each site's traffic counter.
 	usageMu sync.Mutex

@@ -123,8 +123,11 @@ func renderServer(listeners []Listener, sites []site) []byte {
 }
 
 // renderVhost writes one site's vhconf.conf. A suspended site keeps its logs
-// and certificate but has no PHP handler and refuses every request, ACME
-// challenges included, because its vhost-level rule runs before any context.
+// and certificate but has no PHP handler and refuses every request with 403,
+// except ACME challenges: OpenLiteSpeed 1.9.4 serves the challenge context
+// (the panel's own folder, never the site's) before the vhost's rewrite rule,
+// as the dev VM's broker-site-actions proof shows, so certificate renewal
+// keeps working while a site is suspended.
 // Its docRoot is SuspendedDocRoot, not the tenant's: every path a suspended
 // vhost names (docRoot, logs, certificate, challenge directory) is outside
 // every home, so nothing its tenant does can make its config test fail.

@@ -1,0 +1,43 @@
+# Site actions at the broker: PHP version, suspend, a second suspend, resume, delete
+# 2026-11-24T09:30:49Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64  SELinux Enforcing
+# site user act12649, domain act12649.proof.test
+
+## 1. The broker runs with the web operation on
+PASS  the broker started with --web-user nobody
+PASS  LSPHP 8.4 is installed for the version change
+
+## 2. A live site on PHP 8.3
+PASS  the site serves on PHP 8.3
+PASS  the account list shows PHP 8.3 and the 200 MiB quota
+
+## 3. The PHP version changes to 8.4
+PASS  the site serves on PHP 8.4
+PASS  the account list shows PHP 8.4
+
+## 4. Suspend: the public gets 403 from the broker's own empty folder
+PASS  the home page answers 403
+PASS  a PHP file answers 403
+  the ACME challenge path answers 200 for a challenge in the panel's folder while suspended
+PASS  a file the tenant put under .well-known is not served
+PASS  the account list shows it suspended
+  /var/lib/sifruno-suspended: root:root 755, SELinux system_u:object_r:var_lib_t:s0, entries: 0
+PASS  /var/lib/sifruno-suspended is root's, mode 0755, and empty
+PASS  the suspended vhost names no path in /home
+PASS  the server fragment points the vhost at /var/lib/sifruno-suspended
+PASS  the site's files are untouched in its home
+PASS  OpenLiteSpeed is running
+
+## 5. A second suspend applies the suspension again
+PASS  it is a recorded change (the revision moved from 4)
+PASS  the site still answers 403
+
+## 6. Resume serves the site again, as it was
+PASS  the site serves on PHP 8.4 again
+PASS  the vhost names its home again
+
+## 7. Delete
+PASS  the vhost config is gone
+PASS  the Linux user is gone
+PASS  OpenLiteSpeed is still running
+
+RESULT: all checks passed

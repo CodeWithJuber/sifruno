@@ -101,6 +101,18 @@ The test drives the VM over SSH as root with a key throughout. Every command aft
 
 What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins), the nightly schedule the plan asks for (not set up; it needs a runner the owner chooses), and an upgrade from an older release.
 
+## Phase 1: the site page's changes at the broker
+
+Run on 2026-11-24 with `scripts/devvm/proof.sh broker-site-actions` on the dev VM the fresh-install test built (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4), from `2ae3d56`'s broker and driver.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Site actions: a live site moves from PHP 8.3 to 8.4 and the account list shows it; suspend answers 403 for the home page and a PHP file, from `/var/lib/sifruno-suspended` (root 0755, empty, `var_lib_t`) with no `/home` path in the vhost, the site's files untouched and a file the tenant puts under `.well-known` not served; a second suspend is a recorded change; resume serves PHP 8.4 again from the home; delete removes the vhost and the user | [phase1-broker-site-actions.txt](phase1-broker-site-actions.txt) | 22 passed, 0 failed |
+
+While suspended, the ACME challenge path served a challenge from the panel's own folder with 200: OpenLiteSpeed applies the challenge context before the vhost's deny rule, so renewal keeps working. An earlier run failed after the suspend because the proof's driver stopped waiting after 60 s while the broker finished the change (`d2246a5`).
+
+What this run does not show: a tenant changing its own folders (the broker-isolation proof), and the panel's site page in a browser.
+
 ## Phase 1: the New website wizard, with SSL
 
 Run on 2026-11-24 with `scripts/devvm/proof.sh wordpress-wizard` on the dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3, MariaDB 10.11, QEMU software emulation), built from `70efa12`. The panel ran in the VM as `sifpanel` with the real broker (`--web-user`), the MariaDB admin option file, and ACME pointed at Pebble 2.10.1, Let's Encrypt's test CA, installed by provisioning (its DNS answers 127.0.0.1 for every name, so it validates HTTP-01 against this VM's OpenLiteSpeed). Headless Chrome on the host reached the panel through `vm.sh forward` and drove the wizard as an admin would.

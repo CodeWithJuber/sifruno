@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,10 @@ const (
 	migrateHostKeyAlias = "sifruno-migration-source"
 	sshKeyscanPath      = "/usr/bin/ssh-keyscan"
 	rsyncPath           = "/usr/bin/rsync"
+	// The source's own programs, for the sender of a copy: util-linux's
+	// runuser and rsync, where RHEL-family and Ubuntu servers keep them.
+	sourceRunuserPath = "/usr/sbin/runuser"
+	sourceRsyncPath   = "/usr/bin/rsync"
 
 	// A migration's key lives this long. Past it every operation refuses
 	// the migration and its folder is removed.
@@ -344,25 +349,54 @@ var migrateExcludes = []string{
 	"/.razor/", "/.lastlogin", "/.bash_history", "/public_ftp/", "/.gnupg/",
 }
 
-// fetchArgs copies the source user's home into dest as root: recursive,
-// links as links, modes without setuid or setgid bits, times, every file
-// given to the site's user and group, devices and special files left out,
-// one filesystem, the excludes above.
-func fetchArgs(rsh, host, home, dest string, uid, gid int) []string {
-	args := []string{"--rsh=" + rsh, "-rlpt", "--sparse", "--chmod=ug-s", "--chown=" + strconv.Itoa(uid) + ":" + strconv.Itoa(gid), "--one-file-system", "--timeout=600"}
+// senderPath is rsync's --rsync-path for a copy from the source: the
+// source's rsync, run as the account that owns the home, never as root. The
+// account's tree is the tenant's, and a root sender could be raced into
+// reading through a link or hard link the tenant swaps in (/root, another
+// account's wp-config.php); as the account it reads only what the account
+// itself may read. rsync hands this value to the source's shell as it is
+// (rsync(1), --rsync-path: "PROGRAM is run with the help of a shell"), so
+// every word is fixed or the account name, which must match the home's last
+// part and the account name rule. runuser -u runs the program directly,
+// not through the account's own shell, so a nologin or jailed shell does
+// not stop it.
+func senderPath(home string) (string, bool) {
+	user := path.Base(home)
+	if !validUsername(user) || home != path.Clean(home) || !strings.HasPrefix(home, "/") {
+		return "", false
+	}
+	return sourceRunuserPath + " -u " + user + " -- " + sourceRsyncPath, true
+}
+
+// fetchArgs copies the source user's home into dest: the sender runs as
+// the account (senderPath), the receiver as root; recursive, links as
+// links, modes without setuid or setgid bits, times, every file given to
+// the site's user and group, devices and special files left out, one
+// filesystem, the excludes above.
+func fetchArgs(rsh, host, home, dest string, uid, gid int) ([]string, bool) {
+	sender, ok := senderPath(home)
+	if !ok {
+		return nil, false
+	}
+	args := []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlpt", "--sparse", "--chmod=ug-s", "--chown=" + strconv.Itoa(uid) + ":" + strconv.Itoa(gid), "--one-file-system", "--timeout=600"}
 	for _, x := range migrateExcludes {
 		args = append(args, "--exclude="+x)
 	}
-	return append(args, "--", host+":"+home+"/", dest+"/")
+	return append(args, "--", host+":"+home+"/", dest+"/"), true
 }
 
 // htaccessArgs copies only the .htaccess files of the home and its
 // public_html into dest, keeping the folders, so the scan sees the site's
-// tree of rules. Files stay root's in the root-only staging folder.
-func htaccessArgs(rsh, host, home, dest string) []string {
-	return []string{"--rsh=" + rsh, "-rlt", "--prune-empty-dirs", "--one-file-system", "--timeout=300",
+// tree of rules. The sender runs as the account, as for the copy; files
+// stay root's in the root-only staging folder.
+func htaccessArgs(rsh, host, home, dest string) ([]string, bool) {
+	sender, ok := senderPath(home)
+	if !ok {
+		return nil, false
+	}
+	return []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlt", "--prune-empty-dirs", "--one-file-system", "--timeout=300",
 		"--include=/public_html/", "--include=/public_html/**/", "--include=.htaccess", "--exclude=*",
-		"--", host + ":" + home + "/", dest + "/"}
+		"--", host + ":" + home + "/", dest + "/"}, true
 }
 
 // migrateKeyscanArgs reads the source's host keys.

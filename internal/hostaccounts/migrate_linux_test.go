@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -235,6 +236,65 @@ func TestMigrateFilesStagesAsRootAndCopiesAsTheSiteUser(t *testing.T) {
 	// The staging folder was handed to the site's group before cp ran.
 	if !slices.Contains(*calls, chownCall{l.Op, os.Getuid(), 20000}) || !slices.Contains(*calls, chownCall{"public_html", 20000, 20000}) {
 		t.Fatalf("chowns %v", *calls)
+	}
+}
+
+// The source's rsync sender runs as the account, never as root: rsync hands
+// --rsync-path to the source's shell as it is, so each word the shell splits
+// off must be fixed or the account's checked name.
+func TestRsyncSenderRunsAsTheAccount(t *testing.T) {
+	sender, ok := senderPath("/home/fixtureacct")
+	if !ok || !slices.Equal(strings.Fields(sender), []string{"/usr/sbin/runuser", "-u", "fixtureacct", "--", "/usr/bin/rsync"}) {
+		t.Fatalf("sender %q", sender)
+	}
+	for _, word := range strings.Fields(sender) {
+		if !regexp.MustCompile(`^[A-Za-z0-9/_-]+$`).MatchString(word) {
+			t.Fatalf("a word the source's shell would read specially: %q", word)
+		}
+	}
+	for _, home := range []string{"/home/root", "/home/x;id", "/home/Abc", "home/fixtureacct", "/home/fixtureacct/", "/home/a b", "/home/$(id)", "/home/sshd"} {
+		if _, ok := senderPath(home); ok {
+			t.Errorf("%q gave a sender", home)
+		}
+	}
+	for name, args := range map[string]func() ([]string, bool){
+		"copy": func() ([]string, bool) {
+			return fetchArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/files", 20000, 20000)
+		},
+		"htaccess": func() ([]string, bool) {
+			return htaccessArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/htaccess")
+		},
+	} {
+		list, ok := args()
+		if !ok || !slices.Contains(list, "--rsync-path="+sender) {
+			t.Errorf("%s: %q", name, list)
+		}
+	}
+	if _, ok := fetchArgs("/usr/bin/ssh", "source.example.test", "/home/root", "/stage/files", 20000, 20000); ok {
+		t.Error("a copy as root was built")
+	}
+}
+
+// What the account may not read on the source stops the copy (rsync 23)
+// with a plain reason; nothing reaches the home.
+func TestUnreadableSourceFilesStopTheCopy(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	rec := openedRecord(t, m)
+	f.home = map[string]string{"public_html/index.php": "x"}
+	run := f.run
+	m.e.run = func(ctx context.Context, c backupCommand) ([]byte, int, error) {
+		if c.path == rsyncPath {
+			return []byte(`rsync: [sender] send_files failed to open "/home/fixtureacct/public_html/hl.txt": Permission denied (13)`), 23, nil
+		}
+		return run(ctx, c)
+	}
+	_, err := m.Files(context.Background(), rec, "/home/fixtureacct", engineRecord(filepath.Dir(m.e.dir)), 1, backupLeftover{Op: strings.Repeat("9", 32)})
+	var failed *MigrationError
+	if !errors.As(err, &failed) || failed.Step != "fetch" || !strings.Contains(failed.Detail, "cannot be read by the account itself") {
+		t.Fatalf("refusal: %v", err)
+	}
+	if slices.ContainsFunc(f.ran, func(c ranCommand) bool { return c.path == cpPath }) {
+		t.Fatal("cp ran into the home")
 	}
 }
 

@@ -1236,7 +1236,14 @@ root step. The design, with the owner's choices recorded from Jev on
 - `POST /v1/accounts/{id}/migrate-files` (`migration`,
   `expected_revision`, `reason`) copies as a restore does. The account must
   be active, at its revision, and its name the source account's; the
-  broker reads the source's home itself. rsync runs as root into a fresh
+  broker reads the source's home itself. On the old server the sender
+  runs as the account, never as root: `--rsync-path=/usr/sbin/runuser -u
+  <account> -- /usr/bin/rsync` (rsync hands it to the source's shell as it
+  is; every word is fixed or the checked account name). A tenant that
+  swaps a folder for a link to `/root`, or holds a hard link to a file it
+  may not read, gets nothing it could not read itself; what the account
+  may not read stops the copy (rsync 23) with that reason. The `.htaccess`
+  fetch for the tier runs the same way. Here rsync runs as root into a fresh
   staging folder under `/var/lib/sifruno-restore` (root 0700), with
   `--chown` to the site's user, `--sparse`, setuid and setgid bits dropped, no device
   or special files, one filesystem, and the mail, settings, logs, `.ssh`,
@@ -1290,10 +1297,9 @@ Known gaps, found in review and not fixed in v1:
 - A finish, or an expiry, does not stop a copy already running with the
   key (up to its two hours); an expired migration's line stays in the
   source's `authorized_keys` until the admin removes it.
-- The source's rsync reads the tenant's tree as root on the old server; an
-  old rsync there could follow a link a tenant swaps in during the copy.
-  Reading as the account (`--rsync-path` with `runuser`) would fail on the
-  root-owned files a cPanel home holds and is not done.
+- A home holding files the account may not read (root's, another
+  user's) cannot be moved until they are given to the account or removed
+  on the old server.
 - WordPress's bundled Akismet plugin has an `.htaccess` with access rules,
   so a WordPress site that keeps it scans as Compat and is refused.
 

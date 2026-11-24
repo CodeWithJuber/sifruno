@@ -174,8 +174,9 @@ func (m *migrator) remoteSQL(ctx context.Context, rec migrationRecord, sql strin
 	return stdout.b, nil
 }
 
-// rsync runs rsync as root, the migration's ssh as its transport.
-func (m *migrator) rsync(ctx context.Context, rec migrationRecord, args func(rsh string) []string, limit time.Duration) ([]byte, int, error) {
+// rsync runs rsync as root, the migration's ssh as its transport; the
+// sender on the source runs as the account (senderPath).
+func (m *migrator) rsync(ctx context.Context, rec migrationRecord, args func(rsh string) ([]string, bool), limit time.Duration) ([]byte, int, error) {
 	d, err := m.folder(rec.ID)
 	if err != nil {
 		return nil, -1, err
@@ -185,7 +186,17 @@ func (m *migrator) rsync(ctx context.Context, rec migrationRecord, args func(rsh
 	if !ok || !validMigrationHost(rec.Host) {
 		return nil, -1, ErrInvalid
 	}
-	return m.e.run(ctx, backupCommand{path: rsyncPath, args: args(rsh), env: m.env(), dir: "/", limit: limit})
+	list, ok := args(rsh)
+	if !ok {
+		return nil, -1, ErrInvalid
+	}
+	return m.e.run(ctx, backupCommand{path: rsyncPath, args: list, env: m.env(), dir: "/", limit: limit})
+}
+
+// unreadable explains rsync's exit 23 on a copy whose sender runs as the
+// account: something in the old home is not the account's to read.
+func unreadableByAccount(step string, out []byte) error {
+	return &MigrationError{Step: step, Detail: "Some files or folders in the old home cannot be read by the account itself, so they were not copied and the copy stopped. Sifruno reads the home as the account, never as root. Give them to the account, or remove them, on the old server. " + installDetail(out)}
 }
 
 // validSourceHome is a home folder the source named: a plain absolute path
@@ -207,9 +218,12 @@ func (m *migrator) Preflight(ctx context.Context, rec migrationRecord, home stri
 	if unix.Mkdirat(int(stage.Fd()), "htaccess", 0700) != nil {
 		return htaccess.SiteResult{}, false, ErrUnavailable
 	}
-	out, code, err := m.rsync(ctx, rec, func(rsh string) []string { return htaccessArgs(rsh, rec.Host, home, stagePath+"/htaccess") }, 10*time.Minute)
+	out, code, err := m.rsync(ctx, rec, func(rsh string) ([]string, bool) { return htaccessArgs(rsh, rec.Host, home, stagePath+"/htaccess") }, 10*time.Minute)
 	if err != nil {
 		return htaccess.SiteResult{}, false, err
+	}
+	if code == 23 {
+		return htaccess.SiteResult{}, false, unreadableByAccount("fetch", out)
 	}
 	if code != 0 && code != 24 {
 		return htaccess.SiteResult{}, false, migrationFailed("fetch", out)
@@ -294,7 +308,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 			}
 		}
 	}()
-	out, code, err := m.rsync(copying, rec, func(rsh string) []string {
+	out, code, err := m.rsync(copying, rec, func(rsh string) ([]string, bool) {
 		return fetchArgs(rsh, rec.Host, home, stagePath+"/files", r.Account.UID, r.Account.GID)
 	}, backupTimeout)
 	stop()
@@ -305,7 +319,11 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 		return MigrateFilesResult{}, err
 	}
 	// 24 is files that vanished on the source while rsync ran, such as a
-	// live site's cache; everything else is a failure.
+	// live site's cache; 23 is what the account may not read; everything
+	// else is a failure too.
+	if code == 23 {
+		return MigrateFilesResult{}, unreadableByAccount("fetch", out)
+	}
 	if code != 0 && code != 24 {
 		return MigrateFilesResult{}, migrationFailed("fetch", out)
 	}

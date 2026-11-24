@@ -127,7 +127,11 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 make two PHP sites, gives a customer a login for one, and the
                 customer, over HTTPS, finishes setup from the link with an
                 authenticator code, signs in, sees only its site, and is
-                refused the other by address and by API; the admin views the
+                refused the other by address and by API; it is not offered
+                New website, Static sites, PHP, suspend, delete, backups or
+                restores, which the admin is; on Account a wrong current
+                code is refused, the password change works and the old
+                password stops working; the admin views the
                 panel as the customer (banner, customer's menu) and goes
                 back; turning the login off signs the customer out. Needs
                 Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the

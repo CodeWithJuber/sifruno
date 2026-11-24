@@ -20,6 +20,7 @@ const run = Date.now().toString(36).slice(-5);
 const customer = `qacust${run}`;
 const adminPassword = `qa admin ${randomBytes(12).toString("hex")}`;
 const customerPassword = `qa customer ${randomBytes(12).toString("hex")}`;
+const customerNewWords = `qa customer new ${randomBytes(12).toString("hex")}`;
 const customerOrigin = httpsOrigin || origin;
 const checks = [];
 const errors = [];
@@ -58,6 +59,24 @@ const call = (page, method, url, body) => page.evaluate(async ({ method, url, bo
   const response = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   return { status: response.status, text: await response.text() };
 }, { method, url, body });
+
+// The controls only an admin may use, counted on the pages that carry them:
+// Websites, one website's Settings (Simple view) and its Backups.
+async function controlsOn(page, base, accountId) {
+  const counts = {};
+  const count = async (...ids) => { for (const id of ids) counts[id] = await page.getByTestId(id).count(); };
+  await page.goto(base + "/websites");
+  await page.getByTestId("websites-count").filter({ hasText: "website" }).waitFor();
+  await count("new-website-link", "static-sites-link");
+  await page.goto(base + `/websites/sites/${accountId}/settings`);
+  await page.getByTestId("site-settings").waitFor();
+  await count("site-action-php", "use-current-folder", "change-state", "delete-website");
+  await page.goto(base + `/websites/sites/${accountId}/backups`);
+  // The backups, or the problem that says why they could not be read.
+  await page.locator('[data-testid="site-backups"][data-account-id], [data-testid="backups-problem"]').first().waitFor({ timeout: 60_000 });
+  await count("back-up-now", "drill-now", "restore-snapshot", "go-backup-storage");
+  return counts;
+}
 
 const remoteHost = httpsOrigin ? new URL(httpsOrigin).hostname : "";
 const browser = await chromium.launch({ headless: true, ...(chrome ? { executablePath: chrome } : {}), ...(remoteHost ? { args: [`--host-resolver-rules=MAP ${remoteHost} 127.0.0.1`] } : {}) });
@@ -164,6 +183,13 @@ try {
   await cust.getByText(siteA.domain).first().waitFor();
   check("the customer opens its own website's page", true);
 
+  console.log("## Customer: only what it can use");
+  const own = JSON.parse((await call(cust, "GET", "/api/v1/session")).text);
+  check("the customer's session lists the routes it may use", Array.isArray(own.routes) && own.routes.includes("GET /api/v1/websites/sites") && !own.routes.includes("POST /api/v1/websites/sites/{account_id}/state"), JSON.stringify(own.routes ?? null).slice(0, 200));
+  const offered = await controlsOn(cust, customerOrigin, siteA.account_id);
+  for (const [name, n] of Object.entries(offered)) check(`the customer is not offered ${name}`, n === 0, String(n));
+  await cust.screenshot({ path: join(outDir, "1440-customer-backups.png"), fullPage: true });
+
   console.log("## Customer: another website is refused");
   await cust.goto(customerOrigin + `/websites/sites/${siteB.account_id}`);
   await sleep(3000);
@@ -201,6 +227,37 @@ try {
   check("the customer's Websites has no horizontal overflow at 390", await noOverflow(phone.page));
   await phone.page.screenshot({ path: join(outDir, "390-customer-websites.png") });
 
+  console.log("## Customer: changes its password on Account");
+  await cust.goto(customerOrigin + "/account");
+  await cust.getByTestId("account-password-form").waitFor();
+  check("Account offers the password and authenticator changes", (await cust.getByTestId("account-authenticator").count()) === 1);
+  used = await nextStep(used);
+  await cust.getByTestId("current-password").fill(customerPassword);
+  await cust.getByTestId("new-password").fill(customerNewWords);
+  await cust.getByTestId("password-code").fill(totp(customerSecret, used + 10));
+  await cust.getByTestId("change-password-submit").click();
+  await cust.getByTestId("password-problem").waitFor({ timeout: 180_000 });
+  const refused = await cust.getByTestId("password-problem").innerText();
+  check("a wrong current code is refused, saying what, why and what next", refused.includes("Your password was not changed") && refused.includes("wrong") && refused.includes("Next step"), refused);
+  await cust.screenshot({ path: join(outDir, "1440-customer-password-refused.png") });
+  await cust.getByTestId("password-code").fill(totp(customerSecret, used));
+  await cust.getByTestId("change-password-submit").click();
+  await cust.getByTestId("password-changed").filter({ hasText: "changed" }).waitFor({ timeout: 180_000 });
+  check("the password change works and this session stays", (await call(cust, "GET", "/api/v1/session")).status === 200);
+  const fresh = await context();
+  await fresh.page.goto(customerOrigin + "/websites");
+  await fresh.page.getByTestId("admin-sign-in").waitFor();
+  used = await nextStep(used);
+  const oldTry = await fresh.page.evaluate(async (body) => (await fetch("/api/v1/session/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).status,
+    { username: customer, password: customerPassword, totp_code: totp(customerSecret, used) });
+  check("the old password stops working", oldTry === 401, `HTTP ${oldTry}`);
+  await fresh.page.getByLabel("Username", { exact: true }).fill(customer);
+  await fresh.page.getByLabel("Password", { exact: true }).fill(customerNewWords);
+  await fresh.page.getByLabel("6-digit code", { exact: true }).fill(totp(customerSecret, used));
+  await fresh.page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await fresh.page.getByTestId("signed-in-as").waitFor({ timeout: 180_000 });
+  check("the new password signs in", (await fresh.page.getByTestId("signed-in-as").innerText()).includes(customer));
+
   console.log("## Admin: view as the customer");
   await admin.goto(origin + "/customers");
   await row.getByTestId("view-as").click();
@@ -209,6 +266,7 @@ try {
   check("viewing as the customer shows a banner naming whose account it is", banner.includes(customer) && banner.includes("recorded as yours"), banner);
   await admin.getByTestId("websites-count").filter({ hasText: "website" }).waitFor();
   check("while viewing, the admin sees only the customer's website", (await admin.getByTestId("websites-count").innerText()).trim() === "1 website");
+  check("while viewing, New website is not offered", (await admin.getByTestId("new-website-link").count()) === 0);
   const adminMenu = await admin.locator('[data-slot="sidebar-menu-button"]').evaluateAll((items) => items.map((i) => i.textContent.trim()));
   check("while viewing, the menu is the customer's", adminMenu.join(",") === "Home,Websites,Account", adminMenu.join(","));
   const viewing = await call(admin, "GET", `/api/v1/websites/sites/${siteB.account_id}`);
@@ -225,6 +283,17 @@ try {
   check("Back to admin view ends viewing and returns to Customers", (await admin.getByTestId("view-as-banner").count()) === 0 && path(admin) === "/customers");
   const both = JSON.parse((await call(admin, "GET", "/api/v1/websites/sites")).text).sites.length;
   check("the admin sees every website again", both >= 2, String(both));
+
+  console.log("## Admin: the controls the customer is not offered");
+  const adminOffered = await controlsOn(admin, origin, siteA.account_id);
+  for (const name of ["new-website-link", "static-sites-link", "site-action-php", "change-state", "delete-website"]) check(`the admin is offered ${name}`, adminOffered[name] > 0, String(adminOffered[name]));
+  check("the admin is offered Back up now, or Set up backup storage before any", adminOffered["back-up-now"] + adminOffered["go-backup-storage"] > 0, JSON.stringify(adminOffered));
+  await admin.screenshot({ path: join(outDir, "1440-admin-backups.png"), fullPage: true });
+  await admin.goto(origin + "/account");
+  await admin.getByTestId("account-password-form").waitFor();
+  check("the admin's menu has Account, with the same password change", (await admin.getByTestId("nav-account").count()) === 1 && (await admin.getByTestId("account-websites-list").count()) === 0);
+  await admin.goto(origin + "/customers");
+  await admin.getByTestId("customers").waitFor();
 
   console.log("## Admin: turn the login off");
   await row.getByTestId("toggle-login").click();

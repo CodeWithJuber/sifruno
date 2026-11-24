@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -276,6 +277,27 @@ func isSitePath(path string) bool {
 }
 func isSessionPath(path string) bool {
 	return path == "/api/v1/session" || strings.HasPrefix(path, "/api/v1/session/")
+}
+
+// tokenAreas are the parts of the API an API token may use: the hosting work
+// a script such as the WHMCS module does, and the API description. It is an
+// allow list, so a route added later anywhere else, a credential route
+// included, refuses tokens until it is named here.
+var tokenAreas = []string{"/api/v1/accounts", "/api/v1/server", "/api/v1/services", "/api/v1/sites", "/api/v1/status", "/api/v1/websites"}
+
+func tokenArea(p string) bool {
+	if path.Clean(p) != p {
+		return false
+	}
+	if p == "/openapi.json" {
+		return true
+	}
+	for _, area := range tokenAreas {
+		if p == area || strings.HasPrefix(p, area+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func isSiteTransferMutation(r *http.Request) bool {

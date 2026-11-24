@@ -93,6 +93,10 @@ func TestAPITokenThroughThePanelAPI(t *testing.T) {
 			{"GET", "/api/v1/session"}, {"GET", "/api/v1/session/sessions"}, {"POST", "/api/v1/session/login"},
 			{"POST", "/api/v1/session/logout"}, {"POST", "/api/v1/session/revoke-others"}, {"POST", "/api/v1/session/setup/totp"},
 			{"GET", "/api/v1/session/tokens"}, {"POST", "/api/v1/session/tokens"}, {"POST", "/api/v1/session/tokens/" + created.ID + "/revoke"},
+			// Outside the allow list: the change trail, internal tools, any
+			// later route, and a path that only cleans into an allowed one.
+			{"GET", "/api/v1/trail"}, {"GET", "/api/v1/budget"}, {"GET", "/api/v1/platform"}, {"GET", "/api/v1/not-yet-written"},
+			{"GET", "/api/v1/sites/../session"}, {"GET", "/api/v1/sitesx"},
 		} {
 			w := clientRequest(h, network, route.method, route.path, created.Token, map[string]string{})
 			if w.Code != 403 || problemError(t, w) != "token_not_allowed" {

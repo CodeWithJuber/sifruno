@@ -300,12 +300,16 @@ func TestAPITokenFailuresAreRateLimited(t *testing.T) {
 			t.Fatalf("failure %d: %d", i, w.Code)
 		}
 	}
-	// The 21st failure is refused before any check, and while the limit is
-	// used up a valid token waits too.
-	for _, token := range []string{tokenPrefix + strings.Repeat("C", 43), created.Token} {
-		if w := bearer(h, "GET", "/probe", token); w.Code != 429 || w.Header().Get("Retry-After") != "3" {
-			t.Fatalf("over the limit: %d", w.Code)
-		}
+	// The 21st failure gets 429. A valid token is still admitted: wrong
+	// tokens from anyone on the server must not lock out the real client.
+	if w := bearer(h, "GET", "/probe", tokenPrefix+strings.Repeat("C", 43)); w.Code != 429 || w.Header().Get("Retry-After") != "3" {
+		t.Fatalf("over the limit: %d", w.Code)
+	}
+	if w := bearer(h, "GET", "/probe", created.Token); w.Code != 200 {
+		t.Fatalf("a valid token while failures are limited: %d %s", w.Code, w.Body.String())
+	}
+	if w := bearer(h, "GET", "/probe", tokenPrefix+strings.Repeat("C", 43)); w.Code != 429 {
+		t.Fatalf("a valid token reset the failure limit: %d", w.Code)
 	}
 	// Sign-in has its own limits, and the network has its own buckets.
 	if w := opRequest(h, "GET", "/api/v1/session", "", cookie, ""); w.Code != 200 {
@@ -327,8 +331,11 @@ func TestAPITokenFailuresAreRateLimited(t *testing.T) {
 			t.Fatalf("network failure %d: %d", i, w.Code)
 		}
 	}
-	if w := bearer(remote, "GET", "/probe", created.Token, fromNetwork("198.51.100.7:51234")); w.Code != 429 || w.Header().Get("Retry-After") != "60" {
+	if w := bearer(remote, "GET", "/probe", tokenPrefix+strings.Repeat("D", 43), fromNetwork("198.51.100.7:51234")); w.Code != 429 || w.Header().Get("Retry-After") != "60" {
 		t.Fatalf("network address over its limit: %d", w.Code)
+	}
+	if w := bearer(remote, "GET", "/probe", created.Token, fromNetwork("198.51.100.7:51234")); w.Code != 200 {
+		t.Fatalf("a valid token from a limited address: %d", w.Code)
 	}
 	if w := bearer(remote, "GET", "/probe", created.Token, fromNetwork("203.0.113.9:40000")); w.Code != 200 {
 		t.Fatalf("another network address: %d", w.Code)

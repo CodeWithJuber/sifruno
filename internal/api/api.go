@@ -251,6 +251,10 @@ func New(o Options) http.Handler {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		if len(r.Header.Values("Authorization")) > 0 && !tokenArea(r.URL.Path) {
+			operator.WriteError(w, 403, "token_not_allowed", "An API token cannot use this part of the panel API. Sign in to the panel in a browser to do this.")
+			return
+		}
 		if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isWizardPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 			if o.Operator == nil {
 				operator.WriteError(w, 503, "operator_unavailable", "Operator authentication unavailable")

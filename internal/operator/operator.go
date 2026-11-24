@@ -161,12 +161,14 @@ func Open(dir string) (*Manager, error) {
 		_, err := rand.Read(v)
 		return v, err
 	})
+	// The panel does not start without its token files rather than ignore
+	// them, as for the other private files. The message says how to recover.
 	if err != nil {
-		return nil, errors.New("operator API tokens unavailable")
+		return nil, errors.New("operator API tokens unavailable: " + tokensKeyFile + " in the panel's private folder is damaged or has the wrong mode (it must be 0600, " + "32 bytes). Move " + tokensKeyFile + " and " + tokensFile + " aside and start the panel again; then create new API tokens, because the old ones stop working")
 	}
 	tokens, err := loadTokens(dir)
 	if err != nil {
-		return nil, errors.New("operator API tokens unavailable")
+		return nil, errors.New("operator API tokens unavailable: " + tokensFile + " in the panel's private folder is damaged or has the wrong mode (it must be 0600). Move " + tokensFile + " aside and start the panel again; then create new API tokens, because the old ones stop working")
 	}
 	cookies := sessions.NewCookieStore(keys[:32], keys[32:])
 	cookies.MaxAge(int(sessionLifetime.Seconds()))

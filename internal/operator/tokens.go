@@ -203,8 +203,9 @@ func sessionOnly(next http.HandlerFunc) http.HandlerFunc {
 // the server: a 20-attempt burst refilling every 3 seconds. Over the network:
 // a separate burst of the same size, plus 5 attempts per caller IP refilling
 // one a minute, so one outside address cannot lock out the others. Only a
-// failure uses an attempt; while a limit is used up, every bearer request
-// from that caller waits, valid or not. Called with tokenMu held.
+// failure uses an attempt, and only a failure is refused while a limit is
+// used up: a valid token is always admitted (see authorizeToken). Called
+// with tokenMu held.
 func (m *Manager) bearerLimiters(r *http.Request) (global, peer *rate.Limiter) {
 	if !IsRemote(r) {
 		return m.bearerLimiter, nil
@@ -235,16 +236,6 @@ func (m *Manager) authorizeToken(w http.ResponseWriter, r *http.Request) (string
 	}
 	m.tokenMu.Lock()
 	defer m.tokenMu.Unlock()
-	global, peer := m.bearerLimiters(r)
-	if (peer != nil && peer.Tokens() < 1) || global.Tokens() < 1 {
-		retry := "3"
-		if peer != nil && peer.Tokens() < 1 {
-			retry = "60"
-		}
-		w.Header().Set("Retry-After", retry)
-		WriteError(w, 429, "rate_limited", "Too many requests with a wrong API token. Wait a minute, check the token in the API client, and try again.")
-		return "", false
-	}
 	now := m.now()
 	index := -1
 	if token, ok := bearerToken(r); ok {
@@ -257,17 +248,32 @@ func (m *Manager) authorizeToken(w http.ResponseWriter, r *http.Request) (string
 			}
 		}
 	}
-	if index < 0 || !now.Before(m.tokens.Tokens[index].ExpiresAt) {
-		global.Allow()
-		if peer != nil {
-			peer.Allow()
+	// A valid token is admitted whatever the failure limits say. The limits
+	// slow down guessing, and a 256-bit token cannot be guessed, so holding
+	// back a valid one adds no safety; it would only let anyone who can send
+	// wrong tokens, such as a customer's script on this server, lock out the
+	// real clients.
+	if index >= 0 && now.Before(m.tokens.Tokens[index].ExpiresAt) {
+		m.recordTokenUseLocked(index, now)
+		return "local-operator", true
+	}
+	global, peer := m.bearerLimiters(r)
+	if (peer != nil && peer.Tokens() < 1) || global.Tokens() < 1 {
+		retry := "3"
+		if peer != nil && peer.Tokens() < 1 {
+			retry = "60"
 		}
-		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-		WriteError(w, 401, "invalid_token", "The API token was not accepted. It may be mistyped, expired or revoked. Create a new token under Security, API tokens, and put it in the API client.")
+		w.Header().Set("Retry-After", retry)
+		WriteError(w, 429, "rate_limited", "Too many requests with a wrong API token. Wait a minute, check the token in the API client, and try again.")
 		return "", false
 	}
-	m.recordTokenUseLocked(index, now)
-	return "local-operator", true
+	global.Allow()
+	if peer != nil {
+		peer.Allow()
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+	WriteError(w, 401, "invalid_token", "The API token was not accepted. It may be mistyped, expired or revoked. Create a new token under Security, API tokens, and put it in the API client.")
+	return "", false
 }
 
 // recordTokenUseLocked saves the last-used time, at most once a minute per

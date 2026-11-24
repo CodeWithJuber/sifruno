@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -44,7 +45,7 @@ type websiteJobListOutput struct{ Body websiteJobListBody }
 const wizardUnavailable = "Website creation is not set up on this server"
 
 // wordpressKeys are the request's keys, exactly as the contract spells them.
-var wordpressKeys = map[string]bool{"domain": true, "title": true, "admin_user": true, "admin_email": true, "admin_password": true, "php_version": true}
+var wordpressKeys = []string{"domain", "title", "admin_user", "admin_email", "admin_password", "php_version"}
 
 func wizardError(err error) error {
 	var refusal *wizard.Refusal
@@ -112,12 +113,16 @@ func allowedWizardMutation(r *http.Request) bool {
 	return r.Method == http.MethodPost && r.URL.Path == "/api/v1/websites/wordpress"
 }
 
-// prepareWizardJSON bounds and checks the wizard's body before Huma decodes
-// it: JSON content type, at most 4 KiB, one object holding only the
-// contract's keys, each once, each a string. Go's decoder would accept a
-// key in another case, so keys are compared exactly. Nothing from the body
-// is echoed back.
+// prepareWizardJSON checks the wizard's body before Huma decodes it.
 func prepareWizardJSON(w http.ResponseWriter, r *http.Request) bool {
+	return prepareStrictJSON(w, r, wordpressKeys)
+}
+
+// prepareStrictJSON bounds and checks a POST body before Huma decodes it:
+// JSON content type, at most 4 KiB, one object holding only the contract's
+// keys, each once, each a string. Go's decoder would accept a key in another
+// case, so keys are compared exactly. Nothing from the body is echoed back.
+func prepareStrictJSON(w http.ResponseWriter, r *http.Request, keys []string) bool {
 	ct, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || ct != "application/json" || (params["charset"] != "" && !strings.EqualFold(params["charset"], "utf-8")) {
 		operator.WriteError(w, 415, "invalid_request", "Send the request as JSON.")
@@ -152,8 +157,12 @@ func prepareWizardJSON(w http.ResponseWriter, r *http.Request) bool {
 			operator.WriteError(w, 400, "invalid_request", "The request must be one JSON object.")
 			return false
 		}
-		if !wordpressKeys[key] {
-			operator.WriteError(w, 422, "invalid_request", "The request has a field this form does not use. Send only domain, title, admin_user, admin_email, admin_password and php_version.")
+		if !slices.Contains(keys, key) {
+			only := strings.Join(keys, "")
+			if n := len(keys); n > 1 {
+				only = strings.Join(keys[:n-1], ", ") + " and " + keys[n-1]
+			}
+			operator.WriteError(w, 422, "invalid_request", "The request has a field this form does not use. Send only "+only+".")
 			return false
 		}
 		if seen[key] {

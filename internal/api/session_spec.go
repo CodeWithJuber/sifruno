@@ -136,6 +136,9 @@ func documentOperator(a huma.API) {
 			if isWizardPath(path) {
 				op.Description = "Authenticated WordPress website job. The POST checks the request (exactly the six keys, each once, at most 4 KiB; 422 names the field), starts a background job and answers 202; the job creates the hosting account, puts its site live, creates the database and installs WordPress through the root broker and the database service, and on a failure removes what it created, newest first. Poll the job by ID. Job records hold no passwords. Sites are plain HTTP for now; certificates are a later slice."
 			}
+			if isSiteDatabasePath(path) {
+				op.Description = "Authenticated database management for one website. The owner is the account service's username for the account in the address, never a name from the request; names are <username>_<suffix>, and a name that belongs to another website answers 404 like one that does not exist. Each POST takes exactly its own keys, each once, each text, at most 4 KiB. Passwords go to the database server only: they are never stored, logged or returned, and error text is scrubbed of them. Deleting a database leaves its users in place."
+			}
 			op.Security = readSecurity
 			if op.Method != http.MethodGet {
 				op.Security = writeSecurity

@@ -47,6 +47,9 @@ type Options struct {
 	// Wizard runs the "create a WordPress site" jobs. Nil answers 503 on the
 	// /api/v1/websites routes.
 	Wizard *wizard.Runner
+	// Databases manages a site's databases and database users. Nil answers
+	// 503 on the /api/v1/websites/sites/{account_id}/databases routes.
+	Databases Databases
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -73,6 +76,7 @@ func New(o Options) http.Handler {
 	registerAccounts(api, o)
 	registerWizard(api, o)
 	registerWebsites(api, o)
+	registerSiteDatabases(api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)
@@ -241,7 +245,7 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedSessionMutation(r)
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedSessionMutation(r)
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -303,7 +307,12 @@ func New(o Options) http.Handler {
 				return
 			}
 			if mutation {
-				if !prepareWizardJSON(w, r) {
+				// Each POST has its own keys: the wizard's, or a database route's.
+				prepare := prepareWizardJSON
+				if allowedDatabaseMutation(r) {
+					prepare = prepareDatabaseJSON
+				}
+				if !prepare(w, r) {
 					return
 				}
 				actor, ok = o.Operator.Authorize(w, r, true)

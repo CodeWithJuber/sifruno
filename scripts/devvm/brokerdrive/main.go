@@ -32,7 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|domains|show-domains|secure|wordpress|public-html|delete|cron|set-cron|log|usage|usage-all|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|domains|show-domains|secure|wordpress|public-html|delete|cron|set-cron|log|usage|usage-all|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune|files-list|files-read|files-write|files-upload|files-download|files-mkdir|files-rename|files-delete|files-mode [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -52,6 +52,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		timeout = 6 * time.Minute
 	case "backup", "restore", "drill", "prune":
 		timeout = 125 * time.Minute
+	case "files-list", "files-read", "files-write", "files-mkdir", "files-rename", "files-delete", "files-mode":
+		timeout = 3 * time.Minute
+	case "files-upload", "files-download":
+		timeout = 16 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -101,6 +105,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	acmeTestProbeLoopback := command.Bool("acme-test-probe-loopback", false, "Let the alias probe connect to loopback addresses, for Pebble on this machine (secure)")
 	acmeState := command.String("acme-state", "", "Private folder for the ACME account key (secure)")
 	acmeEmail := command.String("acme-email", "", "ACME account contact (secure)")
+	filePath := command.String("file-path", "", "Path in the account's home (files-*)")
+	fileTo := command.String("file-to", "", "New path in the home (files-rename)")
+	fileMode := command.String("file-mode", "", "Permission bits such as 0644 (files-mode)")
+	contentFile := command.String("content-file", "", "File whose text is written (files-write)")
+	fileVersion := command.String("file-version", "", "Version the write expects, from files-read (files-write)")
+	from := command.String("from", "", "Local file or pipe to upload (files-upload)")
+	size := command.Int64("size", -1, "Bytes to upload; default the size of --from (files-upload)")
+	overwrite := command.Bool("overwrite", false, "Let the upload replace a file (files-upload)")
+	to := command.String("to", "", "Local file that receives a download (files-download)")
 	var keyFiles multiFlag
 	command.Var(&keyFiles, "key-file", "Public key file to install (ssh-keys); repeat for several, omit all to remove access. With certificate: the PEM private key, once")
 	if command.Parse(global.Args()[1:]) != nil || command.NArg() != 0 {
@@ -323,6 +336,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "broker refused: backup %s step failed: %s\n", failed.Step, failed.Detail)
 			return 1
 		}
+	case "files-list", "files-read", "files-write", "files-upload", "files-download", "files-mkdir", "files-rename", "files-delete", "files-mode":
+		files, ok := service.(hostaccounts.FilesService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no file surface")
+			return 1
+		}
+		result, err = runFiles(ctx, files, global.Arg(0), *id, *actor, fileArgs{path: *filePath, to: *fileTo, mode: *fileMode, content: *contentFile, version: *fileVersion, from: *from, size: *size, overwrite: *overwrite, out: *to})
+		var failed *hostaccounts.FileError
+		if errors.As(err, &failed) {
+			fmt.Fprintf(stderr, "broker refused: file operation failed: %s\n", failed.Code)
+			return 1
+		}
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", global.Arg(0))
 		return 2
@@ -337,6 +362,68 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+type fileArgs struct {
+	path, to, mode, content, version, from, out string
+	size                                        int64
+	overwrite                                   bool
+}
+
+// runFiles runs one file operation; the account's helper does the work as
+// the site's user. A read prints the text in the answer; a download writes
+// the bytes to --to and prints the entry.
+func runFiles(ctx context.Context, files hostaccounts.FilesService, op, id, actor string, a fileArgs) (any, error) {
+	switch op {
+	case "files-list":
+		return files.ListFiles(ctx, id, a.path, actor)
+	case "files-read":
+		return files.ReadFile(ctx, id, a.path, actor)
+	case "files-write":
+		text, err := os.ReadFile(a.content)
+		if err != nil {
+			return nil, err
+		}
+		return files.WriteFile(ctx, id, hostaccounts.FileWriteInput{Path: a.path, Content: string(text), ExpectedVersion: a.version}, actor)
+	case "files-upload":
+		in, err := os.Open(a.from)
+		if err != nil {
+			return nil, err
+		}
+		defer in.Close()
+		if a.size < 0 {
+			info, err := in.Stat()
+			if err != nil {
+				return nil, err
+			}
+			a.size = info.Size()
+		}
+		return files.UploadFile(ctx, id, hostaccounts.FileUploadInput{Path: a.path, Size: a.size, Overwrite: a.overwrite}, in, actor)
+	case "files-download":
+		entry, body, err := files.DownloadFile(ctx, id, a.path, actor)
+		if err != nil {
+			return nil, err
+		}
+		defer body.Close()
+		out, err := os.OpenFile(a.out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = io.Copy(out, body); err != nil {
+			out.Close()
+			return nil, err
+		}
+		return entry, out.Close()
+	case "files-mkdir":
+		return files.MakeFolder(ctx, id, a.path, actor)
+	case "files-rename":
+		return files.RenameFile(ctx, id, a.path, a.to, actor)
+	case "files-delete":
+		return files.DeleteFile(ctx, id, a.path, actor)
+	case "files-mode":
+		return files.SetFileMode(ctx, id, a.path, a.mode, actor)
+	}
+	return nil, errors.New("unknown file command")
 }
 
 type multiFlag []string

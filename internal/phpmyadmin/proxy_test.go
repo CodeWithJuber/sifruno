@@ -39,7 +39,7 @@ func TestTheProxyStripsThePanelsCredentials(t *testing.T) {
 			origin = "https://panel.example.test:8443"
 		}
 		r := httptest.NewRequest("POST", origin+"/index.php?route=/sql", strings.NewReader("sql_query=SELECT+1"))
-		r.Header.Set("Cookie", PanelCookie+"=panel-session; phpMyAdmin=pma-session; pma_lang=en; "+AdmissionCookie+"=admitted")
+		r.Header.Set("Cookie", PanelCookie+"=panel-session; phpMyAdmin=pma-session; pma_lang=en; "+AdmissionCookie+"=admitted; wordpress_logged_in_x=site; PHPSESSID=other")
 		r.Header.Add("Cookie", "SifrunoPhpMyAdminSignon=signon; "+PanelCookie+"=second")
 		r.Header.Set("Authorization", "Bearer sfr_token")
 		r.Header.Set("Proxy-Authorization", "Basic eA==")
@@ -102,8 +102,10 @@ func TestTheProxyFiltersWhatPhpMyAdminAnswers(t *testing.T) {
 			PanelCookie + "=stolen; path=/api/v1; HttpOnly",
 			AdmissionCookie + "=forged; path=/; Secure",
 			"__Host-x=1; path=/; Secure",
-			"tossed=1; path=/api/v1",
-			"tossed2=1; path=/API",
+			"pma_tossed=1; path=/api/v1",
+			"pma_tossed2=1; path=/API",
+			"PHPSESSID=other; path=/",
+			"wordpress_test_cookie=1; path=/",
 			"pmaUser-1=deleted; expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; path=/",
 			"not a cookie",
 		} {

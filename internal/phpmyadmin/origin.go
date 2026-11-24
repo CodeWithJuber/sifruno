@@ -98,8 +98,8 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(AdmissionCookie); err == nil {
 		cookie = c.Value
 	}
-	// Neither the panel's cookie nor the admission cookie goes further.
-	dropOurCookies(r.Header)
+	// Only phpMyAdmin's own cookies go further.
+	keepPhpMyAdminCookies(r.Header)
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(requestWait))
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(requestWait))
 

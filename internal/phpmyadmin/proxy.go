@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -113,21 +114,29 @@ func stripRequest(h http.Header, https bool) {
 	for _, name := range strippedRequest {
 		h.Del(name)
 	}
-	dropOurCookies(h)
+	keepPhpMyAdminCookies(h)
 	if https {
 		h.Set("X-Forwarded-Proto", "https")
 	}
 }
 
-// dropOurCookies removes the panel's session cookie and the admission cookie
-// from a request's Cookie header and keeps the rest as sent.
-func dropOurCookies(h http.Header) {
+// phpMyAdminCookie is the allow list of cookie names phpMyAdmin and its
+// sign-in script use: the signon session, phpMyAdmin's session
+// (phpMyAdmin, phpMyAdmin_https) and its pma* settings. Every other cookie
+// the browser holds for this host name (the panel's, the admission cookie,
+// a website's on the same name) stays out of PHP's reach, and phpMyAdmin may
+// set no other.
+var phpMyAdminCookie = regexp.MustCompile(`^(SifrunoPhpMyAdminSignon|phpMyAdmin[A-Za-z0-9_-]*|pma[A-Za-z0-9_-]*)$`)
+
+// keepPhpMyAdminCookies keeps only phpMyAdminCookie's names in a request's
+// Cookie header, as sent.
+func keepPhpMyAdminCookies(h http.Header) {
 	cookies := []string{}
 	for _, line := range h.Values("Cookie") {
 		for _, part := range strings.Split(line, ";") {
 			part = strings.TrimSpace(part)
 			name, _, _ := strings.Cut(part, "=")
-			if name = strings.TrimSpace(name); part == "" || name == PanelCookie || name == AdmissionCookie {
+			if part == "" || !phpMyAdminCookie.MatchString(strings.TrimSpace(name)) {
 				continue
 			}
 			cookies = append(cookies, part)
@@ -162,13 +171,14 @@ func filterResponse(h http.Header, https bool, upstream string) {
 }
 
 // allowedCookie is a Set-Cookie line as the browser may get it, or "" when
-// it must not be set: unreadable, the panel's or the admission cookie, a
-// prefixed name (only the origin sets those), or one for /api, which the
-// browser would also send to the panel's API on its own port. A missing path
+// it must not be set: unreadable, a name outside phpMyAdminCookie (the
+// panel's, the admission cookie and every prefixed name among them), or one
+// for /api, which the browser would also send to the panel's API on its own
+// port. A missing path
 // becomes /, and the domain is always this host only.
 func allowedCookie(line string, https bool) string {
 	c, err := http.ParseSetCookie(line)
-	if err != nil || c.Name == PanelCookie || c.Name == AdmissionCookie || strings.HasPrefix(c.Name, "__Host-") || strings.HasPrefix(c.Name, "__Secure-") {
+	if err != nil || !phpMyAdminCookie.MatchString(c.Name) {
 		return ""
 	}
 	if !strings.HasPrefix(c.Path, "/") {

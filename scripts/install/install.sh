@@ -36,6 +36,7 @@ readonly SSHD_DROPIN=/etc/ssh/sshd_config.d/40-sifruno.conf
 readonly BROKER_UNIT=sifruno-broker.service
 readonly PANEL_UNIT=sifruno.service
 readonly UNIT_DIR=/etc/systemd/system
+readonly LIMITS_FILE=/etc/security/limits.d/90-sifruno-accounts.conf
 readonly PACKAGES=(openlitespeed
   lsphp83 lsphp83-common lsphp83-mysqlnd lsphp83-gd lsphp83-mbstring lsphp83-xml
   lsphp83-opcache lsphp83-intl lsphp83-zip lsphp83-process lsphp83-bcmath lsphp83-pdo
@@ -805,6 +806,67 @@ step_openlitespeed() {
   changed "OpenLiteSpeed: Sifruno's include and namespace isolation added (backup: $OLS_BACKUP)"
 }
 
+# Prints OpenLiteSpeed's config (file $1) with "cgroups 1" in its CGIRLimit
+# block: the line replaced where it is, added before the block's end
+# otherwise, or a block appended when there is none. 1 lets a vhost turn
+# cgroups on (the broker's vhosts do): lscgid then starts the site's PHP in
+# its account's user-<uid>.slice, under the limits the broker writes there.
+ols_with_cgroups() {
+  awk '
+    /^CGIRLimit[[:space:]]*\{/ { inblock = 1; seen = 1; print; next }
+    inblock && /^[[:space:]]*cgroups[[:space:]]/ { if (!done) print "  cgroups                 1"; done = 1; next }
+    inblock && /^\}/ { if (!done) print "  cgroups                 1"; done = 1; inblock = 0; print; next }
+    { print }
+    END { if (!seen) { print ""; print "CGIRLimit  {"; print "  cgroups                 1"; print "}" } }
+  ' "$1"
+}
+
+step_ols_cgroups() {
+  local next
+  next="$(ols_with_cgroups "$OLS_CONF")"
+  if [ "$next" = "$(cat "$OLS_CONF")" ]; then
+    return 0
+  fi
+  [ -n "$OLS_BACKUP" ] || OLS_BACKUP="$(backup_file "$OLS_CONF")"
+  printf '%s\n' "$next" > "$OLS_CONF.new"
+  chown --reference="$OLS_CONF" "$OLS_CONF.new"
+  chmod --reference="$OLS_CONF" "$OLS_CONF.new"
+  mv -f -- "$OLS_CONF.new" "$OLS_CONF"
+  relabel "$OLS_CONF"
+  # A running OpenLiteSpeed reads it at its graceful restart.
+  if systemctl is-active --quiet lsws; then
+    systemctl reload lsws
+  fi
+  changed "OpenLiteSpeed: cgroups 1 in CGIRLimit, so each site's PHP runs in its account's user slice (backup: $OLS_BACKUP)"
+}
+
+# Every hosting account's UID (the broker allocates 20000 to 60000) may have
+# at most 100 tasks in any PAM session: SFTP, cron, su or runuser. pam_limits
+# sets RLIMIT_NPROC, which the kernel counts over all of the UID's tasks on
+# the host, so a fork loop stops at fork(). The broker's default is the same
+# 100 for each account's user slice (TasksMax).
+limits_policy() {
+  cat <<'POLICY'
+# Written by Sifruno's installer: at most 100 processes (threads count) for
+# each hosting account's UID in every PAM session. The account broker gives
+# each account a UID from 20000 to 60000 and its own user slice limits.
+20000:60000  soft  nproc  100
+20000:60000  hard  nproc  100
+POLICY
+}
+
+step_limits() {
+  if limits_policy | cmp -s - "$LIMITS_FILE" 2>/dev/null; then
+    return 0
+  fi
+  limits_policy > "$LIMITS_FILE.new"
+  chown root:root "$LIMITS_FILE.new"
+  chmod 0644 "$LIMITS_FILE.new"
+  mv -f -- "$LIMITS_FILE.new" "$LIMITS_FILE"
+  relabel "$LIMITS_FILE"
+  changed "process limit for hosting accounts written to $LIMITS_FILE (new sessions get it)"
+}
+
 step_wpcli() {
   local target="$PREFIX/wp-cli.phar" tmp
   ensure_dir root root 0755 "$PREFIX"
@@ -1228,6 +1290,11 @@ TEXT
     echo "       No backup found: the installer has not changed this file."
   fi
   cat <<TEXT
+  5. Process limit for hosting accounts in PAM sessions: $LIMITS_FILE
+       rm $LIMITS_FILE
+     The broker's per-account slice limits are in
+     $UNIT_DIR/user-<uid>.slice.d/50-sifruno-limits.conf; with the broker
+     stopped, remove those files and run systemctl daemon-reload.
   Packages, the $PANEL_USER user, websites and databases stay. Remove them by
   hand if you want them gone.
 TEXT
@@ -1251,6 +1318,8 @@ main() {
   step "Set passwd, group and shadow in $NSSWITCH to files (backup, check, automatic rollback)" step_nsswitch
   step "Write the sshd policy $SSHD_DROPIN (backup, sshd -t, automatic rollback, reload)" step_sshd
   step "Add Sifruno's include, namespace isolation and the cache module to OpenLiteSpeed's config (backup)" step_openlitespeed
+  step "Let each site's PHP run in its account's user slice: cgroups 1 in OpenLiteSpeed's CGIRLimit (backup)" step_ols_cgroups
+  step "Limit each hosting account to 100 processes in PAM sessions: $LIMITS_FILE" step_limits
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
   step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
   step "Enable and start MariaDB and OpenLiteSpeed" step_services

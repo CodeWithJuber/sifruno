@@ -78,11 +78,18 @@ type record struct {
 	// changes. Strings, so a record stays comparable.
 	Domains     string `json:"domains,omitempty"`
 	DomainsNext string `json:"domains_next,omitempty"`
+	// Folders is a migrated site's protected folders in canonical form
+	// (empty: none; see encodeFolders in folders.go). FoldersNext is what an
+	// unfinished folders operation installs, durable before the config
+	// changes and after its realm user files were written.
+	Folders     string `json:"folders,omitempty"`
+	FoldersNext string `json:"folders_next,omitempty"`
 }
 
-// maxRecordBytes bounds one stored record: the account, the SFTP keys and
-// two sets of site domains (the recorded one and one being installed).
-const maxRecordBytes = 160 << 10
+// maxRecordBytes bounds one stored record: the account, the SFTP keys, two
+// sets of site domains (the recorded one and one being installed) and two
+// sets of protected folders; only one operation is pending at a time.
+const maxRecordBytes = 224 << 10
 
 type nativeSystem interface {
 	// siteToolsSystem writes crontabs and reads logs, quotas and traffic
@@ -177,6 +184,13 @@ type nativeSystem interface {
 	// in it, without following a link. A store that is not there is no
 	// error.
 	RemoveSiteCache(ctx context.Context, id string) error
+	// WriteSiteRealms makes the site's directory in olsweb.RealmRoot hold
+	// exactly these realm user files (path: bytes), root's own and readable
+	// by the web server user alone, written without following a link.
+	WriteSiteRealms(ctx context.Context, site string, files map[string][]byte) error
+	// RemoveSiteRealms removes the site's directory in olsweb.RealmRoot and
+	// everything in it, without following a link. None there is no error.
+	RemoveSiteRealms(ctx context.Context, site string) error
 	// SyncLimits makes the drop-ins match want, one per account UID, removes
 	// the broker's drop-in of every other account-range UID, and reloads
 	// systemd once if anything changed.
@@ -357,7 +371,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron" || r.Pending.Action == "domains"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron" || r.Pending.Action == "domains" || r.Pending.Action == "folders"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -378,6 +392,8 @@ func (s *store) records() ([]record, error) {
 					validTarget = cronDigestPattern.MatchString(r.Pending.Target)
 				case "domains":
 					validTarget = domainsDigestPattern.MatchString(r.Pending.Target) && validStoredDomains(r.Account.Domain, r.DomainsNext) && r.Pending.Target == domainsDigest(r.DomainsNext)
+				case "folders":
+					validTarget = foldersDigestPattern.MatchString(r.Pending.Target) && r.FoldersNext != "" && validStoredFolders(r.Account.ID, r.FoldersNext) && r.Pending.Target == foldersDigest(r.FoldersNext)
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
@@ -401,6 +417,9 @@ func (s *store) records() ([]record, error) {
 			// Like Web, the list fills SiteDomains in; a stored account never
 			// carries it.
 			if !validStoredDomains(r.Account.Domain, r.Domains) || (r.DomainsNext != "" && (r.Pending == nil || r.Pending.Action != "domains")) || r.Account.SiteDomains != nil {
+				return ErrRecovery
+			}
+			if !validStoredFolders(r.Account.ID, r.Folders) || (r.FoldersNext != "" && (r.Pending == nil || r.Pending.Action != "folders")) {
 				return ErrRecovery
 			}
 			if verifyHistory(tx, r) != nil {
@@ -557,6 +576,11 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					return ErrRecovery
 				}
 				continue
+			} else if r.Pending.Action == "folders" {
+				if s.finishFolders(ctx, items, r) != nil {
+					return ErrRecovery
+				}
+				continue
 			} else if r.Pending.Action == "plan" {
 				// Finish the interrupted plan change: its limits were durable
 				// before the slice drop-in changed, and applying them is
@@ -649,6 +673,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				}
 				s.removeLimits(ctx, r.Account.UID)
 				s.removeSiteCache(ctx, r.Account.ID)
+				s.removeSiteRealms(ctx, r.Account.ID)
 				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
 					return ErrRecovery
 				}
@@ -1109,6 +1134,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	}
 	s.removeLimits(ctx, r.Account.UID)
 	s.removeSiteCache(ctx, r.Account.ID)
+	s.removeSiteRealms(ctx, r.Account.ID)
 	operation := *r.Pending
 	r.Pending = nil
 	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {

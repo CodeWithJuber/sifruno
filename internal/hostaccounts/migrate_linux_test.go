@@ -17,6 +17,7 @@ import (
 
 	"sifruno/internal/cpsource"
 	"sifruno/internal/htaccess"
+	"sifruno/internal/olsweb"
 )
 
 // fakeSource stands in for ssh, ssh-keyscan, rsync, cp and the MariaDB
@@ -220,8 +221,12 @@ func TestMigrateFilesStagesAsRootAndCopiesAsTheSiteUser(t *testing.T) {
 		"public_html/.htaccess":     "RewriteEngine On\nRewriteRule ^old$ /new [R=301,L]\n",
 	}
 	l := backupLeftover{Op: strings.Repeat("1", 32)}
-	got, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 10, l)
-	if err != nil || !got.WordPress {
+	noFolders := func(SiteProtection) error {
+		t.Fatal("protect ran for a site without protected folders")
+		return nil
+	}
+	got, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 10, l, noFolders)
+	if err != nil || !got.WordPress || len(got.Folders) != 0 || len(got.Probes) != 0 {
 		t.Fatalf("files: %+v %v", got, err)
 	}
 	var rsync, cp *ranCommand
@@ -312,6 +317,15 @@ func TestRsyncSenderRunsAsTheAccount(t *testing.T) {
 	}
 }
 
+// noProtection is the protect step of a copy whose site has no protected
+// folders: it must not run.
+func noProtection(t *testing.T) func(SiteProtection) error {
+	return func(SiteProtection) error {
+		t.Error("protect ran for a site without protected folders")
+		return nil
+	}
+}
+
 // What the account may not read on the source stops the copy (rsync 23)
 // with a plain reason; nothing reaches the home.
 func TestUnreadableSourceFilesStopTheCopy(t *testing.T) {
@@ -325,7 +339,7 @@ func TestUnreadableSourceFilesStopTheCopy(t *testing.T) {
 		}
 		return run(ctx, c)
 	}
-	_, err := m.Files(context.Background(), rec, "/home/fixtureacct", engineRecord(filepath.Dir(m.e.dir)), 1, backupLeftover{Op: strings.Repeat("9", 32)})
+	_, err := m.Files(context.Background(), rec, "/home/fixtureacct", engineRecord(filepath.Dir(m.e.dir)), 1, backupLeftover{Op: strings.Repeat("9", 32)}, noProtection(t))
 	var failed *MigrationError
 	if !errors.As(err, &failed) || failed.Step != "fetch" || !strings.Contains(failed.Detail, "cannot be read by the account itself") {
 		t.Fatalf("refusal: %v", err)
@@ -347,7 +361,7 @@ func TestMigrateFilesKeepsTheOldServersModes(t *testing.T) {
 	f.realCopy = true
 	f.home = map[string]string{"public_html/wp-config.php": "<?php", "public_html/index.php": "<?php", "public_html/private/notes.txt": "n", "bin/run.sh": "#!/bin/sh"}
 	f.modes = map[string]os.FileMode{"public_html/wp-config.php": 0600, "public_html/private": 0700, "public_html/private/notes.txt": 0600, "bin/run.sh": 0700, "public_html": 0700}
-	if _, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 1, backupLeftover{Op: strings.Repeat("a", 31) + "b"}); err != nil {
+	if _, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 1, backupLeftover{Op: strings.Repeat("a", 31) + "b"}, noProtection(t)); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]os.FileMode{
@@ -376,16 +390,26 @@ func TestMigrateFilesKeepsTheOldServersModes(t *testing.T) {
 }
 
 func TestMigrateFilesRefusesWhatOpenLiteSpeedWouldOpen(t *testing.T) {
+	password := "AuthType Basic\nAuthName x\nAuthUserFile /home/fixtureacct/.htpasswds/p\nRequire valid-user\n"
 	for name, home := range map[string]map[string]string{
-		"password folder": {"public_html/index.php": "x", "public_html/staff/.htaccess": "AuthType Basic\nAuthName x\nAuthUserFile /home/u/.htpasswds/p\nRequire valid-user\n"},
-		"home .htaccess":  {"public_html/index.php": "x", ".htaccess": "Deny from all\n"},
-		"linked docroot":  {"public_html": "->/etc"},
+		"user file outside the home": {"public_html/index.php": "x", "public_html/staff/.htaccess": "AuthType Basic\nAuthName x\nAuthUserFile /home/u/.htpasswds/p\nRequire valid-user\n"},
+		"user file missing":          {"public_html/index.php": "x", "public_html/staff/.htaccess": password},
+		"user file a link":           {"public_html/index.php": "x", "public_html/staff/.htaccess": password, ".htpasswds/p": "->/etc/shadow"},
+		"plain-text password":        {"public_html/index.php": "x", "public_html/staff/.htaccess": password, ".htpasswds/p": "bob:secret\n"},
+		"satisfy any":                {"public_html/index.php": "x", "public_html/staff/.htaccess": "Deny from all\nSatisfy Any\n"},
+		"unknown directive":          {"public_html/index.php": "x", "public_html/staff/.htaccess": "Deny from all\nFoo bar\n"},
+		"home .htaccess":             {"public_html/index.php": "x", ".htaccess": "Deny from all\n"},
+		"linked docroot":             {"public_html": "->/etc"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, f, _ := testMigrator(t)
 			rec := openedRecord(t, m)
 			f.home = home
-			_, err := m.Files(context.Background(), rec, "/home/fixtureacct", engineRecord(filepath.Dir(m.e.dir)), 1, backupLeftover{Op: strings.Repeat("2", 32)})
+			protect := func(SiteProtection) error {
+				t.Fatal("protect ran for a refused site")
+				return nil
+			}
+			_, err := m.Files(context.Background(), rec, "/home/fixtureacct", engineRecord(filepath.Dir(m.e.dir)), 1, backupLeftover{Op: strings.Repeat("2", 32)}, protect)
 			var failed *MigrationError
 			if !errors.As(err, &failed) || (failed.Step != "tier" && failed.Step != "copy") {
 				t.Fatalf("refusal: %v", err)
@@ -397,6 +421,66 @@ func TestMigrateFilesRefusesWhatOpenLiteSpeedWouldOpen(t *testing.T) {
 	}
 }
 
+// TestMigrateFilesProtectsBeforeCopy: a WordPress site with Akismet's
+// .htaccess and a password folder converts; protect gets the folders and
+// the normalized user file before cp makes the files reachable, and the
+// answer lists the folders and the URLs verify checks, open files included.
+func TestMigrateFilesProtectsBeforeCopy(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	rec := openedRecord(t, m)
+	r := engineRecord(filepath.Dir(m.e.dir))
+	akismet, err := os.ReadFile("../htaccess/testdata/akismet-5.7.2.htaccess")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := "$apr1$x1Y2z3$abcdefghijklmnopqrstuv"
+	f.home = map[string]string{
+		"public_html/index.php":                                   "x",
+		"public_html/.htaccess":                                   "RewriteEngine On\nRewriteRule ^old$ /new [R=301,L]\n",
+		"public_html/wp-content/plugins/akismet/.htaccess":        string(akismet),
+		"public_html/wp-content/plugins/akismet/akismet.php":      "<?php",
+		"public_html/wp-content/plugins/akismet/_inc/akismet.css": "a{}",
+		"public_html/wp-content/plugins/akismet/_inc/form.js":     "1",
+		"public_html/members/.htaccess":                           "AuthType Basic\nAuthName \"Members only\"\nAuthUserFile /home/fixtureacct/.htpasswds/public_html/members/passwd\nRequire valid-user\n",
+		"public_html/members/index.html":                          "members",
+		".htpasswds/public_html/members/passwd":                   "# users\nalice:" + hash + "\n",
+	}
+	var got SiteProtection
+	cpBefore := false
+	protect := func(p SiteProtection) error {
+		got = p
+		cpBefore = slices.ContainsFunc(f.ran, func(c ranCommand) bool { return c.path == cpPath })
+		return nil
+	}
+	res, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 10, backupLeftover{Op: strings.Repeat("7", 32)}, protect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cpBefore || !slices.ContainsFunc(f.ran, func(c ranCommand) bool { return c.path == cpPath }) {
+		t.Fatal("cp ran before the folders were protected, or not at all")
+	}
+	site := siteName(r.Account.ID)
+	if len(got.Folders) != 2 || got.Folders[0].Path != "/members/" || got.Folders[0].Realm == nil || got.Folders[0].Realm.UserFile != olsweb.RealmFile(site, 1) ||
+		got.Folders[1].Path != "/wp-content/plugins/akismet/" || got.Folders[1].Hosts != olsweb.HostsNone || len(got.Folders[1].Allow) != 15 {
+		t.Fatalf("folders %+v", got.Folders)
+	}
+	if string(got.Users[olsweb.RealmFile(site, 1)]) != "alice:"+hash+"\n" || len(got.Users) != 1 {
+		t.Fatalf("users %q", got.Users)
+	}
+	if err := olsweb.CheckFolders(site, got.Folders); err != nil {
+		t.Fatal(err)
+	}
+	wantProbes := []MigrationProbe{
+		{Path: "/members/", Kind: "auth"},
+		{Path: "/wp-content/plugins/akismet/", Kind: "deny"},
+		{Path: "/wp-content/plugins/akismet/_inc/akismet.css", Kind: "allow"},
+		{Path: "/wp-content/plugins/akismet/_inc/form.js", Kind: "allow"},
+	}
+	if !slices.Equal(res.Probes, wantProbes) || len(res.Folders) != 2 || res.Folders[1].File != "wp-content/plugins/akismet/.htaccess" {
+		t.Fatalf("result %+v", res)
+	}
+}
+
 func TestPreflightScansOnlyHtaccess(t *testing.T) {
 	m, f, _ := testMigrator(t)
 	rec := openedRecord(t, m)
@@ -405,8 +489,9 @@ func TestPreflightScansOnlyHtaccess(t *testing.T) {
 	if err != nil || home || site.Verdict != htaccess.VerdictCompat {
 		t.Fatalf("preflight: %+v %v %v", site, home, err)
 	}
-	if probes := probesOf(site); !slices.Contains(probes, MigrationProbe{Path: "/staff/", Kind: "auth"}) {
-		t.Fatalf("probes %v", probes)
+	conv := htaccess.ConvertSite(site)
+	if probes := foldersProbes(conv.Rules); !conv.Native || !slices.Contains(probes, MigrationProbe{Path: "/staff/", Kind: "auth"}) {
+		t.Fatalf("conversion %+v probes %v", conv, probes)
 	}
 	f.home = map[string]string{"public_html/index.php": "x"}
 	site, _, err = m.Preflight(context.Background(), rec, "/home/fixtureacct", backupLeftover{Op: strings.Repeat("4", 32)})

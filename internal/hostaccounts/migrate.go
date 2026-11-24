@@ -103,8 +103,9 @@ type MigrationPlanInput struct {
 	Reason   string `json:"reason"`
 }
 
-// MigrationProbe is a closed URL the old site answers 401 (auth) or 403
-// (deny) for, from the .htaccess scan.
+// MigrationProbe is a URL from the converted .htaccess rules that verify
+// checks on both sites: 401 (auth), 403 (deny), or 200 for a file a closed
+// folder leaves open to everyone (allow).
 type MigrationProbe struct {
 	Path string `json:"path"`
 	Kind string `json:"kind"`
@@ -128,8 +129,13 @@ type MigrationPlan struct {
 	CronSkipped   []string                `json:"cron_skipped"`
 	Tier          string                  `json:"tier"`
 	TierCauses    []string                `json:"tier_causes"`
-	Probes        []MigrationProbe        `json:"probes"`
-	Htaccess      int                     `json:"htaccess_files"`
+	// Converted lists the .htaccess files whose access rules were converted
+	// for OpenLiteSpeed (Native includes them); TierRefusals says, file by
+	// file, why a site is not Native.
+	Converted    []MigrationFolder `json:"converted"`
+	TierRefusals []string          `json:"tier_refusals"`
+	Probes       []MigrationProbe  `json:"probes"`
+	Htaccess     int               `json:"htaccess_files"`
 }
 
 // MigrateFilesInput copies the source account of the same name into the
@@ -141,9 +147,13 @@ type MigrateFilesInput struct {
 }
 
 // MigrateFilesResult says whether the copy holds a WordPress site
-// (wp-config.php in public_html or the home).
+// (wp-config.php in public_html or the home), which protected folders its
+// .htaccess files were converted to, now in the site's web server config,
+// and the URLs verify checks for them, open files among them.
 type MigrateFilesResult struct {
-	WordPress bool `json:"wordpress"`
+	WordPress bool              `json:"wordpress"`
+	Folders   []MigrationFolder `json:"folders"`
+	Probes    []MigrationProbe  `json:"probes"`
 }
 
 // MigrateDatabaseInput copies one source database of the account into the

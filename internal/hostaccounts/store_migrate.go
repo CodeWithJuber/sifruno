@@ -71,8 +71,10 @@ type migrateEngine interface {
 	// above public_html, has one.
 	Preflight(ctx context.Context, m migrationRecord, sourceHome string, l backupLeftover) (site htaccess.SiteResult, home bool, err error)
 	// Files copies the source home into the account's home: rsync as root
-	// into a fresh staging folder, then cp as the site's user.
-	Files(ctx context.Context, m migrationRecord, sourceHome string, r record, needMiB int64, l backupLeftover) (MigrateFilesResult, error)
+	// into a fresh staging folder, then cp as the site's user. When the
+	// copy's .htaccess files convert to protected folders, protect puts
+	// them live before cp runs; its error stops the copy.
+	Files(ctx context.Context, m migrationRecord, sourceHome string, r record, needMiB int64, l backupLeftover, protect func(SiteProtection) error) (MigrateFilesResult, error)
 	// Database dumps one database on the source into staging and loads it
 	// as the site's user through l's temporary MariaDB user, then compares
 	// every table's rows.
@@ -588,7 +590,8 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 		return MigrationPlan{}, err
 	}
 	plan := MigrationPlan{Username: account.User, Domain: account.Domain, Aliases: site.Aliases, WWW: site.WWW, DiskUsedMiB: account.DiskUsedMiB, DiskLimitMiB: account.DiskLimitMiB,
-		Databases: []cpsource.Database{}, Users: []cpsource.DatabaseUser{}, GrantsSkipped: []string{}, Cron: []cpsource.CronLine{}, CronSkipped: []string{}, Probes: []MigrationProbe{}, TierCauses: []string{}}
+		Databases: []cpsource.Database{}, Users: []cpsource.DatabaseUser{}, GrantsSkipped: []string{}, Cron: []cpsource.CronLine{}, CronSkipped: []string{}, Probes: []MigrationProbe{}, TierCauses: []string{},
+		Converted: []MigrationFolder{}, TierRefusals: []string{}}
 	out, err := s.remote(work, m, cpsource.VhostPHPCommand(), nil)
 	if err != nil {
 		return MigrationPlan{}, err
@@ -684,8 +687,9 @@ func (s *store) planCron(ctx context.Context, m migrationRecord, plan *Migration
 }
 
 // planTier fetches the site's .htaccess files into a root-only staging
-// folder and scans them. Only a Native site may go live on OpenLiteSpeed;
-// the panel refuses the others (README, Migration).
+// folder, scans them and converts their access rules. Only a Native site,
+// converted rules included, may go live on OpenLiteSpeed; the panel refuses
+// the others (README, Migration).
 func (s *store) planTier(ctx context.Context, m migrationRecord, home string, plan *MigrationPlan) error {
 	s.backupMu.Lock()
 	defer s.backupMu.Unlock()
@@ -705,43 +709,40 @@ func (s *store) planTier(ctx context.Context, m migrationRecord, home string, pl
 	if err != nil {
 		return err
 	}
-	plan.Tier, plan.TierCauses = string(site.Verdict), append([]string{}, site.Causes...)
+	conv := htaccess.ConvertSite(site)
+	plan.Tier, plan.TierCauses = string(htaccess.VerdictNative), []string{}
+	if !conv.Native {
+		plan.Tier, plan.TierCauses = string(htaccess.VerdictCompat), append([]string{}, site.Causes...)
+		plan.TierRefusals = tierRefusals(conv)
+	}
 	if homeFile {
 		plan.Tier = string(htaccess.VerdictCompat)
 		plan.TierCauses = append(plan.TierCauses, "home_htaccess")
 	}
 	plan.Htaccess = len(site.Files)
-	plan.Probes = probesOf(site)
+	if plan.Tier == string(htaccess.VerdictNative) {
+		plan.Converted = migrationFolders(conv.Rules)
+		plan.Probes = foldersProbes(conv.Rules)
+	}
 	return nil
 }
 
-// probesOf turns the scan's access rules whose status it could promise
-// (401 or 403 for a whole folder, or one named file) into verify probes.
-func probesOf(site htaccess.SiteResult) []MigrationProbe {
-	out := []MigrationProbe{}
-	seen := map[string]bool{}
-	for _, f := range site.Files {
-		for _, rule := range f.AccessRules {
-			if rule.URLRegex != "" || rule.FilesRegex || (rule.ExpectStatus != 401 && rule.ExpectStatus != 403 && rule.Files == "") {
-				continue
-			}
-			kind := "deny"
-			if rule.ExpectStatus == 401 || rule.Kind == htaccess.AccessPassword {
-				kind = "auth"
-			}
-			p := rule.Path
-			if rule.Files != "" {
-				if strings.ContainsAny(rule.Files, "/*?[") {
-					continue
-				}
-				p = strings.TrimSuffix(p, "/") + "/" + rule.Files
-			}
-			if !strings.HasPrefix(p, "/") || seen[p] || len(out) >= 500 {
-				continue
-			}
-			seen[p] = true
-			out = append(out, MigrationProbe{Path: p, Kind: kind})
+// tierRefusals says in plain words, at most 20 of them, why a site is not
+// Native: each file the converter refused, with its line.
+func tierRefusals(conv htaccess.SiteConversion) []string {
+	out := []string{}
+	for _, r := range conv.Refused {
+		if len(out) == 20 {
+			break
 		}
+		where := "the site"
+		if r.File != "" {
+			where = r.File
+			if r.Line > 0 {
+				where += fmt.Sprintf(" line %d", r.Line)
+			}
+		}
+		out = append(out, installDetail([]byte(where+": "+r.Reason)))
 	}
 	return out
 }
@@ -824,7 +825,22 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 		return MigrateFilesResult{}, err
 	}
 	defer s.finishLeftover(l)
-	result, err := s.migrate.Files(work, m, site.HomeDir, r, account.DiskUsedMiB, l)
+	// Protected folders go live, journaled, before the copy reaches the
+	// home: the account is busy for this copy, so setSiteFolders runs under
+	// the broker lock without another change in between.
+	protect := func(p SiteProtection) error {
+		switch err := s.setSiteFolders(work, id, p, actor, in.Reason); {
+		case err == nil:
+			return nil
+		case errors.Is(err, ErrWebRejected):
+			return &MigrationError{Step: "tier", Detail: "The web server's configuration test failed with the site's protected folders, so the files were not put into the site."}
+		case errors.Is(err, ErrInvalid):
+			return &MigrationError{Step: "tier", Detail: "The site's protected folders do not fit this server's limits, so the files were not put into the site."}
+		default:
+			return err
+		}
+	}
+	result, err := s.migrate.Files(work, m, site.HomeDir, r, account.DiskUsedMiB, l, protect)
 	if err != nil {
 		return MigrateFilesResult{}, err
 	}

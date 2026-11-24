@@ -1242,18 +1242,40 @@ root step. The design, with the owner's choices recorded from Jev on
   package, databases and users (which must carry the `<user>_` prefix),
   each user's hash and grants, its crontab, and the tier. For the tier
   rsync fetches only the `.htaccess` files of the home and public_html into
-  a root-only staging folder, and `internal/htaccess` scans them there.
-  The answer carries the hashes: the panel hands them to its database
-  service on standard input and records none.
-- Tier (Jev: refuse what is not Native, 0.96, over converting access rules
-  to OpenLiteSpeed or turning on the Apache tier here). Only OpenLiteSpeed
-  serves hosted accounts today. A site whose `.htaccess` holds anything
-  OpenLiteSpeed would ignore (access control, a password folder, a deny
-  rule, an unknown directive, or a `.htaccess` in the home above
-  public_html) is not put live, not even on the preview: OpenLiteSpeed
-  would open the protected folder. The panel stops before it creates
-  anything, and `migrate-files` scans the copied files again and refuses
-  before they reach the home.
+  a root-only staging folder, and `internal/htaccess` scans and converts
+  them there. The answer carries the hashes: the panel hands them to its
+  database service on standard input and records none.
+- Tier (Jev: refuse what is not Native, 0.96; then D-0003, 0.93: build a
+  fail-closed converter first). Only OpenLiteSpeed serves hosted accounts
+  today. Native means rewrite rules only, or access rules the converter
+  turns into OpenLiteSpeed config (`internal/htaccess` convert.go: deny
+  all, deny all with a `<Files>`/`<FilesMatch>` allow-list such as
+  Akismet's, IP lists, `<IfModule [!]mod_authz_core.c>` pairs that agree,
+  Basic password folders). The plan lists each converted file and what it
+  became (`converted`), or why a file was refused (`tier_refusals`). A site
+  with anything else OpenLiteSpeed would ignore (an unconverted access
+  rule, an unknown directive, a `.htaccess` below a converted folder or in
+  the home above public_html) is not put live, not even on the preview:
+  OpenLiteSpeed would open the protected folder. The panel stops before it
+  creates anything, and `migrate-files` scans and converts the copied files
+  again and refuses before they reach the home.
+- Protected folders (`folders.go`, needs human review). When the copy
+  converts, `migrate-files` puts the folders live before `cp` runs: each
+  realm's user file is read from the root-only staging copy by handle,
+  never following a link, must lie in the source home, and keeps only
+  `user:hash` lines whose hash both servers check alike (crypt hashes too:
+  Jev, 0.59); it is written root-owned to
+  `/var/lib/sifruno-realms/<site>/realmN.htpasswd`, readable by the web
+  server user alone through an ACL (Jev: root copy, 0.91, over reading the
+  tenant's file). Then the folders are journaled as one `folders`
+  operation and the site list is written, tested and reloaded, or the
+  files are removed and the copy stops (`tier`). olsweb renders one regex
+  context per folder with rewriting off inside it. The answer lists the
+  folders and the URLs verify checks: 403 for a closed folder, 401 for a
+  password folder, 200 for up to three real files a closed folder leaves
+  open. A delete removes the site's realm files. The folders are a
+  snapshot: a later edit of the tenant's `.htaccess` or user file changes
+  nothing.
 - `POST /v1/accounts/{id}/migrate-files` (`migration`,
   `expected_revision`, `reason`) copies as a restore does. The account must
   be active, at its revision, and its name the source account's; the
@@ -1316,7 +1338,8 @@ root step. The design, with the owner's choices recorded from Jev on
 
 Not in v1: IPv6 source addresses, the site's own certificate (the copy
 runs over http until DNS points here), parked and addon domains (listed,
-not added), and the Compat tier.
+not added), the Compat tier, and a panel page to change a converted
+password folder's users.
 
 Known gaps, found in review and not fixed in v1:
 
@@ -1329,13 +1352,16 @@ Known gaps, found in review and not fixed in v1:
 - A home holding files the account may not read (root's, another
   user's) cannot be moved until they are given to the account or removed
   on the old server.
-- WordPress's bundled Akismet plugin has an `.htaccess` with access rules,
-  so a WordPress site that keeps it scans as Compat and is refused.
 - Grants are copied as the narrower set: a grant on a name with an
   unescaped `_` covers that one database only, and one on a `%` pattern is
   left out (the job notes it).
 - A source host that resolves to a private (RFC 1918) address is
   accepted: admins move sites from their own private networks.
+- The plan fetches only `.htaccess` files, so a password folder whose user
+  file is missing, outside the home or holds a hash shape this server does
+  not keep plans as Native and is refused at the copy (`tier`).
+- A folder open to some addresses only is not probed by verify: its status
+  depends on the address verify runs from.
 
 ## Verification cost
 

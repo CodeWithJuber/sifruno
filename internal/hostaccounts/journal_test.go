@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -392,7 +393,8 @@ func TestOperatorKeepsRoomWhenCompactionCannotRun(t *testing.T) {
 // TestLargestRecordFits: the largest record the broker's inputs can make
 // stays inside maxRecordBytes, which records() holds every record to. Only
 // one operation is pending at a time, so one of the next fields is filled:
-// the largest, a domains set being installed. Every other field is at its
+// the largest, a domains set being installed, with a recorded folders set
+// at its bound too. Every other field is at its
 // bound, texts made of the character JSON escapes most, and the homes
 // directory as long as the broker admits it.
 func TestLargestRecordFits(t *testing.T) {
@@ -427,6 +429,7 @@ func TestLargestRecordFits(t *testing.T) {
 		TLS:     cert, LimitsNext: limits,
 		Cron:    strings.Repeat("c", 64),
 		Domains: domains, DomainsNext: domains,
+		Folders: largestFolders(t, id),
 	}
 	raw, err := json.Marshal(r)
 	if err != nil {
@@ -436,6 +439,29 @@ func TestLargestRecordFits(t *testing.T) {
 		t.Fatalf("the largest record takes %d bytes, more than the %d records() admits", len(raw), maxRecordBytes)
 	}
 	t.Logf("the largest record takes %d of %d bytes", len(raw), maxRecordBytes)
+}
+
+// largestFolders is a folders set as close to maxFoldersBytes as a valid
+// one gets: 32 folders, each with its longest path and 64 networks.
+func largestFolders(t *testing.T, id string) string {
+	t.Helper()
+	f := siteFolders{Users: map[string]string{}}
+	for i := 0; len(f.Folders) < olsweb.MaxFoldersPerSite; i++ {
+		folder := olsweb.Folder{Path: fmt.Sprintf("/%02d%s/%s/", i, strings.Repeat("p", 95), strings.Repeat("q", 95)), Hosts: olsweb.HostsOnly}
+		for n := 0; n < olsweb.MaxFolderNetworks; n++ {
+			folder.Networks = append(folder.Networks, fmt.Sprintf("2001:db8:%x::/48", 0x1000+n))
+		}
+		f.Folders = append(f.Folders, folder)
+		if !foldersSized(encodeFolders(f)) {
+			f.Folders = f.Folders[:len(f.Folders)-1]
+			break
+		}
+	}
+	encoded := encodeFolders(f)
+	if !validStoredFolders(id, encoded) {
+		t.Fatal("the folders fixture is not valid")
+	}
+	return encoded
 }
 
 // TestOversizedRecordIsNotStored: a record past the bound is refused before

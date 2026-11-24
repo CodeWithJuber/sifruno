@@ -113,6 +113,7 @@ func webSites(items []record, except string) []olsweb.Site {
 			Group:      r.Account.Username,
 			Domains:    append([]string{r.Account.Domain}, extra.Aliases...),
 			Redirects:  olswebRedirects(extra.Redirects),
+			Folders:    recordFolders(r),
 			DocRoot:    r.Account.PublicHTML,
 			PHPVersion: w.PHPVersion,
 			Suspended:  state == "suspended",

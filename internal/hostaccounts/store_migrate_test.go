@@ -28,6 +28,8 @@ type fakeMigrate struct {
 	files     []string
 	databases []string
 	failFiles error
+	// protection is what the copy converts to; Files hands it to protect.
+	protection SiteProtection
 }
 
 func newFakeMigrate() *fakeMigrate {
@@ -83,10 +85,16 @@ func (f *fakeMigrate) Remote(_ context.Context, m migrationRecord, command strin
 func (f *fakeMigrate) Preflight(context.Context, migrationRecord, string, backupLeftover) (htaccess.SiteResult, bool, error) {
 	return f.site, f.homeFile, nil
 }
-func (f *fakeMigrate) Files(_ context.Context, _ migrationRecord, home string, r record, _ int64, _ backupLeftover) (MigrateFilesResult, error) {
+func (f *fakeMigrate) Files(_ context.Context, _ migrationRecord, home string, r record, _ int64, _ backupLeftover, protect func(SiteProtection) error) (MigrateFilesResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	protection := f.protection
 	f.files = append(f.files, home+" -> "+r.Account.Username)
+	f.mu.Unlock()
+	if len(protection.Folders) > 0 {
+		if err := protect(protection); err != nil {
+			return MigrateFilesResult{}, err
+		}
+	}
 	return MigrateFilesResult{WordPress: true}, f.failFiles
 }
 func (f *fakeMigrate) Database(_ context.Context, _ migrationRecord, db string, _ record, l backupLeftover) (MigrateDatabaseResult, error) {
@@ -185,11 +193,25 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	if items, _ := s.leftovers(); len(items) != 0 || len(b.cleaned) != 1 {
 		t.Fatalf("the preflight's staging folder must be removed: %v %v", items, b.cleaned)
 	}
-	// An access rule sends the site to Compat.
-	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}}
+	// An access rule the converter takes stays Native, with the conversion
+	// and its probe in the plan.
+	closed := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{closed}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "compat" {
+	if err != nil || plan.Tier != "native" || len(plan.Converted) != 1 || plan.Converted[0].Path != "/private/" || !slices.Equal(plan.Probes, []MigrationProbe{{Path: "/private/", Kind: "deny"}}) {
+		t.Fatalf("converted: %+v %v", plan, err)
+	}
+	// One it refuses sends the site to Compat, saying why.
+	refused := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\nSatisfy Any\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{refused}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "compat" || len(plan.TierRefusals) != 1 || !strings.Contains(plan.TierRefusals[0], "private/.htaccess line 2") || len(plan.Converted) != 0 {
 		t.Fatalf("compat: %+v %v", plan, err)
+	}
+	// A verdict no file accounts for fails closed.
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}}
+	if plan, _ = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator"); plan.Tier != "compat" {
+		t.Fatalf("no file: %+v", plan)
 	}
 	f.site, f.homeFile = htaccess.SiteResult{Verdict: htaccess.VerdictNative}, true
 	if plan, _ = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator"); plan.Tier != "compat" || !slices.Contains(plan.TierCauses, "home_htaccess") {

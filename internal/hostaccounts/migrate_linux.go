@@ -269,7 +269,7 @@ func (m *migrator) room(need uint64) error {
 	return nil
 }
 
-func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, r record, needMiB int64, l backupLeftover) (MigrateFilesResult, error) {
+func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, r record, needMiB int64, l backupLeftover, protect func(SiteProtection) error) (MigrateFilesResult, error) {
 	if m.e.prepare() != nil || m.tools() != nil || r.Account.UID <= 0 || r.Account.GID <= 0 || needMiB < 0 || !validSourceHome(home) {
 		return MigrateFilesResult{}, ErrUnavailable
 	}
@@ -352,18 +352,36 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 		return MigrateFilesResult{}, ErrUnavailable
 	}
 	// The panel checked the tier from the source; the files as copied are
-	// checked again before they reach the home, so a site whose .htaccess
-	// changed meanwhile never goes live on OpenLiteSpeed.
+	// checked and converted again before they reach the home, so a site
+	// whose .htaccess changed meanwhile never goes live on OpenLiteSpeed
+	// with a rule it would ignore.
 	site, _, err := scanSite(stagePath + "/files/public_html")
 	if err != nil {
 		return MigrateFilesResult{}, err
 	}
 	var st unix.Stat_t
 	homeFile := unix.Fstatat(int(files.Fd()), ".htaccess", &st, unix.AT_SYMLINK_NOFOLLOW) == nil
-	if site.Verdict != htaccess.VerdictNative || homeFile {
-		return MigrateFilesResult{}, &MigrationError{Step: "tier", Detail: "The copied site's .htaccess files have rules OpenLiteSpeed does not act on, so the files were not put into the site."}
+	conv := htaccess.ConvertSite(site)
+	if !conv.Native || homeFile {
+		detail := "The copied site's .htaccess files have rules OpenLiteSpeed does not act on, so the files were not put into the site."
+		if refusals := tierRefusals(conv); len(refusals) > 0 {
+			detail += " First: " + refusals[0]
+		}
+		return MigrateFilesResult{}, &MigrationError{Step: "tier", Detail: installDetail([]byte(detail))}
 	}
-	wordpress := regularAt(files, "public_html/wp-config.php") || regularAt(files, "wp-config.php")
+	result := MigrateFilesResult{Folders: migrationFolders(conv.Rules), Probes: foldersProbes(conv.Rules)}
+	if len(conv.Rules) > 0 {
+		p, err := readProtection(files, home, siteName(r.Account.ID), conv.Rules)
+		if err != nil {
+			return MigrateFilesResult{}, err
+		}
+		result.Probes = append(result.Probes, openFileProbes(stagePath+"/files/public_html", conv.Rules)...)
+		// The folders are live before cp makes the files reachable.
+		if err := protect(p); err != nil {
+			return MigrateFilesResult{}, err
+		}
+	}
+	result.WordPress = regularAt(files, "public_html/wp-config.php") || regularAt(files, "wp-config.php")
 	// Only the site's private group may enter the staging folder now.
 	if m.e.chown(stage, m.e.owner, r.Account.GID) != nil || stage.Chmod(0750) != nil {
 		return MigrateFilesResult{}, ErrUnavailable
@@ -376,7 +394,129 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if out, err := m.e.stagedModes(ctx, stage, r); err != nil {
 		return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The files were copied, but some kept a group read bit the old server did not give them. " + installDetail(out)}
 	}
-	return MigrateFilesResult{WordPress: wordpress}, nil
+	return result, nil
+}
+
+// readProtection reads each realm's user file from the staged copy and
+// returns the site's protected folders with the normalized files. The
+// staged files are root's with the site's group (groupStaged), and the
+// staging folder stays root-only until after this, so no tenant can change
+// what root reads here; the path is walked one folder at a time from
+// the staged home's handle, never following a link, and must lie in the
+// source home the copy came from.
+func readProtection(files *os.File, sourceHome, site string, rules []htaccess.FolderRule) (SiteProtection, error) {
+	folders, userFiles := protectionFolders(site, rules)
+	p := SiteProtection{Folders: folders, Users: map[string][]byte{}}
+	for _, f := range folders {
+		if f.Realm == nil {
+			continue
+		}
+		source := userFiles[f.Realm.UserFile]
+		data, ok := readStagedFile(files, sourceHome, source)
+		if !ok {
+			return SiteProtection{}, &MigrationError{Step: "tier", Detail: installDetail([]byte("The password file of the protected folder " + f.Path + " (" + source + ") is not a plain file in the copied home folder, so the files were not put into the site."))}
+		}
+		normal, _, err := htaccess.NormalizeUserFile(data)
+		if err != nil {
+			why := err.Error()
+			var bad *htaccess.UserFileError
+			if errors.As(err, &bad) && bad.User != "" {
+				why += " (user " + bad.User + ": give this user a new password on the old server)"
+			}
+			return SiteProtection{}, &MigrationError{Step: "tier", Detail: installDetail([]byte("The password file of the protected folder " + f.Path + " cannot be used here: " + why + "."))}
+		}
+		p.Users[f.Realm.UserFile] = normal
+	}
+	return p, nil
+}
+
+// readStagedFile reads a regular file of at most htaccess.MaxUserFileBytes
+// at an absolute source path inside sourceHome, from the staged home.
+func readStagedFile(files *os.File, sourceHome, source string) ([]byte, bool) {
+	rel, ok := strings.CutPrefix(source, sourceHome+"/")
+	if !ok || rel == "" || filepath.Clean(rel) != rel || strings.HasPrefix(rel, "../") {
+		return nil, false
+	}
+	parts := strings.Split(rel, "/")
+	dir := files
+	for _, part := range parts[:len(parts)-1] {
+		if part == "" || part == "." || part == ".." {
+			return nil, false
+		}
+		next, err := openDirectoryAt(int(dir.Fd()), part)
+		if err != nil {
+			return nil, false
+		}
+		if dir != files {
+			dir.Close()
+		}
+		dir = next
+	}
+	if dir != files {
+		defer dir.Close()
+	}
+	fd, err := unix.Openat(int(dir.Fd()), parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, false
+	}
+	f := os.NewFile(uintptr(fd), "user file")
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > htaccess.MaxUserFileBytes {
+		return nil, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, htaccess.MaxUserFileBytes+1))
+	if err != nil || len(data) > htaccess.MaxUserFileBytes {
+		return nil, false
+	}
+	return data, true
+}
+
+// openFileProbes finds, below each closed folder of the staged public_html,
+// up to three real files whose names the folder leaves open, in folders
+// whose names have no dot, so verify can ask for them on both sites.
+func openFileProbes(public string, rules []htaccess.FolderRule) []MigrationProbe {
+	out := []MigrationProbe{}
+	root, err := os.OpenRoot(public)
+	if err != nil {
+		return out
+	}
+	defer root.Close()
+	for _, rule := range rules {
+		open := map[string]bool{}
+		for _, name := range rule.Allow {
+			open[name] = true
+		}
+		found, seen := 0, 0
+		var walk func(rel string, depth int)
+		walk = func(rel string, depth int) {
+			if found >= 3 || depth > 8 || seen > 5000 {
+				return
+			}
+			d, err := root.Open(rel)
+			if err != nil {
+				return
+			}
+			entries, _ := d.ReadDir(1000)
+			d.Close()
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+			for _, e := range entries {
+				seen++
+				child := rel + "/" + e.Name()
+				switch t := e.Type(); {
+				case t.IsRegular() && open[e.Name()] && found < 3:
+					out = append(out, MigrationProbe{Path: "/" + child, Kind: "allow"})
+					found++
+				case t.IsDir() && !strings.Contains(e.Name(), "."):
+					walk(child, depth+1)
+				}
+			}
+		}
+		if len(open) > 0 {
+			walk(strings.Trim(rule.Path, "/"), 0)
+		}
+	}
+	return out
 }
 
 // regularAt reports a regular file at a relative path, following no link.

@@ -76,6 +76,27 @@ func (f *fakeNative) RemoveSiteCache(_ context.Context, id string) error {
 	f.cachesRemoved = append(f.cachesRemoved, id)
 	return nil
 }
+func (f *fakeNative) WriteSiteRealms(_ context.Context, site string, files map[string][]byte) error {
+	if !siteDirPattern.MatchString(site) || len(files) == 0 {
+		return ErrInvalid
+	}
+	if f.failure == "realms-write" {
+		return ErrUnavailable
+	}
+	if f.realms == nil {
+		f.realms = map[string]map[string][]byte{}
+	}
+	f.realms[site] = files
+	return nil
+}
+func (f *fakeNative) RemoveSiteRealms(_ context.Context, site string) error {
+	if !siteDirPattern.MatchString(site) {
+		return ErrInvalid
+	}
+	delete(f.realms, site)
+	f.realmsRemoved = append(f.realmsRemoved, site)
+	return nil
+}
 func (f *fakeNative) SyncLimits(_ context.Context, want map[int]AccountLimits) error {
 	f.limitsLog = append(f.limitsLog, fmt.Sprintf("sync %d", len(want)))
 	f.dropIns = map[int]AccountLimits{}

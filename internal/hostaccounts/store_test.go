@@ -19,10 +19,14 @@ import (
 // This typed fake tests journal/recovery logic only. It never provisions an OS
 // user and cannot qualify native shadow-utils, ownership or Unix peer behavior.
 type fakeNative struct {
-	users   map[string]record
-	calls   int
-	failure string
-	changed bool
+	// realms holds each site's realm user files as WriteSiteRealms left
+	// them; realmsRemoved lists the sites RemoveSiteRealms emptied.
+	realms        map[string]map[string][]byte
+	realmsRemoved []string
+	users         map[string]record
+	calls         int
+	failure       string
+	changed       bool
 	// refuseState names a state SetState fails to set, changing nothing.
 	refuseState string
 	// siteApplies counts ApplySites calls, failed ones included.

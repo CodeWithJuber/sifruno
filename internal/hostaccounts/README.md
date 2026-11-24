@@ -1322,6 +1322,11 @@ Known gaps, found in review and not fixed in v1:
   on the old server.
 - WordPress's bundled Akismet plugin has an `.htaccess` with access rules,
   so a WordPress site that keeps it scans as Compat and is refused.
+- Grants are copied as the narrower set: a grant on a name with an
+  unescaped `_` covers that one database only, and one on a `%` pattern is
+  left out (the job notes it).
+- A source host that resolves to a private (RFC 1918) address is
+  accepted: admins move sites from their own private networks.
 
 ## Verification cost
 

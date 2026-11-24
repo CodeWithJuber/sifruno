@@ -106,7 +106,7 @@ func (h hashDatabases) CreateUserWithHashStrict(_ context.Context, owner, name, 
 
 func migrationPlan() hostaccounts.MigrationPlan {
 	return hostaccounts.MigrationPlan{
-		Username: "shopone", Domain: "shop.example.test", PHPSource: "ea-php81", DiskUsedMiB: 40, Tier: "native",
+		Username: "shopone", Domain: "shop.example.test", WWW: true, PHPSource: "ea-php81", DiskUsedMiB: 40, Tier: "native",
 		Databases: []cpsource.Database{{Name: "shopone_wp", Users: []string{"shopone_wpu"}}},
 		Users:     []cpsource.DatabaseUser{{Name: "shopone_wpu", Hash: testHash, Grants: []cpsource.Grant{{Database: "shopone_wp", Privileges: []string{"ALL PRIVILEGES"}}}}},
 		Cron:      []cpsource.CronLine{{Schedule: "*/15 * * * *", Command: "php /home/shopone/public_html/wp-cron.php"}},
@@ -179,6 +179,23 @@ func TestMigrationCopiesInOrderAndOpensTheGate(t *testing.T) {
 	ready, err := f.runner.ReadyMigration(context.Background(), job.ID, "test operator")
 	if err != nil || ready.Migration.Gate != GateReady || len(ready.Migration.DNS) != 2 || ready.Migration.DNS[0] != (DNSRecord{Name: "shop.example.test", Type: "A", Value: "203.0.113.7"}) {
 		t.Fatalf("ready: %+v %v", ready.Migration, err)
+	}
+}
+
+// The DNS records name www.<domain> only when the old site answered for it.
+func TestReadyNamesWWWOnlyWhenTheOldSiteHadIt(t *testing.T) {
+	for _, c := range []struct {
+		domain string
+		www    bool
+		want   int
+	}{{"shop.example.test", true, 2}, {"blog.shop.example.test", false, 1}, {"www.shop.example.test", true, 1}} {
+		f := newMigrationFixture(t)
+		f.broker.plan.Domain, f.broker.plan.WWW = c.domain, c.www
+		job := f.migrate(t)
+		ready, err := f.runner.ReadyMigration(context.Background(), job.ID, "test operator")
+		if err != nil || len(ready.Migration.DNS) != c.want || slices.ContainsFunc(ready.Migration.DNS, func(r DNSRecord) bool { return strings.HasPrefix(r.Name, "www.www.") }) {
+			t.Errorf("%s: %+v %v", c.domain, ready.Migration, err)
+		}
 	}
 }
 

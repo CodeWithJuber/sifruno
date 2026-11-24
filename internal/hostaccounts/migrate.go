@@ -117,6 +117,7 @@ type MigrationPlan struct {
 	Username      string                  `json:"username"`
 	Domain        string                  `json:"domain"`
 	Aliases       []string                `json:"aliases"`
+	WWW           bool                    `json:"www"`
 	PHPSource     string                  `json:"php_source"`
 	DiskUsedMiB   int64                   `json:"disk_used_mib"`
 	DiskLimitMiB  int64                   `json:"disk_limit_mib"`

@@ -587,7 +587,7 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	if err != nil {
 		return MigrationPlan{}, err
 	}
-	plan := MigrationPlan{Username: account.User, Domain: account.Domain, Aliases: site.Aliases, DiskUsedMiB: account.DiskUsedMiB, DiskLimitMiB: account.DiskLimitMiB,
+	plan := MigrationPlan{Username: account.User, Domain: account.Domain, Aliases: site.Aliases, WWW: site.WWW, DiskUsedMiB: account.DiskUsedMiB, DiskLimitMiB: account.DiskLimitMiB,
 		Databases: []cpsource.Database{}, Users: []cpsource.DatabaseUser{}, GrantsSkipped: []string{}, Cron: []cpsource.CronLine{}, CronSkipped: []string{}, Probes: []MigrationProbe{}, TierCauses: []string{}}
 	out, err := s.remote(work, m, cpsource.VhostPHPCommand(), nil)
 	if err != nil {

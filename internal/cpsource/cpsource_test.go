@@ -76,7 +76,7 @@ func TestCommandsTakeOnlyPlainNames(t *testing.T) {
 func TestParseSite(t *testing.T) {
 	out := `{"data":{"userdata":{"documentroot":"/home/shopone/public_html","servername":"shop.example.test","serveralias":"www.shop.example.test parked.example.test","user":"shopone","homedir":"/home/shopone","ip":"10.0.0.1","port":80}},"metadata":{"command":"domainuserdata","result":1}}`
 	site, err := ParseSite([]byte(out), "shopone", "shop.example.test")
-	if err != nil || site.HomeDir != "/home/shopone" || !reflect.DeepEqual(site.Aliases, []string{"parked.example.test"}) {
+	if err != nil || site.HomeDir != "/home/shopone" || !site.WWW || !reflect.DeepEqual(site.Aliases, []string{"parked.example.test"}) {
 		t.Fatalf("site: %+v %v", site, err)
 	}
 	other := strings.Replace(out, `"documentroot":"/home/shopone/public_html"`, `"documentroot":"/home/shopone/sub"`, 1)
@@ -210,6 +210,14 @@ func TestParseCrontab(t *testing.T) {
 	for _, s := range skipped {
 		if strings.Contains(s, "/home/shopone") || strings.Contains(s, "me@example") {
 			t.Errorf("a skipped line quotes what the crontab held: %q", s)
+		}
+	}
+	// A no-break space or a Unicode space would split differently from
+	// cron: the line is refused, not realigned.
+	for _, odd := range []string{"*/5\u00a0* * * * php job.php\n", "0 3 * * *\u2003/bin/true\n", "0 3 * * * echo\u00a0x\n"} {
+		jobs, skipped, err := ParseCrontab([]byte(odd))
+		if err != nil || len(jobs) != 0 || len(skipped) != 1 {
+			t.Errorf("%q: jobs %+v skipped %v %v", odd, jobs, skipped, err)
 		}
 	}
 }

@@ -63,8 +63,11 @@ type Migration struct {
 	SourceHost string `json:"source_host"`
 	SourceUser string `json:"source_user"`
 	Tier       string `json:"tier,omitempty"`
-	PHPSource  string `json:"php_source,omitempty"`
-	WordPress  bool   `json:"wordpress"`
+	// WWW says the old site answered for www.<domain> too, so the DNS
+	// records name it.
+	WWW       bool   `json:"www,omitempty"`
+	PHPSource string `json:"php_source,omitempty"`
+	WordPress bool   `json:"wordpress"`
 	// Databases and DatabaseUsers are what the job made here, so a delete
 	// from the site's page can remove them.
 	Databases     []string `json:"databases"`
@@ -412,7 +415,7 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		}
 	}
 	j.job.Domain, j.in.Domain = plan.Domain, plan.Domain
-	m.Tier, m.PHPSource = plan.Tier, plan.PHPSource
+	m.Tier, m.PHPSource, m.WWW = plan.Tier, plan.PHPSource, plan.WWW && !strings.HasPrefix(plan.Domain, "www.")
 	j.touch()
 	if !validDomain(plan.Domain) || plan.Username != m.SourceUser {
 		return "", &stepError{why: "The old server named a domain or account this server cannot take.", next: "Check the account on the old server.", technical: "domain " + clip(plan.Domain)}
@@ -806,8 +809,15 @@ func (r *Runner) ReadyMigration(ctx context.Context, id, actor string) (Job, err
 		return Job{}, refuse(ErrUnavailable, "This server's public address is not set, so the panel cannot name the DNS records. Start the panel with --dns-ip set to it, then mark the website ready again.")
 	}
 	m.Gate = GateReady
-	m.DNS = []DNSRecord{{Name: job.Domain, Type: dnsType(m.Address), Value: m.Address}, {Name: "www." + job.Domain, Type: dnsType(m.Address), Value: m.Address}}
-	addActivity(m, actor, "Marked the website ready for cutover. Point "+job.Domain+" and www."+job.Domain+" at "+m.Address+"; mail records stay as they are.")
+	// www.<domain> only when the old site answered for it, and never
+	// www.www.<domain>.
+	m.DNS = []DNSRecord{{Name: job.Domain, Type: dnsType(m.Address), Value: m.Address}}
+	names := job.Domain
+	if m.WWW && !strings.HasPrefix(job.Domain, "www.") {
+		m.DNS = append(m.DNS, DNSRecord{Name: "www." + job.Domain, Type: dnsType(m.Address), Value: m.Address})
+		names += " and www." + job.Domain
+	}
+	addActivity(m, actor, "Marked the website ready for cutover. Point "+names+" at "+m.Address+"; mail records stay as they are.")
 	job.UpdatedAt = timestamp(time.Now())
 	r.save(job)
 	return job, nil

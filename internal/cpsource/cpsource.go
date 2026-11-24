@@ -270,8 +270,10 @@ type Site struct {
 	User         string
 	HomeDir      string
 	DocumentRoot string
-	// Aliases are the virtual host's other names, www.<domain> left out.
+	// Aliases are the virtual host's other names, www.<domain> left out;
+	// WWW says the virtual host answers for www.<domain> too.
 	Aliases []string
+	WWW     bool
 }
 
 // ParseSite reads whmapi1 --output=json domainuserdata and checks that the
@@ -304,7 +306,11 @@ func ParseSite(out []byte, user, domain string) (Site, error) {
 	}
 	site := Site{User: u.User, HomeDir: u.HomeDir, DocumentRoot: u.DocumentRoot, Aliases: []string{}}
 	for _, alias := range strings.Fields(u.ServerAlias) {
-		if alias == "www."+domain || alias == domain {
+		if alias == "www."+domain {
+			site.WWW = true
+			continue
+		}
+		if alias == domain {
 			continue
 		}
 		if !ValidDomain(alias) || len(site.Aliases) >= maxAliasCount {
@@ -729,18 +735,25 @@ func ParseCrontab(out []byte) (jobs []CronLine, skipped []string, err error) {
 		return nil, nil, ErrOutput
 	}
 	for _, raw := range strings.Split(string(out), "\n") {
-		line := strings.TrimSpace(raw)
+		line := strings.Trim(raw, " \t\r")
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		if len(jobs)+len(skipped) >= MaxCronLines {
 			return nil, nil, ErrOutput
 		}
+		// cronie splits fields on spaces and tabs only. Other white space
+		// (a no-break space, a Unicode space) would make these fields differ
+		// from cron's, so such a line is not copied.
+		if strings.ContainsFunc(line, func(r rune) bool { return unicode.IsSpace(r) && r != ' ' && r != '\t' }) {
+			skipped = append(skipped, "a line with white space other than spaces and tabs, which cron would read differently")
+			continue
+		}
 		if envLine.MatchString(line) {
 			skipped = append(skipped, "a variable line (such as MAILTO or PATH): jobs here run with the server's defaults")
 			continue
 		}
-		fields := strings.Fields(line)
+		fields := strings.FieldsFunc(line, func(r rune) bool { return r == ' ' || r == '\t' })
 		if strings.HasPrefix(fields[0], "@") {
 			schedule, ok := shortcuts[fields[0]]
 			if !ok || len(fields) < 2 {

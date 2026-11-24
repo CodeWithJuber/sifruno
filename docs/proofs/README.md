@@ -87,7 +87,19 @@ Run on 2026-11-24 with `scripts/devvm/proof.sh installer-sshd` on the dev VM (Op
 | --- | --- | --- |
 | sshd pre-checks: the candidate copy with the policy is accepted by `sshd -t`; other users get SFTP only and no passwords; root with a key counts, but not with `PermitRootLogin no`, an Allow or Deny rule that leaves it out, `AuthenticationMethods` needing a password, or a ForceCommand; Match rules on addresses are judged for the admin's own SSH connection, and refused when there is none; a wheel member counts only with a valid key, StrictModes-safe modes and a login shell; other users who would lose a shell are listed; the live sshd files are unchanged | [phase1-installer-sshd.txt](phase1-installer-sshd.txt) | 30 passed, 0 failed |
 
-What this run does not show: the installer writing the policy and reloading sshd on a fresh server, and a second sign-in after it. That is the fresh-install test (`scripts/devvm/fresh-install-test.sh`), not yet run with this commit. A failed SELinux relabel was not provoked.
+What this run does not show: a failed SELinux relabel, which was not provoked. The installer writing the policy on a fresh server is the fresh-install test below.
+
+## Phase 1: one command installs on a fresh server
+
+Run on 2026-11-24 with `scripts/devvm/fresh-install-test.sh --destroy-vm`, from source `10cd1ad` (release sha256 `3513fead…81a6`). It destroyed the dev VM, created a new AlmaLinux 9.9 one with SELinux enforcing, and provisioned it with `scripts/install/install.sh`, starting the services. It then smoke-tested the result and ran the installer a second time.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Fresh install: preflight on the new server (root, AlmaLinux 9, x86_64, `/home` XFS with user quota and empty, and root still able to sign in with a key once the sshd policy is in place); the release checked against its SHA256SUMS; packages, nsswitch and the sshd policy (written, checked, reloaded); both units active and enabled; the panel answering as `sifpanel`; the broker socket `sifpanel` 0600; `hostbroker --check-host`; SELinux still enforcing; a second run that succeeds and reports nothing changed | [phase1-fresh-install.txt](phase1-fresh-install.txt) | 12 passed, 0 failed |
+
+The test drives the VM over SSH as root with a key throughout. Every command after the sshd step reached the VM through a new key sign-in under the new policy, which is the "second sign-in" the installer asks the operator to check. The installer took 61 minutes under software emulation, mostly package installation.
+
+What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins), the nightly schedule the plan asks for (not set up; it needs a runner the owner chooses), and an upgrade from an older release.
 
 ## Phase 1: the New website wizard, with SSL
 

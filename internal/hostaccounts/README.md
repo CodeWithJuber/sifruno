@@ -339,6 +339,115 @@ database would not.
   step left in public_html stays there; installing again over an existing
   WordPress fails at the download step.
 
+## Backups
+
+Website backups go to an SFTP storage server with restic 0.20.0, which the
+installer puts at `/usr/local/lib/sifruno/restic` (root, 0755). The broker
+checks the binary's sha256 against the pin in `backup.go` before every run.
+Each operation is fixed and typed; nothing goes through a shell.
+
+| Route | Operation |
+| --- | --- |
+| `GET /v1/backup` | The broker's public key, whether restic is ready, the target. The first call makes the key pair and the repository password. |
+| `POST /v1/backup/target` | `host`, `port`, `user`, `path`, `known_hosts`, `reason`. Opens the repository there with the broker's password, or makes one. |
+| `POST /v1/accounts/{id}/backup` | `databases`, `reason`. The account's home and the named databases, as one snapshot. |
+| `GET /v1/accounts/{id}/backups` | The account's snapshots, newest first. |
+| `POST /v1/accounts/{id}/restore` | `expected_revision`, `snapshot`, `files`, `databases`, `reason`. |
+| `POST /v1/accounts/{id}/drill` | `reason`. A restore drill of the latest snapshot. |
+| `POST /v1/backup/prune` | `reason`. Keeps 7 daily and 4 weekly snapshots per site. |
+
+A failed step answers 422 `backup_failed` with the step (`target`,
+`connect`, `password`, `repository`, `database`, `dump`, `backup`,
+`snapshot`, `restore`, `copy`, `import`, `compare`, `check`, `prune`) and the
+end of its output (printable ASCII, secrets removed, at most 512 bytes).
+
+Secrets stay with the broker, in `<state>/backup/` (root, 0700):
+
+- `ssh_key`: an ed25519 key made in Go (0600). The panel shows its public
+  half for the admin to install on the storage server.
+- `password`: the repository password, 32 random bytes (0600). restic reads
+  it through `RESTIC_PASSWORD_FILE`; it is never an argument. The target
+  change that first opens or makes a repository returns it once, so the
+  admin can save it; no later answer carries it.
+- `known_hosts`: the storage server's keys, from the admin (ssh-keyscan
+  output), under the fixed alias `sifruno-backup-target`. There is no trust
+  on first use. A new target is tried with `known_hosts.next` and replaces
+  the old file only when its repository opens; a refused target changes
+  nothing. A path holding a repository this password does not open is
+  refused (`password`).
+
+restic reaches the server with `-o sftp.command=`: restic splits that string
+and starts `/usr/bin/ssh` directly with `-F /dev/null`, `BatchMode`,
+`StrictHostKeyChecking=yes`, only the broker's key and known_hosts, no agent,
+no password prompt and no forwarding. Every word is checked to hold no space,
+quote or backslash, so the split gives back exactly that argument list.
+
+Backup: the databases must carry the account's `<username>_` prefix, pass
+dbhost's identifier rule and not fall inside another account's prefix. Each
+is checked as root first: a database that does not exist, or has views,
+triggers, stored routines or events, is refused (`database`). Restoring such
+objects would let a `DEFINER` name another MariaDB user, so backups cover
+tables and rows only. `mariadb-dump --no-defaults --single-transaction
+--skip-triggers --hex-blob` dumps each as root over the socket into
+`<state>/backup/dump/<id>/` (0700); restic backs up the home
+(`--one-file-system`) and that folder as one snapshot tagged with the
+account and its databases, and the dumps are removed. A backup changes no
+account and holds no lock on it.
+
+Restore (the account must be active or suspended, at its revision, and is
+busy meanwhile, so a delete, suspend, web change or install gets 409):
+
+1. The snapshot must be the account's own (host, tag and paths), holding
+   each database asked for.
+2. restic restores, as root, into a fresh staging folder
+   `/var/lib/sifruno-restore/<op>` (0700). It is outside every home and
+   outside the 0700 state, so the site user can be let in: the broker makes
+   `/var/lib/sifruno-restore` root 0711 with `mkdirat`.
+3. The staged home is given the account's owner and mode 0750, and the
+   staging folder becomes root:<site group> 0750: only the site user may
+   enter it.
+4. `cp -R -P --preserve=mode,timestamps,links --remove-destination -T` runs
+   as the site user (its UID and GID, no supplementary groups, a clean
+   environment) and copies the staged home over the home. Files added since
+   the backup stay. Root writes nothing into a path the tenant controls; a
+   tenant's own files can harm only that tenant.
+5. For each database: root makes it if it is gone, and a temporary user
+   `sifruno_rst_<16 hex>` granted only `SELECT, INSERT, UPDATE, DELETE,
+   CREATE, DROP, ALTER, INDEX, LOCK TABLES, REFERENCES` on exactly that
+   database (escaped as dbhost escapes grants). The statements reach MariaDB
+   on stdin. Its option file is root:<site group> 0440 in the staging
+   folder. `mariadb --defaults-file=... --binary-mode --one-database` runs
+   as the site user with the dump on stdin; `--binary-mode` turns off the
+   client's own commands, such as `\!`. Without SUPER, SET USER, TRIGGER or
+   routine privileges, nothing in a dump can name another `DEFINER`. The
+   user is dropped afterwards, also when the load fails.
+
+Nothing is written to the accounts' journal: it holds 256 rows per account,
+and a nightly backup would fill it in four months. A backup and a drill
+change no account; a restore changes only the tenant's own files and
+databases with the tenant's rights, as a WordPress install does, and the
+panel's job log records who asked. What a restore or drill leaves as root,
+its staging folder and its temporary users, is listed in the broker's
+database before it is made and removed afterwards; an interrupted one is
+removed before the next backup operation starts.
+
+Drill: the latest snapshot is restored with `--verify` into a root-only
+staging folder (never opened to the site user), every file, folder and link
+`restic ls` lists is compared by kind, size and link target, and
+`restic check --read-data-subset=n/8` reads the week's eighth of the
+repository's data, so all of it is read every eight weeks. A drill that
+cannot run, or finds a difference, answers `passed: false` with the step.
+
+Limits for now:
+
+- SFTP only; S3 later.
+- A database with views, triggers, routines or events is not backed up.
+- A restore does not remove files added since the backup.
+- The panel cannot yet take a saved password back: a new server opens an
+  old repository only if this broker's own password does.
+- `restic forget` keeps the last 7 daily and 4 weekly snapshots of a
+  deleted site until they are removed by hand.
+
 ## Verification cost
 
 Every request checks every account's files: its passwd and group identity (from

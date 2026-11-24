@@ -135,6 +135,13 @@ func grantDB(db string) string {
 	return strings.NewReplacer(`\`, `\\`, `_`, `\_`, `%`, `\%`).Replace(db)
 }
 
+// GrantDatabase is a validated database name as a database-level GRANT must
+// name it: escaped as grantDB does and backquoted, so the grant covers
+// exactly that one database. The broker's restore user is granted with it.
+func GrantDatabase(db string) string {
+	return quoteIdent(grantDB(db))
+}
+
 func sqlGrant(db, user, host string, privs []string) string {
 	return fmt.Sprintf("GRANT %s ON %s.* TO %s@%s", strings.Join(privs, ", "), quoteIdent(grantDB(db)), quoteString(user), quoteString(host))
 }

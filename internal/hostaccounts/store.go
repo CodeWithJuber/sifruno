@@ -108,9 +108,15 @@ type store struct {
 	web    *WebOptions // nil: the web operation is off
 	native nativeSystem
 	closed bool
-	// installing holds accounts with a WordPress install running outside
-	// the lock; delete refuses them while their user's processes run.
+	// installing holds accounts with a WordPress install or a restore
+	// running outside the lock; delete refuses them while their user's
+	// processes run.
 	installing map[string]bool
+	// backup runs restic and the database tools (nil: off). backupMu lets
+	// one backup operation run at a time, outside mu, so a long backup
+	// holds no other account.
+	backup   backupEngine
+	backupMu sync.Mutex
 	// auditAfter is the ID of the last account the rotating full check
 	// reached. Keying the rotation on an ID, not a position, keeps it fair
 	// while accounts are created and deleted between requests.

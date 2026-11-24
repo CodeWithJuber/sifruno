@@ -17,6 +17,7 @@ type client struct {
 	socket     string
 	http       *http.Client
 	slow       *http.Client // the WordPress install, which takes minutes
+	long       *http.Client // backups, restores, drills and prunes: up to two hours
 	configured bool
 }
 
@@ -26,6 +27,9 @@ func NewClient(socket string) Service {
 	slow := *c.http
 	slow.Timeout = wordpressTimeout + 2*time.Minute
 	c.slow = &slow
+	long := *c.http
+	long.Timeout = backupTimeout + 2*time.Minute
+	c.long = &long
 	return c
 }
 func validSocketName(s string) bool {
@@ -189,6 +193,107 @@ func (c *client) InstallWordPress(ctx context.Context, id string, in WordPressIn
 	return out, err
 }
 
+// BackupStatus reads the broker's backup key, readiness and target. The
+// first call makes the key pair and the repository password.
+func (c *client) BackupStatus(ctx context.Context) (BackupStatus, error) {
+	var out BackupStatus
+	err := c.request(ctx, "GET", "/v1/backup", nil, &out)
+	return out, err
+}
+
+// SetBackupTarget points backups at an SFTP storage server. A failed step
+// (the server not reached, a repository the password does not open) comes
+// back as a *BackupError, with nothing changed.
+func (c *client) SetBackupTarget(ctx context.Context, in BackupTargetInput, actor string) (BackupTargetResult, error) {
+	if _, ok := validBackupTarget(in, actor); !ok {
+		return BackupTargetResult{}, ErrInvalid
+	}
+	var out BackupTargetResult
+	err := c.send(ctx, c.slow, "POST", "/v1/backup/target", struct {
+		Input BackupTargetInput `json:"input"`
+		Actor string            `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
+// BackupAccount backs up the account's home and the named databases.
+func (c *client) BackupAccount(ctx context.Context, id string, in BackupInput, actor string) (Snapshot, error) {
+	if !idPattern.MatchString(id) || !validBackupInput(in, actor) {
+		return Snapshot{}, ErrInvalid
+	}
+	if in.Databases == nil {
+		in.Databases = []string{}
+	}
+	var out Snapshot
+	err := c.send(ctx, c.long, "POST", "/v1/accounts/"+id+"/backup", struct {
+		Input BackupInput `json:"input"`
+		Actor string      `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
+// ListBackups lists the account's snapshots, newest first.
+func (c *client) ListBackups(ctx context.Context, id string) ([]Snapshot, error) {
+	if !idPattern.MatchString(id) {
+		return nil, ErrInvalid
+	}
+	var out struct {
+		Items []Snapshot `json:"items"`
+	}
+	err := c.send(ctx, c.slow, "GET", "/v1/accounts/"+id+"/backups", nil, &out, maxResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	if out.Items == nil {
+		out.Items = []Snapshot{}
+	}
+	return out.Items, nil
+}
+
+// RestoreAccount restores the account's files, databases or both from one
+// of its snapshots.
+func (c *client) RestoreAccount(ctx context.Context, id string, in RestoreInput, actor string) (RestoreResult, error) {
+	if !idPattern.MatchString(id) || !validRestoreInput(in, actor) {
+		return RestoreResult{}, ErrInvalid
+	}
+	if in.Databases == nil {
+		in.Databases = []string{}
+	}
+	var out RestoreResult
+	err := c.send(ctx, c.long, "POST", "/v1/accounts/"+id+"/restore", struct {
+		Input RestoreInput `json:"input"`
+		Actor string       `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
+// DrillAccount runs a restore drill of the account's latest snapshot.
+func (c *client) DrillAccount(ctx context.Context, id string, in DrillInput, actor string) (DrillResult, error) {
+	if !idPattern.MatchString(id) || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return DrillResult{}, ErrInvalid
+	}
+	var out DrillResult
+	err := c.send(ctx, c.long, "POST", "/v1/accounts/"+id+"/drill", struct {
+		Input DrillInput `json:"input"`
+		Actor string     `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
+// PruneBackups applies the retention rule (7 daily, 4 weekly) to every
+// site's snapshots.
+func (c *client) PruneBackups(ctx context.Context, in PruneInput, actor string) (PruneResult, error) {
+	if !validText(in.Reason, 500) || !validText(actor, 120) {
+		return PruneResult{}, ErrInvalid
+	}
+	var out PruneResult
+	err := c.send(ctx, c.long, "POST", "/v1/backup/prune", struct {
+		Input PruneInput `json:"input"`
+		Actor string     `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
 func (c *client) request(ctx context.Context, method, path string, input, output any) error {
 	return c.requestBounded(ctx, method, path, input, output, maxResponseBytes)
 }
@@ -257,6 +362,8 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			return ErrCertificateRejected
 		case "install_failed":
 			return &InstallError{Step: failure.Step, Detail: installDetail([]byte(failure.Detail))}
+		case "backup_failed":
+			return &BackupError{Step: backupDetail([]byte(failure.Step)), Detail: backupDetail([]byte(failure.Detail))}
 		default:
 			return ErrUnavailable
 		}

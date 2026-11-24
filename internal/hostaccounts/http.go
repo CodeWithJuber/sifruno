@@ -286,10 +286,145 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(item)
+		case r.Method == "GET" && r.URL.Path == "/v1/backup":
+			if r.ContentLength != 0 {
+				writeError(w, ErrInvalid)
+				return
+			}
+			result, err := s.backupStatus(ctx)
+			answerBackup(w, result, err)
+		case r.Method == "POST" && r.URL.Path == "/v1/backup/target":
+			var in struct {
+				Input BackupTargetInput `json:"input"`
+				Actor string            `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"host", "port", "user", "path", "known_hosts", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if !backupDeadline(w, backupTargetTimeout) {
+				return
+			}
+			result, err := s.setBackupTarget(ctx, in.Input, in.Actor)
+			answerBackup(w, result, err)
+		case r.Method == "POST" && r.URL.Path == "/v1/backup/prune":
+			var in struct {
+				Input PruneInput `json:"input"`
+				Actor string     `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if !backupDeadline(w, backupTimeout) {
+				return
+			}
+			result, err := s.pruneBackups(ctx, in.Input, in.Actor)
+			answerBackup(w, result, err)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/backup"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/backup")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input BackupInput `json:"input"`
+				Actor string      `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"databases", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if !backupDeadline(w, backupTimeout) {
+				return
+			}
+			result, err := s.backupAccount(ctx, id, in.Input, in.Actor)
+			answerBackup(w, result, err)
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/backups"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/backups")
+			if !idPattern.MatchString(id) || r.ContentLength != 0 {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if !backupDeadline(w, backupListTimeout) {
+				return
+			}
+			items, err := s.listBackups(ctx, id)
+			answerBackup(w, struct {
+				Items []Snapshot `json:"items"`
+			}{items}, err)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/restore"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/restore")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input RestoreInput `json:"input"`
+				Actor string       `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"expected_revision", "snapshot", "files", "databases", "reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if !backupDeadline(w, backupTimeout) {
+				return
+			}
+			result, err := s.restoreAccount(ctx, id, in.Input, in.Actor)
+			answerBackup(w, result, err)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/drill"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/drill")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input DrillInput `json:"input"`
+				Actor string     `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			if !backupDeadline(w, backupTimeout) {
+				return
+			}
+			result, err := s.drillAccount(ctx, id, in.Input, in.Actor)
+			answerBackup(w, result, err)
 		default:
 			writeError(w, ErrNotFound)
 		}
 	})
+}
+
+// backupDeadline lets a backup operation's answer wait for its own limit,
+// which is longer than the server's default write deadline.
+func backupDeadline(w http.ResponseWriter, limit time.Duration) bool {
+	if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(limit + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+		writeError(w, ErrUnavailable)
+		return false
+	}
+	return true
+}
+
+// answerBackup writes a backup operation's result, or 422 backup_failed
+// with the failed step and the end of its output, or the usual error.
+func answerBackup(w http.ResponseWriter, result any, err error) {
+	var failed *BackupError
+	if errors.As(err, &failed) {
+		w.WriteHeader(422)
+		json.NewEncoder(w).Encode(struct {
+			Error  string `json:"error"`
+			Step   string `json:"step"`
+			Detail string `json:"detail"`
+		}{"backup_failed", failed.Step, failed.Detail})
+		return
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	json.NewEncoder(w).Encode(result)
 }
 func writeError(w http.ResponseWriter, err error) {
 	code, status := "unavailable", 503

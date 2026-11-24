@@ -179,6 +179,9 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	}
 	defer s.close()
 	s.web = web
+	// Backups need no option: each operation checks restic's pin and its
+	// tools when it runs, and answers unavailable without them.
+	s.backup = newResticEngine(s.opts.StateDir)
 	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: opts.SocketPath, Net: "unix"})
 	if e != nil {
 		return ErrUnavailable

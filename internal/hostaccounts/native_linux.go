@@ -917,7 +917,7 @@ const (
 	processWait    = 250 * time.Millisecond
 	processPoll    = 25 * time.Millisecond
 	killTimeout    = 5 * time.Second
-	userdelTries   = 3
+	userdelTries   = DeleteAttempts
 	processBudget  = 20 * time.Second
 	putBackTimeout = time.Minute
 )

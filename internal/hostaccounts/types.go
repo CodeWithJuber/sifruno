@@ -5,6 +5,7 @@ package hostaccounts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"regexp"
 	"strings"
@@ -20,6 +21,16 @@ var (
 	ErrNotFound    = errors.New("native account not found")
 	ErrRecovery    = errors.New("native account recovery required")
 )
+
+// DeleteAttempts is how many times a delete ends the account's processes
+// and runs userdel before it gives up on a user that stays busy.
+const DeleteAttempts = 3
+
+// ErrDeleteBusy is a delete refused because the account's processes were
+// still running after the broker tried to end them: nothing was removed and
+// the account is unchanged. It is a conflict too: errors.Is(err,
+// ErrConflict) holds.
+var ErrDeleteBusy = fmt.Errorf("%w: account processes still running", ErrConflict)
 
 // MaxAccounts bounds one broker's inventory. Every request reads all records
 // and checks each account's files, so the bound is a cost limit, not a

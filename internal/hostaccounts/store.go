@@ -915,7 +915,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 			return Account{}, ErrRecovery
 		}
 		if errors.Is(e, errAccountBusy) {
-			return Account{}, ErrConflict
+			return Account{}, ErrDeleteBusy
 		}
 		return Account{}, ErrUnavailable
 	}

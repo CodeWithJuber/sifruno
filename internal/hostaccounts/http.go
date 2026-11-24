@@ -467,6 +467,8 @@ func writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrInvalid):
 		code, status = "invalid", 400
+	case errors.Is(err, ErrDeleteBusy):
+		code, status = "delete_busy", 409
 	case errors.Is(err, ErrConflict):
 		code, status = "conflict", 409
 	case errors.Is(err, ErrNotFound):

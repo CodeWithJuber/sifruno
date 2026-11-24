@@ -3,6 +3,8 @@ package hostaccounts
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -302,7 +304,7 @@ func TestBusyDeleteBlocksNoOtherAccount(t *testing.T) {
 	other := liveAccount(t, s, "secondacct", "second.test")
 
 	f.failure = "busy"
-	if _, err := s.delete(ctx, tenant.Account.ID, DeleteInput{ExpectedRevision: tenant.Account.Revision, Reason: "Abuse"}, "test operator"); !errors.Is(err, ErrConflict) {
+	if _, err := s.delete(ctx, tenant.Account.ID, DeleteInput{ExpectedRevision: tenant.Account.Revision, Reason: "Abuse"}, "test operator"); !errors.Is(err, ErrDeleteBusy) {
 		t.Fatalf("a delete userdel refused: %v", err)
 	}
 	f.failure = ""
@@ -321,6 +323,37 @@ func TestBusyDeleteBlocksNoOtherAccount(t *testing.T) {
 	if _, ok := f.users[tenant.Account.Username]; ok {
 		t.Fatal("the user is still there")
 	}
+}
+
+// The busy refusal reaches the panel as its own answer: 409 delete_busy on
+// the socket, and ErrDeleteBusy from the client, which is still a conflict.
+// A delete stopped for another reason answers 503.
+func TestBusyDeleteAnswersDeleteBusyThroughTheClient(t *testing.T) {
+	s, f := webStore(t)
+	tenant := liveFixture(t, s)
+	h := handler(s)
+	var answers []string
+	c := &client{configured: true, slow: &http.Client{Transport: previewRoundTrip(func(r *http.Request) (*http.Response, error) {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		answers = append(answers, strings.TrimSpace(w.Body.String()))
+		return w.Result(), nil
+	})}}
+	remove := func() error {
+		_, err := c.Delete(context.Background(), tenant.Account.ID, DeleteInput{ExpectedRevision: tenant.Account.Revision, Reason: "Abuse"}, "test operator")
+		return err
+	}
+
+	f.failure = "busy"
+	if err := remove(); !errors.Is(err, ErrDeleteBusy) || !errors.Is(err, ErrConflict) || !slices.Equal(answers, []string{`{"error":"delete_busy"}`}) {
+		t.Fatalf("busy delete through the client: %v, broker answered %q", err, answers)
+	}
+	f.failure = "stopped"
+	if err := remove(); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrDeleteBusy) || answers[1] != `{"error":"unavailable"}` {
+		t.Fatalf("stopped delete through the client: %v, broker answered %q", err, answers)
+	}
+	f.failure = ""
+	busyDeleteRejected(t, s, f, tenant)
 }
 
 // The next start ends an interrupted delete the same way when userdel

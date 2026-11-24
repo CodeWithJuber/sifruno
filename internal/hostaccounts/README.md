@@ -212,13 +212,28 @@ the lock failing, or the delete's time running out. The account gets back
 the expiry it had, on a fresh limit of its own, and is checked; the site
 goes back into the config; and the delete ends `rejected` with the account
 unchanged, so every other account can still change. A busy user answers 409
-`conflict`; the other causes answer 503 `unavailable`. The next start does
+`delete_busy` (the client's `ErrDeleteBusy`, which is also a conflict); the
+other causes answer 503 `unavailable`. The next start does
 the same for an interrupted delete. A delete stays pending, and stops every
 mutation, only when a root step fails or its effect is unknown: the expiry
 cannot be put back or the account does not check out afterwards, the site
 cannot go back into the config (its test now fails, or the reload does), or
 userdel exits other than 0 or 8, or does not finish, since nobody knows what
 it changed.
+
+The panel shows a busy refusal in plain words: "The account still had
+running processes after 3 attempts, so nothing was removed. Suspend the site
+first (that stops its processes and keeps the site off), then delete it
+again." When the 20 seconds run out first, fewer than three attempts were
+made; the message still says three.
+
+Limit for now: a tenant whose processes fork faster than the kill passes end
+them can keep refusing the delete of an active site, until the planned
+cgroup process limits (Phase 1, "cgroup limits" in the account broker
+rework) bound how many it can start. Suspending first makes the operator's
+intent win: a suspension stands even when processes survive it, so the site
+is off and no login, cron job or PHP request starts for the account while
+the delete is asked again.
 
 Suspend: after the suspension is journaled (and a live site's list
 installed), the account's processes end. This runs with the tenant's own

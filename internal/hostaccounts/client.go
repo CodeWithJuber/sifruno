@@ -108,7 +108,8 @@ func (c *client) Delete(ctx context.Context, id string, in DeleteInput, actor st
 	}
 	var out Account
 	// A delete first rewrites the web server's config, which can take
-	// minutes on a busy host.
+	// minutes on a busy host. A 409 delete_busy answer means the account's
+	// processes kept running, so nothing was removed: ErrDeleteBusy.
 	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/delete", struct {
 		Input DeleteInput `json:"input"`
 		Actor string      `json:"actor"`
@@ -398,6 +399,8 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			return ErrInvalid
 		case "conflict":
 			return ErrConflict
+		case "delete_busy":
+			return ErrDeleteBusy
 		case "not_found":
 			return ErrNotFound
 		case "recovery":

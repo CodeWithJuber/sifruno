@@ -57,7 +57,7 @@ func TestConvertPatterns(t *testing.T) {
 		{"password and a network", "Order Deny,Allow\nDeny from all\nAllow from 192.0.2.0/24\nAuthType Basic\nAuthName Staff\nAuthUserFile /home/u/.htpasswd\nRequire valid-user\n",
 			FolderRule{Hosts: Hosts{Kind: HostsOnly, Networks: []string{"192.0.2.0/24"}}, Realm: &Realm{Name: "Staff", UserFile: "/home/u/.htpasswd"}}},
 		{"password with deny all", "Deny from all\nAuthType Basic\nAuthName Staff\nAuthUserFile /home/u/.htpasswd\nRequire valid-user\n",
-			FolderRule{Hosts: none, Realm: &Realm{Name: "Staff", UserFile: "/home/u/.htpasswd"}}},
+			FolderRule{Hosts: none}},
 		{"files allow-list", "Deny from all\n<Files \"style.css\">\nAllow from all\n</Files>\n<FilesMatch \"^(app|admin)\\.js$\">\nAllow from all\n</FilesMatch>\n",
 			FolderRule{Hosts: none, Allow: []string{"admin.js", "app.js", "style.css"}}},
 		{"files tilde regex", "Require all denied\n<Files ~ \"^logo\\.(png|svg)$\">\nRequire all granted\n</Files>\n",

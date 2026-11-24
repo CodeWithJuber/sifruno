@@ -402,6 +402,12 @@ func (e *evaluator) rule(urlPath string) (*FolderRule, *Conversion) {
 	case authSet:
 		return nil, refuse(e.authLine, "AuthType, AuthName or AuthUserFile without Require valid-user or Require user")
 	}
+	// Apache checks the address first (Satisfy All) and answers 403 before
+	// it asks for a password, so a folder closed to every address never
+	// reaches its realm.
+	if hosts.Kind == HostsNone {
+		rule.Realm = nil
+	}
 	if len(e.files) == 0 {
 		return rule, nil
 	}

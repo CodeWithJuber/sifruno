@@ -867,7 +867,8 @@ an account's home. Root never opens a path inside the home for it.
   answer again.
 - A write's `expected_version` is the file's `version` from the read: 16 hex
   digits from its device, inode, size and modified and change times. A file
-  changed since answers `changed`.
+  changed since answers `changed`. An empty one makes a new file only, so a
+  write never replaces a file it did not read (`exists`).
 
 Checked under the broker lock, then run outside it on the operation's own
 limit (two minutes; fifteen for an upload or download), which does not

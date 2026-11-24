@@ -63,8 +63,9 @@ type FileText struct {
 	Content string    `json:"content"`
 }
 
-// FileWriteInput saves a text file whole. ExpectedVersion, when set, is the
-// Version the editor loaded: a file changed since answers "changed".
+// FileWriteInput saves a text file whole. ExpectedVersion is the Version
+// the editor loaded: a file changed since answers "changed". Empty makes a
+// new file only: a name that is taken answers "exists".
 type FileWriteInput struct {
 	Path            string `json:"path"`
 	Content         string `json:"content"`

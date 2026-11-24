@@ -124,9 +124,21 @@ case "${1:-}" in
     temp="${temps[0]:-none}"
     grants="$(sql "SHOW GRANTS FOR '$temp'@'localhost'" | grep -v '^GRANT USAGE ON \*\.\*' | paste -sd '|')"
     echo "  its grants: $grants"
-    # The database's "_" is escaped, so the grant names exactly that database.
-    want="GRANT ALL PRIVILEGES ON \`${user}\\_wp\`.* TO \`$temp\`@\`localhost\`"
-    check "it has every privilege on ${user}_wp and nothing else" test "$grants" = "$want"
+    # SHOW GRANTS quotes names with backticks and escapes the database's "_",
+    # so the grant names exactly that database.
+    db_grant="ON \`${user}\\_wp\`.* TO \`$temp\`@\`localhost\`"
+    # shellcheck disable=SC2317 # called through check
+    one_grant() { [[ "$grants" == "GRANT "*" $db_grant" ]] && [[ "$grants" != *'|'* ]]; }
+    # shellcheck disable=SC2317 # called through check
+    reads_and_changes() {
+      local p
+      for p in SELECT INSERT UPDATE DELETE CREATE DROP ALTER; do [[ "$grants" == *"$p"* ]] || return 1; done
+    }
+    # shellcheck disable=SC2317 # called through check
+    no_definer() { ! grep -qE 'ALL PRIVILEGES|TRIGGER|CREATE VIEW|CREATE ROUTINE|ALTER ROUTINE|EVENT' <<<"$grants"; }
+    check "it has one grant, on exactly ${user}_wp" one_grant
+    check "it may read and change tables (SELECT to ALTER)" reads_and_changes
+    check "it has no privilege that records a definer (no ALL, TRIGGER, CREATE VIEW, routines or EVENT)" no_definer
     check "nothing of $other's is in its grants" bash -c "! grep -q '$other' <<<\"\$0\"" "$grants"
     check "the panel's record holds it, with $user as the owner" grep -q "\"user\":\"$temp\",\"owner\":\"$user\"" "$dir/state/phpmyadmin/logins.json"
     check "the record is the panel's, 0600" test "$(stat -c '%U %a' "$dir/state/phpmyadmin/logins.json")" = "sifpanel 600"
@@ -141,7 +153,20 @@ case "${1:-}" in
     echo "  process-argument samples taken while phpMyAdmin opened: $samples"
     check "no process argument held the temporary user's password" bash -c "[ $samples -gt 0 ] && ! grep -qF -- \"\$0\" '$dir/ps-samples.txt'" "$password"
     check "the panel ran the mysql client during the samples" grep -q -- '--defaults-extra-file=/var/lib/sifpanel/db-admin.cnf' "$dir/ps-samples.txt"
-    logs=("$dir/panel.log" "$LSWS"/logs/*.log "$LSWS"/logs/sifruno_phpmyadmin/*.log)
+    # The password goes to mysql in its environment, never as an argument.
+    # shellcheck disable=SC2317 # called through check
+    as_temp() { MYSQL_PWD="$password" mysql --protocol=socket -u "$temp" -N -B -e "$1"; }
+    # shellcheck disable=SC2317 # called through check
+    definers_refused() {
+      local db="\`${user}_wp\`"
+      ! as_temp "CREATE VIEW $db.sifruno_proof_v AS SELECT 1" &&
+        as_temp "CREATE TABLE $db.sifruno_proof_t (a INT)" &&
+        ! as_temp "CREATE TRIGGER $db.sifruno_proof_tr BEFORE INSERT ON $db.sifruno_proof_t FOR EACH ROW SET @x = 1" &&
+        as_temp "DROP TABLE $db.sifruno_proof_t"
+    }
+    check "with it the temporary user makes a table but no view or trigger" definers_refused
+    logs=("$dir/panel.log" "$LSWS"/logs/*.log "$LSWS"/logs/sifruno_phpmyadmin/*.log "$PMA_STATE"/logs/*.log)
+    check "phpMyAdmin's PHP error log folder is sifpma's, 0700" test "$(stat -c '%U %a' "$PMA_STATE/logs")" = "sifpma 700"
     check "neither the panel's log nor OpenLiteSpeed's logs hold the password" bash -c "! grep -qF -- \"\$0\" ${logs[*]}" "$password"
     check "no OpenLiteSpeed log holds a sign-in link's code" bash -c "! grep -q 'sifruno-signon.php?code=' ${logs[*]:1}"
     check "sifpma cannot open $user's or $other's home" bash -c "! runuser -u sifpma -- ls /home/$user >/dev/null 2>&1 && ! runuser -u sifpma -- ls /home/$other >/dev/null 2>&1"

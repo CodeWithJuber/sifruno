@@ -139,6 +139,7 @@ try {
   await button.waitFor({ timeout: 30000 });
   check("the Databases tab has an Open phpMyAdmin button", (await button.innerText()).includes("Open phpMyAdmin") && !(await button.isDisabled()));
   check("it says phpMyAdmin opens on its own address, for this website's databases only", (await page.getByTestId("open-phpmyadmin-hint").innerText()).includes("phpMyAdmin's own address, signed in to this website's databases only"));
+  check("it says triggers, views and stored routines need the website's own database user", (await page.getByTestId("phpmyadmin-definers").innerText()).includes("Triggers, views and stored routines need this website's own database user"));
   await page.screenshot({ path: join(outDir, "1440-databases-tab.png"), fullPage: true });
   const [tab] = await Promise.all([ctx.waitForEvent("page"), button.click()]);
   const tabErrors = [];
@@ -191,7 +192,25 @@ try {
   console.log("## VM: the temporary user and its password");
   check("the VM's checks of the temporary user pass", guestStep(`check ${guestDir} ${a.user} ${b.user}`));
 
-  console.log("## VM: the temporary user expires (proof build: 2 minutes)");
+  console.log("## At most 3 open sign-ins per website and person");
+  const opens = await page.evaluate(async (url) => {
+    const out = [];
+    for (let i = 0; i < 3; i++) {
+      const session = await (await fetch("/api/v1/session")).json();
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrf_token }, body: "{}" });
+      out.push({ status: r.status, detail: (await r.json()).detail ?? "" });
+    }
+    return out;
+  }, `/api/v1/websites/sites/${a.id}/databases/phpmyadmin`);
+  console.log(`  three more clicks answered ${opens.map((o) => o.status).join(", ")}`);
+  check("the second and third sign-in open, the fourth is refused with 429 and says why", opens[0].status === 201 && opens[1].status === 201 && opens[2].status === 429 && opens[2].detail.includes("already have 3 phpMyAdmin sign-ins open for this website"), JSON.stringify(opens));
+  const other = await page.evaluate(async (url) => {
+    const session = await (await fetch("/api/v1/session")).json();
+    return (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrf_token }, body: "{}" })).status;
+  }, `/api/v1/websites/sites/${b.id}/databases/phpmyadmin`);
+  check("another website still opens", other === 201, String(other));
+
+  console.log("## VM: the temporary users expire (proof build: 2 minutes)");
   check("the VM sees the sweeper drop it", guestStep("expire"));
   const after = await again.goto(`${pmaOrigin}/index.php`);
   check("then the admission cookie no longer lets the browser in (401)", after?.status() === 401 && (await again.locator("h1").innerText()) === "phpMyAdmin needs a new sign-in.");

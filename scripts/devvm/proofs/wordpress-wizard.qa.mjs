@@ -182,6 +182,31 @@ try {
     check("the site page fits a phone screen", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: join(outDir, "390-light-website-overview.png"), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 900 });
+
+    console.log("## Browser: the site's tabs, Simple and Advanced");
+    const tabs = () => page.locator('nav[aria-label="Website sections"] a').evaluateAll((links) => links.map((a) => a.dataset.testid.replace("site-tab-", "")).join(","));
+    const states = await page.locator('[data-testid="health-line"]').evaluateAll((lines) => lines.map((l) => `${l.dataset.check}=${l.dataset.state}`).join(" "));
+    console.log(`  health: ${states}`);
+    check("the Overview's health checklist has its five lines", /^serving=\S+ https=\S+ php=\S+ backups=\S+ disk=\S+$/.test(states));
+    check("Simple view has six tabs and no Email", (await tabs()) === "overview,domains,files,databases,backups,settings", await tabs());
+    for (const [tab, screen] of [["domains", "site-domains"], ["files", "site-files"], ["databases", "site-databases"], ["backups", "site-backups"], ["settings", "site-settings"]]) {
+      await page.getByTestId(`site-tab-${tab}`).click();
+      await page.getByTestId(screen).waitFor({ timeout: 150000 });
+      check(`the ${tab} tab opens at its own address`, new URL(page.url()).pathname === `/websites/sites/${job.result.account_id}/${tab}` && (await page.getByTestId(`site-tab-${tab}`).getAttribute("aria-current")) === "page");
+    }
+    await page.reload();
+    await page.getByTestId("site-settings").waitFor({ timeout: 30000 });
+    check("a reload keeps the Settings tab", (await page.getByTestId("site-tab-settings").getAttribute("aria-current")) === "page" && (await page.getByTestId("site-cron").count()) === 1);
+    await page.screenshot({ path: join(outDir, "1440-light-website-settings-simple.png"), fullPage: true });
+    await page.getByTestId("site-view-switch").getByText("Advanced", { exact: true }).click();
+    check("Advanced view adds Cron jobs and Logs tabs", (await tabs()) === "overview,domains,files,databases,backups,cron,logs,settings", await tabs());
+    await page.getByTestId("site-tab-logs").click();
+    await page.getByTestId("site-logs").waitFor({ timeout: 30000 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    check("the Logs tab fits a phone screen", await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await page.screenshot({ path: join(outDir, "390-light-website-logs-advanced.png"), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByTestId("site-view-switch").getByText("Simple", { exact: true }).click();
   }
 
   console.log("## Browser: the same domain again is refused");

@@ -307,13 +307,18 @@ Where they apply:
   from the 1.9.4 source, not run: OpenLiteSpeed sets those rlimits on the
   path without its namespace container, and none in the container's path
   (`ns.c`), which broker sites use; there the slice is the bound.
-- Every PAM session. The installer's
-  `/etc/security/limits.d/90-sifruno-accounts.conf` sets nproc 100 (soft
-  and hard) for UIDs 20000 to 60000. pam_limits applies it in the session
-  phase; RLIMIT_NPROC counts all tasks of the real UID on the host, so a
-  fork loop started in an SFTP or cron session stops at fork() even outside
-  any slice. It does not reach processes started without PAM: lsphp from
-  lscgid, or what the broker runs as the account (kill, WP-CLI, cp).
+- Every PAM session, as a backstop. The installer's
+  `/etc/security/limits.d/90-sifruno-accounts.conf` sets nproc 4096 (soft
+  and hard), the largest plan, for UIDs 20000 to 60000. The per-plan bound
+  is the slice's TasksMax, which covers PAM sessions too (pam_systemd puts
+  them in the slice). pam_limits applies the file in the session phase;
+  RLIMIT_NPROC counts all tasks of the real UID on the host, so a fork loop
+  in a session that somehow runs outside the slice still stops at fork().
+  One number for every account never cuts below a plan; a per-account file
+  would count the same tasks under a second limit that had to follow every
+  plan change. It does not reach processes started without PAM: lsphp from
+  lscgid and the broker's WP-CLI and placeholder runs, which run in the
+  slice, or the broker's own fixed kill and cp as the account.
 
 Create writes the drop-in before anything is journaled; if it cannot, the
 create is refused (503) and nothing changes. A plan change journals its

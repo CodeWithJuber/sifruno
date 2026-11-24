@@ -807,32 +807,79 @@ step_openlitespeed() {
 }
 
 # Prints OpenLiteSpeed's config (file $1) with "cgroups 1" in its CGIRLimit
-# block: the line replaced where it is, added before the block's end
-# otherwise, or a block appended when there is none. 1 lets a vhost turn
-# cgroups on (the broker's vhosts do): lscgid then starts the site's PHP in
-# its account's user-<uid>.slice, under the limits the broker writes there.
+# block: a "cgroups 0" line (OpenLiteSpeed's default, disallowed) replaced
+# where it is, a line added before the block's closing brace (indented or
+# not) when there is none, or a block appended when there is no block. Any
+# other value an administrator set stays as it is. Read from the OpenLiteSpeed
+# 1.9.4 source, not yet run: the server value is 0 disallowed, 1 allowed and
+# off unless a vhost turns it on, 2 allowed and on (serverprocessconfig.h:48-50,
+# cgidworker.cpp:409-416); a vhost's 2 turns it on when the server's is not 0
+# (httpvhost.cpp:3401-3405), as the broker's vhosts do. lscgid then puts the
+# site's PHP in its account's user-<uid>.slice (lscgid.cpp:471-529), under
+# the limits the broker writes there.
 ols_with_cgroups() {
   awk '
-    /^CGIRLimit[[:space:]]*\{/ { inblock = 1; seen = 1; print; next }
-    inblock && /^[[:space:]]*cgroups[[:space:]]/ { if (!done) print "  cgroups                 1"; done = 1; next }
-    inblock && /^\}/ { if (!done) print "  cgroups                 1"; done = 1; inblock = 0; print; next }
+    /^[[:space:]]*CGIRLimit[[:space:]]*\{/ { inblock = 1; seen = 1; print; next }
+    inblock && /^[[:space:]]*cgroups[[:space:]]/ {
+      if (!done && $2 == "0") { print "  cgroups                 1"; done = 1; next }
+      done = 1; print; next
+    }
+    inblock && /^[[:space:]]*\}/ { if (!done) print "  cgroups                 1"; done = 1; inblock = 0; print; next }
     { print }
     END { if (!seen) { print ""; print "CGIRLimit  {"; print "  cgroups                 1"; print "}" } }
   ' "$1"
 }
 
+# The cgroups value in the CGIRLimit block of the config on stdin.
+ols_cgroups_value() {
+  awk '
+    /^[[:space:]]*CGIRLimit[[:space:]]*\{/ { inblock = 1; next }
+    inblock && /^[[:space:]]*\}/ { inblock = 0 }
+    inblock && $1 == "cgroups" { print $2; exit }
+  '
+}
+
+# The [ERROR] lines of `openlitespeed -t`, without their time and process
+# ID, sorted, so two runs compare. -t exits 1 after a warning and 2 after an
+# error, which is not a failure here.
+ols_test_errors() {
+  local out
+  out="$("$LSWS/bin/openlitespeed" -t 2>&1)" || true
+  printf '%s\n' "$out" | awk '{ for (i = 1; i <= NF; i++) if ($i == "[ERROR]") { line = ""; for (j = i + 2; j <= NF; j++) line = line " " $j; print line; break } }' | sort -u
+}
+
 step_ols_cgroups() {
-  local next
+  local next value before after added
   next="$(ols_with_cgroups "$OLS_CONF")"
+  value="$(printf '%s\n' "$next" | ols_cgroups_value)"
+  if [ "$value" != 1 ] && [ "$value" != 2 ]; then
+    log "Note: OpenLiteSpeed's CGIRLimit has cgroups $value, which the installer leaves as it is; with it, each site's PHP runs outside its account's user slice. Set it to 1 to put it there, then run this again."
+  fi
   if [ "$next" = "$(cat "$OLS_CONF")" ]; then
     return 0
   fi
   [ -n "$OLS_BACKUP" ] || OLS_BACKUP="$(backup_file "$OLS_CONF")"
+  # `openlitespeed -t` reads only the server root's conf/httpd_config.conf
+  # (it takes no file argument), so the new file goes in place and is tested
+  # before OpenLiteSpeed is reloaded; a new [ERROR] puts the old one back.
+  before="$(ols_test_errors)"
+  cp -a -- "$OLS_CONF" "$OLS_CONF.old"
   printf '%s\n' "$next" > "$OLS_CONF.new"
   chown --reference="$OLS_CONF" "$OLS_CONF.new"
   chmod --reference="$OLS_CONF" "$OLS_CONF.new"
   mv -f -- "$OLS_CONF.new" "$OLS_CONF"
   relabel "$OLS_CONF"
+  after="$(ols_test_errors)"
+  added="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
+  if [ -n "$added" ]; then
+    mv -f -- "$OLS_CONF.old" "$OLS_CONF"
+    relabel "$OLS_CONF"
+    printf '%s\n' "$added" | sed 's/^/  openlitespeed -t:/' >&2
+    die "OpenLiteSpeed's config test reports a new error with cgroups 1 in CGIRLimit, so the installer put the old $OLS_CONF back." \
+      "The installer changes the server-wide file only when OpenLiteSpeed accepts the result; the errors are above." \
+      "Fix what they name in $OLS_CONF, check it with $LSWS/bin/openlitespeed -t, then run this again."
+  fi
+  rm -f -- "$OLS_CONF.old"
   # A running OpenLiteSpeed reads it at its graceful restart.
   if systemctl is-active --quiet lsws; then
     systemctl reload lsws
@@ -840,18 +887,23 @@ step_ols_cgroups() {
   changed "OpenLiteSpeed: cgroups 1 in CGIRLimit, so each site's PHP runs in its account's user slice (backup: $OLS_BACKUP)"
 }
 
-# Every hosting account's UID (the broker allocates 20000 to 60000) may have
-# at most 100 tasks in any PAM session: SFTP, cron, su or runuser. pam_limits
-# sets RLIMIT_NPROC, which the kernel counts over all of the UID's tasks on
-# the host, so a fork loop stops at fork(). The broker's default is the same
-# 100 for each account's user slice (TasksMax).
+# A backstop for every hosting account's UID (the broker allocates 20000 to
+# 60000) in any PAM session: SFTP, cron, su or runuser. pam_limits sets
+# RLIMIT_NPROC, which the kernel counts over all of the UID's tasks on the
+# host. Each account's own bound is its plan's TasksMax on its user slice,
+# which the broker writes and which covers PAM sessions too (pam_systemd puts
+# them in that slice), so this file is the largest plan the broker allows,
+# 4096: it never cuts below a plan and still stops a fork loop that runs
+# outside the slice. A per-account file would count the same tasks a second
+# time under a second limit that had to follow every plan change.
 limits_policy() {
   cat <<'POLICY'
-# Written by Sifruno's installer: at most 100 processes (threads count) for
-# each hosting account's UID in every PAM session. The account broker gives
-# each account a UID from 20000 to 60000 and its own user slice limits.
-20000:60000  soft  nproc  100
-20000:60000  hard  nproc  100
+# Written by Sifruno's installer: a backstop of 4096 processes (threads
+# count) for each hosting account's UID in every PAM session, the largest
+# plan Sifruno allows. Each account's own limit is its user slice's TasksMax,
+# which the account broker writes from the account's plan.
+20000:60000  soft  nproc  4096
+20000:60000  hard  nproc  4096
 POLICY
 }
 
@@ -1318,8 +1370,8 @@ main() {
   step "Set passwd, group and shadow in $NSSWITCH to files (backup, check, automatic rollback)" step_nsswitch
   step "Write the sshd policy $SSHD_DROPIN (backup, sshd -t, automatic rollback, reload)" step_sshd
   step "Add Sifruno's include, namespace isolation and the cache module to OpenLiteSpeed's config (backup)" step_openlitespeed
-  step "Let each site's PHP run in its account's user slice: cgroups 1 in OpenLiteSpeed's CGIRLimit (backup)" step_ols_cgroups
-  step "Limit each hosting account to 100 processes in PAM sessions: $LIMITS_FILE" step_limits
+  step "Let each site's PHP run in its account's user slice: cgroups 1 in OpenLiteSpeed's CGIRLimit (backup, config test)" step_ols_cgroups
+  step "Bound each hosting account to 4096 processes, the largest plan, in PAM sessions: $LIMITS_FILE" step_limits
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
   step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
   step "Enable and start MariaDB and OpenLiteSpeed" step_services

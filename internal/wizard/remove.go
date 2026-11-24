@@ -35,7 +35,9 @@ type Removal struct {
 // RemoveFailure is a site delete that was refused or stopped. Reason is
 // ErrInvalid, ErrConflict, ErrNotFound or ErrUnavailable. Why is plain
 // English for the person and ends with what was removed and what is still on
-// the server; Technical is the error text for "Technical details".
+// the server, or, for a delete refused because the account's processes kept
+// running, says nothing was removed and what to do next; Technical is the
+// error text for "Technical details".
 type RemoveFailure struct {
 	Reason    error
 	Why       string
@@ -46,6 +48,24 @@ type RemoveFailure struct {
 
 func (e *RemoveFailure) Error() string { return e.Why }
 func (e *RemoveFailure) Unwrap() error { return e.Reason }
+
+// What a delete says when the account service refused it because the
+// account's processes kept running.
+var (
+	busyNothingRemoved = fmt.Sprintf("The account still had running processes after %d attempts, so nothing was removed.", hostaccounts.DeleteAttempts)
+	busySuspendFirst   = "Suspend the site first (that stops its processes and keeps the site off), then delete it again."
+)
+
+// busyRefusal is the account step's answer when the account service refused
+// the delete because the account's processes kept running. Nothing was
+// removed, so why is the whole message: what happened, why, what next.
+type busyRefusal struct {
+	why string
+	err error
+}
+
+func (e *busyRefusal) Error() string { return e.err.Error() }
+func (e *busyRefusal) Unwrap() error { return e.err }
 
 // removal is one thing a site delete removes. failed explains an error from
 // remove; unsure means the panel cannot tell whether the thing went. account
@@ -158,8 +178,11 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 	if i >= 0 {
 		plan = append(plan, removal{"the hosting account " + owner + " with its files and its site on the web server", func(ctx context.Context) error {
 			_, err := r.accounts.Delete(ctx, accountID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: removeReason}, actor)
-			if errors.Is(err, hostaccounts.ErrNotFound) {
+			switch {
+			case errors.Is(err, hostaccounts.ErrNotFound):
 				return nil // already gone
+			case errors.Is(err, hostaccounts.ErrDeleteBusy):
+				return &busyRefusal{why: busyNothingRemoved + " " + busySuspendFirst, err: err}
 			}
 			return err
 		}, accountNotDeleted, true})
@@ -195,6 +218,17 @@ func (r *Runner) RemoveSite(ctx context.Context, accountID, confirmDomain string
 			continue
 		}
 		f := &RemoveFailure{Removed: out.Removed, Technical: scrub(err.Error())}
+		// The account goes first, so a busy refusal comes before anything
+		// was removed, and its message already says so and ends with what
+		// to do next.
+		var busy *busyRefusal
+		if errors.As(err, &busy) && len(out.Removed) == 0 {
+			f.Reason, f.Why = ErrConflict, busy.why
+			for _, left := range plan[n:] {
+				f.Left = append(f.Left, left.label)
+			}
+			return Removal{}, f
+		}
 		why, unsure, reason := step.failed(err)
 		f.Reason = reason
 		if len(f.Removed) == 0 {

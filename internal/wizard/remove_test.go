@@ -119,6 +119,24 @@ func TestRemoveSiteChecksBeforeItRemovesAnything(t *testing.T) {
 	}
 }
 
+// A delete the account service refused because the account's processes
+// kept running says so in one message, with what to do next: nothing was
+// removed, and the database is not touched.
+func TestRemoveSiteSaysWhenTheAccountWasBusy(t *testing.T) {
+	f, _, a := removable(t)
+	f.acc.accounts[0].State = "suspended"
+	f.acc.delErr = hostaccounts.ErrDeleteBusy
+	_, err := f.runner.RemoveSite(context.Background(), a.ID, "example.com", a.Revision, "local-operator")
+	failure := removeFailure(t, err, ErrConflict)
+	want := "The account still had running processes after 3 attempts, so nothing was removed. Suspend the site first (that stops its processes and keeps the site off), then delete it again."
+	if failure.Why != want || failure.Technical != hostaccounts.ErrDeleteBusy.Error() || len(failure.Removed) != 0 || !slices.Equal(failure.Left, []string{siteAccount, siteUser, siteDB}) {
+		t.Fatalf("busy delete %+v", failure)
+	}
+	if len(f.dbs.calls) != 0 || len(f.runner.Succeeded()) != 1 {
+		t.Fatalf("a refused delete went on: %q, sites %+v", f.dbs.calls, f.runner.Succeeded())
+	}
+}
+
 func TestRemoveSiteSaysWhatIsLeftAndCarriesOn(t *testing.T) {
 	f, done, a := removable(t)
 	ctx := context.Background()

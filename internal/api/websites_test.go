@@ -27,9 +27,11 @@ type sitesBroker struct {
 	listErr  error
 	lists    int
 	// changes records every SetWeb, SetState and Delete; changeErr, when
-	// set, is their answer, and nothing changes.
-	changes   []string
-	changeErr error
+	// set, is their answer, and nothing changes. busyDeletes is how many
+	// deletes, in turn, the broker refuses as busy, changing nothing.
+	changes     []string
+	changeErr   error
+	busyDeletes int
 }
 
 // changed applies one change to an account at its revision, as the broker
@@ -71,7 +73,16 @@ func (b *sitesBroker) Create(_ context.Context, in hostaccounts.CreateInput, _ s
 	return a, nil
 }
 func (b *sitesBroker) Delete(_ context.Context, id string, in hostaccounts.DeleteInput, actor string) (hostaccounts.Account, error) {
-	a, err := b.changed(fmt.Sprintf("delete %s rev=%d reason=%q actor=%s", id, in.ExpectedRevision, in.Reason, actor), id, in.ExpectedRevision, func(*hostaccounts.Account) {})
+	call := fmt.Sprintf("delete %s rev=%d reason=%q actor=%s", id, in.ExpectedRevision, in.Reason, actor)
+	b.mu.Lock()
+	if b.busyDeletes > 0 {
+		b.busyDeletes--
+		b.changes = append(b.changes, call)
+		b.mu.Unlock()
+		return hostaccounts.Account{}, hostaccounts.ErrDeleteBusy
+	}
+	b.mu.Unlock()
+	a, err := b.changed(call, id, in.ExpectedRevision, func(*hostaccounts.Account) {})
 	if err != nil {
 		return hostaccounts.Account{}, err
 	}

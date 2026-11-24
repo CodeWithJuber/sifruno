@@ -365,6 +365,26 @@ func TestWebsiteDelete(t *testing.T) {
 	}
 }
 
+// A delete the account service refused because the site's processes kept
+// running answers 409 with that reason and what to do next, and the broker's
+// own word under "Technical details".
+func TestWebsiteDeleteRefusedAsBusy(t *testing.T) {
+	f, _, broker, databases, site := actionsFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	broker.change(site.AccountID, func(a *hostaccounts.Account) { a.State = "suspended" })
+	broker.mu.Lock()
+	broker.busyDeletes = 1
+	broker.mu.Unlock()
+	w := websiteRequest(f.handler, "POST", sitePath(site, "delete"), map[string]any{"confirm_domain": "example.com", "expected_revision": site.Revision}, cookie, csrf)
+	want := "The account still had running processes after 3 attempts, so nothing was removed. Suspend the site first (that stops its processes and keeps the site off), then delete it again."
+	if w.Code != 409 || problemDetail(t, w) != want || problemTechnical(t, w) != hostaccounts.ErrDeleteBusy.Error() {
+		t.Fatalf("busy delete %d: %s", w.Code, w.Body.String())
+	}
+	if len(databases.drops) != 0 || len(broker.changes) != 1 {
+		t.Fatalf("a refused delete went on: %q %q", databases.drops, broker.changes)
+	}
+}
+
 func TestWebsiteActionAdmission(t *testing.T) {
 	f, _, broker, databases, site := actionsFixture(t)
 	bodies := map[string]string{

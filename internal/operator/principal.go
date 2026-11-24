@@ -108,6 +108,27 @@ func (m *Manager) Scope(r *http.Request) (p Principal, restricted, ok bool) {
 	return p, true, ok
 }
 
+// SetCustomerRoutes gives the manager the API routes a restricted session
+// may use, as the API's customer table names them (method and pattern). A
+// restricted session's answers carry the list, so the panel shows only what
+// the session can use. It is a list for showing: the API decides every
+// request on its own. Until it is set, answers carry no list.
+func (m *Manager) SetCustomerRoutes(routes []string) {
+	list := slices.Clone(routes)
+	slices.Sort(list)
+	m.customerRoutes.Store(&list)
+}
+
+// publicSession is a session as the session routes answer it; a restricted
+// session also names the routes it may use. The list is shared read-only.
+func (m *Manager) publicSession(a activeSession, csrf string) Session {
+	s := a.public(csrf)
+	if routes := m.customerRoutes.Load(); routes != nil && (a.customer || a.viewAs != "") {
+		s.Routes = *routes
+	}
+	return s
+}
+
 // customerSessionRoomLocked makes room for one more session of this
 // customer: it ends the customer's oldest session when it has four, and
 // reports false when customers already hold their share of the table.

@@ -109,6 +109,7 @@ func build(o Options) (http.Handler, *routeMux) {
 	registerRestorePreview(mux, api, o)
 	if o.Operator != nil {
 		o.Operator.Register(mux)
+		o.Operator.SetCustomerRoutes(customerAllowedRoutes())
 		if o.Accounts != nil {
 			o.Operator.CheckWebsitesWith(missingWebsites(o.Accounts))
 		}

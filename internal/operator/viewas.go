@@ -36,7 +36,7 @@ func (m *Manager) beginViewAs(w http.ResponseWriter, r *http.Request) {
 	a.viewAs = input.Username
 	m.active[id] = a
 	m.mu.Unlock()
-	writeJSON(w, a.public(s.Values["csrf"].(string)))
+	writeJSON(w, m.publicSession(a, s.Values["csrf"].(string)))
 }
 
 // endViewAs takes the session back to the admin's own view. It works even
@@ -63,5 +63,5 @@ func (m *Manager) endViewAs(w http.ResponseWriter, r *http.Request) {
 	a.viewAs = ""
 	m.active[id] = a
 	m.mu.Unlock()
-	writeJSON(w, a.public(s.Values["csrf"].(string)))
+	writeJSON(w, m.publicSession(a, s.Values["csrf"].(string)))
 }

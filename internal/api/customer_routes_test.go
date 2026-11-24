@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
-
+	"flag"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -86,6 +88,79 @@ func TestCustomerRouteTableCoversEveryRoute(t *testing.T) {
 	}
 	if len(mux.patterns) < 100 {
 		t.Fatalf("only %d routes recorded; the recorder misses registrations", len(mux.patterns))
+	}
+}
+
+var updateCustomerRoutes = flag.Bool("update", false, "rewrite "+customerRoutesFile+" from customerRoutes")
+
+const customerRoutesFile = "../../web/src/lib/customer-routes.json"
+
+// The panel's own tests read the table from web/src/lib/customer-routes.json
+// (customer-routes.test.mjs fails when the customer's menu or a website tab
+// needs a route customers are refused). This keeps that file equal to the
+// table. After changing the table, run
+// go test ./internal/api -run TestCustomerRoutesFileMatchesTable -update
+// and commit the file with the change.
+func TestCustomerRoutesFileMatchesTable(t *testing.T) {
+	names := map[customerAccess]string{adminOnly: "adminOnly", customerOpen: "customerOpen", ownWebsite: "ownWebsite", ownWebsites: "ownWebsites"}
+	table := map[string]string{}
+	for pattern, access := range customerRoutes {
+		name, ok := names[access]
+		if !ok {
+			t.Fatalf("%q: access %d has no name here", pattern, access)
+		}
+		table[pattern] = name
+	}
+	want, err := json.MarshalIndent(table, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append(want, '\n')
+	if *updateCustomerRoutes {
+		if err := os.WriteFile(customerRoutesFile, want, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	got, err := os.ReadFile(customerRoutesFile)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("%s does not match customerRoutes (%v). Run go test ./internal/api -run TestCustomerRoutesFileMatchesTable -update and commit the file", customerRoutesFile, err)
+	}
+}
+
+// A restricted session's answers name the routes it may use, which are the
+// table's: a customer's sign-in and its session, and an admin's while it
+// views as the customer. An admin's own session names none: it may use all.
+func TestRestrictedSessionsNameTheirRoutes(t *testing.T) {
+	f, _, _, site, _ := domainsFixture(t)
+	adminCookie, adminCSRF := websiteSignIn(t, f)
+	allowed := customerAllowedRoutes()
+	if len(allowed) < 30 || slices.Contains(allowed, "POST /api/v1/websites/sites/{account_id}/state") || !slices.Contains(allowed, "GET /api/v1/websites/sites/{account_id}/backups") {
+		t.Fatalf("allowed routes: %v", allowed)
+	}
+	routesOf := func(w *httptest.ResponseRecorder) []string {
+		t.Helper()
+		var s operator.Session
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &s) != nil || !s.Authenticated {
+			t.Fatalf("session answer: %d %s", w.Code, w.Body.String())
+		}
+		return s.Routes
+	}
+	if got := routesOf(websiteRequest(f.handler, "GET", "/api/v1/session", nil, adminCookie, "")); got != nil {
+		t.Fatalf("an admin's session names routes: %v", got)
+	}
+	cookie, _ := customerSession(t, f, adminCookie, adminCSRF, "alice", loopback(f), site.AccountID)
+	if got := routesOf(websiteRequest(f.handler, "GET", "/api/v1/session", nil, cookie, "")); !slices.Equal(got, allowed) {
+		t.Fatalf("a customer's session names %v", got)
+	}
+	if got := routesOf(websiteRequest(f.handler, "POST", "/api/v1/session/view-as", map[string]string{"username": "alice"}, adminCookie, adminCSRF)); !slices.Equal(got, allowed) {
+		t.Fatalf("viewing as names %v", got)
+	}
+	if got := routesOf(websiteRequest(f.handler, "GET", "/api/v1/session", nil, adminCookie, "")); !slices.Equal(got, allowed) {
+		t.Fatalf("a viewing session names %v", got)
+	}
+	if got := routesOf(websiteRequest(f.handler, "POST", "/api/v1/session/view-as/end", map[string]string{}, adminCookie, adminCSRF)); got != nil {
+		t.Fatalf("back to the admin view names %v", got)
 	}
 }
 

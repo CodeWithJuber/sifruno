@@ -45,6 +45,7 @@ func documentOperator(a huma.API) {
 		"authenticated": {Type: "boolean", Enum: []any{true}}, "csrf_token": token(), "expires_at": {Type: "string", Format: "date-time"}, "username": sessionUser,
 		"role":    {Type: "string", Enum: []any{"admin", "customer"}, Description: "admin for the access key and admins; customer for a customer's login, which reaches only its own websites."},
 		"view_as": viewAs,
+		"routes":  {Type: "array", Items: &huma.Schema{Type: "string"}, Description: "Present for a restricted session (a customer, or an admin viewing as one): the API routes it may use, as method and path pattern, sorted. The panel shows only what these allow; the server still checks every request, and a {account_id} route works only for the customer's own websites."},
 	}}
 	schemas["OperatorSetupStatus"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"admin_required"}, Properties: map[string]*huma.Schema{
 		"admin_required": {Type: "boolean", Description: "True until the first admin account exists."},

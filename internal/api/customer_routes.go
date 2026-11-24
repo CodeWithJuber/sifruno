@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"path"
+	"slices"
 	"strings"
 
 	"sifruno/internal/operator"
@@ -178,6 +179,22 @@ var customerRoutes = map[string]customerAccess{
 	"/cpsess":            adminOnly,
 	"/scripts/":          adminOnly,
 	"/usr/local/cpanel/": adminOnly,
+}
+
+// customerAllowedRoutes lists the routes the table lets a restricted session
+// use, sorted. The session routes hand it to the panel
+// (operator.Manager.SetCustomerRoutes), which shows a restricted viewer only
+// the controls these allow, so the panel and this table cannot disagree. An
+// ownWebsite route is listed too: its website must still be the customer's.
+func customerAllowedRoutes() []string {
+	var allowed []string
+	for pattern, access := range customerRoutes {
+		if access != adminOnly {
+			allowed = append(allowed, pattern)
+		}
+	}
+	slices.Sort(allowed)
+	return allowed
 }
 
 // customerAdmitted applies the table to a restricted principal and answers

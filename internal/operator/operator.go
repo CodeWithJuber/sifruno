@@ -56,6 +56,11 @@ type Session struct {
 	// ViewAs names the customer an admin is viewing the panel as. While it
 	// is set the session has only that customer's access.
 	ViewAs string `json:"view_as,omitempty"`
+	// Routes is set for a restricted session (a customer's, or an admin's
+	// while it views as a customer): the API routes it may use, as the API's
+	// customer table names them (SetCustomerRoutes). The panel shows only
+	// what they allow; the API still decides every request.
+	Routes []string `json:"routes,omitempty"`
 }
 
 type activeSession struct {
@@ -117,6 +122,7 @@ type Manager struct {
 	remoteSetupBuckets [remoteLoginBuckets]*rate.Limiter
 	publicAddress      atomic.Pointer[string]
 	websiteCheck       atomic.Pointer[WebsiteCheck]
+	customerRoutes     atomic.Pointer[[]string]
 
 	// API tokens (tokens.go). tokenMu guards the token file, its cached copy
 	// and the bearer limiters. It is never held together with adminMu; when
@@ -691,7 +697,7 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 		WriteError(w, 503, "operator_unavailable", "Operator session unavailable")
 		return
 	}
-	writeJSON(w, session.public(csrf))
+	writeJSON(w, m.publicSession(session, csrf))
 }
 
 func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
@@ -702,7 +708,7 @@ func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
 	if _, ok := m.sessionPrincipal(w, id, a); !ok {
 		return
 	}
-	writeJSON(w, a.public(s.Values["csrf"].(string)))
+	writeJSON(w, m.publicSession(a, s.Values["csrf"].(string)))
 }
 
 func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {

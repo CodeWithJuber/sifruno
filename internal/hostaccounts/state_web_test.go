@@ -235,6 +235,62 @@ func TestInterruptedSuspendCanEndRejected(t *testing.T) {
 	}
 }
 
+// A crash after a rejected site list put the account back, and before the
+// rejection was journaled, leaves the suspend pending with the account in
+// its old state. The next start ends it rejected, unchanged, so it no
+// longer blocks every account.
+func TestSuspendInterruptedAfterUndoEndsRejected(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	before := liveFixture(t, s)
+	// What setState does up to the crash: the intent, the account change,
+	// a rejected site list, and the account put back.
+	r := before
+	r.Pending = &pending{Action: "state", Target: "suspended", Actor: "test operator", Reason: "Unpaid"}
+	account := before.Account
+	s.mu.Lock()
+	r, err := s.beginOperation(r, &account)
+	if err == nil {
+		err = f.SetState(ctx, r, "suspended")
+	}
+	if err == nil {
+		f.failure = "sites-reject"
+		if e := s.applySites(ctx, []record{r}); !errors.Is(e, ErrWebRejected) {
+			err = e
+		}
+		f.failure = ""
+	}
+	if err == nil {
+		err = s.undoState(ctx, r)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := recordFor(t, s, before.Account.ID)
+	if pending.Pending == nil || f.users[before.Account.Username].Account.State != "active" {
+		t.Fatalf("the crash fixture is not a pending suspend of an active account: %+v", pending)
+	}
+
+	s.mu.Lock()
+	err = s.refresh(ctx, true)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := recordFor(t, s, before.Account.ID)
+	if after.Pending != nil || after.Account != before.Account || after.HistorySequence != before.HistorySequence+2 {
+		t.Fatalf("refresh did not end the suspend rejected and unchanged: %+v", after)
+	}
+	if got := historyActions(t, s, before.Account.ID); got[len(got)-1] != "state:rejected" {
+		t.Fatalf("history %v", got)
+	}
+	// Nothing is pending, so the same request works now.
+	if got, err := suspend(s, before); err != nil || got.State != "suspended" || !siteOf(t, f.sites, before.Account.ID).Suspended {
+		t.Fatalf("suspend after the recovered crash: %+v %v", got, err)
+	}
+}
+
 func TestStateChangeOfALiveSiteNeedsTheWebOperation(t *testing.T) {
 	s, f := webStore(t)
 	before := liveFixture(t, s)

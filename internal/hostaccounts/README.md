@@ -188,7 +188,10 @@ put back into the state it had, and the change is journaled as `rejected`
 with the account unchanged (422 `web_rejected`). Any other failure leaves
 the change pending: on the next start the broker installs the list again
 once the account is in its new state, or ends the change `rejected` the same
-way. Every later install of the site list, for any account, also marks the
+way. A pending state change whose account the next start finds in its old
+state changed nothing (the broker stopped before the account changed, or
+after a rejected list put it back) and ends `rejected`, unchanged, so it
+does not block every account. Every later install of the site list, for any account, also marks the
 sites of accounts that were suspended before this rule.
 
 The account list shows `web` (`php_version`, `quota_mib`) for each account

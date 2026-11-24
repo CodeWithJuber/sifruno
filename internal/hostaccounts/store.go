@@ -391,6 +391,20 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				}
 				continue
 			} else if s.native.Verify(ctx, targetRecord(r, r.Pending.Target)) != nil {
+				// A state change whose account verifies in its old state
+				// changed nothing: the broker stopped before the account
+				// changed, or after a rejected site list put it back and
+				// before that was journaled. It ends rejected, unchanged,
+				// so it does not block every account.
+				current := r
+				current.Pending = nil
+				if r.Pending.Action == "state" && s.native.Verify(ctx, current) == nil {
+					operation := *r.Pending
+					r.Pending = nil
+					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+						return ErrRecovery
+					}
+				}
 				continue
 			}
 			if r.Pending.Action == "plan" {

@@ -30,6 +30,9 @@ readonly DB_ADMIN_CNF="$PANEL_HOME/db-admin.cnf"
 readonly ACME_DIR=/var/lib/sifruno-acme
 readonly PANEL_LISTEN=127.0.0.1:8080
 readonly PANEL_HTTPS_LISTEN=0.0.0.0:8443
+# phpMyAdmin's own origin: the panel's host names and certificate on the
+# next port, so a phpMyAdmin page can never act on the panel's API.
+readonly PMA_HTTPS_LISTEN=0.0.0.0:8444
 readonly LSWS=/usr/local/lsws
 readonly OLS_CONF="$LSWS/conf/httpd_config.conf"
 readonly NSSWITCH=/etc/nsswitch.conf
@@ -69,7 +72,6 @@ readonly PMA_USER=sifpma
 readonly PMA_STATE=/var/lib/sifruno-phpmyadmin
 readonly PMA_ETC=/etc/sifruno/phpmyadmin
 readonly PMA_LISTEN=127.0.0.1:8090
-readonly PMA_PATH=/api/v1/phpmyadmin/
 readonly PMA_VHOST=sifruno_phpmyadmin
 readonly PMA_OLS_CONF="$LSWS/conf/sifruno-phpmyadmin.conf"
 readonly PMA_VHCONF_DIR="$LSWS/conf/vhosts/$PMA_VHOST"
@@ -99,8 +101,9 @@ usage() {
   cat <<'USAGE'
 usage: install.sh [--panel-host NAME] [--acme-email ADDR] [--no-start] [--dry-run]
   --panel-host NAME   also serve the panel over HTTPS on 0.0.0.0:8443 for this
-                      host name or IP (several: comma-separated). Without it
-                      the panel answers on 127.0.0.1:8080 only.
+                      host name or IP (several: comma-separated), and
+                      phpMyAdmin on 0.0.0.0:8444. Without it the panel
+                      answers on 127.0.0.1:8080 only, without phpMyAdmin.
   --acme-email ADDR   contact address for Let's Encrypt. It turns on website
                       certificates and accepts the certificate authority's
                       terms of service.
@@ -1116,8 +1119,8 @@ pma_settings() {
 pma_ols_server() {
   cat <<CONF
 # Written by Sifruno's installer (install.sh); a new run puts it back.
-# phpMyAdmin for the panel, which proxies $PMA_PATH to this loopback
-# listener for a person signed in to the panel.
+# phpMyAdmin for the panel, whose phpMyAdmin origin (HTTPS on its own
+# port) proxies to this loopback listener for a browser it admitted.
 
 virtualhost $PMA_VHOST {
   vhRoot                  $PMA_DIR/
@@ -1140,8 +1143,9 @@ CONF
 
 # phpMyAdmin's vhost: its own lsphp 8.3 run as $PMA_USER through the CGI
 # daemon, PHP held to phpMyAdmin's folders, no access log (a sign-in link's
-# code is in its query string), and only $PMA_PATH served, without
-# phpMyAdmin's libraries, templates, vendor code or dot files.
+# code is in its query string), and phpMyAdmin at the root without its
+# libraries, templates, vendor code or dot files, and nothing under /api
+# (the panel's API path on the panel's own port).
 pma_ols_vhost() {
   cat <<CONF
 # Written by Sifruno's installer (install.sh); a new run puts it back.
@@ -1204,21 +1208,14 @@ php_admin_value post_max_size 64M
 php_admin_value max_execution_time 600
 }
 
-context $PMA_PATH {
-  location                $PMA_DIR/
-  allowBrowse             1
-  indexFiles              index.php
-}
-
 rewrite  {
   enable                  1
   autoLoadHtaccess        0
   rules                   <<<END_rules
-RewriteCond %{REQUEST_URI} !^${PMA_PATH}
-RewriteRule .* - [F,L]
+RewriteRule ^/?api(/|$) - [F,L,NC]
 RewriteRule (^|/)\. - [F,L]
-RewriteRule ^/?api/v1/phpmyadmin/(libraries|templates|vendor|sql|setup|examples|test)(/|$) - [F,L]
-RewriteRule ^/?api/v1/phpmyadmin/(config\.inc\.php|composer\.(json|lock)|package\.json|yarn\.lock|babel\.config\.json|ChangeLog|README|LICENSE|CONTRIBUTING\.md|RELEASE-DATE-.*)$ - [F,L]
+RewriteRule ^/?(libraries|templates|vendor|sql|setup|examples|test)(/|$) - [F,L]
+RewriteRule ^/?(config\.inc\.php|composer\.(json|lock)|package\.json|yarn\.lock|babel\.config\.json|ChangeLog|README|LICENSE|CONTRIBUTING\.md|RELEASE-DATE-.*)$ - [F,L]
   END_rules
 }
 CONF
@@ -1440,7 +1437,9 @@ UNIT
 panel_unit() { # panel_unit PHPMYADMIN_UID
   local remote=""
   if [ -n "$PANEL_HOST" ]; then
-    remote="$remote --https-listen $PANEL_HTTPS_LISTEN --panel-host $PANEL_HOST"
+    # phpMyAdmin needs an HTTPS origin of its own, so it comes with the
+    # panel's HTTPS listener.
+    remote="$remote --https-listen $PANEL_HTTPS_LISTEN --panel-host $PANEL_HOST --phpmyadmin-listen $PMA_HTTPS_LISTEN --phpmyadmin-upstream $PMA_LISTEN --phpmyadmin-uid $1"
   fi
   if [ -n "$ACME_EMAIL" ]; then
     remote="$remote --acme-email $ACME_EMAIL"
@@ -1459,9 +1458,9 @@ Type=simple
 User=$PANEL_USER
 Group=$PANEL_USER
 WorkingDirectory=$PANEL_STATE
-ExecStart=$BIN_DIR/sifruno --listen $PANEL_LISTEN --sites-listen= --state $PANEL_STATE --ui $UI_DIR --accounts-socket $BROKER_SOCKET --db-defaults-file $DB_ADMIN_CNF --phpmyadmin-upstream $PMA_LISTEN --phpmyadmin-uid $1$remote
-# phpMyAdmin's sign-in script redeems its one-time codes on a socket here;
-# the panel answers only phpMyAdmin's user (ID $1) on it.
+ExecStart=$BIN_DIR/sifruno --listen $PANEL_LISTEN --sites-listen= --state $PANEL_STATE --ui $UI_DIR --accounts-socket $BROKER_SOCKET --db-defaults-file $DB_ADMIN_CNF$remote
+# With phpMyAdmin on, its sign-in script redeems one-time codes on a socket
+# here; the panel answers only phpMyAdmin's user (ID $1) on it.
 RuntimeDirectory=${PANEL_RUN#/run/}
 RuntimeDirectoryMode=0755
 Restart=on-failure
@@ -1614,14 +1613,17 @@ TEXT
      The certificate is self-signed. Compare the fingerprint your browser
      shows with the one the panel logged:
        journalctl -u $PANEL_UNIT | grep SHA-256
-     Open TCP ${PANEL_HTTPS_LISTEN##*:} for the panel and 80 and 443 for websites in your
-     firewall. The installer does not change firewall rules.
+     Open TCP ${PANEL_HTTPS_LISTEN##*:} for the panel, ${PMA_HTTPS_LISTEN##*:} for phpMyAdmin (its own
+     address, https://${PANEL_HOST%%,*}:${PMA_HTTPS_LISTEN##*:}/, which each website's
+     Databases page opens) and 80 and 443 for websites in your firewall. The
+     installer does not change firewall rules.
 TEXT
   else
     cat <<TEXT
   3. Websites need TCP 80 and 443 open in your firewall. The installer does
      not change firewall rules. To sign in to the panel from other machines
-     without an SSH forward, run this again with --panel-host NAME.
+     without an SSH forward, and to use phpMyAdmin (it opens on the panel's
+     HTTPS address, on port ${PMA_HTTPS_LISTEN##*:}), run this again with --panel-host NAME.
 TEXT
   fi
   if [ "$START" = no ]; then

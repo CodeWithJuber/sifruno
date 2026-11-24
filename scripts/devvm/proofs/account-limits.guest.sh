@@ -4,8 +4,11 @@
 # pam_limits file and OpenLiteSpeed cgroups setting, the broker's slice
 # drop-in at create and plan change, a tenant's fork loop stopping at the
 # limit, a runuser session in the user slice with TasksMax set, the site's
-# lsphp process and its limits, and the delete of an active site while a
-# fork loop runs. Prints PASS/FAIL per check, and what it read.
+# lsphp process and its limits, the delete of an active site while a fork
+# loop runs, and a WordPress install step whose tenant wp-cli.yml starts a
+# fork loop: held in its own unit in the account's slice, the broker still
+# answering, nothing left after the step. Prints PASS/FAIL per check, and
+# what it read.
 # shellcheck disable=SC2317 # the helpers are called through check
 set -uo pipefail
 
@@ -17,6 +20,11 @@ UNITS=/etc/systemd/system
 LIMITS_FILE=/etc/security/limits.d/90-sifruno-accounts.conf
 RUNID="$(date +%s)"
 RUNID="${RUNID: -5}"
+# Files the tenant copies into its public_html, readable by it.
+WORK="/tmp/account-limits-proof-$RUNID"
+# What the panel holds lives in its own home, where brokerdrive (as sifpanel)
+# can read it.
+PANEL="/var/lib/sifpanel/limits-proof-$RUNID"
 A_USER="lma${RUNID}"
 B_USER="lmb${RUNID}"
 A_DOMAIN="${A_USER}.proof.test"
@@ -117,8 +125,8 @@ echo "## 1. The installer's two steps"
 # shellcheck disable=SC1091
 (SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$BIN/install.sh" && step_limits && step_ols_cgroups && printf '  changed: %s\n' "${CHANGES[@]}") || fail "the installer's limits and cgroups steps run"
 check "the limits file is root's, 0644" test "$(stat -c '%U:%G %a' "$LIMITS_FILE")" = "root:root 644"
-check "it sets nproc 100, soft and hard, for UIDs 20000:60000" grep -qxE '20000:60000 +hard +nproc +100' "$LIMITS_FILE"
-check "and the soft limit too" grep -qxE '20000:60000 +soft +nproc +100' "$LIMITS_FILE"
+check "it sets the backstop nproc 4096, soft and hard, for UIDs 20000:60000" grep -qxE '20000:60000 +hard +nproc +4096' "$LIMITS_FILE"
+check "and the soft limit too" grep -qxE '20000:60000 +soft +nproc +4096' "$LIMITS_FILE"
 echo "  CGIRLimit cgroups: $(ols_cgroups)"
 check "OpenLiteSpeed's CGIRLimit has cgroups 1" test "$(ols_cgroups)" = 1
 # shellcheck disable=SC2016 # expands in the inner shell
@@ -154,7 +162,7 @@ echo "## 3. A runuser session lands in the user slice with TasksMax set"
 session="$(tenant_session "$A_USER" /usr/bin/cat /proc/self/cgroup /proc/self/limits)"
 printf '%s\n' "$session" | grep -E '^0::|Max processes|Max address space' | sed 's/^/  /'
 check "the session runs in user-$a_uid.slice" grep -q "^0::/user.slice/user-$a_uid.slice/" <<<"$session"
-check "the session's RLIMIT_NPROC is 100 (limits.d)" grep -qE '^Max processes +100 +100 ' <<<"$session"
+check "the session's RLIMIT_NPROC is the backstop 4096 (limits.d)" grep -qE '^Max processes +4096 +4096 ' <<<"$session"
 tenant_session_bg "limits-proof-hold-$RUNID" "$A_USER" /usr/bin/sleep 600
 sleep 2
 echo "  pids.max $(cat "$(slice_dir "$a_uid")/pids.max" 2>&1), memory.max $(cat "$(slice_dir "$a_uid")/memory.max" 2>&1), cpu.max $(cat "$(slice_dir "$a_uid")/cpu.max" 2>&1)"
@@ -232,9 +240,72 @@ check "no process runs as A's UID" bash -c "! pgrep -u $a_uid"
 check "A's drop-in is gone" test ! -e "$dropin"
 check "B still serves" test "$(code "$B_DOMAIN" /)" = 200
 systemctl stop "limits-proof-loop-$RUNID" 2>/dev/null
+
+echo
+echo "## 8. Tenant code in a WordPress install step stays in the account's slice"
+# B's wp-cli.yml makes WP-CLI load fork.php before every command the broker
+# runs in public_html. fork.php starts a fork loop that never stops in a new
+# session (setsid), then waits, so the step is still running while this
+# section looks. B has no database, so the install stops at a step; what
+# matters is where the loop runs, that it stays bounded, that the broker
+# answers meanwhile, and that nothing of it is left after the step.
+b_uid="$(id -u "$B_USER")"
+install -d -m 0755 "$WORK"
+printf 'require:\n  - fork.php\n' > "$WORK/wp-cli.yml"
+printf '%s\n' "$FORK_LOOP" > "$WORK/loop.py"
+cat > "$WORK/fork.php" <<'PHP'
+<?php
+// Tenant code that WP-CLI loads through wp-cli.yml.
+exec('/usr/bin/setsid /usr/bin/python3 ' . __DIR__ . '/loop.py > /dev/null 2>&1 &');
+sleep(20);
+PHP
+chmod 0644 "$WORK/wp-cli.yml" "$WORK/loop.py" "$WORK/fork.php"
+as_tenant "$B_USER" "cp $WORK/wp-cli.yml $WORK/loop.py $WORK/fork.php public_html/"
+install -d -o sifpanel -g sifpanel -m 0700 "$PANEL"
+for f in admin-password db-password; do
+  head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20 > "$PANEL/$f"
+  chown sifpanel:sifpanel "$PANEL/$f"
+  chmod 0600 "$PANEL/$f"
+done
+drive wordpress --id "$b_id" --revision "$b_rev" --title 'Limits proof' --admin-user proofadmin \
+  --admin-email "admin@$B_DOMAIN" --admin-password-file "$PANEL/admin-password" \
+  --db-name "${B_USER}_wp" --db-user "${B_USER}_wp" --db-password-file "$PANEL/db-password" \
+  >"$WORK/install.out" 2>"$WORK/install.err" &
+install_pid=$!
+sleep 12
+loop_pid="$(pgrep -u "$b_uid" -f loop.py | head -1)"
+loop_cgroup="$(cat "/proc/${loop_pid:-0}/cgroup" 2>/dev/null)"
+unit="$(sed -nE 's|^0::/user.slice/user-[0-9]+.slice/(sifruno-site-[0-9]+-[0-9a-f]{16}.service)$|\1|p' <<<"$loop_cgroup")"
+echo "  loop process ${loop_pid:-none}: $loop_cgroup"
+check "the loop runs in a sifruno-site unit in user-$b_uid.slice" grep -qE "^0::/user.slice/user-$b_uid.slice/sifruno-site-$b_uid-[0-9a-f]{16}.service$" <<<"$loop_cgroup"
+php_pid="$(pgrep -u "$b_uid" -f wp-cli.phar | head -1)"
+check "the loop runs in a session of its own (setsid), not WP-CLI's" bash -c "[ -n '$loop_pid' ] && [ -n '$php_pid' ] && [ \"\$(ps -o sid= -p $loop_pid)\" != \"\$(ps -o sid= -p $php_pid)\" ]"
+unit_dir="$(slice_dir "$b_uid")/$unit"
+echo "  $unit: pids.current $(cat "$unit_dir/pids.current" 2>&1), pids.max $(cat "$unit_dir/pids.max" 2>&1); slice pids.current $(cat "$(slice_dir "$b_uid")/pids.current" 2>&1)"
+echo "  unit: TasksMax $(systemctl show -P TasksMax "$unit" 2>&1), RuntimeMaxUSec $(systemctl show -P RuntimeMaxUSec "$unit" 2>&1), KillMode $(systemctl show -P KillMode "$unit" 2>&1), User $(systemctl show -P User "$unit" 2>&1), WorkingDirectory $(systemctl show -P WorkingDirectory "$unit" 2>&1)"
+check "the unit's task limit is B's plan, 100" test "$(systemctl show -P TasksMax "$unit")" = 100
+check "the loop is held at or under it" between "$(cat "$unit_dir/pids.current")" 20 100
+echo "  the broker's own tasks: $(systemctl show -P TasksCurrent sifruno-broker-proof)"
+check "the broker's own cgroup holds few tasks" between "$(systemctl show -P TasksCurrent sifruno-broker-proof)" 1 60
+started="$(date +%s)"
+drive list >/dev/null
+listed=$?
+echo "  the broker answered a list in $(($(date +%s) - started)) s while the loop ran"
+check "the broker answers while the loop runs" bash -c "[ $listed -eq 0 ] && [ $(($(date +%s) - started)) -le 10 ]"
+check "WP-CLI's HOME is the broker's empty root-owned folder" bash -c "tr '\\0' '\\n' < /proc/${php_pid:-0}/environ | grep -qx HOME=/var/lib/sifruno-site-home"
+wait "$install_pid"
+echo "  install answer: $(cat "$WORK/install.err" "$WORK/install.out" | tr '\n' ' ')"
+sleep 2
+check "no loop process of B is left after the steps" bash -c "! pgrep -u $b_uid -f loop.py"
+check "no sifruno-site unit is left" bash -c "[ -z \"\$(systemctl list-units --all --plain --no-legend 'sifruno-site-*')\" ]"
+# The download step may have put WordPress's files in place, which redirect
+# to its setup page while there is no wp-config.php.
+check "B's site answers again" bash -c "for _ in \$(seq 1 30); do case \$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: $B_DOMAIN' http://127.0.0.1/) in 200|302) exit 0;; esac; sleep 2; done; exit 1"
 drive delete --id "$b_id" --revision "$b_rev" --reason 'Remove B' >/dev/null || fail "the operator deletes B"
 check "B's Linux user is gone" bash -c "! getent passwd $B_USER"
+check "B's cache store is gone" test ! -e "$LSWS/cachedata/sifruno-u${b_id:0:31}"
 check "OpenLiteSpeed is still running" systemctl is-active --quiet lsws
+rm -rf "$WORK" "$PANEL"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "RESULT: all checks passed"; else echo "RESULT: $fails check(s) failed"; fi

@@ -42,9 +42,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch global.Arg(0) {
 	case "wordpress":
 		timeout = 12 * time.Minute
-	case "web", "certificate", "delete", "state", "plan", "backup-target", "backups":
+	case "create", "web", "certificate", "delete", "state", "plan", "backup-target", "backups":
 		// A state change of a live site re-applies the site list too, and
-		// so does a plan change of its limits.
+		// so does a plan change of its limits. A create writes the slice
+		// limits and may reload systemd first.
 		timeout = 6 * time.Minute
 	case "backup", "restore", "drill", "prune":
 		timeout = 125 * time.Minute

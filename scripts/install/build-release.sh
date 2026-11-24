@@ -6,7 +6,8 @@
 #   artifacts/release/sifruno-linux-amd64.tar.gz.sha256
 #
 # The tarball unpacks to sifruno-linux-amd64/ with bin/ (sifruno, hostbroker,
-# hostsetup, panelctl, sifruno-files), ui/ (the built panel), install.sh and a
+# hostsetup, panelctl, sifruno-files), ui/ (the built panel), phpmyadmin/
+# (phpMyAdmin's configuration and sign-in script), install.sh and a
 # SHA256SUMS of those files. Set SIFRUNO_RELEASE_OUT to write somewhere else.
 set -euo pipefail
 umask 022
@@ -48,13 +49,17 @@ echo "Building the panel UI"
 [ -f "$REPO/web/dist/index.html" ] || die "npm run panel:build left no web/dist/index.html"
 cp -R -- "$REPO/web/dist" "$root/ui"
 cp -- "$HERE/install.sh" "$root/install.sh"
+# phpMyAdmin's configuration and Sifruno's sign-in script for it; the
+# installer downloads phpMyAdmin itself and checks it against its pin.
+mkdir -p "$root/phpmyadmin"
+cp -- "$HERE/phpmyadmin/config.inc.php" "$HERE/phpmyadmin/sifruno-signon.php" "$root/phpmyadmin/"
 
 # Fixed modes, whatever the build machine's umask or checkout made them.
 chmod -R u=rwX,go=rX "$root"
 chmod 0755 "$root/install.sh" "$root"/bin/*
-find "$root/ui" -type f -exec chmod 0644 {} +
+find "$root/ui" "$root/phpmyadmin" -type f -exec chmod 0644 {} +
 
-(cd "$root" && find bin ui install.sh -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
+(cd "$root" && find bin ui phpmyadmin install.sh -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
 
 mkdir -p "$OUT"
 # Root owns every file in the archive, so unpacking as root on the server

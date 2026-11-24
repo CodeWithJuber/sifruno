@@ -55,6 +55,28 @@ readonly RESTIC_VERSION=0.20.0
 readonly RESTIC_BZ2_SHA256=0ccd9fa7885074a24603b051e01bf9bd8b5e45d6a1791e9d9887e9e9372107f7
 readonly RESTIC_SHA256=c109579d3a1a4d26094bef5400ac5645fceb1043414c05f51b8fb48272001c72
 readonly WPCLI_SHA512=be928f6b8ca1e8dfb9d2f4b75a13aa4aee0896f8a9a0a1c45cd5d2c98605e6172e6d014dda2e27f88c98befc16c040cbb2bd1bfa121510ea5cdf5f6a30fe8832
+# phpMyAdmin for the panel's one-click sign-in. The download is checked
+# against the sha256 files.phpmyadmin.net publishes beside it (its .asc
+# signature is Isaac Bennetch's release key, 3D06 A59E CE73 0EB7 1B51 1C17
+# CE75 2F17 8259 BD92; both checked 2026-11-24; 5.2.3 is the release of
+# 2025-10-08 and fixes every advisory up to PMASA-2025-3); the unpacked tree,
+# without setup/ and examples/, against PMA_TREE_SHA256 (pma_tree_sha256).
+readonly PMA_VERSION=5.2.3
+readonly PMA_TARBALL_SHA256=03de2640bb25c9a6f96bc94eae316080b5fd5bd58d769e1318ba9dd94c83364c
+readonly PMA_TREE_SHA256=dd0f2c288f080c4bdd1468e178f6f5f49ee8227187bd017d7a4f2459444fcdb8
+readonly PMA_DIR="$PREFIX/phpmyadmin"
+readonly PMA_USER=sifpma
+readonly PMA_STATE=/var/lib/sifruno-phpmyadmin
+readonly PMA_ETC=/etc/sifruno/phpmyadmin
+readonly PMA_LISTEN=127.0.0.1:8090
+readonly PMA_PATH=/api/v1/phpmyadmin/
+readonly PMA_VHOST=sifruno_phpmyadmin
+readonly PMA_OLS_CONF="$LSWS/conf/sifruno-phpmyadmin.conf"
+readonly PMA_VHCONF_DIR="$LSWS/conf/vhosts/$PMA_VHOST"
+readonly PMA_LOG_DIR="$LSWS/logs/$PMA_VHOST"
+# systemd makes it for the panel (RuntimeDirectory); phpMyAdmin's sign-in
+# script redeems its codes on the socket inside.
+readonly PANEL_RUN=/run/sifruno-panel
 STAMP="$(date +%Y%m%d-%H%M)"
 readonly STAMP
 
@@ -477,7 +499,7 @@ verify_release() {
   [ "$listed" = "$present" ] || die "The release holds files that SHA256SUMS does not list." \
     "Every file the installer copies must be a verified one." \
     "Unpack the release tarball into an empty folder and run its install.sh."
-  for name in "${PROGRAMS[@]/#/bin/}" ui/index.html; do
+  for name in "${PROGRAMS[@]/#/bin/}" ui/index.html phpmyadmin/config.inc.php phpmyadmin/sifruno-signon.php; do
     [ -f "$HERE/$name" ] || die "The release has no $name." \
       "The release is incomplete." \
       "Build it again with scripts/install/build-release.sh."
@@ -969,6 +991,300 @@ step_restic() {
   changed "restic ${RESTIC_VERSION} installed at $target"
 }
 
+# ---------------------------------------------------------------- phpMyAdmin
+
+# The sha256 of phpMyAdmin's own files in DIR, Sifruno's config.inc.php and
+# sign-in script left out: the sorted sha256sum list of every file, hashed.
+pma_tree_sha256() { # pma_tree_sha256 DIR
+  (cd "$1" && find . \( -path ./config.inc.php -o -path ./sifruno-signon.php \) -prune -o -type f -print0 |
+    LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+}
+
+# put_file OWNER GROUP MODE SOURCE TARGET: puts SOURCE at TARGET unless TARGET
+# already has those bytes, that owner and mode, and is not a link. Answers
+# true when it wrote.
+put_file() {
+  local owner="$1" group="$2" mode="$3" source="$4" target="$5"
+  if [ ! -L "$target" ] && cmp -s "$source" "$target" &&
+    [ "$(stat -c '%U:%G %a' "$target")" = "$owner:$group ${mode#0}" ]; then
+    return 1
+  fi
+  install -o "$owner" -g "$group" -m "$mode" "$source" "$target.new"
+  mv -f -- "$target.new" "$target"
+  return 0
+}
+
+# Sifruno's two files in phpMyAdmin's folder DIR: its configuration, which
+# only root and phpMyAdmin's user can read, and the sign-in script.
+pma_own_files() { # pma_own_files DIR
+  local wrote=no
+  if put_file root "$PMA_USER" 0640 "$HERE/phpmyadmin/config.inc.php" "$1/config.inc.php"; then wrote=yes; fi
+  if put_file root root 0644 "$HERE/phpmyadmin/sifruno-signon.php" "$1/sifruno-signon.php"; then wrote=yes; fi
+  [ "$wrote" = yes ]
+}
+
+pma_user() {
+  local uid
+  if ! id "$PMA_USER" >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir "$PMA_STATE" --no-create-home --shell /usr/sbin/nologin "$PMA_USER"
+    changed "system user $PMA_USER created for phpMyAdmin's PHP"
+  fi
+  uid="$(id -u "$PMA_USER")"
+  if [ "$uid" -eq 0 ] || { [ "$uid" -ge 20000 ] && [ "$uid" -le 60000 ]; } || [ "$(id -G "$PMA_USER")" != "$(id -g "$PMA_USER")" ]; then
+    die "The user $PMA_USER (ID $uid, groups: $(id -Gn "$PMA_USER")) cannot run phpMyAdmin." \
+      "phpMyAdmin's PHP runs as its own system user: not root, outside the hosting accounts' IDs 20000 to 60000, and in no other group, so it can open no website's files." \
+      "Remove that user, or give it only its own group, then run this again."
+  fi
+}
+
+# phpMyAdmin's files: root's, read-only, exactly the pinned release.
+pma_files() {
+  local work
+  ensure_dir root root 0755 "$PREFIX"
+  if [ -d "$PMA_DIR" ] && [ ! -L "$PMA_DIR" ] && [ "$(pma_tree_sha256 "$PMA_DIR")" = "$PMA_TREE_SHA256" ] &&
+    [ -z "$(find "$PMA_DIR" \( -type l -o ! -user root -o -perm /022 \) -print -quit)" ]; then
+    if pma_own_files "$PMA_DIR"; then
+      changed "phpMyAdmin's config.inc.php and sign-in script written in $PMA_DIR"
+    fi
+    return 0
+  fi
+  work="$(mktemp -d)"
+  curl -fsSL -o "$work/phpmyadmin.tar.gz" \
+    "https://files.phpmyadmin.net/phpMyAdmin/${PMA_VERSION}/phpMyAdmin-${PMA_VERSION}-english.tar.gz"
+  if [ "$(sha256sum "$work/phpmyadmin.tar.gz" | cut -d' ' -f1)" != "$PMA_TARBALL_SHA256" ]; then
+    rm -rf -- "$work"
+    die "The phpMyAdmin ${PMA_VERSION} download does not match the sha256 phpmyadmin.net publishes." \
+      "The panel serves only the exact phpMyAdmin release it was built for, so a different file is never installed." \
+      "Check the server's connection to files.phpmyadmin.net and run this again."
+  fi
+  mkdir -- "$work/tree"
+  tar -xzf "$work/phpmyadmin.tar.gz" -C "$work/tree" --strip-components=1 --no-same-owner --no-same-permissions
+  # The setup wizard and the examples (an example sign-in page among them)
+  # are never served.
+  rm -rf -- "$work/tree/setup" "$work/tree/examples"
+  if [ "$(pma_tree_sha256 "$work/tree")" != "$PMA_TREE_SHA256" ] || [ -n "$(find "$work/tree" ! -type f ! -type d -print -quit)" ]; then
+    rm -rf -- "$work"
+    die "The unpacked phpMyAdmin ${PMA_VERSION} does not match its pinned list of files." \
+      "The panel serves only the exact files it was built for." \
+      "Run this again; if it fails the same way, report it with the installer's output."
+  fi
+  rm -rf -- "$PMA_DIR.new" "$PMA_DIR.old"
+  mv -- "$work/tree" "$PMA_DIR.new"
+  rm -rf -- "$work"
+  chown -R root:root "$PMA_DIR.new"
+  chmod -R u=rwX,go=rX "$PMA_DIR.new"
+  # The configuration goes in before the folder is swapped in, so phpMyAdmin
+  # never runs without it.
+  pma_own_files "$PMA_DIR.new" || true
+  if [ -e "$PMA_DIR" ]; then
+    mv -- "$PMA_DIR" "$PMA_DIR.old"
+  fi
+  mv -- "$PMA_DIR.new" "$PMA_DIR"
+  rm -rf -- "$PMA_DIR.old"
+  relabel -R "$PMA_DIR"
+  changed "phpMyAdmin ${PMA_VERSION} installed in $PMA_DIR (root's, read-only)"
+}
+
+# The blowfish secret, made once, and phpMyAdmin's private folders.
+pma_settings() {
+  local secret target="$PMA_ETC/secret.inc.php"
+  ensure_dir root "$PMA_USER" 0750 "$PMA_ETC"
+  if [ ! -s "$target" ] || [ -L "$target" ]; then
+    # 32 random bytes as hex. printf is bash's own, so the secret is never
+    # a command argument.
+    secret="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+    rm -f -- "$target.new"
+    install -o root -g "$PMA_USER" -m 0640 /dev/null "$target.new"
+    printf "<?php\n// Made by Sifruno's installer: phpMyAdmin's blowfish secret. Root and %s only.\n\$cfg['blowfish_secret'] = hex2bin('%s');\n" "$PMA_USER" "$secret" > "$target.new"
+    unset secret
+    mv -f -- "$target.new" "$target"
+    changed "phpMyAdmin's blowfish secret made in $target"
+  elif [ "$(stat -c '%U:%G %a' "$target")" != "root:$PMA_USER 640" ]; then
+    chown root:"$PMA_USER" "$target"
+    chmod 0640 "$target"
+    changed "$target set to root:$PMA_USER 640"
+  fi
+  ensure_dir root root 0755 "$PMA_STATE"
+  ensure_dir "$PMA_USER" "$PMA_USER" 0700 "$PMA_STATE/sessions"
+  ensure_dir "$PMA_USER" "$PMA_USER" 0700 "$PMA_STATE/tmp"
+  relabel "$PMA_ETC" "$target" "$PMA_STATE" "$PMA_STATE/sessions" "$PMA_STATE/tmp"
+}
+
+# The server-level fragment httpd_config.conf includes: phpMyAdmin's vhost
+# and a listener on loopback only. Its names have no "sifruno-" prefix, so
+# the broker, which owns every sifruno-* vhost, never touches them.
+pma_ols_server() {
+  cat <<CONF
+# Written by Sifruno's installer (install.sh); a new run puts it back.
+# phpMyAdmin for the panel, which proxies $PMA_PATH to this loopback
+# listener for a person signed in to the panel.
+
+virtualhost $PMA_VHOST {
+  vhRoot                  $PMA_DIR/
+  configFile              $PMA_VHCONF_DIR/vhconf.conf
+  allowSymbolLink         0
+  enableScript            1
+  restrained              1
+  setUIDMode              2
+  user                    $PMA_USER
+  group                   $PMA_USER
+}
+
+listener $PMA_VHOST {
+  address                 $PMA_LISTEN
+  secure                  0
+  map                     $PMA_VHOST *
+}
+CONF
+}
+
+# phpMyAdmin's vhost: its own lsphp 8.3 run as $PMA_USER through the CGI
+# daemon, PHP held to phpMyAdmin's folders, no access log (a sign-in link's
+# code is in its query string), and only $PMA_PATH served, without
+# phpMyAdmin's libraries, templates, vendor code or dot files.
+pma_ols_vhost() {
+  cat <<CONF
+# Written by Sifruno's installer (install.sh); a new run puts it back.
+docRoot                   $PMA_DIR/
+
+index  {
+  useServer               0
+  indexFiles              index.php
+  autoIndex               0
+}
+
+errorlog $PMA_LOG_DIR/error.log {
+  useServer               0
+  logLevel                WARN
+  rollingSize             10M
+  keepDays                30
+}
+
+accesslog $PMA_LOG_DIR/access.log {
+  useServer               2
+}
+
+extprocessor $PMA_VHOST {
+  type                    lsapi
+  address                 uds://tmp/lshttpd/$PMA_VHOST.sock
+  maxConns                4
+  env                     PHP_LSAPI_CHILDREN=4
+  env                     LSAPI_AVOID_FORK=200M
+  initTimeout             60
+  retryTimeout            0
+  persistConn             1
+  respBuffer              0
+  autoStart               2
+  path                    $LSWS/lsphp83/bin/lsphp
+  backlog                 100
+  instances               1
+  runOnStartUp            0
+  extUser                 $PMA_USER
+  extGroup                $PMA_USER
+  priority                0
+  memSoftLimit            2047M
+  memHardLimit            2047M
+  procSoftLimit           500
+  procHardLimit           500
+}
+
+scripthandler  {
+  add                     lsapi:$PMA_VHOST php
+}
+
+phpIniOverride  {
+php_admin_value open_basedir "$PMA_DIR/:$PMA_STATE/:$PMA_ETC/:$PANEL_RUN/"
+php_admin_value session.save_path "$PMA_STATE/sessions"
+php_admin_value upload_tmp_dir "$PMA_STATE/tmp"
+php_admin_value sys_temp_dir "$PMA_STATE/tmp"
+php_admin_flag mysqli.allow_local_infile off
+php_admin_flag allow_url_fopen off
+php_admin_value upload_max_filesize 64M
+php_admin_value post_max_size 64M
+php_admin_value max_execution_time 600
+}
+
+context $PMA_PATH {
+  location                $PMA_DIR/
+  allowBrowse             1
+  indexFiles              index.php
+}
+
+rewrite  {
+  enable                  1
+  autoLoadHtaccess        0
+  rules                   <<<END_rules
+RewriteCond %{REQUEST_URI} !^${PMA_PATH}
+RewriteRule .* - [F,L]
+RewriteRule (^|/)\. - [F,L]
+RewriteRule ^/?api/v1/phpmyadmin/(libraries|templates|vendor|sql|setup|examples|test)(/|$) - [F,L]
+RewriteRule ^/?api/v1/phpmyadmin/(config\.inc\.php|composer\.(json|lock)|package\.json|yarn\.lock|babel\.config\.json|ChangeLog|README|LICENSE|CONTRIBUTING\.md|RELEASE-DATE-.*)$ - [F,L]
+  END_rules
+}
+CONF
+}
+
+# phpMyAdmin's OpenLiteSpeed config: the fragment, its vhost, the include
+# line in httpd_config.conf (backup first), a config test that puts the old
+# files back on a new error, and a graceful reload.
+pma_openlitespeed() {
+  local include="include $PMA_OLS_CONF" conf_owner log_owner work before after added name has_include=no
+  conf_owner="$(stat -c '%U %G' "$LSWS/conf")"
+  log_owner="$(stat -c '%U %G' "$LSWS/logs")"
+  # Folders as the broker makes a site's: the owner of their parent, 0750.
+  ensure_dir "${conf_owner% *}" "${conf_owner#* }" 0750 "$PMA_VHCONF_DIR"
+  ensure_dir "${log_owner% *}" "${log_owner#* }" 0750 "$PMA_LOG_DIR"
+  grep -qxF "$include" "$OLS_CONF" && has_include=yes
+  work="$(mktemp -d)"
+  pma_ols_server > "$work/server.conf"
+  pma_ols_vhost > "$work/vhconf.conf"
+  if [ ! -L "$PMA_OLS_CONF" ] && [ ! -L "$PMA_VHCONF_DIR/vhconf.conf" ] &&
+    cmp -s "$work/server.conf" "$PMA_OLS_CONF" && cmp -s "$work/vhconf.conf" "$PMA_VHCONF_DIR/vhconf.conf" && [ "$has_include" = yes ]; then
+    rm -rf -- "$work"
+    return 0
+  fi
+  before="$(ols_test_errors)"
+  for name in "$PMA_OLS_CONF" "$PMA_VHCONF_DIR/vhconf.conf"; do
+    if [ -e "$name" ]; then cp -a -- "$name" "$name.old"; fi
+  done
+  [ -n "$OLS_BACKUP" ] || OLS_BACKUP="$(backup_file "$OLS_CONF")"
+  cp -a -- "$OLS_CONF" "$OLS_CONF.old"
+  install -o "${conf_owner% *}" -g "${conf_owner#* }" -m 0600 "$work/server.conf" "$PMA_OLS_CONF.new"
+  install -o "${conf_owner% *}" -g "${conf_owner#* }" -m 0600 "$work/vhconf.conf" "$PMA_VHCONF_DIR/vhconf.conf.new"
+  rm -rf -- "$work"
+  mv -f -- "$PMA_OLS_CONF.new" "$PMA_OLS_CONF"
+  mv -f -- "$PMA_VHCONF_DIR/vhconf.conf.new" "$PMA_VHCONF_DIR/vhconf.conf"
+  if [ "$has_include" = no ]; then
+    printf '%s\n' "$include" >> "$OLS_CONF"
+  fi
+  relabel "$PMA_OLS_CONF" "$PMA_VHCONF_DIR" "$PMA_VHCONF_DIR/vhconf.conf" "$PMA_LOG_DIR" "$OLS_CONF"
+  after="$(ols_test_errors)"
+  added="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
+  if [ -n "$added" ]; then
+    mv -f -- "$OLS_CONF.old" "$OLS_CONF"
+    for name in "$PMA_OLS_CONF" "$PMA_VHCONF_DIR/vhconf.conf"; do
+      if [ -e "$name.old" ]; then mv -f -- "$name.old" "$name"; else rm -f -- "$name"; fi
+    done
+    relabel "$OLS_CONF"
+    printf '%s\n' "$added" | sed 's/^/  openlitespeed -t:/' >&2
+    die "OpenLiteSpeed's config test reports a new error with phpMyAdmin's vhost, so the installer put the old files back." \
+      "The installer changes OpenLiteSpeed's config only when OpenLiteSpeed accepts the result; the errors are above." \
+      "Fix what they name, check with $LSWS/bin/openlitespeed -t, then run this again."
+  fi
+  rm -f -- "$OLS_CONF.old" "$PMA_OLS_CONF.old" "$PMA_VHCONF_DIR/vhconf.conf.old"
+  if systemctl is-active --quiet lsws; then
+    systemctl reload lsws
+  fi
+  changed "OpenLiteSpeed: phpMyAdmin's vhost and its listener on $PMA_LISTEN ($PMA_OLS_CONF, included from $OLS_CONF; backup: $OLS_BACKUP)"
+}
+
+step_phpmyadmin() {
+  pma_user
+  pma_files
+  pma_settings
+  pma_openlitespeed
+}
+
 step_services() {
   local unit
   # crond runs the sites' scheduled jobs, which the broker writes to
@@ -1121,7 +1437,7 @@ WantedBy=multi-user.target
 UNIT
 }
 
-panel_unit() {
+panel_unit() { # panel_unit PHPMYADMIN_UID
   local remote=""
   if [ -n "$PANEL_HOST" ]; then
     remote="$remote --https-listen $PANEL_HTTPS_LISTEN --panel-host $PANEL_HOST"
@@ -1143,7 +1459,11 @@ Type=simple
 User=$PANEL_USER
 Group=$PANEL_USER
 WorkingDirectory=$PANEL_STATE
-ExecStart=$BIN_DIR/sifruno --listen $PANEL_LISTEN --sites-listen= --state $PANEL_STATE --ui $UI_DIR --accounts-socket $BROKER_SOCKET --db-defaults-file $DB_ADMIN_CNF$remote
+ExecStart=$BIN_DIR/sifruno --listen $PANEL_LISTEN --sites-listen= --state $PANEL_STATE --ui $UI_DIR --accounts-socket $BROKER_SOCKET --db-defaults-file $DB_ADMIN_CNF --phpmyadmin-upstream $PMA_LISTEN --phpmyadmin-uid $1$remote
+# phpMyAdmin's sign-in script redeems its one-time codes on a socket here;
+# the panel answers only phpMyAdmin's user (ID $1) on it.
+RuntimeDirectory=${PANEL_RUN#/run/}
+RuntimeDirectoryMode=0755
 Restart=on-failure
 RestartSec=5
 # The panel reaches the host only through the broker's socket. It writes its
@@ -1185,14 +1505,15 @@ write_unit() { # write_unit NAME CONTENT
 }
 
 step_units() {
-  local uid web_user
+  local uid web_user pma_uid
   uid="$(id -u "$PANEL_USER")"
+  pma_uid="$(id -u "$PMA_USER")"
   web_user="$(ols_user)"
   id "$web_user" >/dev/null 2>&1 || die "OpenLiteSpeed's user '$web_user' (from $OLS_CONF) is not a user on this server." \
     "The broker gives exactly that user read access to each website's files." \
     "Check the 'user' line in $OLS_CONF, then run this again."
   write_unit "$BROKER_UNIT" "$(broker_unit "$uid" "$web_user")"
-  write_unit "$PANEL_UNIT" "$(panel_unit)"
+  write_unit "$PANEL_UNIT" "$(panel_unit "$pma_uid")"
   if [ "$UNITS_WRITTEN" = yes ]; then
     systemctl daemon-reload
     RESTART_NEEDED=yes
@@ -1262,14 +1583,15 @@ step_start() {
 # ------------------------------------------------------------------ summary
 
 print_units() {
-  local uid web_user
+  local uid web_user pma_uid
   uid="$(id -u "$PANEL_USER" 2>/dev/null || true)"
+  pma_uid="$(id -u "$PMA_USER" 2>/dev/null || true)"
   web_user="$(ols_user)"
   [ -r "$OLS_CONF" ] || web_user="<OpenLiteSpeed's user>"
   printf '\n%s\n' "--- $UNIT_DIR/$BROKER_UNIT"
   broker_unit "${uid:-<user ID of $PANEL_USER>}" "$web_user"
   printf '\n%s\n' "--- $UNIT_DIR/$PANEL_UNIT"
-  panel_unit
+  panel_unit "${pma_uid:-<user ID of $PMA_USER>}"
 }
 
 print_first_run() {
@@ -1352,8 +1674,14 @@ TEXT
      The broker's per-account slice limits are in
      $UNIT_DIR/user-<uid>.slice.d/50-sifruno-limits.conf; with the broker
      stopped, remove those files and run systemctl daemon-reload.
-  Packages, the $PANEL_USER user, websites and databases stay. Remove them by
-  hand if you want them gone.
+  6. phpMyAdmin: take the line "include $PMA_OLS_CONF" out of $OLS_CONF
+     (step 4's backup is from before it), then
+       rm -f $PMA_OLS_CONF && rm -rf $PMA_VHCONF_DIR $PMA_DIR $PMA_ETC
+       systemctl reload lsws
+     The panel drops its temporary database users (SifrunoPMA_...) within
+     the hour while it runs.
+  Packages, the $PANEL_USER and $PMA_USER users, websites and databases
+  stay. Remove them by hand if you want them gone.
 TEXT
 }
 
@@ -1379,6 +1707,7 @@ main() {
   step "Bound each hosting account to 4096 processes, the largest plan, in PAM sessions: $LIMITS_FILE" step_limits
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
   step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
+  step "Install phpMyAdmin $PMA_VERSION in $PMA_DIR (pinned sha256), its user $PMA_USER, and its OpenLiteSpeed vhost on $PMA_LISTEN (backup, config test)" step_phpmyadmin
   step "Enable and start MariaDB, OpenLiteSpeed and crond" step_services
   step "Create the panel's MariaDB admin user and its 0600 option file $DB_ADMIN_CNF" step_db_admin
   step "Create the ACME challenge folder $ACME_DIR" step_acme

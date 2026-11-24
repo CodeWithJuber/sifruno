@@ -96,14 +96,16 @@ function RestoreForm({ accountId, data, snapshot, onStarted, onCancel, onBusy }:
   </form>;
 }
 
-function SnapshotTable({ data, onRestore, disabled }: { data: Backups; onRestore: (snapshot: Snapshot) => void; disabled: boolean }) {
+// onRestore is absent for a viewer who may not restore (a customer's login):
+// the table then has no Restore column.
+function SnapshotTable({ data, onRestore, disabled }: { data: Backups; onRestore?: (snapshot: Snapshot) => void; disabled: boolean }) {
   return <Table aria-labelledby="backups-list-heading" data-testid="snapshots-table">
     <TableHeader>
       <TableRow>
         <TableHead scope="col">When</TableHead>
         <TableHead scope="col" className="hidden sm:table-cell">Size</TableHead>
         <TableHead scope="col" className="hidden md:table-cell">Databases</TableHead>
-        <TableHead scope="col"><span className="sr-only">Restore</span></TableHead>
+        {onRestore && <TableHead scope="col"><span className="sr-only">Restore</span></TableHead>}
       </TableRow>
     </TableHeader>
     <TableBody>
@@ -119,11 +121,11 @@ function SnapshotTable({ data, onRestore, disabled }: { data: Backups; onRestore
           </TableCell>
           <TableCell className="hidden sm:table-cell">{formatBytes(snapshot.bytes)}</TableCell>
           <TableCell className="hidden whitespace-normal md:table-cell">{databases}</TableCell>
-          <TableCell className="text-end">
+          {onRestore && <TableCell className="text-end">
             <Button variant="outline" className={`${rowControl} aria-disabled:opacity-60`} disabled={disabled} focusableWhenDisabled onClick={() => onRestore(snapshot)} data-testid="restore-snapshot">
               <ArchiveRestore aria-hidden="true" />Restore<span className="sr-only"> from the backup of {when}</span>
             </Button>
-          </TableCell>
+          </TableCell>}
         </TableRow>;
       })}
     </TableBody>
@@ -131,7 +133,13 @@ function SnapshotTable({ data, onRestore, disabled }: { data: Backups; onRestore
 }
 
 export function SiteBackups({ accountId }: { accountId: string }) {
-  const { revision, setPageResource } = useShell();
+  const { revision, setPageResource, viewer } = useShell();
+  // A customer's login sees its backups but takes, restores and drills
+  // none, and cannot set up the storage: those controls are not shown.
+  const canBackUp = viewer.can("POST /api/v1/websites/sites/{account_id}/backups");
+  const canDrill = viewer.can("POST /api/v1/websites/sites/{account_id}/backups/drill");
+  const canRestore = viewer.can("POST /api/v1/websites/sites/{account_id}/backups/restore");
+  const canSetUpStorage = viewer.can("POST /api/v1/websites/backup-storage");
   const [data, setData] = useState<Backups>();
   const [problem, setProblem] = useState<Problem>();
   const [actionProblem, setActionProblem] = useState<Problem>();
@@ -218,24 +226,26 @@ export function SiteBackups({ accountId }: { accountId: string }) {
           <EmptyHeader>
             <EmptyMedia variant="icon"><HardDrive aria-hidden="true" /></EmptyMedia>
             <EmptyTitle>Backup storage is not set up</EmptyTitle>
-            <EmptyDescription>No website on this server is backed up yet, because the panel does not know where to keep the backups. Set up the storage server first.</EmptyDescription>
+            <EmptyDescription>{canSetUpStorage
+              ? "No website on this server is backed up yet, because the panel does not know where to keep the backups. Set up the storage server first."
+              : "This website is not backed up yet, because the server has no place to keep backups. Ask whoever runs this server to set one up."}</EmptyDescription>
           </EmptyHeader>
-          <Link to="/server/backups" className={linkButton("default")} data-testid="go-backup-storage">Set up backup storage</Link>
+          {canSetUpStorage && <Link to="/server/backups" className={linkButton("default")} data-testid="go-backup-storage">Set up backup storage</Link>}
         </Empty>
         : <>
           {!data.ready && <Alert variant="destructive" className="text-start">
             <CircleAlert aria-hidden="true" />
             <AlertTitle>Backups cannot run on this server right now</AlertTitle>
-            <AlertDescription className="text-start text-foreground">restic is missing or is not the version the panel was built for. Run the installer again, then reload this page.</AlertDescription>
+            <AlertDescription className="text-start text-foreground">restic is missing or is not the version the panel was built for. {canBackUp ? "Run the installer again, then reload this page." : "Ask whoever runs this server to fix it."}</AlertDescription>
           </Alert>}
-          <div className="flex flex-wrap gap-2">
-            <Button className={`${control} aria-disabled:opacity-60`} disabled={busy} focusableWhenDisabled onClick={() => void start("backup")} data-testid="back-up-now">
+          {(canBackUp || canDrill) && <div className="flex flex-wrap gap-2">
+            {canBackUp && <Button className={`${control} aria-disabled:opacity-60`} disabled={busy} focusableWhenDisabled onClick={() => void start("backup")} data-testid="back-up-now">
               {starting === "backup" ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <DatabaseBackup aria-hidden="true" />}Back up now
-            </Button>
-            <Button variant="outline" className={`${control} aria-disabled:opacity-60`} disabled={busy || data.snapshots.length === 0} focusableWhenDisabled onClick={() => void start("drill")} data-testid="drill-now">
+            </Button>}
+            {canDrill && <Button variant="outline" className={`${control} aria-disabled:opacity-60`} disabled={busy || data.snapshots.length === 0} focusableWhenDisabled onClick={() => void start("drill")} data-testid="drill-now">
               {starting === "drill" ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <ShieldCheck aria-hidden="true" />}Run restore drill now
-            </Button>
-          </div>
+            </Button>}
+          </div>}
           {actionProblem && <ProblemAlert problem={actionProblem} testId="backup-action-problem" />}
           <div ref={statusRef} tabIndex={-1} className="outline-none" data-testid="backup-status">
             {running && <Alert role={undefined} className="text-start" data-testid="backup-running" data-kind={running.kind}>
@@ -266,10 +276,10 @@ export function SiteBackups({ accountId }: { accountId: string }) {
             <EmptyHeader>
               <EmptyMedia variant="icon"><DatabaseBackup aria-hidden="true" /></EmptyMedia>
               <EmptyTitle>No backups yet</EmptyTitle>
-              <EmptyDescription>The first backup runs tonight at {data.nightly_at}. To make one now, choose Back up now.</EmptyDescription>
+              <EmptyDescription>The first backup runs tonight at {data.nightly_at}.{canBackUp ? " To make one now, choose Back up now." : ""}</EmptyDescription>
             </EmptyHeader>
           </Empty>
-          : <SnapshotTable data={data} disabled={busy} onRestore={(snapshot) => { setRestoreFrom(snapshot); setRestoreRound((value) => value + 1); setRestoreOpen(true); }} />}
+          : <SnapshotTable data={data} disabled={busy} onRestore={canRestore ? (snapshot) => { setRestoreFrom(snapshot); setRestoreRound((value) => value + 1); setRestoreOpen(true); } : undefined} />}
       <div className="text-sm text-muted-foreground">Kept: the last 7 daily and 4 weekly backups. Older ones are removed each week.</div>
     </section>}
 

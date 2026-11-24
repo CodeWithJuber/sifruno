@@ -145,22 +145,27 @@ export function SiteLink({ href, label, domain, variant, testId }: { href: strin
 // ---- Websites list ------------------------------------------------------------
 
 export function WebsitesList() {
+  const { viewer } = useShell();
   const { data: sites, problem, loading, retry } = useRead("websites", (signal) => listWebsites({ signal }), "Your websites could not be loaded.");
+  // A customer's login cannot make websites or reach the old static sites,
+  // so it is not offered either.
+  const canCreate = viewer.can("POST /api/v1/websites/wordpress");
+  const canStatic = viewer.can("GET /api/v1/sites");
   return <div className="flex w-full flex-col gap-4" data-testid="websites-page">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="text-sm text-muted-foreground" data-testid="websites-count">
         {sites?.length ? (sites.length === 1 ? "1 website" : `${sites.length} websites`) : ""}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Link to="/websites/static" className={linkButton("ghost")} data-testid="static-sites-link">Static sites (old)</Link>
-        <Link to="/websites/new" className={linkButton("default")} data-testid="new-website-link"><Plus aria-hidden="true" />New website</Link>
-      </div>
+      {(canStatic || canCreate) && <div className="flex flex-wrap items-center gap-2">
+        {canStatic && <Link to="/websites/static" className={linkButton("ghost")} data-testid="static-sites-link">Static sites (old)</Link>}
+        {canCreate && <Link to="/websites/new" className={linkButton("default")} data-testid="new-website-link"><Plus aria-hidden="true" />New website</Link>}
+      </div>}
     </div>
     {problem && (sites
       ? <ProblemAlert problem={{ ...problem, next: `${problem.next} The list below is from the last successful read.` }} onRetry={retry} />
       : <ProblemAlert problem={problem} onRetry={retry} />)}
     {!sites && loading && <ListLoading />}
-    {sites && sites.length === 0 && <NoWebsites />}
+    {sites && sites.length === 0 && <NoWebsites canCreate={canCreate} />}
     {sites && sites.length > 0 && <SiteTable sites={sites} />}
   </div>;
 }
@@ -174,16 +179,18 @@ function ListLoading() {
   </div>;
 }
 
-function NoWebsites() {
+function NoWebsites({ canCreate }: { canCreate: boolean }) {
   return <Empty className={`${panel} border-dashed py-12`} data-testid="websites-empty">
     <EmptyHeader>
       <EmptyMedia variant="icon"><Globe aria-hidden="true" /></EmptyMedia>
       <EmptyTitle><h2 className="text-sm font-medium">No websites yet</h2></EmptyTitle>
-      <EmptyDescription>Create a WordPress website or a PHP site. The panel sets up the hosting account and the site, and the site is listed here.</EmptyDescription>
+      <EmptyDescription>{canCreate
+        ? "Create a WordPress website or a PHP site. The panel sets up the hosting account and the site, and the site is listed here."
+        : "Your login has no websites at the moment. Ask whoever gave you the login to add yours; they then show here."}</EmptyDescription>
     </EmptyHeader>
-    <EmptyContent>
+    {canCreate && <EmptyContent>
       <Link to="/websites/new" className={linkButton("default")} data-testid="empty-new-website"><Plus aria-hidden="true" />New website</Link>
-    </EmptyContent>
+    </EmptyContent>}
   </Empty>;
 }
 
@@ -269,6 +276,13 @@ function ActionButton({ busy, busyLabel, children, className = "", disabled, ...
 export function SiteActions({ site, repair, between, onChanged, onDeleted, onReload, announce }: {
   site: WebsiteDetail; repair: boolean; between?: ReactNode; onChanged: (site: WebsiteDetail) => void; onDeleted: (done: WebsiteDeleted) => void; onReload: () => void; announce: (text: string) => void;
 }) {
+  // Each part shows only when the viewer may use its route: a customer's
+  // login keeps the site's cron jobs and logs (between) and nothing here.
+  const { viewer } = useShell();
+  const canFolder = viewer.can("POST /api/v1/websites/sites/{account_id}/folder");
+  const canPhp = viewer.can("POST /api/v1/websites/sites/{account_id}/php");
+  const canState = viewer.can("POST /api/v1/websites/sites/{account_id}/state");
+  const canDelete = viewer.can("POST /api/v1/websites/sites/{account_id}/delete");
   const [busy, setBusy] = useState<ActionName>();
   const [failure, setFailure] = useState<{ action: ActionName; problem: Problem }>();
   const [outcome, setOutcome] = useState<{ action: ActionName; text: string }>();
@@ -342,7 +356,7 @@ export function SiteActions({ site, repair, between, onChanged, onDeleted, onRel
   return <>
     {/* Part of the page from the start, so a named region rather than an alert that interrupts.
         Once the folder is used the notice and its button go; the outcome stays and takes focus. */}
-    {(folder || outcome?.action === "folder") && <section className={sectionClass} data-busy={busy ?? ""}>
+    {canFolder && (folder || outcome?.action === "folder") && <section className={sectionClass} data-busy={busy ?? ""}>
       <div ref={folderRef} tabIndex={-1} className="flex flex-col gap-3 outline-none" data-testid="site-action-folder" data-kind={folder?.kind ?? "done"}>
         {folder && <>
           <Alert role="region" aria-labelledby={`${ids}-folder-title`} className="text-start" data-testid="site-folder-notice">
@@ -365,7 +379,7 @@ export function SiteActions({ site, repair, between, onChanged, onDeleted, onRel
       </div>
     </section>}
 
-    <section className={sectionClass} aria-labelledby={`${ids}-php-heading`} data-testid="site-actions" data-busy={busy ?? ""}>
+    {canPhp && <section className={sectionClass} aria-labelledby={`${ids}-php-heading`} data-testid="site-actions" data-busy={busy ?? ""}>
       <div className="flex flex-col gap-3" data-testid="site-action-php">
         <div className="flex flex-col gap-1">
           <h2 id={`${ids}-php-heading`} tabIndex={-1} className="outline-none">PHP version</h2>
@@ -388,13 +402,13 @@ export function SiteActions({ site, repair, between, onChanged, onDeleted, onRel
         {succeeded("php")}
         {failed("php")}
       </div>
-    </section>
+    </section>}
 
     {between}
 
-    <section className={sectionClass} aria-labelledby={`${ids}-manage-heading`} data-testid="site-manage" data-busy={busy ?? ""}>
-      <h2 id={`${ids}-manage-heading`}>Suspend or delete</h2>
-      <div className="flex flex-col gap-3" data-testid="site-action-state">
+    {(canState || canDelete) && <section className={sectionClass} aria-labelledby={`${ids}-manage-heading`} data-testid="site-manage" data-busy={busy ?? ""}>
+      <h2 id={`${ids}-manage-heading`}>{canState && canDelete ? "Suspend or delete" : canState ? "Suspend" : "Delete"}</h2>
+      {canState && <div className="flex flex-col gap-3" data-testid="site-action-state">
         <div className="flex flex-col gap-1">
           <h3 className="m-0 text-sm font-medium text-foreground">{suspended ? "Resume website" : "Suspend website"}</h3>
           <div className="text-sm text-muted-foreground">
@@ -417,11 +431,11 @@ export function SiteActions({ site, repair, between, onChanged, onDeleted, onRel
         {failed("state")}
         {succeeded("resuspend")}
         {failed("resuspend")}
-      </div>
+      </div>}
 
-      <Separator />
+      {canState && canDelete && <Separator />}
 
-      <div className="flex flex-col gap-3" data-testid="site-action-delete">
+      {canDelete && <div className="flex flex-col gap-3" data-testid="site-action-delete">
         <div className="flex flex-col gap-1">
           <h3 className="m-0 text-sm font-medium text-foreground">Delete website</h3>
           <div className="text-sm text-muted-foreground" data-testid="delete-website-hint">
@@ -430,7 +444,7 @@ export function SiteActions({ site, repair, between, onChanged, onDeleted, onRel
           </div>
         </div>
         <Button variant="destructive" className={`${control} w-fit`} disabled={Boolean(busy)} onClick={() => setDialog(true)} data-testid="delete-website">Delete website…</Button>
-      </div>
+      </div>}
 
       <Dialog open={confirming} onOpenChange={setDialog}>
         <DialogContent className="sm:max-w-md" showCloseButton={false} initialFocus={confirmRef} data-testid="delete-website-dialog">
@@ -456,6 +470,6 @@ export function SiteActions({ site, repair, between, onChanged, onDeleted, onRel
           </form>
         </DialogContent>
       </Dialog>
-    </section>
+    </section>}
   </>;
 }

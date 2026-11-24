@@ -20,17 +20,25 @@ export interface SiteTab {
   segment: string;
   // Simple view keeps cron jobs and logs inside Settings.
   advancedOnly?: true;
+  // The API routes the tab reads to show itself, as the server's customer
+  // table names them. A customer sees every tab, so each of these must be
+  // open to customers (customer-routes.test.mjs checks it against the table).
+  needs: readonly string[];
 }
 
+// Every tab shows the site's name and state, read by the website's layout.
+const siteRead = "GET /api/v1/websites/sites/{account_id}";
+
 export const siteTabs: readonly SiteTab[] = [
-  { id: "overview", label: "Overview", segment: "" },
-  { id: "domains", label: "Domains and SSL", segment: "domains" },
-  { id: "files", label: "Files", segment: "files" },
-  { id: "databases", label: "Databases", segment: "databases" },
-  { id: "backups", label: "Backups", segment: "backups" },
-  { id: "cron", label: "Cron jobs", segment: "cron", advancedOnly: true },
-  { id: "logs", label: "Logs", segment: "logs", advancedOnly: true },
-  { id: "settings", label: "Settings", segment: "settings" },
+  { id: "overview", label: "Overview", segment: "", needs: [siteRead, `${siteRead}/usage`, `${siteRead}/backups`] },
+  { id: "domains", label: "Domains and SSL", segment: "domains", needs: [siteRead] },
+  { id: "files", label: "Files", segment: "files", needs: [siteRead, `${siteRead}/files`] },
+  { id: "databases", label: "Databases", segment: "databases", needs: [siteRead, `${siteRead}/databases`] },
+  { id: "backups", label: "Backups", segment: "backups", needs: [`${siteRead}/backups`] },
+  { id: "cron", label: "Cron jobs", segment: "cron", advancedOnly: true, needs: [siteRead, `${siteRead}/cron`] },
+  { id: "logs", label: "Logs", segment: "logs", advancedOnly: true, needs: [siteRead, `${siteRead}/logs/{kind}`] },
+  // In Simple view Settings also shows the cron jobs and logs.
+  { id: "settings", label: "Settings", segment: "settings", needs: [siteRead, `${siteRead}/cron`, `${siteRead}/logs/{kind}`] },
 ];
 
 export function siteTab(id: SiteTabId): SiteTab {
@@ -55,10 +63,14 @@ export function tabFromPath(pathname: string): SiteTabId | undefined {
 // The tabs a site shows. A partly deleted site has no hosting account, so
 // only its Overview and Settings (where it is deleted again) are there. An
 // Advanced tab opened by its address in Simple view stays in the bar while it
-// is the current page, so a shared link opens what was shared.
-export function tabsFor(mode: ViewMode, state: string, current?: SiteTabId): SiteTab[] {
-  if (state === "partly_deleted") return siteTabs.filter((t) => t.id === "overview" || t.id === "settings");
-  return siteTabs.filter((t) => !t.advancedOnly || mode === "advanced" || t.id === current);
+// is the current page, so a shared link opens what was shared. siteActions is
+// false for a viewer who may not change PHP, suspend or delete (a customer's
+// login): its Settings tab then holds only Simple view's cron jobs and logs,
+// and is left out where it would be empty, unless it is the current page.
+export function tabsFor(mode: ViewMode, state: string, current?: SiteTabId, siteActions = true): SiteTab[] {
+  const settings = siteActions || (mode === "simple" && state !== "partly_deleted") || current === "settings";
+  if (state === "partly_deleted") return siteTabs.filter((t) => t.id === "overview" || (t.id === "settings" && settings));
+  return siteTabs.filter((t) => (!t.advancedOnly || mode === "advanced" || t.id === current) && (t.id !== "settings" || settings));
 }
 
 // Settings holds cron jobs and logs in Simple view; in Advanced view they

@@ -57,7 +57,13 @@ const ownTabs: readonly SiteTabId[] = ["overview", "settings", "cron", "logs"];
 
 const browserStorage = () => window.localStorage;
 
+// Whether the viewer may change the site's PHP, folder or state, or delete
+// it: the Settings tab's own actions. A customer's login may not.
+const siteActionsFor = (can: (route: string) => boolean) => can("POST /api/v1/websites/sites/{account_id}/php") || can("POST /api/v1/websites/sites/{account_id}/folder")
+  || can("POST /api/v1/websites/sites/{account_id}/state") || can("POST /api/v1/websites/sites/{account_id}/delete");
+
 export function WebsiteLayout({ accountId }: { accountId: string }) {
+  const { viewer } = useShell();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const tab = tabFromPath(pathname) ?? "overview";
   const { data: site, problem, loading, retry, replace } = useRead<WebsiteDetail>(ownTabs.includes(tab) ? tabPages[tab] : undefined, (signal) => getWebsite(accountId, { signal }), "This website could not be loaded.");
@@ -127,7 +133,7 @@ export function WebsiteLayout({ accountId }: { accountId: string }) {
   </div>;
 
   const partly = site.state === "partly_deleted";
-  const tabs = tabsFor(mode, site.state, tab);
+  const tabs = tabsFor(mode, site.state, tab, siteActionsFor(viewer.can));
   const shown = tabs.some((t) => t.id === tab);
   const website: Website = { site, mode, navigated, replace, reload: retry, announce: setAnnouncement, onDeleted };
 
@@ -212,14 +218,17 @@ function SiteTabsNav({ accountId, tabs, current }: { accountId: string; tabs: Si
 // screen does not run, so this reports the site's read for the footer.
 function Gone({ tab }: { tab: SiteTabId }) {
   const { site } = useWebsite();
-  const { setPageResource } = useShell();
+  const { setPageResource, viewer } = useShell();
+  const canDelete = viewer.can("POST /api/v1/websites/sites/{account_id}/delete");
   useEffect(() => { setPageResource(tabPages[tab], { data: site, loading: false, loadedAt: new Date() }); }, [tab, site, setPageResource]);
   return <Alert className="text-start" data-testid="site-tab-gone">
     <CircleAlert aria-hidden="true" />
     <AlertTitle>This part of the website is gone</AlertTitle>
     <AlertDescription className="flex flex-col gap-3 text-start">
       <div className="text-foreground">The hosting account was deleted, so its files, domains, scheduled jobs and logs are gone too. The site's database is still on this server.</div>
-      <Link to={tabRoute("settings")} params={{ accountId: site.account_id }} className={linkButton("outline", "w-fit")}>Open Settings to delete the rest</Link>
+      {canDelete
+        ? <Link to={tabRoute("settings")} params={{ accountId: site.account_id }} className={linkButton("outline", "w-fit")}>Open Settings to delete the rest</Link>
+        : <div className="text-foreground">Whoever runs this server can delete the rest.</div>}
     </AlertDescription>
   </Alert>;
 }
@@ -369,6 +378,7 @@ function DetailsSection() {
 
 export function WebsiteSettingsTab() {
   const { site, mode, replace, reload, announce, onDeleted } = useWebsite();
+  const { viewer } = useShell();
   const shows = viewShows(mode);
   const partly = site.state === "partly_deleted";
   const onRevision = (revision: number) => replace({ ...site, revision });
@@ -376,6 +386,12 @@ export function WebsiteSettingsTab() {
     {shows.cronInSettings && <SiteCronSection site={site} onRevision={onRevision} />}
     {shows.logsInSettings && <SiteLogsSection site={site} />}
   </>;
+  // Reached by its address with nothing here for this login: say where things are.
+  if (!siteActionsFor(viewer.can) && (partly || !shows.cronInSettings)) return <TabBody testId="site-settings">
+    <div className="text-sm text-foreground" data-testid="site-settings-none">{partly
+      ? "Whoever runs this server can delete what is left of this website."
+      : "Cron jobs and Logs are tabs of their own in Advanced view. Changing PHP, suspending and deleting the website are for whoever runs this server."}</div>
+  </TabBody>;
   return <TabBody testId="site-settings">
     <SiteActions site={site} repair={shows.repair} between={between} onChanged={replace} onDeleted={onDeleted} onReload={reload} announce={announce} />
   </TabBody>;

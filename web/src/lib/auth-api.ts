@@ -4,7 +4,9 @@
 
 // role is "customer" for a site owner's login, which reaches only its own
 // websites; view_as names the customer an admin is viewing the panel as.
-export interface AuthSession { authenticated: true; csrf_token: string; expires_at: string; username?: string; role?: "admin" | "customer"; view_as?: string }
+// routes comes with a restricted session: the API routes it may use, as the
+// server's customer table names them ("POST /api/v1/websites/sites/{account_id}/php").
+export interface AuthSession { authenticated: true; csrf_token: string; expires_at: string; username?: string; role?: "admin" | "customer"; view_as?: string; routes?: string[] }
 export interface SetupSecret { secret: string; otpauth_uri: string; expires_at: string }
 export interface CustomerSetupSecret extends SetupSecret { username: string }
 
@@ -21,7 +23,8 @@ function validSession(v: unknown): v is AuthSession {
   return object(v) && v.authenticated === true && text(v.csrf_token) && v.csrf_token.length === 43 && text(v.expires_at)
     && !Number.isNaN(Date.parse(v.expires_at)) && (v.username === undefined || name(v.username))
     && (v.role === undefined || v.role === "admin" || v.role === "customer") && (v.view_as === undefined || (name(v.view_as) && v.role !== "customer"))
-    && (v.role !== "customer" || name(v.username));
+    && (v.role !== "customer" || name(v.username))
+    && (v.routes === undefined || (Array.isArray(v.routes) && v.routes.length <= 512 && v.routes.every((r) => text(r) && r.length <= 200)));
 }
 function validSecret(v: unknown): v is SetupSecret {
   return object(v) && text(v.secret) && /^[A-Z2-7]{32}$/.test(v.secret) && text(v.otpauth_uri) && v.otpauth_uri.startsWith("otpauth://totp/") && text(v.expires_at);
@@ -89,6 +92,12 @@ export const endViewAs = (csrf: string) =>
 // Whether a session reaches only one customer's websites: a customer's own,
 // or an admin's while it views as a customer.
 export const restricted = (session: AuthSession | null) => Boolean(session && (session.role === "customer" || session.view_as));
+
+// Whether the session may use an API route, named as the server's customer
+// table names it. An admin may use all; a restricted session only the routes
+// its session lists, and none when the list is missing. The panel hides what
+// this refuses; the server still checks every request.
+export const allows = (session: AuthSession | null, route: string) => !restricted(session) || Boolean(session?.routes?.includes(route));
 
 // On the server itself the panel is reached through loopback; anywhere else it
 // came through the HTTPS listener, where only password sign-in works.

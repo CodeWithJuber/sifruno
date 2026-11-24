@@ -17,6 +17,7 @@ import { actionsFor, checkName, checkText, deleteEntry, downloadURL, FilesApiErr
 import type { FileEntry, Folder as FolderList, Permissions, Triple } from "@/lib/files-api";
 import { getWebsite, listWebsites, WebsitesApiError } from "@/lib/websites-api";
 import type { Website } from "@/lib/websites-api";
+import { useShell } from "@/shell/context";
 
 // One website's Files page: the hosting account's real home folder. Every
 // change runs on the server as the website's own user, so the account's
@@ -571,6 +572,10 @@ function Editor({ accountId, editing, onChange, onClose }: { accountId: string; 
 
 // Websites → Files: every website, each opening its own Files page.
 export function FilesSitePicker() {
+  // A customer's login neither makes websites nor reaches the old static sites.
+  const { viewer } = useShell();
+  const canCreate = viewer.can("POST /api/v1/websites/wordpress");
+  const canStatic = viewer.can("GET /api/v1/sites");
   const [sites, setSites] = useState<Website[]>();
   const [problem, setProblem] = useState<Problem>();
   const [round, setRound] = useState(0);
@@ -588,7 +593,7 @@ export function FilesSitePicker() {
       <h2 id="files-sites-heading">Choose a website</h2>
       <p className="text-sm">Each website has its own home folder. Open one to see, upload, edit and download its files.</p>
       {usable.length === 0
-        ? <Empty className="border border-dashed border-border py-8"><EmptyHeader><EmptyMedia variant="icon"><Folder aria-hidden="true" /></EmptyMedia><EmptyTitle>No websites yet</EmptyTitle><EmptyDescription>Create a website first; its files then appear here.</EmptyDescription></EmptyHeader></Empty>
+        ? <Empty className="border border-dashed border-border py-8"><EmptyHeader><EmptyMedia variant="icon"><Folder aria-hidden="true" /></EmptyMedia><EmptyTitle>No websites yet</EmptyTitle><EmptyDescription>{canCreate ? "Create a website first; its files then appear here." : "Your login has no websites at the moment. Ask whoever gave you the login to add yours."}</EmptyDescription></EmptyHeader></Empty>
         : <ul role="list" className="flex flex-col gap-2">
           {usable.map((site) => <li key={site.account_id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3" data-testid="files-site">
             <div className="flex min-w-0 flex-col">
@@ -598,7 +603,7 @@ export function FilesSitePicker() {
             <Link to="/websites/sites/$accountId/files" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="files-site-open"><FolderOpen aria-hidden="true" />Open files<span className="sr-only"> of {site.domain}</span></Link>
           </li>)}
         </ul>}
-      <div className="text-sm text-muted-foreground">Files of the older static sites open from <Link to="/websites/static" className="text-primary underline">Static sites (old)</Link>.</div>
+      {canStatic && <div className="text-sm text-muted-foreground">Files of the older static sites open from <Link to="/websites/static" className="text-primary underline">Static sites (old)</Link>.</div>}
     </section>}
   </div>;
 }

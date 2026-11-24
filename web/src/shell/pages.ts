@@ -27,12 +27,19 @@ export interface Page {
   // A page whose address holds an id (one setup job) is matched by this
   // pattern and is never listed in the sidebar or the palette.
   pattern?: RegExp;
+  // For a page in the customer's menu: the API routes it reads to show
+  // itself, as the server's customer table names them. Each must be open to
+  // customers (customer-routes.test.mjs checks it against the table). A
+  // website's tabs name theirs in lib/site-page.ts.
+  needs?: readonly string[];
 }
 
+const websitesRead = ["GET /api/v1/websites/sites"] as const;
+
 export const pages: readonly Page[] = [
-  { id: "home", path: "/", label: "Home", title: "Home", subtitle: "Your websites and this server at a glance.", icon: Home, testId: "nav-overview", audience: "both", group: "main" },
+  { id: "home", path: "/", label: "Home", title: "Home", subtitle: "Your websites and this server at a glance.", icon: Home, testId: "nav-overview", audience: "both", group: "main", needs: websitesRead },
   { id: "tour", path: "/tour", label: "Panel tour", title: "Panel tour", subtitle: "Explore Websites, Files and Backups with sample content.", icon: Layers, testId: "nav-panel-preview", audience: "preview", group: "main" },
-  { id: "websites", path: "/websites", label: "Websites", title: "Websites", subtitle: "The WordPress and PHP websites on this server.", icon: Globe, testId: "nav-websites", audience: "private", group: "main" },
+  { id: "websites", path: "/websites", label: "Websites", title: "Websites", subtitle: "The WordPress and PHP websites on this server.", icon: Globe, testId: "nav-websites", audience: "private", group: "main", needs: websitesRead },
   { id: "new-website", path: "/websites/new", label: "New website", title: "New website", subtitle: "Create a WordPress website on this server.", icon: Plus, testId: "nav-new-website", audience: "private", group: "main", parent: "websites" },
   { id: "website-job", path: "/websites/jobs/$jobId", label: "Website setup", title: "Website setup", subtitle: "Follow each step while the panel creates the website.", icon: ListChecks, testId: "nav-website-job", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/jobs\/[^/]+$/ },
   // One website's page: one entry for each of its tabs.
@@ -45,13 +52,13 @@ export const pages: readonly Page[] = [
   { id: "site-logs", path: "/websites/sites/$accountId/logs", label: "Logs", title: "", subtitle: "", icon: ScrollText, testId: "nav-site-logs", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/logs$/ },
   { id: "site-settings", path: "/websites/sites/$accountId/settings", label: "Settings", title: "", subtitle: "", icon: Settings, testId: "nav-site-settings", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/settings$/ },
   { id: "static-sites", path: "/websites/static", label: "Static sites (old)", title: "Static sites (old)", subtitle: "Websites made with the old static-file model.", icon: Globe, testId: "nav-static-sites", audience: "private", group: "main", parent: "websites" },
-  { id: "files", path: "/websites/files", label: "Files", title: "Files", subtitle: "View and edit your website's files.", icon: Folder, testId: "nav-files", audience: "private", group: "main", parent: "websites" },
+  { id: "files", path: "/websites/files", label: "Files", title: "Files", subtitle: "View and edit your website's files.", icon: Folder, testId: "nav-files", audience: "private", group: "main", parent: "websites", needs: websitesRead },
   // The old static sites' file screen, opened from Static sites (old) only.
   { id: "static-files", path: "/websites/static/files", label: "Static site files (old)", title: "Static site files (old)", subtitle: "Files of the websites made with the old static-file model.", icon: Folder, testId: "nav-static-files", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/static\/files$/ },
   { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },
   { id: "activity", path: "/activity", label: "Activity", title: "Activity", subtitle: "Recent changes to website files, and how to recover them.", icon: History, testId: "nav-trail", audience: "private", group: "main" },
   // A customer's own page: its login and its websites.
-  { id: "account", path: "/account", label: "Account", title: "Account", subtitle: "Your login and the websites it manages.", icon: UserRound, testId: "nav-account", audience: "private", group: "main" },
+  { id: "account", path: "/account", label: "Account", title: "Account", subtitle: "Your login and the websites it manages.", icon: UserRound, testId: "nav-account", audience: "private", group: "main", needs: ["GET /api/v1/session", ...websitesRead] },
   // Where a customer lands from its setup link. It needs no session.
   { id: "setup", path: "/setup", label: "Set up your login", title: "Set up your login", subtitle: "Choose a password and connect an authenticator app.", icon: ShieldCheck, testId: "nav-setup", audience: "private", group: "main", pattern: /^\/setup$/ },
   { id: "customers", path: "/customers", label: "Customers", title: "Customers", subtitle: "Who can sign in to manage which websites.", icon: Users, testId: "nav-customers", audience: "private", group: "admin" },

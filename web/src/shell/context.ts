@@ -24,8 +24,10 @@ export interface Shell {
   setPageResource: (id: PageId, value: Resource<unknown>) => void;
   open: (target: ScreenTarget) => void;
   // Who is signed in. restricted: a customer's session, or an admin's while
-  // it views the panel as a customer (viewAs).
-  viewer: { session: AuthSession | null; restricted: boolean };
+  // it views the panel as a customer (viewAs). can: whether the viewer may
+  // use an API route, named as the server's customer table names it; the
+  // panel shows a control only when its route is allowed.
+  viewer: { session: AuthSession | null; restricted: boolean; can: (route: string) => boolean };
   viewAs: (username: string) => Promise<void>;
   endViewAs: () => Promise<void>;
   signOut: () => void;

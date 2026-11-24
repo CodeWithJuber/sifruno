@@ -13,7 +13,7 @@ import { useResource, validPlatform, validServer, validServices } from "@/lib/ap
 import type { Resource, ServerReport } from "@/lib/api";
 import type { BackupCopySelection, ZIPImportRequest } from "@/lib/backupCopy";
 import type { RestoreHandoff } from "@/lib/restoreHandoff";
-import { currentSession, endViewAs as endViewAsRequest, onThisServer, restricted, setupStatus, signOut, viewAsCustomer } from "@/lib/auth-api";
+import { allows, currentSession, endViewAs as endViewAsRequest, onThisServer, restricted, setupStatus, signOut, viewAsCustomer } from "@/lib/auth-api";
 import type { AuthSession } from "@/lib/auth-api";
 import { AuthGate } from "@/shell/AuthGate";
 import { CommandPalette } from "@/shell/CommandPalette";
@@ -199,7 +199,7 @@ export function AppShell() {
   const toggleTheme = useCallback(() => setTheme((value) => value === "light" ? "dark" : "light"), []);
   const signOutNow = useCallback(() => { void endSession(); }, [endSession]);
   const shell: Shell = { publicPreview, revision, refresh, server, services, platform, range, setRange, serviceQuery, setServiceQuery, setPageResource, open,
-    viewer: { session: signedIn ? auth.session : null, restricted: limited }, viewAs, endViewAs, signOut: signOutNow, setSession: (session: AuthSession) => onSession(session, false) };
+    viewer: { session: signedIn ? auth.session : null, restricted: limited, can: (route: string) => allows(auth.session, route) }, viewAs, endViewAs, signOut: signOutNow, setSession: (session: AuthSession) => onSession(session, false) };
 
   const commandGroups = useMemo<CommandGroup[]>(() => {
     const pageCommands = visiblePages(publicPreview, menuRole).map((p) => {

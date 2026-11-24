@@ -141,6 +141,11 @@ func siteRunArgs(r record, unit string, left time.Duration, path string, args []
 	out := []string{
 		"--quiet", "--wait", "--pipe", "--collect",
 		"--unit=" + unit,
+		// A fixed description: by default systemd-run describes the unit
+		// with its whole command line, which carries the site's title, admin
+		// email and database names, and any local user can read a unit's
+		// description.
+		"--description=sifruno site step",
 		"--slice=user-" + id + ".slice",
 		"--uid=" + id, "--gid=" + id,
 		"--working-directory=" + r.Account.PublicHTML,
@@ -148,6 +153,8 @@ func siteRunArgs(r record, unit string, left time.Duration, path string, args []
 		"--property=RuntimeMaxSec=" + strconv.FormatInt(int64((left+time.Second-1)/time.Second), 10),
 		"--property=KillMode=control-group",
 		"--property=KillSignal=SIGKILL",
+		// The steps need no setuid program.
+		"--property=NoNewPrivileges=yes",
 		"--setenv=PATH=/usr/bin:/bin",
 		"--setenv=LANG=C.UTF-8",
 		"--setenv=HOME=" + siteHome,

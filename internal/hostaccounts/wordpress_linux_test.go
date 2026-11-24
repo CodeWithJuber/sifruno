@@ -31,6 +31,7 @@ func TestSiteRunArgsBoundTheStepToTheAccountSlice(t *testing.T) {
 	want := []string{
 		"--quiet", "--wait", "--pipe", "--collect",
 		"--unit=" + unit,
+		"--description=sifruno site step",
 		"--slice=user-20001.slice",
 		"--uid=20001", "--gid=20001",
 		"--working-directory=/home/alice/public_html",
@@ -38,6 +39,7 @@ func TestSiteRunArgsBoundTheStepToTheAccountSlice(t *testing.T) {
 		"--property=RuntimeMaxSec=91",
 		"--property=KillMode=control-group",
 		"--property=KillSignal=SIGKILL",
+		"--property=NoNewPrivileges=yes",
 		"--setenv=PATH=/usr/bin:/bin",
 		"--setenv=LANG=C.UTF-8",
 		"--setenv=HOME=/var/lib/sifruno-site-home",

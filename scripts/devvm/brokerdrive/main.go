@@ -31,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|delete|backup-status|backup-target|backup|backups|restore|drill|prune [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|backup-status|backup-target|backup|backups|restore|drill|prune [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -102,6 +102,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		result, err = service.SetState(ctx, *id, hostaccounts.StateInput{State: *state, ExpectedRevision: *revision, Reason: *reason}, *actor)
 	case "delete":
 		result, err = service.Delete(ctx, *id, hostaccounts.DeleteInput{ExpectedRevision: *revision, Reason: *reason}, *actor)
+	case "public-html":
+		folders, ok := service.(hostaccounts.SiteFolderService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no site folder surface")
+			return 1
+		}
+		result, err = folders.AdoptPublicHTML(ctx, *id, hostaccounts.AdoptInput{ExpectedRevision: *revision, Reason: *reason}, *actor)
 	case "show-keys":
 		keys, ok := service.(hostaccounts.SSHKeyService)
 		if !ok {

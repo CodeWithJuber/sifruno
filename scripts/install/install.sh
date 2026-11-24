@@ -30,6 +30,8 @@ readonly PANEL_HTTPS_LISTEN=0.0.0.0:8443
 readonly LSWS=/usr/local/lsws
 readonly OLS_CONF="$LSWS/conf/httpd_config.conf"
 readonly NSSWITCH=/etc/nsswitch.conf
+readonly SSHD_CONFIG=/etc/ssh/sshd_config
+readonly SSHD_INCLUDE='Include /etc/ssh/sshd_config.d/*.conf'
 readonly SSHD_DROPIN=/etc/ssh/sshd_config.d/40-sifruno.conf
 readonly BROKER_UNIT=sifruno-broker.service
 readonly PANEL_UNIT=sifruno.service
@@ -58,6 +60,7 @@ UNITS_WRITTEN=no
 NSS_BACKUP=""
 SSHD_BACKUP=""
 SSHD_CHANGE=unchanged
+SSH_ADMIN=""
 OLS_BACKUP=""
 
 usage() {
@@ -184,19 +187,149 @@ SSHD
 
 sshd_policy_current() { sshd_policy | cmp -s - "$SSHD_DROPIN" 2>/dev/null; }
 
-# The sshd policy turns password sign-in off, so someone must already be able
-# to sign in with a key: root, or a member of wheel.
-admin_key_present() {
-  local members user home
-  [ -s /root/.ssh/authorized_keys ] && return 0
-  members="$(getent group wheel | cut -d: -f4)"
-  for user in ${members//,/ }; do
-    home="$(getent passwd "$user" | cut -d: -f6)"
-    if [ -n "$home" ] && [ -s "$home/.ssh/authorized_keys" ]; then
+# Builds, in a new private temporary folder, a copy of sshd's configuration
+# as it will be with the Sifruno drop-in in place, and prints the folder.
+# sshd checks and evaluates the copy (-t and -T with -f) before anything
+# on the server changes. Fails when sshd_config does not include its
+# drop-in folder the way AlmaLinux 9 does.
+sshd_candidate() {
+  local dir file
+  # Callers run this inside a condition, where set -e does not apply, so
+  # each step stops it on failure.
+  grep -qxF "$SSHD_INCLUDE" "$SSHD_CONFIG" || return 1
+  dir="$(mktemp -d)" || return 1
+  mkdir "$dir/sshd_config.d" || return 1
+  for file in /etc/ssh/sshd_config.d/*.conf; do
+    if [ -e "$file" ] && [ "$file" != "$SSHD_DROPIN" ]; then
+      cp -L -- "$file" "$dir/sshd_config.d/" || return 1
+    fi
+  done
+  sshd_policy > "$dir/sshd_config.d/${SSHD_DROPIN##*/}" || return 1
+  awk -v inc="$SSHD_INCLUDE" -v new="Include $dir/sshd_config.d/*.conf" \
+    '$0 == inc { print new; next } { print }' "$SSHD_CONFIG" > "$dir/sshd_config" || return 1
+  printf '%s' "$dir"
+}
+
+# The value sshd -T prints for KEYWORD, its lines joined by spaces.
+sshd_value() {
+  awk -v k="$1" '$1 == k { $1 = ""; sub(/^ /, ""); out = out (out == "" ? "" : " ") $0 } END { print out }'
+}
+
+# Whether sshd, under StrictModes, reads the key file PATH of the user with
+# UID and HOME: the file and every folder above it, up to HOME (or to / for
+# a file outside HOME), belong to the user or root and are not writable by
+# group or others. sshd checks the resolved path, so this does too.
+key_file_secure() { # key_file_secure PATH UID HOME
+  local path owner mode
+  path="$(realpath -e -- "$1" 2>/dev/null)" || return 1
+  while :; do
+    read -r owner mode < <(stat -c '%u %a' -- "$path") || return 1
+    [ "$owner" = "$2" ] || [ "$owner" = 0 ] || return 1
+    [ $((8#$mode & 8#022)) -eq 0 ] || return 1
+    if [ "$path" = "$3" ] || [ "$path" = / ]; then
+      return 0
+    fi
+    path="$(dirname -- "$path")"
+  done
+}
+
+# Whether USER can sign in over SSH with a key under the sshd configuration
+# CONFIG, looking the user up in the local files only, as the server will
+# once nsswitch names only files. That needs a login shell; public-key
+# sign-in on, no ForceCommand and no AuthenticationMethods beyond a key;
+# for root, a PermitRootLogin that allows keys; and a key file sshd accepts
+# holding at least one valid key. AllowUsers, AllowGroups, DenyUsers and
+# DenyGroups are read in their simplest form only: the user must be named
+# in AllowUsers when it is set, and no group or deny rule may be set.
+ssh_admin_ok() { # ssh_admin_ok CONFIG USER
+  local config="$1" user="$2" entry uid home shell eff allow file files strict
+  entry="$(getent -s files passwd "$user")" || return 1
+  IFS=: read -r _ _ uid _ _ home shell <<<"$entry"
+  case "$shell" in "" | */nologin | */false) return 1 ;; esac
+  grep -qxF "$shell" /etc/shells || return 1
+  eff="$(sshd -T -f "$config" -C "user=$user,host=localhost,addr=127.0.0.1" 2>/dev/null)" || return 1
+  [ "$(sshd_value pubkeyauthentication <<<"$eff")" = yes ] || return 1
+  [ "$(sshd_value forcecommand <<<"$eff")" = none ] || return 1
+  case "$(sshd_value authenticationmethods <<<"$eff")" in any | publickey) ;; *) return 1 ;; esac
+  if [ "$user" = root ]; then
+    case "$(sshd_value permitrootlogin <<<"$eff")" in yes | prohibit-password | without-password) ;; *) return 1 ;; esac
+  fi
+  [ -z "$(sshd_value denyusers <<<"$eff")$(sshd_value denygroups <<<"$eff")$(sshd_value allowgroups <<<"$eff")" ] || return 1
+  allow="$(sshd_value allowusers <<<"$eff")"
+  if [ -n "$allow" ] && [[ " $allow " != *" $user "* ]]; then
+    return 1
+  fi
+  strict="$(sshd_value strictmodes <<<"$eff")"
+  read -ra files <<<"$(sshd_value authorizedkeysfile <<<"$eff")"
+  for file in "${files[@]}"; do
+    file="${file//%%/$'\x01'}"
+    file="${file//%u/$user}"
+    file="${file//%U/$uid}"
+    file="${file//%h/$home}"
+    file="${file//$'\x01'/%}"
+    [[ "$file" == /* ]] || file="$home/$file"
+    if [ -f "$file" ] && ssh-keygen -l -f "$file" >/dev/null 2>&1 &&
+      { [ "$strict" = no ] || key_file_secure "$file" "$uid" "$home"; }; then
       return 0
     fi
   done
   return 1
+}
+
+# Prints the first of root and wheel's members (as /etc/group lists them)
+# who can sign in with a key under the sshd configuration CONFIG.
+ssh_admin() { # ssh_admin CONFIG
+  local user members
+  members="$(getent -s files group wheel | cut -d: -f4)"
+  for user in root ${members//,/ }; do
+    if ssh_admin_ok "$1" "$user"; then
+      printf '%s' "$user"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Local users with a login shell who are neither root, nor in wheel, nor a
+# hosting account (home in $HOMES): the policy would make them SFTP-only.
+other_login_users() {
+  local wheel
+  wheel=",$(getent -s files group wheel | cut -d: -f4),"
+  getent -s files passwd | awk -F: -v homes="$HOMES/" -v wheel="$wheel" '
+    $3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ && index($6, homes) != 1 && index(wheel, "," $1 ",") == 0 { print $1 }' |
+    paste -sd ' '
+}
+
+# Checks the sshd policy before anything changes: sshd must accept the whole
+# configuration with it, someone must still be able to sign in with a key,
+# and no other local login may lose its shell. Prints why on refusal.
+preflight_sshd() {
+  local candidate others out
+  if ! candidate="$(sshd_candidate)"; then
+    refuse "$SSHD_CONFIG does not have the line '$SSHD_INCLUDE'." \
+      "The installer's sshd policy is a drop-in in that folder, and it checks the policy on a copy of the full configuration before any change." \
+      "Put that line back near the top of $SSHD_CONFIG, where AlmaLinux 9 has it, then run this again."
+    return 0
+  fi
+  if ! out="$(sshd -t -f "$candidate/sshd_config" 2>&1)"; then
+    printf '%s\n' "$out" | sed 's/^/  sshd: /' >&2
+    refuse "sshd rejects its configuration with the installer's policy added." \
+      "sshd checked a copy of its configuration with the drop-in $SSHD_DROPIN in place (lines above)." \
+      "Run sshd -t, fix what it reports in the other files, then run this again."
+  elif SSH_ADMIN="$(ssh_admin "$candidate/sshd_config")"; then
+    echo "ok: $SSH_ADMIN can still sign in over SSH with a key once the policy is in place"
+  else
+    refuse "Nobody could sign in over SSH once the installer's policy is in place." \
+      "The policy turns password sign-in off. No root or wheel member in /etc/passwd has a login shell, a valid key in a key file sshd accepts (owner and mode), and nothing in the way: PermitRootLogin no for root, a ForceCommand, AuthenticationMethods, or an Allow or Deny rule." \
+      "Add your public key to /root/.ssh/authorized_keys or a local wheel user's, sign in with it once in a second session, then run this again. To see what sshd would apply: sshd -T -C user=root,host=localhost,addr=127.0.0.1"
+  fi
+  rm -rf -- "$candidate"
+  others="$(other_login_users)"
+  if [ -n "$others" ]; then
+    refuse "These local users have a login shell but are neither root nor in wheel: $others." \
+      "The installer's sshd policy makes such users SFTP-only and reads their keys from /etc/sifruno/ssh/authorized_keys, so their SSH access as it is now would stop." \
+      "Add each one who needs a shell to wheel (usermod -aG wheel NAME), or give the others /usr/sbin/nologin, then run this again."
+  fi
 }
 
 preflight() {
@@ -268,13 +401,9 @@ preflight() {
 
   if ! sshd_policy_current; then
     if [ "$(id -u)" -ne 0 ]; then
-      echo "not checked without root: an SSH key for root or for a member of wheel"
-    elif ! admin_key_present; then
-      refuse "No SSH key is set up for root or for a member of the wheel group." \
-        "The installer turns password sign-in over SSH off, so without a key you would be locked out of this server." \
-        "Add your public key to /root/.ssh/authorized_keys, sign in with it once in a second session, then run this again."
+      echo "not checked without root: who can still sign in over SSH once the policy is in place"
     else
-      echo "ok: an SSH key is set up for root or a member of wheel"
+      preflight_sshd
     fi
   fi
 
@@ -485,14 +614,20 @@ step_nsswitch() {
       "Its layout is not one the installer knows. Nothing was changed; a copy is in $NSS_BACKUP." \
       "Edit the three lines by hand so each reads 'files', then run this again."
   fi
+  # Labelled before the move, so nothing that can fail sits between the
+  # move and the lookups that decide whether the change stays.
+  restorecon "$new" || true
   mv -f -- "$new" "$NSSWITCH"
-  restorecon "$NSSWITCH"
-  if ! getent passwd root >/dev/null || ! getent group root >/dev/null || ! getent passwd "$PANEL_USER" >/dev/null; then
+  restorecon "$NSSWITCH" || true
+  # SSH_ADMIN is the user preflight found able to sign in with a key; it was
+  # looked up in the local files only, so it must resolve now too.
+  if ! getent passwd root >/dev/null || ! getent group root >/dev/null || ! getent passwd "$PANEL_USER" >/dev/null ||
+    { [ -n "$SSH_ADMIN" ] && ! getent passwd "$SSH_ADMIN" >/dev/null; }; then
     cp -a -- "$NSS_BACKUP" "$NSSWITCH"
-    restorecon "$NSSWITCH"
-    die "After the change to $NSSWITCH the system could not look up root or $PANEL_USER." \
+    restorecon "$NSSWITCH" || true
+    die "After the change to $NSSWITCH the system could not look up root, $PANEL_USER or ${SSH_ADMIN:-root} (who signs in over SSH)." \
       "The new file was rejected and the previous one was put back from $NSS_BACKUP." \
-      "Check that root and $PANEL_USER are in /etc/passwd and /etc/group, then run this again."
+      "Check that root, $PANEL_USER and your SSH admin are in /etc/passwd and /etc/group, then run this again."
   fi
   changed "$NSSWITCH: passwd, group and shadow set to files (backup: $NSS_BACKUP)"
 }
@@ -506,14 +641,28 @@ sshd_put_back() {
 }
 
 step_sshd() {
+  local candidate admin
   if sshd_policy_current; then
     return 0
   fi
   sshd -t || die "sshd's configuration is already invalid, before any change by the installer." \
     "The installer checks its own change with sshd -t, which needs a valid starting point." \
     "Run sshd -t, fix what it reports, then run this again."
-  sshd_policy > "$SSHD_DROPIN.new"
-  chmod 0600 "$SSHD_DROPIN.new"
+  # The whole configuration as it will be is checked on a copy first, so a
+  # run cut short after the move below leaves only a policy sshd accepts and
+  # an admin can sign in under.
+  candidate="$(sshd_candidate)" || die "$SSHD_CONFIG does not have the line '$SSHD_INCLUDE'." \
+    "The policy is a drop-in in that folder and is checked on a copy of the full configuration. Nothing was changed." \
+    "Put that line back near the top of $SSHD_CONFIG, then run this again."
+  if ! sshd -t -f "$candidate/sshd_config" || ! admin="$(ssh_admin "$candidate/sshd_config")"; then
+    rm -rf -- "$candidate"
+    die "With the new policy, sshd would reject its configuration or nobody could sign in with a key." \
+      "The installer checked a copy of the configuration with $SSHD_DROPIN in place. Nothing was changed." \
+      "Run this again to see the preflight's reason, or run sshd -T -C user=root,host=localhost,addr=127.0.0.1"
+  fi
+  install -o root -g root -m 0600 -- "$candidate/sshd_config.d/${SSHD_DROPIN##*/}" "$SSHD_DROPIN.new"
+  rm -rf -- "$candidate"
+  restorecon "$SSHD_DROPIN.new" || true
   if [ -e "$SSHD_DROPIN" ]; then
     SSHD_BACKUP="$(backup_file "$SSHD_DROPIN")"
     SSHD_CHANGE=replaced
@@ -521,15 +670,15 @@ step_sshd() {
     SSHD_CHANGE=created
   fi
   mv -f -- "$SSHD_DROPIN.new" "$SSHD_DROPIN"
-  restorecon "$SSHD_DROPIN"
-  # Validate before applying, and reload rather than restart so the session
-  # running this script stays up.
-  if ! sshd -t; then
+  # The live files again, before applying: they are what a reload loads.
+  # Reload rather than restart, so the session running this script stays up.
+  if ! sshd -t || ! ssh_admin_ok "$SSHD_CONFIG" "$admin"; then
     sshd_put_back
-    die "sshd rejected the new policy in $SSHD_DROPIN." \
+    die "sshd rejected the new policy in $SSHD_DROPIN, or $admin could no longer sign in with a key under it." \
       "The change was undone and sshd was not reloaded, so sign-in works as before." \
-      "Run sshd -t to see what sshd objects to in its other files, then run this again."
+      "Run sshd -t and sshd -T -C user=$admin,host=localhost,addr=127.0.0.1 to see what sshd applies, then run this again."
   fi
+  echo "ok: $admin can sign in over SSH with a key under the new policy"
   if ! systemctl reload sshd; then
     sshd_put_back
     systemctl reload sshd || true

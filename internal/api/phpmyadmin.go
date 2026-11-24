@@ -41,11 +41,12 @@ type siteDatabaseOpenBodyOut struct {
 type siteDatabaseOpenOutput struct{ Body siteDatabaseOpenBodyOut }
 
 const (
-	phpMyAdminNotSetUp       = "phpMyAdmin is not set up on this server. It opens on the panel's own HTTPS address, on its own port: run Sifruno's installer (install.sh) with --panel-host to add it."
-	phpMyAdminNoData         = "This website has no database yet, so phpMyAdmin would have nothing to show. Create a database first."
-	phpMyAdminTooMany        = "Too many phpMyAdmin sign-ins are open on this server. Each ends one hour after it was opened; try again later."
-	phpMyAdminTooManyForSite = "You already have 3 phpMyAdmin sign-ins open for this website, the most one person may have. Each ends one hour after it was opened: use a phpMyAdmin tab you already have open, or try again later."
-	phpMyAdminRecord         = "The panel could not record the phpMyAdmin sign-in, so it made none. Check that the panel's state folder can be written, then try again."
+	phpMyAdminNotSetUp        = "phpMyAdmin is not set up on this server. It opens on the panel's own HTTPS address, on its own port: run Sifruno's installer (install.sh) with --panel-host to add it."
+	phpMyAdminNoData          = "This website has no database yet, so phpMyAdmin would have nothing to show. Create a database first."
+	phpMyAdminTooMany         = "Too many phpMyAdmin sign-ins are open on this server. Each ends one hour after it was opened; try again later."
+	phpMyAdminTooManyForSite  = "You already have 3 phpMyAdmin sign-ins open for this website, the most one person may have. Each ends one hour after it was opened: use a phpMyAdmin tab you already have open, or try again later."
+	phpMyAdminTooManyForActor = "You already have 10 phpMyAdmin sign-ins open across your websites, the most one person may have. Each ends one hour after it was opened: use a phpMyAdmin tab you already have open, or try again later."
+	phpMyAdminRecord          = "The panel could not record the phpMyAdmin sign-in, so it made none. Check that the panel's state folder can be written, then try again."
 )
 
 // registerSiteDatabasePhpMyAdmin adds the one click: a temporary database
@@ -85,6 +86,8 @@ func registerSiteDatabasePhpMyAdmin(a huma.API, o Options) {
 		switch {
 		case errors.Is(err, phpmyadmin.ErrTooManyForOwner):
 			return nil, huma.Error429TooManyRequests(phpMyAdminTooManyForSite)
+		case errors.Is(err, phpmyadmin.ErrTooManyForActor):
+			return nil, huma.Error429TooManyRequests(phpMyAdminTooManyForActor)
 		case errors.Is(err, phpmyadmin.ErrTooMany):
 			return nil, huma.Error429TooManyRequests(phpMyAdminTooMany)
 		case errors.Is(err, phpmyadmin.ErrNotRecorded):

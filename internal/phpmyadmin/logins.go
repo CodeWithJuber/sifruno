@@ -75,6 +75,10 @@ const (
 	// MaxLoginsPerOwner bounds the open temporary users of one hosting
 	// account for one actor, so no one can use up MaxLogins for everyone.
 	MaxLoginsPerOwner = 3
+	// MaxLoginsPerActor bounds one actor's open temporary users across all
+	// accounts, so a customer with many websites cannot use up MaxLogins
+	// either.
+	MaxLoginsPerActor = 10
 	// MaxAdmissions bounds the admission cookies at one time; each redeemed
 	// code makes one.
 	MaxAdmissions = 4 * MaxLogins
@@ -89,6 +93,9 @@ var (
 	// ErrTooManyForOwner is returned when the account already has
 	// MaxLoginsPerOwner open temporary users for this actor.
 	ErrTooManyForOwner = errors.New("this website has the most phpMyAdmin sign-ins open that one person may have")
+	// ErrTooManyForActor is returned when the actor already has
+	// MaxLoginsPerActor open temporary users across all accounts.
+	ErrTooManyForActor = errors.New("this person has the most phpMyAdmin sign-ins open across all websites")
 	// ErrCodeRefused covers a code that is unknown, used or expired: the
 	// answer never tells which.
 	ErrCodeRefused = errors.New("the code is unknown, used or expired")
@@ -286,15 +293,22 @@ func (s *Service) open(ctx context.Context, owner string, databases []string) (H
 		s.mu.Unlock()
 		return Handoff{}, ErrTooMany
 	}
-	open := 0
+	open, openByActor := 0, 0
 	for _, r := range s.logins {
-		if r.Owner == owner && r.Actor == actor && now.Before(r.Expires) {
-			open++
+		if r.Actor == actor && now.Before(r.Expires) {
+			openByActor++
+			if r.Owner == owner {
+				open++
+			}
 		}
 	}
 	if open >= MaxLoginsPerOwner {
 		s.mu.Unlock()
 		return Handoff{}, ErrTooManyForOwner
+	}
+	if openByActor >= MaxLoginsPerActor {
+		s.mu.Unlock()
+		return Handoff{}, ErrTooManyForActor
 	}
 	s.logins[user] = login
 	if err := s.flushLocked(); err != nil {

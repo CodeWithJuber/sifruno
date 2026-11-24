@@ -346,9 +346,10 @@ func TestOpenFailuresLeaveNothingBehind(t *testing.T) {
 	}
 	db.createErr = nil
 
-	// At most MaxLogins at once, from many accounts.
+	// At most MaxLogins at once, from many accounts and people.
 	for i := 0; len(s.logins) < MaxLogins; i++ {
-		if _, err := s.Open(ctx, fmt.Sprintf("acct%d", i), []string{fmt.Sprintf("acct%d_wp", i)}); err != nil {
+		who := WithActor(ctx, fmt.Sprintf("customer:c%d", i))
+		if _, err := s.Open(who, fmt.Sprintf("acct%d", i), []string{fmt.Sprintf("acct%d_wp", i)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -475,6 +476,32 @@ func TestEachOwnerAndActorHasALimit(t *testing.T) {
 	// An expired sign-in no longer counts, even before the sweep.
 	c.Add(time.Hour)
 	if _, err := restarted.Open(ctx, "alpha", []string{"alpha_wp"}); err != nil {
+		t.Fatalf("after the hour: %v", err)
+	}
+}
+
+// One actor can hold at most MaxLoginsPerActor open sign-ins across all
+// accounts, so many websites do not add up to the global limit.
+func TestEachActorHasALimitAcrossAccounts(t *testing.T) {
+	db := newFakeDatabase()
+	c := &clock{now: time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)}
+	s, _ := newTestService(t, db, c)
+	ctx := WithActor(context.Background(), "customer:many")
+	for i := 0; i < MaxLoginsPerActor; i++ {
+		owner := fmt.Sprintf("site%02d", i)
+		if _, err := s.Open(ctx, owner, []string{owner + "_wp"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := len(db.users)
+	if _, err := s.Open(ctx, "site99", []string{"site99_wp"}); !errors.Is(err, ErrTooManyForActor) || len(db.users) != before {
+		t.Fatalf("over the actor's limit: %v", err)
+	}
+	if _, err := s.Open(WithActor(context.Background(), "customer:other"), "site99", []string{"site99_wp"}); err != nil {
+		t.Fatalf("another actor: %v", err)
+	}
+	c.Add(time.Hour)
+	if _, err := s.Open(ctx, "site99", []string{"site99_wp"}); err != nil {
 		t.Fatalf("after the hour: %v", err)
 	}
 }

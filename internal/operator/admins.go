@@ -154,35 +154,13 @@ func (f adminFile) validate() error {
 // state: no symlinks, a regular file only the owner can read, bounded size.
 // A missing file means no admin exists yet.
 func loadAdmins(dir string) (adminFile, error) {
-	path := filepath.Join(dir, adminsFile)
-	if err := securestate.CheckPath(path); err != nil {
-		return adminFile{}, err
-	}
-	st, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return adminFile{Version: 1}, nil
-	}
-	if err != nil || !st.Mode().IsRegular() || st.Size() > maxAdminsBytes || (runtime.GOOS != "windows" && st.Mode().Perm()&0077 != 0) {
-		return adminFile{}, errors.New("invalid admin file")
-	}
-	f, err := os.Open(path)
+	var out adminFile
+	found, err := readPrivateJSON(dir, adminsFile, maxAdminsBytes, &out)
 	if err != nil {
 		return adminFile{}, err
 	}
-	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(st, opened) || privateHandle(f, opened) != nil {
-		return adminFile{}, errors.New("admin file changed")
-	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxAdminsBytes+1))
-	if err != nil || len(raw) > maxAdminsBytes {
-		return adminFile{}, errors.New("invalid admin file")
-	}
-	var out adminFile
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&out); err != nil || dec.More() {
-		return adminFile{}, errors.New("invalid admin file")
+	if !found {
+		return adminFile{Version: 1}, nil
 	}
 	if err := out.validate(); err != nil {
 		return adminFile{}, err
@@ -196,11 +174,52 @@ func saveAdmins(dir string, file adminFile) error {
 	if err := file.validate(); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(file, "", "  ")
-	if err != nil || len(raw) > maxAdminsBytes {
-		return errors.New("admin file too large")
+	return writePrivateJSON(dir, adminsFile, maxAdminsBytes, file)
+}
+
+// readPrivateJSON strictly decodes one private state file (admins.json,
+// tokens.json) into target. found is false when the file does not exist.
+func readPrivateJSON(dir, name string, limit int64, target any) (found bool, err error) {
+	path := filepath.Join(dir, name)
+	if err := securestate.CheckPath(path); err != nil {
+		return false, err
 	}
-	path := filepath.Join(dir, adminsFile)
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || !st.Mode().IsRegular() || st.Size() > limit || (runtime.GOOS != "windows" && st.Mode().Perm()&0077 != 0) {
+		return false, errors.New("invalid private file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(st, opened) || privateHandle(f, opened) != nil {
+		return false, errors.New("private file changed")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(raw)) > limit {
+		return false, errors.New("invalid private file")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil || dec.More() {
+		return false, errors.New("invalid private file")
+	}
+	return true, nil
+}
+
+// writePrivateJSON replaces a private state file atomically: a new 0600 file
+// in the same directory, synced, then renamed over the old one.
+func writePrivateJSON(dir, name string, limit int, value any) error {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil || len(raw) > limit {
+		return errors.New("private file too large")
+	}
+	path := filepath.Join(dir, name)
 	if err := securestate.CheckPath(path); err != nil {
 		return err
 	}
@@ -208,7 +227,7 @@ func saveAdmins(dir string, file adminFile) error {
 	if _, err := rand.Read(suffix); err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, adminsFile+".tmp-"+base64.RawURLEncoding.EncodeToString(suffix))
+	tmp := filepath.Join(dir, name+".tmp-"+base64.RawURLEncoding.EncodeToString(suffix))
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err

@@ -8,8 +8,24 @@ This package decides who may use the panel's private pages and API. It is securi
 | --- | --- | --- |
 | Access key (`operator/access.key`, 43 random characters) | Whoever controls the server: the CLI, first-run setup, recovery | Loopback only |
 | Username, password and a 6-digit authenticator code | People | Loopback, and the HTTPS listener (`--https-listen`) |
+| API token (`Authorization: Bearer sfr_…`) | Programs, such as the WHMCS module | Loopback, and the HTTPS listener; never on `/api/v1/session/*` |
 
 The access key is not weaker than the admin login for the people it serves. Reading it needs the panel's own OS user, and that user can already read `session.keys` and forge sessions. The admin login is the one for people, and the only one accepted off loopback.
+
+## API tokens
+
+A signed-in session creates, lists and revokes tokens at `/api/v1/session/tokens` (the panel's Security › API tokens page). Code in `tokens.go`.
+
+- A token is `sfr_` and 43 base64url characters: 32 bytes from `crypto/rand`. It is in the create response only. The list shows its first 10 characters (`sfr_` and 6 more), the name, and when it was created, expires and was last used.
+- Expiry is required: 90 days unless the request asks for 1 to 365. Expired tokens stay listed, marked expired, until revoked. Revoking removes the token at once. At most 32 tokens; names are unique regardless of case.
+- `Authorize` treats any request with an `Authorization` header as a token request. A valid token gets what an admin session gets on every route `Authorize` guards, on loopback and over HTTPS, with no cookie, Origin or CSRF token. Off loopback a plain-HTTP request is refused (403 `https_required`); `Remote` already only marks TLS requests.
+- Every `/api/v1/session` route refuses a request with an `Authorization` header (403 `token_not_allowed`), and those handlers check sessions only. So a token cannot sign in, list or end sessions, run setup, or create, list or revoke tokens. Future credential routes (admins, passwords, 2FA) belong under that prefix.
+- A token sent together with the session cookie is refused (400 `invalid_request`).
+- A wrong, malformed, expired or revoked token gets one answer: 401 `invalid_token` with `WWW-Authenticate: Bearer error="invalid_token"`.
+- Failed attempts are limited like sign-ins, with their own limiters: on the server a 20-attempt burst refilling every 3 seconds; over the network a separate burst of 20, plus 5 per caller IP refilling one a minute (4096 keyed-hash buckets). Only failures count. While a limit is used up, every bearer request from that caller gets 429 with `Retry-After`, a valid token too. Many addresses together can block network token use for a while, as for sign-in.
+- The last-used time is saved at most once a minute per token. If that write fails, the request still succeeds and the time stays in memory until the next successful write.
+- Routes that loopback serves without a session (`/api/v1/server`, `/status` and the like) do not check a token there.
+- There is no audit log for admin actions yet. The change trail (`internal/trail`) is a file checkpoint journal with rollback, which could bring a revoked token back, so tokens are not recorded in it. Creation time and last use are kept per token; the name and prefix are what identify it.
 
 ## Over the network
 
@@ -33,6 +49,8 @@ All in the private state directory (0700, owner only, no symlinks), next to `acc
 - `admins.json` (0600, at most 64 KiB, 16 admins): username, Argon2id hash, authenticator secret, last used code step, creation time. Written atomically (new file, fsync, rename).
 - Passwords: Argon2id, 19 MiB memory, 2 passes, 1 lane, 16-byte salt, 32-byte key (the OWASP Password Storage Cheat Sheet minimum). Parameters are stored per hash, bounded on read, so they can be raised later.
 - Authenticator: RFC 6238, HMAC-SHA1, 6 digits, 30-second steps, one step of drift either way. The secret is 160 random bits. It is stored in the clear because the server must compute codes; the file's permissions are its protection, as for `session.keys`.
+- `tokens.json` (0600, at most 64 KiB, 32 tokens), written the same way as `admins.json`: per token a public ID, name, shown prefix, HMAC-SHA256 of the token, creation, expiry and last-use times. Never the token.
+- `tokens.key` (0600, 32 random bytes): the HMAC key. Tokens carry 256 random bits, so a keyed hash compared in constant time is enough; Argon2id would slow every API call for no gain. Deleting the key makes every token fail.
 
 The plan moves this file into the single SQLite store with the broker rework.
 
@@ -43,11 +61,12 @@ The plan moves this file into the single SQLite store with the broker rework.
 - Rate limits on the server: the existing 20-attempt burst refilling every 3 seconds, plus 5 attempts per username refilling one per minute (network limits are separate, below). Every name, existing or not, uses one of 256 buckets chosen by a keyed hash, so a 429 does not reveal whether a name exists, and memory stays fixed. Someone can lock an admin out for a while by guessing; the access key still works locally.
 - At most two Argon2id computations run at once, bounding memory under a burst.
 - First-run setup needs an access-key session, works only while no admin exists, and issues the authenticator secret to that one session for 10 minutes. The admin is created only after a correct code proves the app is set up, and only if that session is still active at that moment. The session then becomes the admin's.
-- Lock order: `adminMu`, then `mu`. `mu` is never held while taking `adminMu` or writing the file.
+- Lock order: `adminMu`, then `mu`; `tokenMu`, then `mu`. `adminMu` and `tokenMu` are never held together, and `mu` is never held while taking either or writing a file.
 - Sessions, cookies, CSRF and Origin checks are unchanged: 15 minutes, HttpOnly, SameSite=Strict, Secure on TLS, at most 128.
 
 ## Not done yet
 
-- More than one admin, password change, 2FA reset from the UI, passkeys, API tokens, customer logins.
+- More than one admin, password change, 2FA reset from the UI, passkeys, customer logins.
+- Token scopes: every token has full admin API access. An audit log of admin actions, including token use.
 - Sliding session renewal; sessions still end after 15 minutes.
 - An outside review of this package and the broker, which the plan requires before a paying customer.

@@ -63,7 +63,7 @@ func (m *Manager) authorizingSessionLocked(id string, expected activeSession) bo
 	return ok && actual == expected
 }
 func (m *Manager) managementAuthorization(w http.ResponseWriter, r *http.Request, mutation bool) (string, activeSession, bool) {
-	if _, ok := m.Authorize(w, r, mutation); !ok {
+	if _, ok := m.authorizeSession(w, r, mutation); !ok {
 		return "", activeSession{}, false
 	}
 	_, id, a, ok := m.session(r)

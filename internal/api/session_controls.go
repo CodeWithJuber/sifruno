@@ -13,13 +13,14 @@ func allowedSessionMutation(r *http.Request) bool {
 	}
 	switch r.URL.Path {
 	case "/api/v1/session/login", "/api/v1/session/logout", "/api/v1/session/revoke-others",
-		"/api/v1/session/setup/totp", "/api/v1/session/setup/admin":
+		"/api/v1/session/setup/totp", "/api/v1/session/setup/admin", "/api/v1/session/tokens":
 		return true
 	}
-	const prefix = "/api/v1/session/sessions/"
-	if !strings.HasPrefix(r.URL.Path, prefix) {
-		return false
+	for _, prefix := range []string{"/api/v1/session/sessions/", "/api/v1/session/tokens/"} {
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
+			return len(parts) == 2 && parts[0] != "" && parts[1] == "revoke"
+		}
 	}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] == "revoke"
+	return false
 }

@@ -80,6 +80,16 @@ type Manager struct {
 	pending       map[string]pendingSetup
 	dummy         passwordHash
 	hashSlots     chan struct{}
+
+	// API tokens (tokens.go). tokenMu guards the token file, its cached copy
+	// and the bearer limiters. It is never held together with adminMu; when
+	// a session is rechecked, tokenMu is taken first, then mu.
+	tokenMu             sync.Mutex
+	tokenKey            [32]byte
+	tokens              tokenFile
+	bearerLimiter       *rate.Limiter
+	remoteBearerLimiter *rate.Limiter
+	remoteBearerBuckets [remoteLoginBuckets]*rate.Limiter
 }
 
 // Open creates project-owned private state without rotating existing secrets.
@@ -146,6 +156,18 @@ func Open(dir string) (*Manager, error) {
 	if err != nil {
 		return nil, errors.New("operator admin accounts unavailable")
 	}
+	tokenKey, err := privateBytes(filepath.Join(dir, tokensKeyFile), 32, func() ([]byte, error) {
+		v := make([]byte, 32)
+		_, err := rand.Read(v)
+		return v, err
+	})
+	if err != nil {
+		return nil, errors.New("operator API tokens unavailable")
+	}
+	tokens, err := loadTokens(dir)
+	if err != nil {
+		return nil, errors.New("operator API tokens unavailable")
+	}
 	cookies := sessions.NewCookieStore(keys[:32], keys[32:])
 	cookies.MaxAge(int(sessionLifetime.Seconds()))
 	cookies.Options = &sessions.Options{Path: "/api/v1", MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, SameSite: http.SameSiteStrictMode}
@@ -161,6 +183,13 @@ func Open(dir string) (*Manager, error) {
 	m.remoteLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
 	for i := range m.remoteBuckets {
 		m.remoteBuckets[i] = newAccountLimiter()
+	}
+	copy(m.tokenKey[:], tokenKey)
+	m.tokens = tokens
+	m.bearerLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
+	m.remoteBearerLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
+	for i := range m.remoteBearerBuckets {
+		m.remoteBearerBuckets[i] = newAccountLimiter()
 	}
 	return m, nil
 }
@@ -315,8 +344,24 @@ func (m *Manager) pruneLocked() {
 }
 
 // Authorize protects every website read. Mutations additionally require an
-// exact request Origin and the active session's independent CSRF token.
+// exact request Origin and the active session's independent CSRF token. A
+// request with an Authorization header is checked as an API token instead
+// (tokens.go): a token is not a session, so it needs no cookie, Origin or
+// CSRF token.
 func (m *Manager) Authorize(w http.ResponseWriter, r *http.Request, mutation bool) (string, bool) {
+	if len(r.Header.Values("Authorization")) > 0 {
+		if !admitted(r) {
+			WriteError(w, 403, "local_access_required", "Local operator access required")
+			return "", false
+		}
+		return m.authorizeToken(w, r)
+	}
+	return m.authorizeSession(w, r, mutation)
+}
+
+// authorizeSession admits a session only. The /api/v1/session routes use it
+// directly, so an API token never works there.
+func (m *Manager) authorizeSession(w http.ResponseWriter, r *http.Request, mutation bool) (string, bool) {
 	if !admitted(r) {
 		WriteError(w, 403, "local_access_required", "Local operator access required")
 		return "", false
@@ -419,16 +464,30 @@ func DecodeObject(b []byte, target any) error {
 	return nil
 }
 
+// Register serves the /api/v1/session routes. Every one refuses a request
+// that carries an Authorization header (sessionOnly): sign-in, sessions,
+// first-run setup and API token management are for a person with a session.
+// Credential management added later belongs under this prefix too.
 func (m *Manager) Register(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/session/login", m.login)
-	mux.HandleFunc("GET /api/v1/session", m.getSession)
-	mux.HandleFunc("POST /api/v1/session/logout", m.logout)
-	mux.HandleFunc("GET /api/v1/session/sessions", m.getSessions)
-	mux.HandleFunc("POST /api/v1/session/sessions/{id}/revoke", m.revokeSession)
-	mux.HandleFunc("POST /api/v1/session/revoke-others", m.revokeOthers)
-	mux.HandleFunc("GET /api/v1/session/setup", m.getSetup)
-	mux.HandleFunc("POST /api/v1/session/setup/totp", m.beginSetup)
-	mux.HandleFunc("POST /api/v1/session/setup/admin", m.finishSetup)
+	for _, route := range []struct {
+		pattern string
+		handler http.HandlerFunc
+	}{
+		{"POST /api/v1/session/login", m.login},
+		{"GET /api/v1/session", m.getSession},
+		{"POST /api/v1/session/logout", m.logout},
+		{"GET /api/v1/session/sessions", m.getSessions},
+		{"POST /api/v1/session/sessions/{id}/revoke", m.revokeSession},
+		{"POST /api/v1/session/revoke-others", m.revokeOthers},
+		{"GET /api/v1/session/setup", m.getSetup},
+		{"POST /api/v1/session/setup/totp", m.beginSetup},
+		{"POST /api/v1/session/setup/admin", m.finishSetup},
+		{"GET /api/v1/session/tokens", m.listTokens},
+		{"POST /api/v1/session/tokens", m.createToken},
+		{"POST /api/v1/session/tokens/{id}/revoke", m.revokeToken},
+	} {
+		mux.HandleFunc(route.pattern, sessionOnly(route.handler))
+	}
 }
 
 func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
@@ -534,7 +593,7 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 }
 
 func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
-	if _, ok := m.Authorize(w, r, false); !ok {
+	if _, ok := m.authorizeSession(w, r, false); !ok {
 		return
 	}
 	s, _, a, ok := m.session(r)
@@ -546,7 +605,7 @@ func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
-	if _, ok := m.Authorize(w, r, true); !ok {
+	if _, ok := m.authorizeSession(w, r, true); !ok {
 		return
 	}
 	var input struct{}

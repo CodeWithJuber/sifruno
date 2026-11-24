@@ -222,6 +222,12 @@ $fields = sifruno_AdminServicesTabFields($params(1, 'shop.example.com'));
 $messages[] = implode("\n", $fields);
 check('AdminServicesTabFields shows the live website and its address', ($fields['Sifruno website'] ?? '') === 'Live: shop.example.com' && str_contains($fields['Website address'] ?? '', 'href="http://shop.example.com/"'), json_encode($fields));
 
+$mark = count(mockState()['requests']);
+$r = sifruno_CreateAccount($params(1, 'shop.example.com'));
+$messages[] = $r;
+$again = array_filter(received($mark), static fn (array $q): bool => $q['path'] === '/api/v1/websites/wordpress');
+check('a repeated CreateAccount finds the website this service made and starts nothing', $r === 'success' && count($again) === 0 && siteFor('shop.example.com') !== null, $r);
+
 $r = sifruno_CreateAccount($params(1, 'bad domain', []));
 $messages[] = $r;
 check('a service without a plain domain is refused before anything is sent', str_contains($r, 'not a plain domain name'), $r);
@@ -258,6 +264,18 @@ $messages[] = $r;
 $posts = array_filter(received($mark), static fn (array $q): bool => $q['method'] === 'POST');
 check('a website that keeps changing stops after three tries with the panel\'s reason', count($posts) === 3 && str_contains($r, 'This website changed after the page loaded it') && str_contains($r, 'HTTP 409') && siteFor('shop.example.com')['state'] === 'active', $r);
 
+echo "## Another service with the same domain\n";
+// Service 3 never saved an account ID: it must not change or delete the
+// website service 1 made for the same domain.
+$mark = count(mockState()['requests']);
+$r = sifruno_TerminateAccount($params(3, 'shop.example.com'));
+$messages[] = $r;
+$posts = array_filter(received($mark), static fn (array $q): bool => $q['method'] === 'POST');
+check('a service without a saved account ID cannot delete a website matched by domain alone', str_contains($r, 'does not record which website on the panel is its own') && count($posts) === 0 && siteFor('shop.example.com') !== null, $r);
+$r = sifruno_SuspendAccount($params(3, 'shop.example.com'));
+$messages[] = $r;
+check('nor suspend it', str_contains($r, 'does not record which website on the panel is its own') && siteFor('shop.example.com')['state'] === 'active', $r);
+
 echo "## TerminateAccount\n";
 $mark = count(mockState()['requests']);
 $site = siteFor('shop.example.com');
@@ -268,12 +286,12 @@ check('TerminateAccount deletes the website', $r === 'success' && siteFor('shop.
 check('with confirm_domain and the current expected_revision', ($delete[0]['body'] ?? []) === ['confirm_domain' => 'shop.example.com', 'expected_revision' => $site['revision']]);
 $r = sifruno_TerminateAccount($params(1, 'shop.example.com'));
 $messages[] = $r;
-check('a second terminate says the panel has no website for the domain', str_contains($r, 'The panel has no website for shop.example.com, so nothing changed'), $r);
+check('a second terminate says the service has no website on the panel and changes nothing', str_contains($r, 'Could not delete the website for shop.example.com') && str_contains($r, 'nothing changed'), $r);
 
 echo "## A domain the panel does not have\n";
 $r = sifruno_SuspendAccount($params(9, 'missing.example.com'));
 $messages[] = $r;
-check('Suspend for an unknown domain says so and changes nothing', str_contains($r, 'Could not suspend the website for missing.example.com. The panel has no website for missing.example.com'), $r);
+check('Suspend for an unknown domain says so and changes nothing', str_contains($r, 'Could not suspend the website for missing.example.com') && str_contains($r, 'nothing changed'), $r);
 
 echo "## A job that fails\n";
 $r = sifruno_CreateAccount($params(2, 'fail-blog.example.com'));

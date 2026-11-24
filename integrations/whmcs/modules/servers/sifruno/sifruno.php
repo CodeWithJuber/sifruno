@@ -398,13 +398,15 @@ final class SifrunoSite
     }
 
     /**
-     * Finds the service's website: by the saved account ID, else by domain.
-     * Without a website, the wizard job the service started, if the panel
-     * still has it.
+     * Finds the service's website: by the saved account ID, else (only when
+     * $byDomain) by domain. Without a website, the wizard job the service
+     * started, if the panel still has it. A change or a repeated create passes
+     * $byDomain false: a website found by domain alone may be another
+     * service's, and deleting or claiming it would hit the wrong client.
      *
      * @return array{site: ?array, job: ?array}
      */
-    public static function locate(SifrunoPanel $panel, array $params, string $domain, string $what): array
+    public static function locate(SifrunoPanel $panel, array $params, string $domain, string $what, bool $byDomain = true): array
     {
         $id = self::stored($params, SifrunoPanel::ACCOUNT_FIELD);
         if (self::validId($id)) {
@@ -416,16 +418,15 @@ final class SifrunoSite
                 throw $panel->fail($what, $res);
             }
         }
-        $res = $panel->call($what, 'GET', '/api/v1/websites/sites', null, SifrunoPanel::READ_TIMEOUT);
-        if ($res['status'] !== 200 || !is_array($res['data']['sites'] ?? null)) {
-            throw $panel->fail($what, $res);
-        }
-        foreach ($res['data']['sites'] as $site) {
-            if (self::isSite($site) && $site['domain'] === $domain) {
-                if ($site['account_id'] !== $id) {
-                    self::store($params, [SifrunoPanel::ACCOUNT_FIELD => $site['account_id']]);
+        if ($byDomain) {
+            $res = $panel->call($what, 'GET', '/api/v1/websites/sites', null, SifrunoPanel::READ_TIMEOUT);
+            if ($res['status'] !== 200 || !is_array($res['data']['sites'] ?? null)) {
+                throw $panel->fail($what, $res);
+            }
+            foreach ($res['data']['sites'] as $site) {
+                if (self::isSite($site) && $site['domain'] === $domain) {
+                    return ['site' => $site, 'job' => null];
                 }
-                return ['site' => $site, 'job' => null];
             }
         }
         $job = null;
@@ -456,9 +457,9 @@ final class SifrunoSite
     /**
      * The service's website, or an error that says why there is none.
      */
-    public static function find(SifrunoPanel $panel, array $params, string $domain, string $what): array
+    public static function find(SifrunoPanel $panel, array $params, string $domain, string $what, bool $byDomain = true): array
     {
-        $found = self::locate($panel, $params, $domain, $what);
+        $found = self::locate($panel, $params, $domain, $what, $byDomain);
         if ($found['site'] !== null) {
             return $found['site'];
         }
@@ -469,6 +470,9 @@ final class SifrunoSite
         }
         if ($state === 'failed') {
             throw new SifrunoError($what . '. ' . self::jobFailure($job));
+        }
+        if (!$byDomain) {
+            throw new SifrunoError($what . '. This service does not record which website on the panel is its own (its Sifruno account ID field is empty or names no website), so nothing changed. Open the website in the panel, copy the account ID from its page into that field, then try again. If the website was deleted there, set this service\'s status in WHMCS by hand.');
         }
         throw new SifrunoError($what . '. The panel has no website for ' . $domain . ', so nothing changed. Check Websites in the panel. If the website was deleted there, set this service\'s status in WHMCS by hand.');
     }
@@ -484,7 +488,9 @@ final class SifrunoSite
     public static function change(SifrunoPanel $panel, array $params, string $domain, string $what, callable $request): array
     {
         for ($try = 1; ; $try++) {
-            $site = self::find($panel, $params, $domain, $what);
+            // Only the website this service recorded: never one matched by
+            // domain alone.
+            $site = self::find($panel, $params, $domain, $what, false);
             [$path, $body] = $request($site);
             $res = $panel->call($what, 'POST', $path, $body, SifrunoPanel::CHANGE_TIMEOUT);
             if ($res['status'] === 200) {
@@ -639,6 +645,14 @@ function sifruno_CreateAccount(array $params): string
         $email = trim((string) ($params['clientsdetails']['email'] ?? ''));
         if ($email === '' || strlen($email) > 100 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
             throw new SifrunoError($what . '. The client\'s email address is missing or is not a plain address, and WordPress needs one for its admin, so nothing was sent to the panel. Correct it on the client\'s profile, then try again.');
+        }
+        // A repeated Create (WHMCS retries after a timeout, or an admin runs it
+        // again) finds the website or job this service already started, by the
+        // IDs it saved, and changes nothing. A website found by domain alone is
+        // not taken over: the panel refuses the duplicate domain instead.
+        $found = SifrunoSite::locate($panel, $params, $domain, $what, false);
+        if ($found['site'] !== null || ($found['job']['state'] ?? '') === 'running') {
+            return;
         }
         $user = SifrunoSite::adminUser($params, $domain);
         $password = SifrunoSite::newPassword();

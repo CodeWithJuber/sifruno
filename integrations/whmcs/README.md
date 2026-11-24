@@ -51,7 +51,7 @@ WHMCS runs Create inside a payment gateway's callback, an admin's browser reques
 3. It follows the job for 15 seconds, so a job that fails early is shown as a failed Create.
 4. It returns success while the job runs on.
 
-After that, every action finds the website by its saved account ID, or by the domain once the job has finished. While the job still runs, or after it failed, the action and the admin service page say so. A job that fails after Create returned leaves the service Active in WHMCS with no website: the admin service page shows the panel's reason. Fix the cause, then run Create again.
+After that, every action finds the website by the account ID or job ID this service saved. Suspend, Unsuspend and Terminate never act on a website matched by domain alone, because another service may own it; a repeated Create finds what this service already started and starts nothing. While the job still runs, or after it failed, the action and the admin service page say so. A job that fails after Create returned leaves the service Active in WHMCS with no website: the admin service page shows the panel's reason. Fix the cause, then run Create again.
 
 The panel builds one website at a time. An order that arrives while another website is being built fails with "Another website is being created right now"; run Create on that service again a few minutes later.
 
@@ -78,6 +78,7 @@ The token can do everything an admin can do in the panel's API, except sign in a
 | "Nothing answered at" or "HTTPS could not be set up" | The panel is not listening there, or a firewall blocks WHMCS. | Check the Port, that the panel runs with `--panel-host`, and the panel server's firewall. |
 | "Another website is being created right now" | The panel builds one website at a time. | Run Create again when the other website is done. |
 | "already belongs to the hosting account" | The domain already has a website on the panel. | Use another domain, or delete that website first. |
+| "does not record which website on the panel is its own" | The service's `Sifruno account ID` field is empty or names no website, and the module does not guess by domain. Nothing changed. | Open the website in the panel, copy the account ID from its page into the field, then run the action again. |
 | "Creating the website failed on the panel" | The wizard job failed. The message has the panel's what, why and next step, and the job ID. | Follow the panel's next step, then run Create again. |
 | "The website is still being created" | The job has not finished. | Wait, then try again. The admin service page shows the step it is on. |
 | "The panel has no website for" | No website has this domain, and no job for it is kept. | Check Websites in the panel. If it was deleted there, set the service's status in WHMCS by hand. |

@@ -31,7 +31,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|wordpress|public-html|delete|cron|set-cron|log|usage|usage-all|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -89,6 +89,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	files := command.Bool("files", false, "Restore the files (restore)")
 	var databases multiFlag
 	command.Var(&databases, "db", "Database to back up or restore; repeat for several (backup, restore)")
+	kind := command.String("kind", "access", "access or error (log)")
+	var jobs multiFlag
+	command.Var(&jobs, "job", "A job as five cron fields, a space and the command (set-cron); repeat for several, omit all to remove every job")
 	var keyFiles multiFlag
 	command.Var(&keyFiles, "key-file", "Public key file to install (ssh-keys); repeat for several, omit all to remove access. With certificate: the PEM private key, once")
 	if command.Parse(global.Args()[1:]) != nil || command.NArg() != 0 {
@@ -111,6 +114,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 		result, err = service.SetPlan(ctx, *id, hostaccounts.PlanInput{Plan: *plan, Limits: limits, ExpectedRevision: *revision, Reason: *reason}, *actor)
 	case "delete":
 		result, err = service.Delete(ctx, *id, hostaccounts.DeleteInput{ExpectedRevision: *revision, Reason: *reason}, *actor)
+	case "cron", "set-cron", "log", "usage", "usage-all":
+		tools, ok := service.(hostaccounts.SiteToolsService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no scheduled jobs, logs and usage surface")
+			return 1
+		}
+		switch global.Arg(0) {
+		case "cron":
+			result, err = tools.Cron(ctx, *id)
+		case "set-cron":
+			input := hostaccounts.CronInput{Jobs: []hostaccounts.CronJob{}, ExpectedRevision: *revision, Reason: *reason}
+			for _, job := range jobs {
+				fields := strings.SplitN(job, " ", 6)
+				if len(fields) != 6 {
+					fmt.Fprintf(stderr, "a job needs five fields and a command: %q\n", job)
+					return 2
+				}
+				input.Jobs = append(input.Jobs, hostaccounts.CronJob{Schedule: strings.Join(fields[:5], " "), Command: fields[5]})
+			}
+			result, err = tools.SetCron(ctx, *id, input, *actor)
+		case "log":
+			result, err = tools.SiteLog(ctx, *id, *kind)
+		case "usage":
+			result, err = tools.SiteUsage(ctx, *id)
+		case "usage-all":
+			result, err = tools.UsageAll(ctx)
+		}
 	case "public-html":
 		folders, ok := service.(hostaccounts.SiteFolderService)
 		if !ok {

@@ -464,6 +464,8 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 			}
 			result, err := s.drillAccount(ctx, id, in.Input, in.Actor)
 			answerBackup(w, result, err)
+		case siteToolsRoute(r.URL.Path):
+			serveSiteTools(ctx, w, r, s)
 		default:
 			writeError(w, ErrNotFound)
 		}

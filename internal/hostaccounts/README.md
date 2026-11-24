@@ -857,6 +857,127 @@ Limits for now:
 - `restic forget` keeps the last 7 daily and 4 weekly snapshots of a
   deleted site until they are removed by hand.
 
+## Scheduled jobs
+
+`SetCron` (`POST /v1/accounts/{id}/cron`, input `jobs`, `expected_revision`,
+`reason`) replaces an account's whole job set; `GET /v1/accounts/{id}/cron`
+lists it with each job's next run and the broker's clock (`server_time`).
+Root never runs a job's command: it writes the crontab, and cronie's crond
+runs the jobs as the account's user.
+
+- A job is a schedule and a command. The schedule is five fields one space
+  apart, each a comma list of `*`, `*/step`, `n`, `n-m` or `n-m/step` with
+  numbers of one or two digits in the field's bounds (minute 0-59, hour
+  0-23, day 1-31, month 1-12, weekday 0-7): a strict subset of what cronie
+  1.5.7 parses (`entry.c`), without names, `@` shortcuts or `~`. The command
+  is 1 to 1024 bytes of UTF-8 on one line: no control character, no
+  `U+2028`/`U+2029`, no outer space and no `%`, which cron turns into a new
+  line and standard input; nor does it start with `-`, which AlmaLinux 9's
+  cronie reads as an entry option (its `n_option` patch), or `*`, which
+  cronie refuses as a typo. At most 50 jobs and 16 KiB of job lines. The
+  request is read as strictly as the others (each job exactly `schedule`
+  and `command`, once each), up to 128 KiB.
+- The file is `/var/spool/cron/<username>`: a fixed header, `MAILTO=""` (no
+  mail: the account has no mailbox; cronie `do_command.c`), and one line per
+  job. Nothing else is written, so a job runs with cronie's defaults,
+  `/bin/sh`, HOME the home and PATH `/usr/bin:/bin`; no tenant can set a
+  variable such as `XDG_SESSION_CLASS`, which AlmaLinux 9's cronie passes to
+  PAM. No jobs: no file.
+- Written directly, not with `crontab -u`: root 0600, beside its target
+  under a name crond skips (`.sifruno-new-<id>`; `not_a_crontab` skips dot
+  names) with `O_EXCL|O_NOFOLLOW`, synced and renamed. That is
+  what cronie's `crontab` leaves when root runs it (`crontab.c`: the owner is
+  root when the real and effective IDs are root's; `mkstemp` makes it 0600),
+  and what crond's `check_open` accepts (regular, one link, `mode & 07533 ==
+  0400`, owner root or the user). The write either happens whole or not at
+  all, the broker can compare what is installed with its record, and delete
+  removes the same file by name after the user is gone, which `crontab -r
+  -u` cannot.
+  crond sees the rename through inotify (`IN_MOVED_TO`) or the directory's
+  modification time. `/var/spool/cron` must be root's along its path and
+  0700, as the cronie package makes it; otherwise the change is refused
+  (503) before anything is journaled, as it is (409) when something other
+  than a regular single-link file of root or the user is at the name.
+- The account's own user can rewrite its crontab with cronie's setuid
+  `crontab` (from PHP or a job; the shell is nologin). The jobs still run as
+  that user, so this gives nothing beyond what its PHP can do, but the panel
+  then lists the broker's record, not the file; the next save writes the
+  record's list again. The broker therefore never reads the file back after
+  its rename: a tenant's rewrite at that moment must not leave a change
+  pending. Denying tenants the `crontab` program (`/etc/cron.allow`; crond
+  itself does not read it) is the host's choice and is not made here.
+- Journal: the checks come first (input, every account settled, revision,
+  history room, what only root controls, a usable directory). The new set
+  is stored in the `hostaccounts-cron-v1` bucket under its SHA-256, the
+  intent journaled (action `cron`, target the digest, revision plus one;
+  no command enters the journal), the crontab written, and the result
+  journaled. A write that failed changed nothing (the rename or unlink is
+  its last step), so it ends `rejected`, unchanged (503 `unavailable`). Only
+  a crash or a failed journal write leaves the change pending; the next
+  start writes the stored set. An unchanged set is a
+  no-op only while the installed file still holds it; a file edited outside
+  the broker is rewritten through the journaled path. Each change takes two
+  of the account's 256 history rows.
+- How crond runs them, read from source, not yet run (proof
+  `site-tools.guest.sh`): for each job crond calls PAM service `crond`
+  (`security.c`: `pam_acct_mgmt`, `pam_setcred`, `pam_open_session`), then
+  `setgid`, `initgroups` and `setreuid` to the user, and runs `/bin/sh -c`.
+  cronie's `pam/crond` includes `system-auth`; authselect 1.2.6's `sssd` and
+  `minimal` profiles put `pam_unix` in its account stack (so a suspended,
+  expired account runs no job), and `pam_limits` and `-pam_systemd` in its
+  session stack. pam_systemd puts the session's scope in `user-<uid>.slice`
+  (pam_systemd(8), systemd v252), under the plan's TasksMax, MemoryMax and
+  CPUQuota, and pam_limits applies `limits.d/90-sifruno-accounts.conf`
+  (nproc 4096). That AlmaLinux 9's installed `/etc/pam.d/crond` is cronie's
+  file unchanged, and that the host's authselect profile is one of those
+  two, is inferred.
+- Times are the server's: the broker and crond both read `/etc/localtime`.
+  The next run follows cronie's day rule (both day fields must match when
+  either starts with `*`, otherwise either); around a daylight saving change
+  crond's own rule differs, so the time is a guide there.
+- Delete removes the crontab and the temporary name with the account's
+  other files (`removeAccountFiles`), root's or the user's, after userdel. It
+  must: crond keeps a crontab whose user is gone and loads it again when a
+  user of that name appears (`database.c`, `check_orphans`). An unexpected
+  object there keeps the delete pending.
+
+## Logs and usage
+
+`GET /v1/accounts/{id}/logs/access` and `/logs/error` return the end of the
+site's OpenLiteSpeed logs; `GET /v1/accounts/{id}/usage` and `GET /v1/usage`
+(every account) its disk use and this month's traffic. They need the web
+operation, which admits `xfs_quota` and knows the web server's user.
+
+- These only read, outside every home. They depend on nothing an unfinished
+  operation half-changes, so no pending record, the account's own included,
+  stops them, and they hold the broker lock only to read the records. The
+  cron list reads only the broker's records and is not stopped either.
+- Logs are read from `olsweb.LogRoot/<site name>/`, which must be root's
+  and writable by no one else along its path, through handles opened with
+  `O_NOFOLLOW`; the file must be regular, single-link, and root's or the web
+  server's user's (OpenLiteSpeed hands its logs to its user,
+  `logrotate.cpp`). At most the last 256 KiB are read and the last 200 whole
+  lines returned, made valid UTF-8 and otherwise as written: they hold what
+  visitors sent, so the panel shows them as text only.
+- Disk is `xfs_quota -x -c "report -u -b -n -N -L <uid> -U <uid>" <homes>`,
+  read-only, in KiB (xfsprogs 6.3 `report.c`); the list reads the accounts' UIDs
+  in reports of at most 500 accounts, each within a command's 64 KiB of output.
+- Traffic is the response body bytes OpenLiteSpeed's access log records
+  (`accesslog.cpp`: the field after the status is `getBodySent()`, headers
+  not counted) for the server's current month. Each site has a counter in
+  `<state>/usage/<id>.json` (root 0600, directory 0700): the month, its
+  total, and where reading stopped (device, inode, modification time,
+  offset after the last whole line). A read goes on from there, through the
+  copies OpenLiteSpeed rotated the log into (`access.log.YYYY_MM_DD[.NN]`,
+  `archiveFile` renames the file, so it is found by its inode), oldest
+  first, then the live log, at most 64 MiB per read (shared by all sites,
+  at least 4 MiB each), counting whole lines of the current month only. A
+  line over 64 KiB is skipped. When what is left of the budget ends inside
+  a line, the read stops before that line and the next read counts it. `traffic_complete` is false while earlier
+  lines remain. If the file read last is gone (`keepDays` removed it), the
+  files written after it are read. Usage reads run one at a time; a counter
+  is saved only while its account exists, and delete removes it.
+
 ## Verification cost
 
 Every request checks every account's files: its passwd and group identity (from

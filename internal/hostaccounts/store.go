@@ -61,8 +61,16 @@ type record struct {
 	// LimitsNext is what an unfinished plan operation applies (empty: the
 	// limits stay), durable before the slice drop-in changes.
 	LimitsNext AccountLimits `json:"limits_next,omitzero"`
+	// Cron is the digest of the installed scheduled jobs (empty: none). The
+	// jobs are in the cron bucket under that digest, so a record stays
+	// small; an unfinished cron operation's jobs are there too, under its
+	// pending target, before the crontab changes (store_sitetools.go).
+	Cron string `json:"cron,omitempty"`
 }
 type nativeSystem interface {
+	// siteToolsSystem writes crontabs and reads logs, quotas and traffic
+	// counters (sitetools_linux.go).
+	siteToolsSystem
 	Plan(context.Context, string) (int, int, error)
 	Create(context.Context, record, func(ownership) error) (ownership, error)
 	RecoverCreate(context.Context, record, func(ownership) error) (ownership, error)
@@ -173,6 +181,9 @@ type store struct {
 	// backupKeyMu guards making the backup key and password, so reading
 	// the backup status never waits for backupMu.
 	backupKeyMu sync.Mutex
+	// usageMu lets one usage read run at a time, outside mu: it reads logs,
+	// which takes a moment, and keeps each site's traffic counter.
+	usageMu sync.Mutex
 	// auditAfter is the ID of the last account the rotating full check
 	// reached. Keying the rotation on an ID, not a position, keeps it fair
 	// while accounts are created and deleted between requests.
@@ -311,7 +322,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -328,6 +339,8 @@ func (s *store) records() ([]record, error) {
 					validTarget = certificateDigestPattern.MatchString(r.Pending.Target) && validCertificateState(r.TLSNext) && r.Pending.Target == certificateDigest(r.TLSNext)
 				case "adopt":
 					_, validTarget = parsePublicTarget(r.Pending.Target)
+				case "cron":
+					validTarget = cronDigestPattern.MatchString(r.Pending.Target)
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
@@ -343,6 +356,9 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if (r.Account.Limits.given() && !validLimits(r.Account.Limits)) || (r.LimitsNext.given() && (!validLimits(r.LimitsNext) || r.Pending == nil || r.Pending.Action != "plan")) {
+				return ErrRecovery
+			}
+			if r.Cron != "" && (!cronDigestPattern.MatchString(r.Cron) || r.Cron == emptyCronDigest) {
 				return ErrRecovery
 			}
 			if verifyHistory(tx, r) != nil {
@@ -477,6 +493,13 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					return ErrRecovery
 				}
 				continue
+			} else if r.Pending.Action == "cron" {
+				// Finish the interrupted crontab write from the journaled set
+				// (store_sitetools.go); a failure stays pending.
+				if s.reconcileCron(ctx, r) != nil {
+					return ErrRecovery
+				}
+				continue
 			} else if r.Pending.Action == "adopt" {
 				// Metadata only: record the directory the intent named.
 				if s.finishAdopt(r) != nil {
@@ -581,6 +604,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				if e := s.purge(r.Account.ID); e != nil {
 					return ErrRecovery
 				}
+				s.removeUsageState(r.Account.ID)
 				continue
 			}
 			if r.Pending.Action == "state" && r.Web.enabled() {
@@ -811,6 +835,11 @@ func (s *store) purge(id string) error {
 		if b == nil {
 			return ErrRecovery
 		}
+		if c := tx.Bucket(cronBucket); c != nil {
+			if e := c.Delete([]byte(id)); e != nil {
+				return e
+			}
+		}
 		return b.Delete([]byte(id))
 	}) != nil {
 		return ErrRecovery
@@ -1025,6 +1054,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	if e := s.purge(r.Account.ID); e != nil {
 		return Account{}, ErrRecovery
 	}
+	s.removeUsageState(r.Account.ID)
 	return before, nil
 }
 

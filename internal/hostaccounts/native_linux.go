@@ -68,6 +68,10 @@ type linuxSystem struct {
 	// unitDir is systemdUnitDir, where the accounts' slice drop-ins go; a
 	// field so a root-only test can use a scratch directory.
 	unitDir string
+	// cronDir is cronSpoolDir and logRoot olsweb.LogRoot (sitetools_linux.go),
+	// fields for the same reason.
+	cronDir string
+	logRoot string
 	cacheMu sync.Mutex
 	cache   *accountDatabase
 }
@@ -95,7 +99,7 @@ func newLinuxSystem(opts BrokerOptions, web *WebOptions) (*linuxSystem, error) {
 	if e != nil || supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return nil, ErrUnavailable
 	}
-	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir, tlsDir: olsweb.TLSRoot, unitDir: systemdUnitDir}
+	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir, tlsDir: olsweb.TLSRoot, unitDir: systemdUnitDir, cronDir: cronSpoolDir, logRoot: olsweb.LogRoot}
 	if web != nil && n.enableWeb(web) != nil {
 		return nil, ErrUnavailable
 	}
@@ -1281,6 +1285,19 @@ func (n *linuxSystem) removeAccountFiles(r record) error {
 	// between the two; it holds only public keys but goes with the account.
 	for _, path := range []string{filepath.Join(n.sshDir, r.Account.Username), filepath.Join(n.sshDir, ".new-"+r.Account.ID)} {
 		if e := removeRegular(path, 0, false); e != nil {
+			return e
+		}
+	}
+	// The crontab, whoever wrote it (cronie's crontab run by root leaves it
+	// root's, by the user the user's), and SetCron's temporary name. crond
+	// keeps a crontab whose user is gone as an orphan and loads it again
+	// when a user of that name appears (cronie database.c, check_orphans),
+	// so it must not outlive the account.
+	if !filepath.IsAbs(n.cronDir) {
+		return ErrUnavailable
+	}
+	for _, name := range []string{r.Account.Username, cronTempName(r.Account.ID)} {
+		if e := removeRegular(filepath.Join(n.cronDir, name), r.Account.UID, true); e != nil {
 			return e
 		}
 	}

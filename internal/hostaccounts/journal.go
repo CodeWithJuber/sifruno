@@ -149,7 +149,10 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 					return ErrRecovery
 				}
 			} else {
-				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" && e.Action != "ssh_keys" && e.Action != "web" && e.Action != "certificate" && e.Action != "adopt" {
+				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" && e.Action != "ssh_keys" && e.Action != "web" && e.Action != "certificate" && e.Action != "adopt" && e.Action != "cron" {
+					return ErrRecovery
+				}
+				if e.Action == "cron" && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) {
 					return ErrRecovery
 				}
 				if e.Action == "state" && e.After.Revision != e.Before.Revision+1 || e.Action == "plan" && e.After.Revision != e.Before.Revision+1 || e.Action == "ssh_keys" && e.After.Revision != e.Before.Revision+1 || e.Action == "web" && e.After.Revision != e.Before.Revision+1 || e.Action == "certificate" && e.After.Revision != e.Before.Revision+1 || e.Action == "adopt" && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) || e.Action == "conflict" && e.After.Revision != e.Before.Revision || e.Action == "delete" && e.After.Revision != e.Before.Revision {
@@ -182,8 +185,10 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 				// run out): nothing was removed and the site went back. A
 				// plan change ends rejected when its limits could not be
 				// written or loaded, or a live site's config with them failed
-				// its test: the old drop-in and site list went back.
-				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" && e.Action != "state" && e.Action != "plan" || e.Before == nil || !sameAccount(e.After, *e.Before) {
+				// its test: the old drop-in and site list went back. A cron
+				// change ends rejected when its crontab could not be written,
+				// which changes nothing: the rename is the write's last step.
+				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" && e.Action != "state" && e.Action != "plan" && e.Action != "cron" || e.Before == nil || !sameAccount(e.After, *e.Before) {
 					return ErrRecovery
 				}
 				lastSuccess = e

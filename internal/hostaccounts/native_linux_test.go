@@ -338,10 +338,11 @@ func TestRootOnlySSHKeyFileLifecycle(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(base) })
 	dir := filepath.Join(base, "authorized_keys")
 	mail := filepath.Join(base, "mail")
-	if os.Chmod(base, 0755) != nil || os.Mkdir(dir, 0711) != nil || os.Chmod(dir, 0711) != nil || os.Mkdir(mail, 0775) != nil {
+	cron := filepath.Join(base, "cron")
+	if os.Chmod(base, 0755) != nil || os.Mkdir(dir, 0711) != nil || os.Chmod(dir, 0711) != nil || os.Mkdir(mail, 0775) != nil || os.Mkdir(cron, 0700) != nil {
 		t.Fatal("fixture")
 	}
-	n := &linuxSystem{sshDir: dir, mailDir: mail}
+	n := &linuxSystem{sshDir: dir, mailDir: mail, cronDir: cron}
 	const gid = 54321
 	r := record{Account: Account{ID: strings.Repeat("b", 32), Username: "fixtureacct", UID: 54321, GID: gid}}
 	first, second := testEd25519Line(t, "laptop"), testEd25519Line(t, "ci")
@@ -397,13 +398,19 @@ func TestRootOnlySSHKeyFileLifecycle(t *testing.T) {
 	if os.WriteFile(spool, nil, 0660) != nil || os.Chown(spool, r.Account.UID, 12) != nil || os.WriteFile(leftover, []byte("x"), 0600) != nil {
 		t.Fatal("fixture")
 	}
+	// The crontab goes too, whether root or the user wrote it, and so does
+	// SetCron's temporary name.
+	crontab, cronLeftover := filepath.Join(cron, "fixtureacct"), filepath.Join(cron, cronTempName(r.Account.ID))
+	if os.WriteFile(crontab, []byte("* * * * * true\n"), 0600) != nil || os.Chown(crontab, r.Account.UID, r.Account.GID) != nil || os.WriteFile(cronLeftover, nil, 0600) != nil {
+		t.Fatal("fixture")
+	}
 	if e := n.removeAccountFiles(r); e != nil {
 		t.Fatal(e)
 	}
 	if e := n.VerifySSHKeys(r, nil); e != nil {
 		t.Fatalf("absent file is not the empty set: %v", e)
 	}
-	for _, path := range []string{target, spool, leftover} {
+	for _, path := range []string{target, spool, leftover, crontab, cronLeftover} {
 		if _, e := os.Lstat(path); !os.IsNotExist(e) {
 			t.Fatalf("%s survived account removal", path)
 		}

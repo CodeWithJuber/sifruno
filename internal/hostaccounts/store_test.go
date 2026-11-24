@@ -82,6 +82,9 @@ type fakeNative struct {
 	cachesRemoved []string
 	// limitsDelay makes every ApplyLimits take this long, as a slow reload.
 	limitsDelay time.Duration
+	// siteTools models crontabs, logs, quotas and traffic counters
+	// (sitetools_test.go).
+	siteTools *fakeSiteTools
 }
 
 func (f *fakeNative) EndProcesses(_ context.Context, r record) error {
@@ -311,6 +314,8 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 	}
 	delete(f.live, r.Account.Username)
 	delete(f.staged, r.Account.Username)
+	// The native delete removes the crontab with the account's other files.
+	delete(f.tools().crontabs, r.Account.Username)
 	return nil
 }
 

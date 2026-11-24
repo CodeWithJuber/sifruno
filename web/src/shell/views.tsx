@@ -15,6 +15,7 @@ import type { PageId } from "@/shell/pages";
 const Trail = lazy(() => import("@/Tools").then((m) => ({ default: m.Trail })));
 const Budget = lazy(() => import("@/Tools").then((m) => ({ default: m.Budget })));
 const Access = lazy(() => import("@/Access"));
+const ApiTokens = lazy(() => import("@/ApiTokens").then((m) => ({ default: m.ApiTokens })));
 const Storage = lazy(() => import("@/HostResources").then((m) => ({ default: m.Storage })));
 const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ default: m.NetworkResources })));
 const PanelPreview = lazy(() => import("@/PanelPreview"));
@@ -109,6 +110,10 @@ export function SecurityView() {
   const { revision, setPageResource } = useShell();
   const onStatus = useCallback((value: Resource<unknown>) => setPageResource("security", value), [setPageResource]);
   return <Access revision={revision} onStatus={onStatus} />;
+}
+
+export function ApiTokensView() {
+  return <ApiTokens />;
 }
 
 export function TourView() {

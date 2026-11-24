@@ -1,4 +1,4 @@
-import { Archive, Database, Folder, Globe, History, Home, Layers, ListChecks, Network, Plus, Server, Settings, ShieldCheck, HardDrive, Users } from "lucide-react";
+import { Archive, Database, Folder, Globe, History, Home, KeyRound, Layers, ListChecks, Network, Plus, Server, Settings, ShieldCheck, HardDrive, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 // One list drives the sidebar, the command palette, the breadcrumb and the
@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 // Change trail and AI budget screens live under Customers, Security,
 // Activity and Settings. testId keeps the ids the browser QA scripts click.
 
-export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "security" | "settings" | "tour";
+export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "security" | "api-tokens" | "settings" | "tour";
 
 export interface Page {
   id: PageId;
@@ -44,6 +44,7 @@ export const pages: readonly Page[] = [
   { id: "storage", path: "/server/storage", label: "Storage", title: "Server", subtitle: "Services, storage and network on this server.", icon: HardDrive, testId: "nav-storage", audience: "both", group: "admin", parent: "server" },
   { id: "network", path: "/server/network", label: "Network", title: "Server", subtitle: "Services, storage and network on this server.", icon: Network, testId: "nav-network", audience: "both", group: "admin", parent: "server" },
   { id: "security", path: "/security", label: "Security", title: "Security", subtitle: "Sessions signed in to this panel.", icon: ShieldCheck, testId: "nav-access", audience: "private", group: "admin" },
+  { id: "api-tokens", path: "/security/api-tokens", label: "API tokens", title: "API tokens", subtitle: "Let a program, such as your billing system, use the panel API.", icon: KeyRound, testId: "nav-api-tokens", audience: "private", group: "admin", parent: "security" },
   { id: "settings", path: "/settings", label: "Settings", title: "Settings", subtitle: "Panel settings, including the monthly limit for paid AI work.", icon: Settings, testId: "nav-budget", audience: "private", group: "admin" },
 ];
 

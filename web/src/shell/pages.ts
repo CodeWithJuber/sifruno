@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 // Change trail and AI budget screens live under Customers, Security,
 // Activity and Settings. testId keeps the ids the browser QA scripts click.
 
-export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "site-backups" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
+export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "site-backups" | "site-domains" | "static-sites" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
 
 export interface Page {
   id: PageId;
@@ -36,6 +36,7 @@ export const pages: readonly Page[] = [
   { id: "website", path: "/websites/sites/$accountId", label: "Overview", title: "Website overview", subtitle: "One website: its status, versions and links.", icon: Globe, testId: "nav-website", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+$/ },
   { id: "site-databases", path: "/websites/sites/$accountId/databases", label: "Databases", title: "Databases", subtitle: "One website's databases and database users.", icon: Database, testId: "nav-site-databases", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/databases$/ },
   { id: "site-backups", path: "/websites/sites/$accountId/backups", label: "Backups", title: "Backups", subtitle: "One website's backups: back up now, restore, and the last restore drill.", icon: ArchiveRestore, testId: "nav-site-backups", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/backups$/ },
+  { id: "site-domains", path: "/websites/sites/$accountId/domains", label: "Domains", title: "Domains", subtitle: "One website's other domains and its redirects.", icon: Globe, testId: "nav-site-domains", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/domains$/ },
   { id: "static-sites", path: "/websites/static", label: "Static sites (old)", title: "Static sites (old)", subtitle: "Websites made with the old static-file model.", icon: Globe, testId: "nav-static-sites", audience: "private", group: "main", parent: "websites" },
   { id: "files", path: "/websites/files", label: "Files", title: "Files", subtitle: "View and edit your website's files.", icon: Folder, testId: "nav-files", audience: "private", group: "main", parent: "websites" },
   { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },

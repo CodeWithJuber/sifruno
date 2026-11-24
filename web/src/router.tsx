@@ -47,6 +47,14 @@ function SiteBackupsRoute() {
   return <SiteBackups key={accountId} accountId={accountId} />;
 }
 
+// One website's Domains page: its other domains and its redirects.
+const SiteDomains = lazy(() => import("@/SiteDomains").then((m) => ({ default: m.SiteDomains })));
+const siteDomainsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/domains", component: SiteDomainsRoute, beforeLoad: privateOnly });
+function SiteDomainsRoute() {
+  const { accountId } = siteDomainsRoute.useParams();
+  return <SiteDomains key={accountId} accountId={accountId} />;
+}
+
 const routeTree = rootRoute.addChildren([
   route("/", HomeView),
   route("/tour", TourView, previewOnly),
@@ -56,6 +64,7 @@ const routeTree = rootRoute.addChildren([
   websiteRoute,
   siteDatabasesRoute,
   siteBackupsRoute,
+  siteDomainsRoute,
   route("/websites/static", ShellRendered, privateOnly),
   route("/websites/files", ShellRendered, privateOnly),
   route("/websites/backups", ShellRendered, privateOnly),

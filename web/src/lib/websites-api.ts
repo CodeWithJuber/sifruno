@@ -49,6 +49,10 @@ export interface Website {
   limits?: WebsiteLimits;
   // In the list only, and only when the account service answered in time.
   usage?: WebsiteUsage;
+  // The site's other domains, which serve the same site, and how many
+  // redirects it has; empty and 0 from a server before domains.
+  aliases: WebsiteAliasSummary[];
+  redirect_count: number;
 }
 // Disk use against the quota, and the response bytes the site served this
 // month by its access log. traffic_complete is false while older log lines
@@ -70,6 +74,9 @@ export function parseWebsiteUsage(v: unknown): WebsiteUsage | undefined {
   if (typeof u.traffic_month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(u.traffic_month)) return undefined;
   return { disk_used_bytes: u.disk_used_bytes, disk_limit_bytes: u.disk_limit_bytes, traffic_month: u.traffic_month, traffic_bytes: u.traffic_bytes, traffic_complete: u.traffic_complete };
 }
+// One of the site's other domains and what its HTTPS is: "on" (the
+// certificate covers it), "waiting_for_dns", "pending" or "off".
+export interface WebsiteAliasSummary { name: string; https: string }
 // One site as its own page reads it: with the PHP versions installed on the
 // server, which are the ones it can change to.
 export interface WebsiteDetail extends Website {
@@ -122,6 +129,9 @@ export function parseWebsite(v: unknown): Website | undefined {
   if (v.limits !== undefined && !limits) return undefined;
   const usage = v.usage === undefined ? undefined : parseWebsiteUsage(v.usage);
   if (v.usage !== undefined && !usage) return undefined;
+  const aliases = parseAliasSummaries(v.aliases);
+  const redirectCount = v.redirect_count === undefined ? 0 : v.redirect_count;
+  if (!aliases || !Number.isSafeInteger(redirectCount) || (redirectCount as number) < 0) return undefined;
   return {
     account_id: v.account_id, username: v.username, domain: v.domain, kind: v.kind, state: v.state,
     https: { on: https.on, not_after: https.not_after as string },
@@ -129,7 +139,21 @@ export function parseWebsite(v: unknown): Website | undefined {
     revision: v.revision as number, site_folder_changed: v.site_folder_changed,
     ...(limits ? { limits } : {}),
     ...(usage ? { usage } : {}),
+    aliases, redirect_count: redirectCount as number,
   };
+}
+
+// The site's other domains as the list shows them. A server before domains
+// sends neither key.
+function parseAliasSummaries(v: unknown): WebsiteAliasSummary[] | undefined {
+  if (v === undefined) return [];
+  if (!Array.isArray(v) || v.length > 15) return undefined;
+  const out: WebsiteAliasSummary[] = [];
+  for (const item of v) {
+    if (!object(item) || !shortText(item.name, 253) || !item.name || !text(item.https) || !/^[a-z_]{1,20}$/.test(item.https)) return undefined;
+    out.push({ name: item.name, https: item.https });
+  }
+  return out;
 }
 
 const positive = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;

@@ -12,7 +12,8 @@ const accountId = "0123456789abcdef0123456789abcdef";
 const site = (change = {}) => ({
   account_id: accountId, username: "example", domain: "example.com", kind: "wordpress", state: "active",
   https: { on: true, not_after: "2027-02-21T12:30:00Z" }, php_version: "8.3", wordpress_version: "7.1.5",
-  url: "https://example.com/", admin_url: "https://example.com/wp-admin/", created_at: "2026-11-23T10:00:00Z", revision: 7, site_folder_changed: false, ...change,
+  url: "https://example.com/", admin_url: "https://example.com/wp-admin/", created_at: "2026-11-23T10:00:00Z", revision: 7, site_folder_changed: false,
+  aliases: [], redirect_count: 0, ...change,
 });
 // One site as its page reads it, and a signed-in session for its changes.
 const detail = (change = {}) => site({ php_versions: ["8.2", "8.3"], ...change });
@@ -325,4 +326,16 @@ test("a site's resource limits are read when present and said in plain words", (
   assert.equal(api.limitsSummary(limits), "Up to 100 processes, 1 GB of memory and 1 CPU");
   assert.equal(api.limitsSummary({ processes: 200, memory_mib: 1536, cpu_percent: 200 }), "Up to 200 processes, 1.5 GB of memory and 2 CPUs");
   assert.equal(api.limitsSummary({ processes: 32, memory_mib: 512, cpu_percent: 50 }), "Up to 32 processes, 512 MB of memory and 50% of one CPU");
+});
+
+test("a site's other domains and redirect count are read, and a server before them sends neither", () => {
+  const listed = api.parseWebsite(site({ aliases: [{ name: "www.example.com", https: "on" }, { name: "example.net", https: "waiting_for_dns" }], redirect_count: 2 }));
+  assert.deepEqual(listed.aliases, [{ name: "www.example.com", https: "on" }, { name: "example.net", https: "waiting_for_dns" }]);
+  assert.equal(listed.redirect_count, 2);
+  const { aliases: _a, redirect_count: _r, ...older } = site();
+  const old = api.parseWebsite(older);
+  assert.deepEqual([old.aliases, old.redirect_count], [[], 0]);
+  for (const bad of [{ aliases: null }, { aliases: [{ name: "", https: "on" }] }, { aliases: [{ name: "x.example", https: "On Now" }] }, { redirect_count: -1 }, { redirect_count: "2" }]) {
+    assert.equal(api.parseWebsite(site(bad)), undefined, JSON.stringify(bad));
+  }
 });

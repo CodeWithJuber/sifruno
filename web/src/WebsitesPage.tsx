@@ -121,6 +121,18 @@ function HttpsBadge({ site }: { site: Website }) {
   </span>;
 }
 
+// The site's other domains and redirects under its name in the list, when it
+// has any. An alias without https says so.
+function OtherDomains({ site }: { site: Website }) {
+  if (site.aliases.length === 0 && site.redirect_count === 0) return null;
+  const httpOnly = site.aliases.filter((alias) => alias.https !== "on").length;
+  return <span className="mt-0.5 block text-xs font-normal text-muted-foreground" data-testid="website-other-domains">
+    {site.aliases.length > 0 && <span className="wrap-anywhere">Also {site.aliases.map((alias) => alias.name).join(", ")}</span>}
+    {httpOnly > 0 && <span> · {httpOnly === 1 ? "1 on http only" : `${httpOnly} on http only`}</span>}
+    {site.redirect_count > 0 && <span>{site.aliases.length > 0 ? " · " : ""}{site.redirect_count === 1 ? "1 redirect" : `${site.redirect_count} redirects`}</span>}
+  </span>;
+}
+
 // External links name the site, so each is distinct for a screen reader, and
 // say that they open a new tab.
 function SiteLink({ href, label, domain, variant, testId }: { href: string; label: string; domain: string; variant: "default" | "outline" | "ghost"; testId: string }) {
@@ -205,6 +217,7 @@ function SiteTable({ sites }: { sites: Website[] }) {
             className={`${stacked} @max-[62rem]:rounded-lg @max-[62rem]:border @max-[62rem]:border-border @max-[62rem]:p-3 @max-[62rem]:hover:bg-transparent`}>
             <th scope="row" className={`p-2 text-start align-middle font-medium text-foreground ${stacked} @max-[62rem]:px-0 @max-[62rem]:pt-0 @max-[62rem]:pb-2`}>
               <span className="wrap-anywhere">{site.domain}</span>
+              <OtherDomains site={site} />
             </th>
             <TableCell data-label="Status" className={stackedCell}><StatusBadge state={site.state} /></TableCell>
             <TableCell data-label="HTTPS" className={`${stackedCell} whitespace-normal`}><HttpsBadge site={site} /></TableCell>
@@ -298,6 +311,12 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
         <h3>Overview</h3>
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm" data-testid="website-facts">
           <dt className="text-muted-foreground">Domain</dt><dd className="wrap-anywhere text-foreground">{site.domain}</dd>
+          <dt className="text-muted-foreground">Other domains</dt>
+          <dd className="wrap-anywhere text-foreground" data-testid="website-aliases">
+            {site.aliases.length === 0 ? "None" : site.aliases.map((alias) => `${alias.name}${alias.https === "on" ? "" : " (http only for now)"}`).join(", ")}
+          </dd>
+          <dt className="text-muted-foreground">Redirects</dt>
+          <dd className="text-foreground" data-testid="website-redirects">{site.redirect_count === 0 ? "None" : site.redirect_count === 1 ? "1 redirect" : `${site.redirect_count} redirects`}</dd>
           <dt className="text-muted-foreground">Status</dt><dd className="text-foreground" data-testid="website-status-fact">{siteStatus(site.state).label}</dd>
           <dt className="text-muted-foreground">HTTPS</dt>
           <dd className="text-foreground" data-testid="website-https-fact">
@@ -325,6 +344,7 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
           <SiteLink href={site.url} label="Open site" domain={site.domain} variant="default" testId="open-site" />
           {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />}
           <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
+          <Link to="/websites/sites/$accountId/domains" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-domains-link">Domains and redirects</Link>
           <Link to="/websites/sites/$accountId/databases" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-databases-link">Databases</Link>
           <Link to="/websites/sites/$accountId/backups" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-backups-link">Backups</Link>
         </div>

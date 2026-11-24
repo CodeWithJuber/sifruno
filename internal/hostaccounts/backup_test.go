@@ -146,8 +146,7 @@ func TestAccountDatabases(t *testing.T) {
 
 func TestRestoreUserSQL(t *testing.T) {
 	sql := createRestoreUserSQL("fixtureacct_wp", "sifruno_rst_0123456789abcdef", "00112233445566778899aabbccddeeff")
-	want := "CREATE DATABASE IF NOT EXISTS `fixtureacct_wp` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n" +
-		"CREATE USER 'sifruno_rst_0123456789abcdef'@'localhost' IDENTIFIED BY '00112233445566778899aabbccddeeff';\n" +
+	want := "CREATE USER 'sifruno_rst_0123456789abcdef'@'localhost' IDENTIFIED BY '00112233445566778899aabbccddeeff';\n" +
 		"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, LOCK TABLES, REFERENCES ON `fixtureacct\\_wp`.* TO 'sifruno_rst_0123456789abcdef'@'localhost';\n"
 	if sql != want {
 		t.Fatalf("restore user SQL:\n got %q\nwant %q", sql, want)
@@ -160,6 +159,14 @@ func TestRestoreUserSQL(t *testing.T) {
 	}
 	if got := dropRestoreUserSQL("sifruno_rst_0123456789abcdef"); got != "DROP USER IF EXISTS 'sifruno_rst_0123456789abcdef'@'localhost';\n" {
 		t.Fatalf("drop SQL %q", got)
+	}
+	// The broker never makes a database: a restore into one that is gone
+	// is refused first.
+	if strings.Contains(sql, "CREATE DATABASE") {
+		t.Fatal("the restore user's SQL makes a database")
+	}
+	if got := databaseExistsSQL("fixtureacct_wp"); got != "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='fixtureacct_wp';\n" {
+		t.Fatalf("exists SQL %q", got)
 	}
 	const fixtureSecret = "00112233445566778899aabbccddeeff"
 	wantConfig := "[client]\nuser=sifruno_rst_0123456789abcdef\n" + "pass" + "word=" + fixtureSecret + "\nprotocol=socket\nsocket=/var/lib/mysql/mysql.sock\n"

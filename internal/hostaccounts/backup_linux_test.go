@@ -69,6 +69,7 @@ type fakeTools struct {
 	sql       []string
 	snapshots string
 	failSQL   string // a statement prefix that fails
+	missingDB bool   // the database a restore names is gone
 	failCopy  bool
 	failLoad  bool
 	catConfig int
@@ -98,6 +99,12 @@ func (f *fakeTools) run(_ context.Context, c backupCommand) ([]byte, int, error)
 			f.sql = append(f.sql, stdin)
 			if f.failSQL != "" && strings.HasPrefix(stdin, f.failSQL) {
 				return []byte("ERROR 1044 (42000): Access denied"), 1, nil
+			}
+			if strings.HasPrefix(stdin, "SELECT COUNT(*) FROM information_schema.SCHEMATA") {
+				if f.missingDB {
+					return []byte("0\n"), 0, nil
+				}
+				return []byte("1\n"), 0, nil
 			}
 			return nil, 0, nil
 		}
@@ -414,7 +421,7 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 	if _, err := os.Lstat(stagePath + "/client-fixtureacct_wp.cnf"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the option file outlived the import")
 	}
-	if len(tools.sql) != 2 || !strings.HasPrefix(tools.sql[0], "CREATE DATABASE IF NOT EXISTS `fixtureacct_wp`") || !strings.Contains(tools.sql[0], "ON `fixtureacct\\_wp`.* TO 'sifruno_rst_0123456789abcdef'@'localhost'") || tools.sql[1] != dropRestoreUserSQL("sifruno_rst_0123456789abcdef") {
+	if len(tools.sql) != 3 || tools.sql[0] != databaseExistsSQL("fixtureacct_wp") || !strings.HasPrefix(tools.sql[1], "CREATE USER 'sifruno_rst_0123456789abcdef'@'localhost'") || !strings.Contains(tools.sql[1], "ON `fixtureacct\\_wp`.* TO 'sifruno_rst_0123456789abcdef'@'localhost'") || tools.sql[2] != dropRestoreUserSQL("sifruno_rst_0123456789abcdef") {
 		t.Fatalf("root SQL: %q", tools.sql)
 	}
 	password := strings.TrimSuffix(strings.SplitN(strings.SplitN(cnfText, "word=", 2)[1], "\n", 2)[0], "\n")
@@ -434,7 +441,7 @@ func TestRestoreStagesAndRunsAsTheSiteUser(t *testing.T) {
 func TestRestoreDropsTheTemporaryUserOnFailure(t *testing.T) {
 	for name, setup := range map[string]func(*fakeTools){
 		"the load fails":  func(f *fakeTools) { f.failLoad = true },
-		"the grant fails": func(f *fakeTools) { f.failSQL = "CREATE DATABASE" },
+		"the grant fails": func(f *fakeTools) { f.failSQL = "CREATE USER" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, tools, _ := testEngine(t)
@@ -452,6 +459,33 @@ func TestRestoreDropsTheTemporaryUserOnFailure(t *testing.T) {
 				t.Fatalf("the temporary user was not dropped: %q", tools.sql)
 			}
 		})
+	}
+}
+
+// A database that is gone is not made again: the restore is refused before
+// anything is staged or any MariaDB user is made.
+func TestRestoreRefusesAMissingDatabase(t *testing.T) {
+	e, tools, _ := testEngine(t)
+	r := engineRecord(filepath.Dir(e.dir))
+	tools.snapshots = restoreSnapshots(r, e.dir)
+	tools.restored = map[string]string{"fixtureacct_wp.sql": "CREATE TABLE t (a int);\n"}
+	tools.missingDB = true
+	in := RestoreInput{ExpectedRevision: 1, Snapshot: strings.Repeat("d", 64), Files: true, Databases: []string{"fixtureacct_wp"}, Reason: "Restore"}
+	err := e.Restore(context.Background(), engineTarget(t), r, in, engineLeftover())
+	var failed *BackupError
+	if !errors.As(err, &failed) || failed.Step != "database" || !strings.Contains(failed.Detail, "fixtureacct_wp does not exist") {
+		t.Fatalf("a missing database: %v", err)
+	}
+	if !slices.Equal(tools.sql, []string{databaseExistsSQL("fixtureacct_wp")}) {
+		t.Fatalf("root SQL after the refusal: %q", tools.sql)
+	}
+	if entries, _ := os.ReadDir(e.stage); len(entries) != 0 {
+		t.Fatalf("a refused restore staged %v", entries)
+	}
+	for _, c := range tools.ran {
+		if c.path == resticPath && c.args[8] == "restore" || c.path == cpPath {
+			t.Fatalf("ran %s %q after the refusal", c.path, c.args)
+		}
 	}
 }
 

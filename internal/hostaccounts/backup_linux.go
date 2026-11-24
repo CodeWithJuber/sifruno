@@ -674,6 +674,14 @@ func (e *resticEngine) Restore(ctx context.Context, t BackupTarget, r record, in
 		if !contains(snap.Databases, db) {
 			return &BackupError{Step: "snapshot", Detail: "That backup has no copy of the database " + db + "."}
 		}
+		// The database must still exist: the broker never makes one.
+		out, code, err := e.rootSQL(ctx, databaseExistsSQL(db))
+		if err != nil || code != 0 {
+			return backupFailed("database", out)
+		}
+		if strings.TrimSpace(string(out)) != "1" {
+			return &BackupError{Step: "database", Detail: "The database " + db + " does not exist on this server, so it cannot be restored into. Create it again for this site with the same name, then restore it."}
+		}
 	}
 	if err := e.fitsStage(ctx, t, in.Snapshot); err != nil {
 		return err

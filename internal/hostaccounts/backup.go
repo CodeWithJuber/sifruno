@@ -598,12 +598,18 @@ func byteSize(n uint64) string {
 // Without SUPER or SET USER the user cannot name another DEFINER either.
 const restorePrivileges = "SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, LOCK TABLES, REFERENCES"
 
-// createRestoreUserSQL makes the database if it is gone and a temporary
-// user granted only on it. The statement travels on stdin, never in an
+// databaseExistsSQL counts the databases of exactly that name: 1 or 0.
+func databaseExistsSQL(db string) string {
+	return "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=" + sqlString(db) + ";\n"
+}
+
+// createRestoreUserSQL makes a temporary user granted only on the
+// database. It never makes the database: the broker cannot tell whose a
+// database it does not see would be, so a restore into one that is gone is
+// refused before this runs. The statement travels on stdin, never in an
 // argument.
 func createRestoreUserSQL(db, user, password string) string {
-	return "CREATE DATABASE IF NOT EXISTS `" + db + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n" +
-		"CREATE USER " + sqlString(user) + "@'localhost' IDENTIFIED BY " + sqlString(password) + ";\n" +
+	return "CREATE USER " + sqlString(user) + "@'localhost' IDENTIFIED BY " + sqlString(password) + ";\n" +
 		"GRANT " + restorePrivileges + " ON " + grantDatabase(db) + ".* TO " + sqlString(user) + "@'localhost';\n"
 }
 

@@ -540,7 +540,10 @@ Restore (the account must be active or suspended, at its revision, and is
 busy meanwhile, so a delete, suspend, web change or install gets 409):
 
 1. The snapshot must be the account's own (host, tag and paths), holding
-   each database asked for.
+   each database asked for, and each database must still exist. The broker
+   checks names only by prefix and cannot see dbhost's registry, so it
+   never makes a database: one that is gone is refused (`database`). The
+   panel sends only databases its registry records for the site.
 2. The snapshot must fit on the staging disk (see Disk space). restic
    restores, as root, into a fresh staging folder
    `/var/lib/sifruno-restore/<op>` (0700), with `--sparse`, so a tenant's
@@ -557,7 +560,7 @@ busy meanwhile, so a delete, suspend, web change or install gets 409):
    environment) and copies the staged home over the home. Files added since
    the backup stay. Root writes nothing into a path the tenant controls; a
    tenant's own files can harm only that tenant.
-5. For each database: root makes it if it is gone, and a temporary user
+5. For each database: root makes a temporary user
    `sifruno_rst_<16 hex>` granted only `SELECT, INSERT, UPDATE, DELETE,
    CREATE, DROP, ALTER, INDEX, LOCK TABLES, REFERENCES` on exactly that
    database (escaped as dbhost escapes grants). The statements reach MariaDB

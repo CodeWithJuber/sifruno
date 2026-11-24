@@ -16,12 +16,28 @@ About 4 GB of disk for the image and the VM's disks.
 
 ## Create, provision, prove
 
+Provisioning runs the real installer, so build the release first. It needs the Go and Node versions CI pins and the repo's npm packages (`npm ci --ignore-scripts --no-audit --no-fund` and `npm --prefix web ci --ignore-scripts --no-audit --no-fund`).
+
+```bash
+scripts/install/build-release.sh
+```
+
 ```bash
 scripts/devvm/vm.sh create
 ```
 
 ```bash
 scripts/devvm/vm.sh start
+```
+
+Put the release, its checksum and the provisioning script in:
+
+```bash
+scripts/devvm/vm.sh put artifacts/release/sifruno-linux-amd64.tar.gz /root/sifruno-linux-amd64.tar.gz
+```
+
+```bash
+scripts/devvm/vm.sh put artifacts/release/sifruno-linux-amd64.tar.gz.sha256 /root/sifruno-linux-amd64.tar.gz.sha256
 ```
 
 ```bash
@@ -54,14 +70,37 @@ scripts/devvm/vm.sh destroy
 
 ## What provisioning sets up
 
-`provision.sh` is the dev VM's stand-in for the one-command installer that Phase 1 owes. It shows what that installer has to do on a stock AlmaLinux 9:
+`provision.sh` is a wrapper for the dev VM. It checks the release against its `.sha256`, unpacks it to `/root/sifruno-release` and runs the product's installer, `scripts/install/install.sh`, with `--no-start`: the two Sifruno units are written but left off, because each proof starts its own broker and panel. Then it adds what only the proofs need. Set `SIFRUNO_RELEASE` to use a tarball or an unpacked release at another path.
+
+The installer's part is the same on a real server, and [the installation guide](../../docs/installation.md) lists what it changes:
 
 - **Repositories.** LiteSpeed, EPEL, CRB and Remi. Remi is required: LiteSpeed's `lsphp` extension packages link against library builds EL9 only gets from there.
-- **Packages.** OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman, and Apache for the Compat tier (moved off port 80 to loopback 8080, not started at boot).
-- **`/home`.** A separate XFS filesystem mounted with user and group quota. XFS only enables quota at mount time. Root is the only login, so `/home` holds nothing but accounts, which the broker requires of its homes directory.
-- **Broker host policy.** `passwd`, `group` and `shadow` in `nsswitch.conf` are set to `files` (stock AlmaLinux lists `sss` and `systemd` too, and the broker refuses that). The controller user `sifpanel` and the root-owned key directory `/etc/sifruno/ssh/authorized_keys` (mode 0711) are created.
-- **sshd policy.** Deny by default: every login is SFTP-only and reads its keys from the broker's directory, with forwarding and TTYs off, unless it is root or in `wheel`. The file is validated with `sshd -t` before a reload.
-- **Certificates.** `/var/lib/sifruno-acme` (sifpanel, 0755) holds the panel's HTTP-01 challenge files, which every vhost serves at `/.well-known/acme-challenge/`. For the proofs only, Let's Encrypt's test CA Pebble (pinned release and checksums) and its DNS test server are installed as the `pebble` and `pebble-challtestsrv` units, off at boot: the DNS server answers 127.0.0.1 for every name, and Pebble's ACME directory is `https://127.0.0.1:14000/dir`, served with a certificate from `/etc/pebble/api-ca.pem`. Pebble makes a new issuing CA at every start; fetch it from `https://127.0.0.1:15000/roots/0`.
+- **Packages.** OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman, and Apache for the Compat tier (installed, left off).
+- **`/home`.** The installer refuses a server whose `/home` is not a separate XFS filesystem mounted with user quota, because XFS only enables quota at mount time. `vm.sh create` makes that disk. Root is the only login, so `/home` holds nothing but accounts, which the broker requires of its homes directory.
+- **Broker host policy.** `passwd`, `group` and `shadow` in `nsswitch.conf` are set to `files` (stock AlmaLinux lists `sss` and `systemd` too, and the broker refuses that). The controller user `sifpanel` and the root-owned key directory `/etc/sifruno/ssh/authorized_keys` (mode 0711) are created. `/var/lib/sifpanel` is root's (0711); the panel writes in `/var/lib/sifpanel/state`, which `hostsetup --apply` makes together with `/var/lib/sifruno-broker` and `/run/sifruno-broker`.
+- **sshd policy.** Deny by default: every login is SFTP-only and reads its keys from the broker's directory, with forwarding and TTYs off, unless it is root or in `wheel`. The file is validated with `sshd -t` before a reload and taken out again if sshd rejects it.
+- **Programs and units.** `sifruno`, `hostbroker`, `hostsetup` and `panelctl` in `/usr/local/lib/sifruno/bin`, the panel UI in `/usr/local/lib/sifruno/ui`, WP-CLI (pinned checksum) beside them, the panel's MariaDB option file `/var/lib/sifpanel/db-admin.cnf`, and `sifruno-broker.service` and `sifruno.service`.
+- **Certificates.** `/var/lib/sifruno-acme` (sifpanel, 0755) holds the panel's HTTP-01 challenge files, which every vhost serves at `/.well-known/acme-challenge/`.
+
+For the proofs only, `provision.sh` then:
+
+- moves Apache to loopback port 8080, so the migrate-verify proof can start it next to OpenLiteSpeed. The installed panel listens on 127.0.0.1:8080 too, so the two cannot run at once;
+- creates `/opt/sifruno-proof`, where `proof.sh` copies each proof's programs;
+- installs Let's Encrypt's test CA Pebble (pinned release and checksums) and its DNS test server as the `pebble` and `pebble-challtestsrv` units, off at boot: the DNS server answers 127.0.0.1 for every name, and Pebble's ACME directory is `https://127.0.0.1:14000/dir`, served with a certificate from `/etc/pebble/api-ca.pem`. Pebble makes a new issuing CA at every start; fetch it from `https://127.0.0.1:15000/roots/0`.
+
+## Fresh-install test
+
+`fresh-install-test.sh` is the test for the Phase 1 gate "one command installs on a new AlmaLinux server". It builds the release, deletes the dev VM, creates a new one, provisions it with the installer starting the services, and then checks that both units are active, the panel answers on loopback, the broker socket exists, `hostbroker --check-host` passes and SELinux is still enforcing. It runs the installer a second time to show that a second run changes nothing, and saves the transcript under `artifacts/devvm/`. It deletes the VM's disks, so it asks for a flag:
+
+```bash
+scripts/devvm/fresh-install-test.sh --destroy-vm
+```
+
+It leaves both units running. The proofs start their own broker on the same socket, so turn the units off before a proof:
+
+```bash
+scripts/devvm/vm.sh ssh 'systemctl disable --now sifruno sifruno-broker'
+```
 
 ## Proofs
 

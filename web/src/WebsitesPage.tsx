@@ -16,7 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateLabel } from "@/lib/api";
-import { adoptCurrentFolder, changePhpVersion, dayLabel, deletedSummary, deleteWebsite, folderNotice, getWebsite, httpsState, listWebsites, phpChange, setWebsiteState, siteStatus, WebsitesApiError } from "@/lib/websites-api";
+import { adoptCurrentFolder, changePhpVersion, dayLabel, deletedSummary, deleteWebsite, folderNotice, getWebsite, httpsState, limitsSummary, listWebsites, phpChange, setWebsiteState, siteStatus, WebsitesApiError } from "@/lib/websites-api";
 import type { Website, WebsiteDeleted, WebsiteDetail } from "@/lib/websites-api";
 import { useShell } from "@/shell/context";
 import type { PageId } from "@/shell/pages";
@@ -302,6 +302,12 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
           </dd>
           <dt className="text-muted-foreground">Type</dt><dd className="text-foreground" data-testid="website-type">{site.kind === "php" ? "PHP site" : "WordPress"}</dd>
           <dt className="text-muted-foreground">PHP version</dt><dd className="text-foreground" data-testid="website-php">{site.php_version || "Not reported for this site"}</dd>
+          <dt className="text-muted-foreground">Resource limits</dt>
+          <dd className="text-foreground" data-testid="website-limits">
+            {site.limits
+              ? `${limitsSummary(site.limits)}, shared by everything the site runs: its PHP, SFTP sessions and scheduled jobs. The hosting plan sets them.`
+              : "Not reported for this site"}
+          </dd>
           {site.kind === "wordpress" && <><dt className="text-muted-foreground">WordPress version</dt><dd className="text-foreground" data-testid="website-wordpress">{site.wordpress_version}</dd></>}
           <dt className="text-muted-foreground">Hosting account</dt><dd className="text-foreground" data-testid="website-username"><code>{site.username}</code></dd>
           {site.kind === "php" && <><dt className="text-muted-foreground">Files</dt><dd className="text-foreground" data-testid="website-files">Upload with SFTP as <code>{site.username}</code>, into <code>public_html</code>. SFTP signs in with an SSH key.</dd></>}

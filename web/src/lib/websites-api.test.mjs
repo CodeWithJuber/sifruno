@@ -314,3 +314,15 @@ test("a site's kind: WordPress links to its admin, a PHP site has no WordPress",
   ]) assert.equal(api.parseWebsite(bad), undefined, JSON.stringify(bad));
   assert.deepEqual(api.parseWebsiteList({ sites: [site(), php] }).map((s) => s.kind), ["wordpress", "php"]);
 });
+
+test("a site's resource limits are read when present and said in plain words", () => {
+  const limits = { processes: 100, memory_mib: 1024, cpu_percent: 100 };
+  assert.deepEqual(api.parseWebsite(site({ limits })).limits, limits);
+  assert.equal("limits" in api.parseWebsite(site()), false);
+  for (const bad of [null, [], "100", { processes: 100, memory_mib: 1024 }, { processes: 0, memory_mib: 1024, cpu_percent: 100 }, { processes: 1.5, memory_mib: 1024, cpu_percent: 100 }, { processes: "100", memory_mib: 1024, cpu_percent: 100 }]) {
+    assert.equal(api.parseWebsite(site({ limits: bad })), undefined, JSON.stringify(bad));
+  }
+  assert.equal(api.limitsSummary(limits), "Up to 100 processes, 1 GB of memory and 1 CPU");
+  assert.equal(api.limitsSummary({ processes: 200, memory_mib: 1536, cpu_percent: 200 }), "Up to 200 processes, 1.5 GB of memory and 2 CPUs");
+  assert.equal(api.limitsSummary({ processes: 32, memory_mib: 512, cpu_percent: 50 }), "Up to 32 processes, 512 MB of memory and 50% of one CPU");
+});

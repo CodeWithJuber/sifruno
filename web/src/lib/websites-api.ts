@@ -12,6 +12,14 @@ export interface WebsiteHttps {
   // RFC 3339, or empty when there is no certificate.
   not_after: string;
 }
+// What all of the hosting account's processes may use together. The plan
+// sets them; the site page only shows them.
+export interface WebsiteLimits {
+  processes: number;
+  memory_mib: number;
+  // 100 is one CPU.
+  cpu_percent: number;
+}
 export interface Website {
   account_id: string;
   username: string;
@@ -37,6 +45,8 @@ export interface Website {
   // changed the permissions of its home or public_html. It concerns this
   // site only.
   site_folder_changed: boolean;
+  // Left out when the server reports none (a partly deleted site).
+  limits?: WebsiteLimits;
 }
 // One site as its own page reads it: with the PHP versions installed on the
 // server, which are the ones it can change to.
@@ -86,12 +96,30 @@ export function parseWebsite(v: unknown): Website | undefined {
   if (!shortText(v.php_version, 10) || !shortText(v.wordpress_version, 40) || !webURL(v.url) || !date(v.created_at)) return undefined;
   if (v.kind === "wordpress" ? !webURL(v.admin_url) : v.admin_url !== "" || v.wordpress_version !== "") return undefined;
   if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 1 || typeof v.site_folder_changed !== "boolean") return undefined;
+  const limits = v.limits === undefined ? undefined : parseLimits(v.limits);
+  if (v.limits !== undefined && !limits) return undefined;
   return {
     account_id: v.account_id, username: v.username, domain: v.domain, kind: v.kind, state: v.state,
     https: { on: https.on, not_after: https.not_after as string },
     php_version: v.php_version, wordpress_version: v.wordpress_version, url: v.url, admin_url: v.admin_url as string, created_at: v.created_at,
     revision: v.revision as number, site_folder_changed: v.site_folder_changed,
+    ...(limits ? { limits } : {}),
   };
+}
+
+const positive = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
+function parseLimits(v: unknown): WebsiteLimits | undefined {
+  if (!object(v) || !positive(v.processes) || !positive(v.memory_mib) || !positive(v.cpu_percent)) return undefined;
+  return { processes: v.processes, memory_mib: v.memory_mib, cpu_percent: v.cpu_percent };
+}
+
+// The limits in plain words: "up to 100 processes, 1 GB of memory and 1 CPU".
+export function limitsSummary(limits: WebsiteLimits): string {
+  const gb = limits.memory_mib / 1024;
+  const memory = limits.memory_mib >= 1024 ? `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB` : `${limits.memory_mib} MB`;
+  const cpus = limits.cpu_percent / 100;
+  const cpu = Number.isInteger(cpus) ? `${cpus} CPU${cpus === 1 ? "" : "s"}` : `${limits.cpu_percent}% of one CPU`;
+  return `Up to ${limits.processes} processes, ${memory} of memory and ${cpu}`;
 }
 
 export function parseWebsiteDetail(v: unknown): WebsiteDetail | undefined {

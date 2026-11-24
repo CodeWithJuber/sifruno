@@ -126,6 +126,8 @@ var (
 	databaseUserCreateKeys = []string{"name_suffix", "password", "database"}
 	databasePasswordKeys   = []string{"password"}
 	databaseConfirmKeys    = []string{"confirm_name"}
+	// Opening phpMyAdmin takes an empty object.
+	databaseOpenKeys = []string{}
 )
 
 // databaseMutationKeys answers the keys a database POST's body takes; ok is
@@ -145,6 +147,8 @@ func databaseMutationKeys(r *http.Request) (keys []string, ok bool) {
 		return databaseCreateKeys, true
 	case len(p) == 1 && p[0] == "users":
 		return databaseUserCreateKeys, true
+	case len(p) == 1 && p[0] == "phpmyadmin":
+		return databaseOpenKeys, true
 	case len(p) == 3 && p[0] == "users" && p[2] == "password":
 		return databasePasswordKeys, true
 	case len(p) == 3 && p[0] == "users" && p[2] == "delete":

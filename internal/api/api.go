@@ -60,6 +60,11 @@ type Options struct {
 	// PanelHosts are the panel's own --panel-host names, which no website
 	// may take as a domain.
 	PanelHosts []string
+	// PhpMyAdmin opens phpMyAdmin for a website, and PhpMyAdminProxy (an
+	// internal/phpmyadmin Proxy) serves it under /api/v1/phpmyadmin/. Nil
+	// answers 503 there and on the open route.
+	PhpMyAdmin      PhpMyAdmin
+	PhpMyAdminProxy http.Handler
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -94,6 +99,7 @@ func build(o Options) (http.Handler, *routeMux) {
 	registerWebsites(api, o)
 	registerWebsiteDomains(api, o)
 	registerSiteDatabases(api, o)
+	registerSiteDatabasePhpMyAdmin(api, o)
 	registerSiteBackups(api, o)
 	registerSiteTools(api, o)
 	registerWebsiteFiles(mux, api, o)
@@ -270,6 +276,11 @@ func build(o Options) (http.Handler, *routeMux) {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 		if !customerScope(w, r, mux, o.Operator) {
+			return
+		}
+		// phpMyAdmin has its own admission and its own page policy.
+		if isPhpMyAdminPath(r.URL.Path) {
+			servePhpMyAdmin(w, r, o)
 			return
 		}
 		if remote && !remoteAdmitted(w, r, o.Operator, mux) {

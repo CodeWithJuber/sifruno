@@ -104,7 +104,7 @@ func (s *store) cronJobs(id, digest string) ([]CronJob, error) {
 		return nil, err
 	}
 	jobs, ok := sets[digest]
-	if !ok || len(jobs) == 0 || !validCronJobs(jobs) || cronDigest(jobs) != digest {
+	if !ok || len(jobs) == 0 || !validStoredCronJobs(jobs) || cronDigest(jobs) != digest {
 		return nil, ErrRecovery
 	}
 	return jobs, nil

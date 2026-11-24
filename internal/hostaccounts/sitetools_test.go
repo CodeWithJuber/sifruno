@@ -208,6 +208,9 @@ func TestCronCommandRefusesInjection(t *testing.T) {
 	bad := []string{
 		"", " true", "true ", "-n true", "-x", "* true", "echo ok\n* * * * * rm -rf ~", "echo ok\r* * * * * id", "date +%s",
 		"echo 100\\%", "a\x00b", "a\tb", "a\x1bb", "a\u2028b", "a\u0085b", "\xff\xfe",
+		// Format characters: bidi overrides, embeddings and isolates, marks,
+		// zero-width characters and the byte order mark.
+		"rm -rf ~/tmp/\u202ecod.exe", "echo \u2066a\u2069", "echo a\u200bb", "echo \u200fa", "echo a\u2060b", "\ufeffecho a", "echo a\u00adb",
 		strings.Repeat("x", maxCronCommand+1),
 	}
 	for _, c := range bad {
@@ -234,6 +237,31 @@ func TestCronCommandRefusesInjection(t *testing.T) {
 	}
 	if validCronJobs(long) {
 		t.Fatal("20 KiB of jobs admitted")
+	}
+}
+
+// TestStoredCronWithFormatCharactersStillReads: a set an earlier broker
+// stored before format characters were refused still reads, so neither its
+// account's job list nor a change left pending across the upgrade gets stuck.
+func TestStoredCronWithFormatCharactersStillReads(t *testing.T) {
+	s, _, _ := setupStore(t)
+	a := createFixture(t, s)
+	jobs := []CronJob{{Schedule: "0 3 * * *", Command: "echo a​b"}}
+	if CronJobProblem(jobs[0]) == "" {
+		t.Fatal("a command with a zero-width space admitted")
+	}
+	digest := cronDigest(jobs)
+	if err := s.putCronSets(a.ID, map[string][]CronJob{digest: jobs}); err != nil {
+		t.Fatal(err)
+	}
+	r := recordFor(t, s, a.ID)
+	r.Cron = digest
+	if err := s.save(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.cron(context.Background(), a.ID)
+	if err != nil || len(got.Jobs) != 1 || got.Jobs[0].Command != jobs[0].Command {
+		t.Fatalf("the stored set does not read: %v %+v", err, got)
 	}
 }
 

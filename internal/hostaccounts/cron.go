@@ -96,8 +96,25 @@ type cronSchedule struct {
 // does not start with "-" or "*": AlmaLinux 9's cronie reads a leading "-"
 // as an option of the entry (its n_option patch, entry.c), and cronie
 // refuses an entry whose command starts with "*" as a typo; either way crond
-// would skip the job or run something other than the panel shows.
+// would skip the job or run something other than the panel shows. Nor may
+// it hold a Unicode format character (category Cf), such as a right-to-left
+// override or a zero-width space: shown, the command would read otherwise
+// than the bytes the shell runs.
 func CronJobProblem(j CronJob) string {
+	if problem := storedCronJobProblem(j); problem != "" {
+		return problem
+	}
+	if strings.ContainsFunc(j.Command, func(r rune) bool { return unicode.Is(unicode.Cf, r) }) {
+		return "The command contains an invisible formatting character, such as a right-to-left mark, so it would not read as it runs. Type the command again without it."
+	}
+	return ""
+}
+
+// storedCronJobProblem is CronJobProblem without the check for format
+// characters, which came later: a set an earlier broker stored, and that
+// crond already runs, still reads, and a change left pending across the
+// upgrade still finishes.
+func storedCronJobProblem(j CronJob) string {
 	if _, problem := parseCronSchedule(j.Schedule); problem != "" {
 		return problem
 	}
@@ -120,12 +137,19 @@ func CronJobProblem(j CronJob) string {
 	return ""
 }
 
-func validCronJobs(jobs []CronJob) bool {
+// validCronJobs admits a new job set; validStoredCronJobs reads a stored one.
+func validCronJobs(jobs []CronJob) bool { return cronJobsPass(jobs, CronJobProblem) }
+
+func validStoredCronJobs(jobs []CronJob) bool {
+	return cronJobsPass(jobs, storedCronJobProblem)
+}
+
+func cronJobsPass(jobs []CronJob, problem func(CronJob) string) bool {
 	if len(jobs) > MaxCronJobs {
 		return false
 	}
 	for _, j := range jobs {
-		if CronJobProblem(j) != "" {
+		if problem(j) != "" {
 			return false
 		}
 	}

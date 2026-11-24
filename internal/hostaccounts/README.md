@@ -1000,7 +1000,10 @@ runs the jobs as the account's user.
   `U+2028`/`U+2029`, no outer space and no `%`, which cron turns into a new
   line and standard input; nor does it start with `-`, which AlmaLinux 9's
   cronie reads as an entry option (its `n_option` patch), or `*`, which
-  cronie refuses as a typo. At most 50 jobs and 16 KiB of job lines. The
+  cronie refuses as a typo. No format character (Unicode category Cf: bidi
+  overrides and isolates, zero-width characters, the byte order mark), so
+  the command reads as it runs; a set stored before this rule still reads
+  and runs. At most 50 jobs and 16 KiB of job lines. The
   request is read as strictly as the others (each job exactly `schedule`
   and `command`, once each), up to 128 KiB.
 - The file is `/var/spool/cron/<username>`: a fixed header, `MAILTO=""` (no

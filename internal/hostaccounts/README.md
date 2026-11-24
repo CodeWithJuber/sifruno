@@ -16,7 +16,8 @@ ownership/mode, root parent authority and root server peer credentials. No remot
 network listener, passwords, free-form commands, deletion or rollback API exists.
 
 Native execution requires preinstalled regular root-owned binaries at fixed
-paths: /usr/sbin/groupadd, useradd, usermod, nologin; /usr/bin/passwd and chage.
+paths: /usr/sbin/groupadd, useradd, usermod, userdel, nologin; /usr/bin/passwd,
+chage and kill (which runs only as an account's own user, see Processes).
 Arguments are fixed typed options and validated account identity. Subprocesses
 have fixed credential-free locale/PATH, no shell and bounded output. Commands
 have15second deadlines within the broker request's45second overall deadline;
@@ -80,9 +81,9 @@ of OS accounts is attempted. Manual recovery tooling is outside this slice.
 
 Active means no account-expiry restriction, while passwords stay locked and shell
 stays nologin. Suspended sets account expiry to1970-01-02. It restricts PAM-aware
-account admission; existing processes, databases and mail remain unaffected, and
-a live site stops serving (see Websites). It does not establish full SSH or
-hosting suspension. External changes
+account admission, a live site stops serving (see Websites), and the account's
+running processes end (see Processes); databases and mail remain unaffected. It
+does not establish full SSH or hosting suspension. External changes
 to UID/GID, tag, shell, the home directory object or its owner, lock/expiry or
 the ownership marker require recovery: only root can make them. Existing file
 content inside public_html is not inventoried or restored.
@@ -165,6 +166,55 @@ must point at the directory above, and accounts must be held to
 shows that policy. SFTP is not chrooted; accounts are kept apart by home
 ownership and mode.
 
+## Processes
+
+Delete and suspend end every process that runs as the account: an open SFTP
+session, a PHP worker, a cron job, anything the tenant started. Not yet run
+on the dev VM: `scripts/devvm/proofs/broker-isolation.guest.sh` and
+`TestRootOnlyEndProcessesTakesOnlyTheAccount` are the proof to run.
+
+- The broker runs `/usr/bin/kill -s KILL -- -1` as the account's own user:
+  its UID and GID, no supplementary groups, in `/`, with a clean environment
+  and no input, by a direct exec. Go's exec sets the groups, GID and UID in
+  the child before it runs kill, and runs nothing when that fails. kill(2)
+  with PID -1 from a process that is not root signals every process that
+  user may signal, other than itself: those whose real or saved user ID is
+  the account's, and those in user namespaces the account made (rootless
+  containers). No other user's process can be hit, and the broker never
+  sends a signal to -1 itself.
+- Before every run the credential is checked again: the UID must be in the
+  range the broker allocates (20000 to 60000, so never 0 or a system user),
+  equal the GID, not be the controller's, and passwd and group must show
+  exactly this account on it now (one user with its name and none other on
+  its UID, the recorded home, tag and nologin shell, and its private group).
+  Otherwise nothing runs. kill is one of the fixed binaries checked at start.
+- A pass signals, then reads `/proc` until no process has the account's UID
+  as its real, effective or saved user ID (a zombie not yet reaped counts),
+  for up to 250 ms. Up to four passes catch what started meanwhile: a fork
+  that raced the signal, or a process root started for the account.
+
+Delete: after the intent is journaled and the site is out of the config, an
+active account is expired and locked as a suspend does, so no new login or
+cron job starts for it; then its processes end and `userdel` runs. userdel
+refuses a user it finds busy (exit 8) before it changes anything
+(shadow-utils 4.9 `userdel.c`); it checks threads and the account's
+subordinate IDs too, so it is tried up to three times, each after the
+processes were ended again. If it still refuses, the account gets back the
+expiry it had, the site goes back into the config, and the delete ends
+`rejected` with the account unchanged: the answer is 409 `conflict`, and
+every other account can still change. The next start does the same for an
+interrupted delete. A delete stays pending, and stops every mutation, only
+when a root step fails: the expiry cannot be put back, or the site cannot
+go back into the config (its test now fails, or the reload does).
+
+Suspend: after the suspension is journaled (and a live site's list
+installed), the account's processes end. This runs with the tenant's own
+rights and changes no record, so it is not journaled. The suspension stands
+either way; if a process outlived the last pass the answer is 503
+`unavailable`, and a suspend of the suspended account, with or without a
+site, ends its processes again. A suspend the next start finishes does not
+end them: suspend again.
+
 ## Websites
 
 `SetWeb` puts an account's site live on OpenLiteSpeed with a PHP version
@@ -227,7 +277,9 @@ installs the config: web, certificate, state and delete. A web
 operation needs two history rows and is refused (409) when they are not
 free. Delete takes the site out of the config before the user and home go;
 if that config fails its test, the delete ends `rejected` with the account
-unchanged (422), and after any other failure the user is kept.
+unchanged (422), and after any other failure the user is kept. If userdel
+still finds the account busy after its processes were ended, the site goes
+back and the delete ends `rejected` (409; see Processes).
 
 A state change of an account with a live site rewrites the site list too: a
 suspended account's site stays in the config marked suspended, so
@@ -282,11 +334,11 @@ Limits for now:
   such an account ends `rejected` and the site stays suspended until the
   directory is back. A suspend does not depend on it (not yet run on the dev
   VM).
-- userdel refuses a user with a running process, such as an open SFTP
-  session, and the broker does not end them. A delete of such an account
-  stays pending, which stops every mutation until a later start finishes
-  it once the processes are gone. Ending the account's processes as a step
-  of delete is not built yet.
+- The process check reads each process's own user IDs. userdel also counts
+  a thread with the account's UID inside another user's process, and a
+  process under the account's subordinate IDs in a namespace someone else
+  made; kill as the account cannot end those, so such a delete ends
+  rejected.
 
 ## Certificates
 

@@ -23,7 +23,11 @@ import (
 
 const nologin = "/usr/sbin/nologin"
 
-var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", nologin}
+// killPath ends an account's processes. It only ever runs as the account's
+// own user (see signalAs), never as root.
+const killPath = "/usr/bin/kill"
+
+var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin}
 
 type nativeUser struct {
 	Username         string
@@ -394,7 +398,7 @@ func (n *linuxSystem) Plan(ctx context.Context, name string) (int, int, error) {
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return 0, 0, ErrUnavailable
 	}
-	for id := 20000; id <= 60000; id++ {
+	for id := firstAccountID; id <= lastAccountID; id++ {
 		if !used[id] {
 			return id, id, nil
 		}
@@ -827,10 +831,8 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 // removed only when it is the exact recorded path with the recorded
 // identity. The marker is removed last so a crash mid-delete stays visible
 // and the operation can be safely retried by the store's reconciliation.
-// Known delta vs the reference's removeacct pipeline: managed identities
-// are nologin system users with no processes, mail, databases or web vhosts,
-// so there is nothing further to tear down yet; as those services land,
-// their teardown joins this operation before user removal.
+// The account's processes end before userdel (removeUser); the store takes
+// a live site out of the config before it calls Delete.
 func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
 	if e == nil && marker != r.Ownership.Marker {
@@ -861,7 +863,7 @@ func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 		return ErrRecovery
 	}
 	if present {
-		if _, e = n.command(ctx, "/usr/sbin/userdel", "--", r.Account.Username); e != nil {
+		if e = n.removeUser(ctx, r); e != nil {
 			return e
 		}
 	}
@@ -889,6 +891,284 @@ func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 		return ErrUnavailable
 	}
 	return nil
+}
+
+// userdelBusy is userdel's exit status for a user with a running process
+// (shadow-utils E_USER_BUSY). userdel checks for one before it opens the
+// account files, so with this status it changed nothing.
+const userdelBusy = 8
+
+// Ending an account's processes takes at most processPasses passes. A pass
+// signals every process of the account, then waits up to processWait for
+// them to be gone, looking every processPoll. The next pass catches what
+// started meanwhile: a fork that raced the signal, or a process root
+// started for the account. userdelTries bounds the same race between the
+// last pass and userdel.
+const (
+	processPasses = 4
+	processWait   = 250 * time.Millisecond
+	processPoll   = 25 * time.Millisecond
+	killTimeout   = 5 * time.Second
+	userdelTries  = 3
+)
+
+// removeUser removes the account's user once its processes have ended. An
+// active account is first expired and locked, as a suspend does, so no new
+// login or cron job starts for it while they end. userdel is tried a few
+// times, each after the processes were ended again. If it still refuses the
+// user as busy, the account gets back the expiry it had and the answer is
+// errAccountBusy: nothing changed.
+func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
+	active := r.Account.State == "active"
+	if active {
+		if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "1970-01-02", "--lock", "--", r.Account.Username); e != nil {
+			return e
+		}
+	}
+	for try := 0; try < userdelTries; try++ {
+		if e := n.EndProcesses(ctx, r); e != nil && !errors.Is(e, errAccountBusy) {
+			return e
+		}
+		_, code, e := n.commandStatus(ctx, commandTimeout, "/usr/sbin/userdel", "--", r.Account.Username)
+		if e != nil {
+			return e
+		}
+		if code == 0 {
+			return nil
+		}
+		if code != userdelBusy {
+			return ErrUnavailable
+		}
+	}
+	if active {
+		if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "", "--lock", "--", r.Account.Username); e != nil {
+			return e
+		}
+		if e := n.VerifyAccount(ctx, r); e != nil {
+			return e
+		}
+	}
+	return errAccountBusy
+}
+
+// EndProcesses ends every process that runs as the account's user: an SFTP
+// session, a PHP worker, a cron job, anything the tenant started. Each pass
+// checks the credential again (processCredential), runs kill as that user
+// (signalAs) and waits for the processes to be gone (accountRunning).
+// errAccountBusy: some were still there after the last pass.
+func (n *linuxSystem) EndProcesses(ctx context.Context, r record) error {
+	if ctx == nil || ctx.Err() != nil {
+		return ErrUnavailable
+	}
+	for pass := 0; pass < processPasses; pass++ {
+		cred, e := n.processCredential(r)
+		if e != nil {
+			return e
+		}
+		if e = n.signalAs(ctx, cred); e != nil {
+			return e
+		}
+		gone, e := waitGone(ctx, cred.Uid)
+		if e != nil {
+			return e
+		}
+		if gone {
+			return nil
+		}
+	}
+	return errAccountBusy
+}
+
+// processCredential is the credential that ends an account's processes,
+// read from passwd and group now: see accountCredential.
+func (n *linuxSystem) processCredential(r record) (*syscall.Credential, error) {
+	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
+		return nil, ErrUnavailable
+	}
+	db, e := n.database()
+	if e != nil {
+		return nil, e
+	}
+	return accountCredential(db, r, n.opts.ControllerUID)
+}
+
+// accountCredential is the account's own UID and GID with no supplementary
+// groups, given only for an ID in the range the broker allocates (never 0,
+// a system user or the controller) that passwd and group show as exactly
+// this account: one user with this name and none other on its UID, the
+// recorded IDs, home, tag and nologin shell, and its private group.
+// Otherwise ErrRecovery: the kill must not run as anyone else.
+func accountCredential(db *accountDatabase, r record, controllerUID uint32) (*syscall.Credential, error) {
+	uid, gid := r.Account.UID, r.Account.GID
+	if uid < firstAccountID || uid > lastAccountID || gid != uid || uid == int(controllerUID) {
+		return nil, ErrRecovery
+	}
+	user, ok := db.managedIdentity(r)
+	if !ok || user.UID != uid || user.GID != gid {
+		return nil, ErrRecovery
+	}
+	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}}, nil
+}
+
+// killArgs is kill's whole argument list: SIGKILL to PID -1. "--" ends the
+// options, so -1 is a PID.
+func killArgs() []string { return []string{"-s", "KILL", "--", "-1"} }
+
+// killCommand is kill as cred: the fixed binary, in "/", with a clean
+// environment, no input (the null device) and no supplementary groups. Go's
+// exec sets the groups, GID and UID in the child before it runs the binary,
+// and runs nothing when that fails. Its context ends only this process.
+func killCommand(ctx context.Context, cred *syscall.Credential) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, killPath, killArgs()...)
+	cmd.Dir = "/"
+	cmd.Env = []string{"LANG=C", "LC_ALL=C"}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred, Pdeathsig: syscall.SIGKILL}
+	cmd.WaitDelay = time.Second
+	return cmd
+}
+
+// signalAs runs `kill -s KILL -- -1` as the account. kill(2) with PID -1
+// from a process that is not root signals every process that user may
+// signal, other than itself: those whose real or saved user ID is the
+// account's, and those in user namespaces the account made. That is only
+// the account's own; no other user's process can be hit. It refuses any
+// credential outside the broker's range, so it never runs as root. Its exit
+// status says only whether anything was signalled; the caller looks at
+// /proc.
+func (n *linuxSystem) signalAs(ctx context.Context, cred *syscall.Credential) error {
+	if cred == nil || cred.Uid < firstAccountID || cred.Uid > lastAccountID || cred.Gid != cred.Uid || len(cred.Groups) != 0 || cred.NoSetGroups {
+		return ErrRecovery
+	}
+	before, ok := n.tools[killPath]
+	actual, e := trustedFile(killPath, false)
+	if !ok || e != nil || !os.SameFile(before, actual) || before.Size() != actual.Size() || !before.ModTime().Equal(actual.ModTime()) {
+		return ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, killTimeout)
+	defer cancel()
+	cmd := killCommand(ctx, cred)
+	out := &commandBuffer{}
+	cmd.Stdout, cmd.Stderr = out, out
+	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		return ErrUnavailable
+	}
+	// An exit status means kill ran as the account; any other error means
+	// it did not run at all.
+	var exit *exec.ExitError
+	if runErr != nil && !errors.As(runErr, &exit) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// waitGone looks until no process of uid is left, for up to processWait.
+func waitGone(ctx context.Context, uid uint32) (bool, error) {
+	deadline := time.Now().Add(processWait)
+	for {
+		running, e := accountRunning(uid)
+		if e != nil {
+			return false, e
+		}
+		if !running {
+			return true, nil
+		}
+		if !time.Now().Before(deadline) {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ErrUnavailable
+		case <-time.After(processPoll):
+		}
+	}
+}
+
+// accountRunning reports whether a process has uid as its real, effective
+// or saved user ID, a zombie not yet reaped included. That is what userdel
+// looks for (shadow-utils user_busy), less the subordinate IDs and the
+// per-thread IDs it also reads; userdel stays the judge of those. A
+// process that ends while it is read is skipped.
+func accountRunning(uid uint32) (bool, error) {
+	proc, e := os.Open("/proc")
+	if e != nil {
+		return false, ErrUnavailable
+	}
+	defer proc.Close()
+	for {
+		names, readErr := proc.Readdirnames(1024)
+		for _, name := range names {
+			if !pidName(name) {
+				continue
+			}
+			status, e := readProcStatus("/proc/" + name + "/status")
+			if errors.Is(e, os.ErrNotExist) || errors.Is(e, syscall.ESRCH) {
+				continue
+			}
+			if e != nil {
+				return false, ErrUnavailable
+			}
+			ids, ok := statusUIDs(status)
+			if !ok {
+				return false, ErrUnavailable
+			}
+			if ids[0] == uid || ids[1] == uid || ids[2] == uid {
+				return true, nil
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return false, nil
+		}
+		if readErr != nil {
+			return false, ErrUnavailable
+		}
+	}
+}
+
+func pidName(name string) bool {
+	if name == "" || len(name) > 10 {
+		return false
+	}
+	for _, c := range name {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func readProcStatus(path string) ([]byte, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, 64<<10))
+}
+
+// statusUIDs reads the real, effective, saved and file-system user IDs
+// from the "Uid:" line of /proc/<pid>/status.
+func statusUIDs(status []byte) ([4]uint32, bool) {
+	for _, line := range strings.Split(string(status), "\n") {
+		rest, ok := strings.CutPrefix(line, "Uid:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) != 4 {
+			return [4]uint32{}, false
+		}
+		var ids [4]uint32
+		for i, f := range fields {
+			v, e := strconv.ParseUint(f, 10, 32)
+			if e != nil {
+				return [4]uint32{}, false
+			}
+			ids[i] = uint32(v)
+		}
+		return ids, true
+	}
+	return [4]uint32{}, false
 }
 
 // removeAccountFiles removes what an account has outside the home: its

@@ -117,8 +117,14 @@ type nativeSystem interface {
 	// site; it changes only the tenant's files.
 	InstallWordPress(context.Context, record, WordPressInput) (WordPressResult, error)
 	// Delete removes the managed system identity and owned home after
-	// ownership verification; it must be safe to retry after a crash.
+	// ownership verification; it must be safe to retry after a crash. It
+	// ends the account's processes first. errAccountBusy: userdel still
+	// refused the user as busy, and nothing changed.
 	Delete(context.Context, record) error
+	// EndProcesses ends every process that runs as the account's user, by
+	// signalling as that user, never as root. errAccountBusy: some were
+	// still running after its last pass. It changes no record.
+	EndProcesses(context.Context, record) error
 	SetState(context.Context, record, string) error
 	GuardState(string) error
 	GuardHomes([]record) error
@@ -155,6 +161,19 @@ type store struct {
 // broker to about a hundred accounts; a rotating batch keeps drift detection
 // while the cost per request stays fixed.
 const auditBatch = 16
+
+// The broker gives each account one ID, its UID and its GID, from this range
+// (Plan). A record outside it is refused as damaged, and no process runs with
+// an account's credential outside it.
+const (
+	firstAccountID = 20000
+	lastAccountID  = 60000
+)
+
+// errAccountBusy is the native answer when processes of the account were
+// still running after the broker ended them; for a delete, userdel refused
+// the user and nothing changed.
+var errAccountBusy = errors.New("account processes still running")
 
 var accountBucket = []byte("hostaccounts-v1")
 var configBucket = []byte("hostbroker-config-v1")
@@ -258,7 +277,7 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			var r record
-			if json.Unmarshal(value, &r) != nil || r.Version != 1 || !idPattern.MatchString(r.Account.ID) || string(key) != r.Account.ID || !validUsername(r.Account.Username) || !validDomain(r.Account.Domain) || r.Account.UID < 20000 || r.Account.UID > 60000 || r.Account.GID != r.Account.UID || r.Account.Revision == 0 || r.Tag != "sifruno-managed-"+r.Account.ID || r.Account.Home != filepath.Join(s.opts.HomesDir, r.Account.Username) || r.Account.PublicHTML != filepath.Join(r.Account.Home, "public_html") || r.Account.CreatedAt.IsZero() || r.Account.UpdatedAt.IsZero() || (r.Account.State != "active" && r.Account.State != "suspended" && r.Account.State != "recovery_required") {
+			if json.Unmarshal(value, &r) != nil || r.Version != 1 || !idPattern.MatchString(r.Account.ID) || string(key) != r.Account.ID || !validUsername(r.Account.Username) || !validDomain(r.Account.Domain) || r.Account.UID < firstAccountID || r.Account.UID > lastAccountID || r.Account.GID != r.Account.UID || r.Account.Revision == 0 || r.Tag != "sifruno-managed-"+r.Account.ID || r.Account.Home != filepath.Join(s.opts.HomesDir, r.Account.Username) || r.Account.PublicHTML != filepath.Join(r.Account.Home, "public_html") || r.Account.CreatedAt.IsZero() || r.Account.UpdatedAt.IsZero() || (r.Account.State != "active" && r.Account.State != "suspended" && r.Account.State != "recovery_required") {
 				return ErrRecovery
 			}
 			if r.Pending != nil {
@@ -477,8 +496,22 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					}
 				}
 				if e := s.native.Delete(ctx, r); e != nil {
-					// Keep the record and retry on the next refresh; an
-					// uncertain destructive effect is never force-closed.
+					// A busy user ends the delete rejected, as in delete: the
+					// site goes back and nothing else changed. Any other
+					// failure keeps the record and retries on the next
+					// refresh; an uncertain destructive effect is never
+					// force-closed.
+					if errors.Is(e, errAccountBusy) {
+						live := append([]record(nil), items...)
+						live[i].Pending = nil
+						if r.Web.enabled() && s.applySites(ctx, live, "") != nil {
+							continue
+						}
+						r.Pending = nil
+						if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+							return ErrRecovery
+						}
+					}
 					continue
 				}
 				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
@@ -856,6 +889,24 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	removeCtx, cancel := webContext(ctx)
 	e = s.native.Delete(removeCtx, r)
 	cancel()
+	if errors.Is(e, errAccountBusy) {
+		// A process of the account was still running after the broker ended
+		// them, so userdel refused the user and nothing was removed. The
+		// site goes back into the config (items lists the account without
+		// its pending delete) and the delete ends rejected, the account
+		// unchanged: a process the tenant keeps alive holds up this delete
+		// only. If the site cannot go back, the delete stays pending.
+		if r.Web.enabled() && s.applySites(ctx, items, "") != nil {
+			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+			return Account{}, ErrRecovery
+		}
+		operation := *r.Pending
+		r.Pending = nil
+		if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+			return Account{}, ErrRecovery
+		}
+		return Account{}, ErrConflict
+	}
 	if e != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
@@ -940,9 +991,9 @@ func (s *store) list(ctx context.Context) ([]Account, error) {
 // the next start must finish from a known state, so nothing else may change
 // first. A tenant's folders cannot leave one behind: they make no conflict,
 // and the checks made after an intent is journaled read only what root
-// controls (a create's run before its user can act). What a tenant can
-// still do is keep a process running: userdel refuses such a user, so that
-// delete stays pending (README, Websites, "Limits for now").
+// controls (a create's run before its user can act). Nor can a tenant's
+// running processes: delete ends them, and if userdel still refuses the
+// user, the delete ends rejected (README, Processes).
 func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 	if ctx == nil {
 		return nil, ErrInvalid
@@ -1000,7 +1051,7 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	if err != nil {
 		return Account{}, err
 	}
-	if uid < 20000 || uid > 60000 || gid != uid || uid == int(s.opts.ControllerUID) {
+	if uid < firstAccountID || uid > lastAccountID || gid != uid || uid == int(s.opts.ControllerUID) {
 		return Account{}, ErrRecovery
 	}
 	for _, r := range items {
@@ -1073,6 +1124,10 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	// list again, journaled like any change, so an operator can enforce a
 	// suspension made before the site list followed the account.
 	if r.Account.State == in.State && !(in.State == "suspended" && r.Web.enabled()) {
+		// A suspend of a suspended account ends its processes again.
+		if in.State == "suspended" && s.native.EndProcesses(ctx, r) != nil {
+			return Account{}, ErrUnavailable
+		}
 		return withWeb(r), nil
 	}
 	if r.Account.Revision == ^uint64(0) {
@@ -1133,6 +1188,14 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	next.Pending = nil
 	if _, e := s.resultEvent(next, operation, "succeeded"); e != nil {
 		return Account{}, ErrRecovery
+	}
+	// A suspended account's processes end too: SFTP sessions, PHP workers,
+	// cron jobs. This runs with the tenant's own rights and changes no
+	// record, so it is not journaled. The suspension stands either way (no
+	// login, cron job or PHP request starts for it); if some processes did
+	// not end, the answer is 503 and a suspend again ends them again.
+	if in.State == "suspended" && s.native.EndProcesses(ctx, next) != nil {
+		return Account{}, ErrUnavailable
 	}
 	return withWeb(next), nil
 }

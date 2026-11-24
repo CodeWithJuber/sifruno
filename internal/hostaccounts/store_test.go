@@ -59,6 +59,21 @@ type fakeNative struct {
 	live               map[string]CertificateState
 	certApply          int
 	tlsGoneWhileServed bool
+	// ended counts EndProcesses calls per username. Failure "busy" stands
+	// for a process that outlived every pass: EndProcesses reports it, and
+	// Delete answers as userdel's refusal, changing nothing.
+	ended map[string]int
+}
+
+func (f *fakeNative) EndProcesses(_ context.Context, r record) error {
+	if f.ended == nil {
+		f.ended = map[string]int{}
+	}
+	f.ended[r.Account.Username]++
+	if f.failure == "busy" {
+		return errAccountBusy
+	}
+	return nil
 }
 
 func (f *fakeNative) StageCertificate(_ context.Context, r record, chainPEM, keyPEM []byte) error {
@@ -252,6 +267,9 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 	}
 	if actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.Home != r.Account.Home {
 		return ErrRecovery
+	}
+	if f.failure == "busy" {
+		return errAccountBusy
 	}
 	delete(f.users, r.Account.Username)
 	// The native delete removes the site's TLS directory with the account.

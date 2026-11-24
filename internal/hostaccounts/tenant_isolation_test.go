@@ -290,3 +290,117 @@ func TestInterruptedChangesOfAChangedAccountAreFinished(t *testing.T) {
 		}
 	})
 }
+
+// (d) A process the tenant keeps alive through every pass makes userdel
+// refuse its user. That delete ends rejected with the site back and the
+// account unchanged, so it blocks no other account, and it can be deleted
+// once its processes end.
+func TestBusyDeleteBlocksNoOtherAccount(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	tenant := liveFixture(t, s)
+	other := liveAccount(t, s, "secondacct", "second.test")
+
+	f.failure = "busy"
+	if _, err := s.delete(ctx, tenant.Account.ID, DeleteInput{ExpectedRevision: tenant.Account.Revision, Reason: "Abuse"}, "test operator"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a delete userdel refused: %v", err)
+	}
+	f.failure = ""
+	busyDeleteRejected(t, s, f, tenant)
+
+	if _, err := suspend(s, other); err != nil {
+		t.Fatalf("another account's suspend after the refused delete: %v", err)
+	}
+	if _, err := s.create(ctx, CreateInput{Username: "thirdacct", Domain: "third.test", Reason: "Created after the refused delete"}, "test operator"); err != nil {
+		t.Fatalf("create after the refused delete: %v", err)
+	}
+	held := recordFor(t, s, tenant.Account.ID)
+	if _, err := s.delete(ctx, tenant.Account.ID, DeleteInput{ExpectedRevision: held.Account.Revision, Reason: "Abuse"}, "test operator"); err != nil {
+		t.Fatalf("delete once the processes ended: %v", err)
+	}
+	if _, ok := f.users[tenant.Account.Username]; ok {
+		t.Fatal("the user is still there")
+	}
+}
+
+// The next start ends an interrupted delete the same way when userdel
+// still refuses the user.
+func TestBusyDeleteAtRestartBlocksNoOtherAccount(t *testing.T) {
+	s, f := webStore(t)
+	ctx := context.Background()
+	tenant := liveFixture(t, s)
+	other := liveAccount(t, s, "secondacct", "second.test")
+
+	f.failure = "sites"
+	if _, err := s.delete(ctx, tenant.Account.ID, DeleteInput{ExpectedRevision: tenant.Account.Revision, Reason: "Abuse"}, "test operator"); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("interrupted delete: %v", err)
+	}
+	f.failure = "busy"
+	s.mu.Lock()
+	err := s.refresh(ctx, true)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.failure = ""
+	busyDeleteRejected(t, s, f, tenant)
+	if _, err := s.setWeb(ctx, other.Account.ID, WebInput{PHPVersion: "8.2", QuotaMiB: 200, ExpectedRevision: other.Account.Revision, Reason: "PHP change"}, "test operator"); err != nil {
+		t.Fatalf("another account's web change after the refused delete: %v", err)
+	}
+}
+
+func busyDeleteRejected(t *testing.T, s *store, f *fakeNative, tenant record) {
+	t.Helper()
+	after := recordFor(t, s, tenant.Account.ID)
+	if after.Pending != nil || after.Account != tenant.Account || after.Web != tenant.Web {
+		t.Fatalf("the refused delete changed the account: %+v", after)
+	}
+	if _, ok := f.users[tenant.Account.Username]; !ok {
+		t.Fatal("the user went although userdel refused it")
+	}
+	if site := siteOf(t, f.sites, tenant.Account.ID); site.Suspended {
+		t.Fatalf("the site came back as %+v", site)
+	}
+	if rows := historyActions(t, s, tenant.Account.ID); rows[len(rows)-1] != "delete:rejected" {
+		t.Fatalf("journal %v", rows)
+	}
+	if c, err := s.capability(context.Background()); err != nil || !c.Available {
+		t.Fatalf("capability after the refused delete: %+v %v", c, err)
+	}
+}
+
+// A suspend ends the account's processes after the suspension is journaled;
+// a resume does not. When some outlive the passes the suspension stands and
+// the answer is 503, and a suspend again ends them again without a journal
+// row (the account has no site, so its record does not change).
+func TestSuspendEndsTheAccountsProcesses(t *testing.T) {
+	s, f, _ := setupStore(t)
+	ctx := context.Background()
+	a := createFixture(t, s)
+
+	suspended, err := suspend(s, recordFor(t, s, a.ID))
+	if err != nil || f.ended[a.Username] != 1 {
+		t.Fatalf("suspend: %v, processes ended %d times", err, f.ended[a.Username])
+	}
+	resumed, err := s.setState(ctx, a.ID, StateInput{State: "active", ExpectedRevision: suspended.Revision, Reason: "Paid"}, "test operator")
+	if err != nil || f.ended[a.Username] != 1 {
+		t.Fatalf("resume: %v, processes ended %d times", err, f.ended[a.Username])
+	}
+
+	f.failure = "busy"
+	if _, err := s.setState(ctx, a.ID, StateInput{State: "suspended", ExpectedRevision: resumed.Revision, Reason: "Unpaid"}, "test operator"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("suspend with a process left: %v", err)
+	}
+	f.failure = ""
+	held := recordFor(t, s, a.ID)
+	if held.Pending != nil || held.Account.State != "suspended" || f.users[a.Username].Account.State != "suspended" {
+		t.Fatalf("the suspension did not stand: %+v", held)
+	}
+	rows := len(historyActions(t, s, a.ID))
+	if again, err := suspend(s, held); err != nil || again.Revision != held.Account.Revision || f.ended[a.Username] != 3 || len(historyActions(t, s, a.ID)) != rows {
+		t.Fatalf("suspend again: %+v %v, processes ended %d times", again, err, f.ended[a.Username])
+	}
+	if _, err := s.create(ctx, CreateInput{Username: "secondacct", Domain: "second.test", Reason: "Created after the suspend"}, "test operator"); err != nil {
+		t.Fatalf("create after the suspend: %v", err)
+	}
+}

@@ -189,6 +189,7 @@ func renderVhost(v site) []byte {
 		rules = denyRules
 		autoLoad = "1"
 	}
+	renderCache(&b, v)
 	renderACMEChallenge(&b)
 
 	b.WriteString("\nrewrite  {\n")
@@ -244,6 +245,53 @@ func renderPHP(b *bytes.Buffer, v site) {
 
 	b.WriteString("\nscripthandler  {\n")
 	kv(b, "add", "lsapi:"+name+" php")
+	b.WriteString("}\n")
+}
+
+// cacheSettings are the cache module's vhost-level values for an active site:
+// the stock server-level ones, written out so a changed httpd_config.conf
+// does not change them. enableCache and enablePrivateCache 0 cache nothing
+// by default: a page is cached only when the site's own response asks for it
+// (X-LiteSpeed-Cache-Control, which the LiteSpeed Cache WordPress plugin
+// sends) or a rewrite rule does. The module never caches a POST.
+var cacheSettings = [][2]string{
+	{"checkPublicCache", "1"},
+	{"checkPrivateCache", "1"},
+	{"enableCache", "0"},
+	{"enablePrivateCache", "0"},
+	{"qsCache", "1"},
+	{"reqCookieCache", "1"},
+	{"respCookieCache", "1"},
+	{"ignoreReqCacheCtrl", "1"},
+	{"ignoreRespCacheCtrl", "0"},
+	{"expireInSeconds", "3600"},
+	{"privateExpireInSeconds", "3600"},
+	{"maxStaleAge", "200"},
+	{"maxCacheObjSize", "10000000"},
+}
+
+// renderCache writes the vhost's "module cache" block. An active site gets
+// the module with its own store in CacheRoot, so the purge headers its PHP
+// sends act on its own pages only. A suspended site gets the module off and
+// nothing to look up: the module serves a cached page when the request
+// headers arrive, before the vhost's rewrite rules, so a store left on
+// would keep serving the site's pages past its 403 rule.
+func renderCache(b *bytes.Buffer, v site) {
+	b.WriteString("\nmodule cache {\n")
+	if v.Suspended {
+		kv(b, "ls_enabled", "0")
+		kv(b, "checkPublicCache", "0")
+		kv(b, "checkPrivateCache", "0")
+		kv(b, "enableCache", "0")
+		kv(b, "enablePrivateCache", "0")
+		b.WriteString("}\n")
+		return
+	}
+	kv(b, "ls_enabled", "1")
+	kv(b, "storagePath", pathpkg.Join(CacheRoot, NamePrefix+v.Name))
+	for _, s := range cacheSettings {
+		kv(b, s[0], s[1])
+	}
 	b.WriteString("}\n")
 }
 

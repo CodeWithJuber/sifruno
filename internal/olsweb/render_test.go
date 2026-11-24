@@ -228,6 +228,76 @@ func TestSuspendedSiteNamesNoTenantPath(t *testing.T) {
 	}
 }
 
+// Every active site gets the cache module with its own store outside every
+// home and nothing cached unless its response asks; a suspended site gets
+// the module off, with no store and nothing to look up.
+func TestCacheModulePerSite(t *testing.T) {
+	files, err := Render(baseServer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := func(name string) string {
+		t.Helper()
+		vhost := string(files[VhostConfigPath(name)])
+		if strings.Count(vhost, "\nmodule ") != 1 {
+			t.Fatalf("%s: not one module block:\n%s", name, vhost)
+		}
+		b := vhost[strings.Index(vhost, "\nmodule cache {\n")+1:]
+		return b[:strings.Index(b, "\n}\n")+3]
+	}
+	stores := map[string]bool{}
+	for _, name := range []string{"blog", "legacy", "iso", "shop"} {
+		b := block(name)
+		want := "module cache {\n" +
+			"  ls_enabled              1\n" +
+			"  storagePath             /usr/local/lsws/cachedata/sifruno-" + name + "\n" +
+			"  checkPublicCache        1\n" +
+			"  checkPrivateCache       1\n" +
+			"  enableCache             0\n" +
+			"  enablePrivateCache      0\n" +
+			"  qsCache                 1\n" +
+			"  reqCookieCache          1\n" +
+			"  respCookieCache         1\n" +
+			"  ignoreReqCacheCtrl      1\n" +
+			"  ignoreRespCacheCtrl     0\n" +
+			"  expireInSeconds         3600\n" +
+			"  privateExpireInSeconds  3600\n" +
+			"  maxStaleAge             200\n" +
+			"  maxCacheObjSize         10000000\n" +
+			"}\n"
+		if b != want {
+			t.Errorf("%s cache block:\n%s", name, b)
+		}
+		store := strings.Fields(b[strings.Index(b, "storagePath"):])[1]
+		if stores[store] || strings.HasPrefix(store, HomeRoot+"/") || !strings.HasPrefix(store, CacheRoot+"/"+NamePrefix) {
+			t.Errorf("%s: store %s is shared or not in %s", name, store, CacheRoot)
+		}
+		stores[store] = true
+	}
+	// Two sites of one account still get one store each.
+	if !stores[CacheRoot+"/sifruno-blog"] || !stores[CacheRoot+"/sifruno-shop"] {
+		t.Error("sites of one account share a store")
+	}
+	const off = "module cache {\n" +
+		"  ls_enabled              0\n" +
+		"  checkPublicCache        0\n" +
+		"  checkPrivateCache       0\n" +
+		"  enableCache             0\n" +
+		"  enablePrivateCache      0\n" +
+		"}\n"
+	if b := block("paused"); b != off {
+		t.Errorf("suspended cache block:\n%s", b)
+	}
+	// The module block sits before the vhost rewrite block, so it never
+	// joins the rules heredoc.
+	for _, name := range []string{"blog", "paused"} {
+		vhost := string(files[VhostConfigPath(name)])
+		if strings.Index(vhost, "\nmodule cache {\n") > strings.Index(vhost, "\nrewrite  {\n") {
+			t.Errorf("%s: module block after the rewrite block", name)
+		}
+	}
+}
+
 // Every vhost, suspended or not, with or without a certificate, maps the
 // HTTP-01 path to the shared challenge directory as static files only.
 func TestACMEChallengeContext(t *testing.T) {

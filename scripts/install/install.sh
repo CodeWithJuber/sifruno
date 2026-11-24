@@ -741,15 +741,58 @@ step_sshd() {
   changed "sshd policy $SSHD_DROPIN $SSHD_CHANGE and sshd reloaded"
 }
 
+# The server-level cache module block exactly as the openlitespeed 1.9.4
+# package's httpd_config.conf ships it: the module on, nothing cached by
+# default. Each Sifruno vhost has its own block over it (its own store, or
+# the module off while suspended); the WordPress plugin asks for each page.
+ols_cache_module() {
+  cat <<'BLOCK'
+
+module cache {
+    ls_enabled          1
+
+    checkPrivateCache   1
+    checkPublicCache    1
+    maxCacheObjSize     10000000
+    maxStaleAge         200
+    qsCache             1
+    reqCookieCache      1
+    respCookieCache     1
+    ignoreReqCacheCtrl  1
+    ignoreRespCacheCtrl 0
+
+    enableCache         0
+    expireInSeconds     3600
+    enablePrivateCache  0
+    privateExpireInSeconds 3600
+
+}
+BLOCK
+}
+
 step_openlitespeed() {
-  local include="include $LSWS/conf/sifruno.conf"
+  local include="include $LSWS/conf/sifruno.conf" has_include=no has_cache=no
   # The broker writes conf/sifruno.conf and the vhosts but never edits the
-  # server-wide file; the installer adds the include once. A vhost's
-  # namespace setting applies only when the server-level one is not 0.
+  # server-wide file; the installer adds the include once, and the cache
+  # module block when the file has none. A vhost's namespace setting
+  # applies only when the server-level one is not 0.
   if grep -qxF "$include" "$OLS_CONF"; then
+    has_include=yes
+  fi
+  if grep -qE '^[[:space:]]*module[[:space:]]+cache[[:space:]]*\{[[:space:]]*$' "$OLS_CONF"; then
+    has_cache=yes
+  fi
+  if [ "$has_include" = yes ] && [ "$has_cache" = yes ]; then
     return 0
   fi
   OLS_BACKUP="$(backup_file "$OLS_CONF")"
+  if [ "$has_cache" = no ]; then
+    ols_cache_module >> "$OLS_CONF"
+    changed "OpenLiteSpeed: the stock cache module block added for LSCache (backup: $OLS_BACKUP)"
+  fi
+  if [ "$has_include" = yes ]; then
+    return 0
+  fi
   if grep -qE '^namespace[[:space:]]' "$OLS_CONF"; then
     sed -i -E 's/^namespace[[:space:]].*/namespace                 1/' "$OLS_CONF"
   else
@@ -1207,7 +1250,7 @@ main() {
   step "Label $HOMES, create the system user $PANEL_USER and Sifruno's folders in /etc and /var/lib" step_host_folders
   step "Set passwd, group and shadow in $NSSWITCH to files (backup, check, automatic rollback)" step_nsswitch
   step "Write the sshd policy $SSHD_DROPIN (backup, sshd -t, automatic rollback, reload)" step_sshd
-  step "Add Sifruno's include and namespace isolation to OpenLiteSpeed's config (backup)" step_openlitespeed
+  step "Add Sifruno's include, namespace isolation and the cache module to OpenLiteSpeed's config (backup)" step_openlitespeed
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
   step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
   step "Enable and start MariaDB and OpenLiteSpeed" step_services

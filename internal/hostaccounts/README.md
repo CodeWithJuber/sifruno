@@ -288,8 +288,21 @@ broker.
   lsws` restarts OpenLiteSpeed gracefully (its unit reloads with
   `lswsctrl restart`). The broker never edits `httpd_config.conf`: the
   installer adds `include /usr/local/lsws/conf/sifruno.conf` and
-  server-level `namespace 1` once. New files take their SELinux label from
+  server-level `namespace 1` once, and the package's stock `module cache`
+  block if the file has none. New files take their SELinux label from
   the directory they are written in.
+- Page cache (LSCache): each live site's `vhconf.conf` has its own
+  `module cache` block with `ls_enabled 1` and its own store,
+  `/usr/local/lsws/cachedata/sifruno-u<id>`, outside every home, so the
+  purge headers a site's PHP sends reach its own pages only. OpenLiteSpeed
+  makes that directory as root when it loads the config (mode 2770, owned
+  by the web user); the package's `cachedata` is root-owned 0755, so no
+  tenant can put a link there. `enableCache 0`: nothing is cached unless the
+  site's response asks (the LiteSpeed Cache WordPress plugin does), and the
+  module never caches a POST. A suspended site has `ls_enabled 0` and no
+  store, because the module answers from its store when the request headers
+  arrive, before the 403 rule. Delete leaves the site's store, as it leaves
+  its logs.
 - One invalid vhost at a restart: OpenLiteSpeed 1.9.4 configures each vhost
   on its own, at start and at a graceful restart, which starts a new
   instance (`configVHosts` in `src/main/httpserver.cpp`). A vhost whose

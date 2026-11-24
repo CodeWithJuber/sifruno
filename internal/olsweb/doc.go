@@ -23,9 +23,14 @@
 //     the account, with rlimits and LSAPI children), the php script handler
 //     that uses it, namespace 2 and cgroups 2 when an active site asks for
 //     them, a static context that maps /.well-known/acme-challenge/ to
-//     ACMEChallengeDir, and a rewrite
-//     block with .htaccess autoload plus vhost-level deny rules. A suspended
-//     site has no extprocessor or handler, autoLoadHtaccess 0 and one rule
+//     ACMEChallengeDir, a "module cache" block, and a rewrite
+//     block with .htaccess autoload plus vhost-level deny rules. The cache
+//     block turns LSCache on with the site's own store in
+//     CacheRoot/sifruno-NAME and the stock values written out, enableCache
+//     0 among them: a page is cached only when the site's response asks.
+//     A suspended
+//     site has no extprocessor or handler, the cache module off with nothing
+//     to look up, autoLoadHtaccess 0 and one rule
 //     answering 403 to everything, challenges included. Its docRoot is
 //     SuspendedDocRoot, so no path it names is under the tenant's home and
 //     the tenant cannot make its config test fail; SuspendedDocRoot must
@@ -49,9 +54,11 @@
 //
 // Server-level settings stay with the administrator: namespace containers
 // need "namespace 1" (or 2) in httpd_config.conf, cgroups need "cgroups 1"
-// (or 2) inside its CGIRLimit block, and LSCache uses the stock
-// "module cache" block. A second definition in the included file would
-// compete with the administrator's, so none is emitted.
+// (or 2) inside its CGIRLimit block, and LSCache needs the stock
+// "module cache" block, which the installer adds when it is missing. A
+// second server-level definition in the included file would compete with
+// the administrator's, so none is emitted; each vhost's own block overrides
+// it for that site.
 //
 // # Config grammar (OLS v1.9.4 src/main/plainconf.cpp)
 //
@@ -174,6 +181,29 @@
 //   - dist/conf/mime.properties: txt is text/plain, so forceType text/plain
 //     names a known type.
 //
+// Read 2026-11-24, same tag and docs, for the cache module:
+//
+//   - /config/lscache/ [2024-07-29]: the vhost-level sample "module cache {
+//     ls_enabled 1 storagePath ... enableCache 0 ... }", and "the most
+//     important virtual host cache setting should be storagePath", so each
+//     user purges only their own cache.
+//   - src/modules/prelinkedmods.cpp: cache is built in, not a .so.
+//   - src/main/plainconf.cpp: in a module block every key but ls_enabled
+//     (and the block's own keys) becomes a line of its "param" value.
+//   - src/http/httpvhost.cpp, src/lsiapi/modulemanager.cpp: vhconf.conf's
+//     module blocks are parsed at vhost level over the server's; ls_enabled
+//     0 turns the module's hooks off for that vhost.
+//   - src/modules/cache/cache.cpp: the keys and their ranges; storagePath is
+//     created as root with mode 2770 and chowned to the server user, and
+//     purges act on the config's own store; a POST is never cached; the
+//     lookup runs when the request headers arrive (checkAssignHandler at
+//     LSI_HKPT_RCVD_REQ_HEADER), before rewrite rules.
+//   - src/http/httpcgitool.cpp: every LSAPI request gets X-LSCACHE
+//     "on,crawler", which the WordPress plugin reads as LSCache being there.
+//   - openlitespeed-1.9.4-3.el9.x86_64.rpm (rpms.litespeedtech.com, unpacked,
+//     not installed): httpd_config.conf has the stock "module cache" block
+//     with ls_enabled 1 and enableCache 0, and cachedata is root-owned 0755.
+//
 // # Unverified
 //
 // Not confirmed on an official page or by running a server:
@@ -203,4 +233,9 @@
 //   - That OpenLiteSpeed serves a challenge file through this context, and
 //     that it loads root-only 0600 keys on a graceful restart; the source
 //     reading above says so, and the dev VM proof is where it is run.
+//   - That "openlitespeed -t" reports no warning for the vhost cache block,
+//     that ls_enabled 0 keeps a suspended site's earlier cached pages from
+//     being served, and that a WordPress page with the plugin answers
+//     "X-LiteSpeed-Cache: hit"; the php-site dev VM proof checks the last
+//     one.
 package olsweb

@@ -207,11 +207,11 @@ func registerSiteDatabases(a huma.API, o Options) {
 	huma.Register(a, op("create-site-database", http.MethodPost, base, http.StatusCreated), func(ctx context.Context, in *siteDatabaseCreateInput) (*siteDatabaseNameOutput, error) {
 		ctx, cancel := context.WithTimeout(ctx, databaseWait)
 		defer cancel()
-		owner, err := siteDatabaseOwner(ctx, o, in.AccountID)
+		owner, others, err := siteDatabaseOwners(ctx, o, in.AccountID)
 		if err != nil {
 			return nil, err
 		}
-		name, err := newDatabaseName("database", owner, in.Body.NameSuffix, dbhost.MaxDatabaseLen)
+		name, err := newDatabaseName("database", owner, in.Body.NameSuffix, dbhost.MaxDatabaseLen, others)
 		if err != nil {
 			return nil, err
 		}
@@ -231,11 +231,11 @@ func registerSiteDatabases(a huma.API, o Options) {
 		defer func() { in.Body.Password, password = "", "" }()
 		ctx, cancel := context.WithTimeout(ctx, databaseWait)
 		defer cancel()
-		owner, err := siteDatabaseOwner(ctx, o, in.AccountID)
+		owner, others, err := siteDatabaseOwners(ctx, o, in.AccountID)
 		if err != nil {
 			return nil, err
 		}
-		name, err := newDatabaseName("user", owner, in.Body.NameSuffix, dbhost.MaxUserLen)
+		name, err := newDatabaseName("user", owner, in.Body.NameSuffix, dbhost.MaxUserLen, others)
 		if err != nil {
 			return nil, err
 		}
@@ -329,37 +329,58 @@ func registerSiteDatabases(a huma.API, o Options) {
 // owner. dbhost reads an empty owner as "every account", so a username the
 // broker's own rule would refuse is never passed on.
 func siteDatabaseOwner(ctx context.Context, o Options, accountID string) (string, error) {
+	owner, _, err := siteDatabaseOwners(ctx, o, accountID)
+	return owner, err
+}
+
+// siteDatabaseOwners is siteDatabaseOwner that also returns the usernames
+// of the broker's other accounts, which a create needs.
+func siteDatabaseOwners(ctx context.Context, o Options, accountID string) (owner string, others []string, err error) {
 	if o.Databases == nil || o.Accounts == nil {
-		return "", huma.Error503ServiceUnavailable(databasesNotSetUp)
+		return "", nil, huma.Error503ServiceUnavailable(databasesNotSetUp)
 	}
 	if !websiteAccountID.MatchString(accountID) {
-		return "", huma.Error404NotFound(databaseSiteNotFound)
+		return "", nil, huma.Error404NotFound(databaseSiteNotFound)
 	}
 	accounts, err := o.Accounts.List(ctx)
 	if err != nil {
-		return "", huma.Error503ServiceUnavailable(databasesNoBroker)
+		return "", nil, huma.Error503ServiceUnavailable(databasesNoBroker)
 	}
+	found := false
 	for _, a := range accounts {
 		if a.ID != accountID {
+			others = append(others, a.Username)
 			continue
 		}
 		if !databaseOwner.MatchString(a.Username) {
-			return "", huma.Error503ServiceUnavailable(databaseOwnerUnknown)
+			return "", nil, huma.Error503ServiceUnavailable(databaseOwnerUnknown)
 		}
-		return a.Username, nil
+		owner, found = a.Username, true
 	}
-	return "", huma.Error404NotFound(databaseSiteNotFound)
+	if !found {
+		return "", nil, huma.Error404NotFound(databaseSiteNotFound)
+	}
+	return owner, others, nil
 }
 
 // newDatabaseName builds <owner>_<suffix> for a create. The suffix is always
 // appended, so no suffix can make a name outside the owner's prefix.
-func newDatabaseName(kind, owner, suffix string, max int) (string, error) {
+// Usernames may hold "_", so a name can also fall inside another account's
+// prefix: bob's bob_x_wp is inside account bob_x's. Such a name is refused
+// before the server is asked, so that account keeps its own names and the
+// answer never tells whether that account has the name already.
+func newDatabaseName(kind, owner, suffix string, max int, others []string) (string, error) {
 	if !databaseSuffix.MatchString(suffix) {
 		return "", huma.Error422UnprocessableEntity(databaseSuffixRule)
 	}
 	name := owner + "_" + suffix
 	if len(name) > max || dbhost.ValidateIdentifier(kind, name, max) != nil {
 		return "", huma.Error422UnprocessableEntity("name_suffix is too long for this website: the whole " + kind + " name, " + owner + "_ and the suffix, can have at most " + strconv.Itoa(max) + " characters.")
+	}
+	for _, other := range others {
+		if strings.HasPrefix(name, other+"_") {
+			return "", huma.Error422UnprocessableEntity("The " + kind + " name " + name + " begins with another website's prefix, " + other + "_, so it is kept for that website. Choose a name_suffix that does not make that prefix.")
+		}
 	}
 	return name, nil
 }

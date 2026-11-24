@@ -163,6 +163,52 @@ func TestDroppedDatabasesTakeTheirGrants(t *testing.T) {
 	}
 }
 
+// A grant written before the names were escaped has the plain spelling, and
+// a REVOKE matches the spelling exactly: both are revoked, and a spelling
+// with no grant (1141) is no failure unless neither had one.
+func TestRevokesFindGrantsOfEitherSpelling(t *testing.T) {
+	ctx := context.Background()
+	svc, f := newTestService(t)
+	for _, err := range []error{
+		svc.CreateDatabaseStrict(ctx, "acct", "acct_wp"),
+		svc.CreateUserStrict(ctx, "acct", "acct_u", "pw"),
+	} {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	noGrant := errors.New("ERROR 1141 (42000) at line 1: There is no such grant defined for user")
+	escaped, plain := sqlRevokeAll("acct_wp", "acct_u", "localhost"), sqlRevokeAllPlain("acct_wp", "acct_u", "localhost")
+	if escaped == plain || !strings.Contains(plain, "`acct_wp`") {
+		t.Fatalf("spellings: %s / %s", escaped, plain)
+	}
+	for _, tc := range []struct {
+		name       string
+		errs       map[string]error
+		revokeFail bool
+	}{
+		{"an escaped grant", map[string]error{plain: noGrant}, false},
+		{"a plain grant", map[string]error{escaped: noGrant}, false},
+		{"no grant", map[string]error{escaped: noGrant, plain: noGrant}, true},
+	} {
+		f.errs, f.stmts = tc.errs, nil
+		if err := svc.SetPrivileges(ctx, "acct", "acct_u", "acct_wp", []string{"SELECT"}); err != nil {
+			t.Fatalf("%s: set: %v", tc.name, err)
+		}
+		if !slices.Contains(f.stmts, escaped) || !slices.Contains(f.stmts, plain) {
+			t.Fatalf("%s: set did not revoke both spellings: %q", tc.name, f.stmts)
+		}
+		if err := svc.RevokeAccess(ctx, "acct", "acct_u", "acct_wp"); (err != nil) != tc.revokeFail || (err != nil && !isNoSuchGrant(err)) {
+			t.Fatalf("%s: revoke: %v", tc.name, err)
+		}
+	}
+	// Any other refusal stops it.
+	f.errs, f.stmts = map[string]error{escaped: errors.New("ERROR 2013 (HY000): Lost connection")}, nil
+	if err := svc.RevokeAccess(ctx, "acct", "acct_u", "acct_wp"); err == nil || slices.Contains(f.stmts, plain) {
+		t.Fatalf("a failed revoke went on: %v %q", err, f.stmts)
+	}
+}
+
 // Made on the server but not recorded: ErrNotRegistered, and the caller can
 // still remove it.
 func TestStrictCreatesReportAnUnrecordedObject(t *testing.T) {

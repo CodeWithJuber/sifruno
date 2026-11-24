@@ -821,8 +821,11 @@ func TestSiteDatabasesOverTheRegistry(t *testing.T) {
 	post(409, "", map[string]string{"name_suffix": "shop"})
 	post(201, "/users", user,
 		"CREATE USER 'alpha_app'@'localhost' IDENTIFIED BY '"+databasePassword+"'",
+		// The grant names the database exactly ("_" escaped), and the
+		// revoke before it also clears a grant written with the plain name.
+		"REVOKE ALL PRIVILEGES ON `alpha\\_shop`.* FROM 'alpha_app'@'localhost'",
 		"REVOKE ALL PRIVILEGES ON `alpha_shop`.* FROM 'alpha_app'@'localhost'",
-		"GRANT ALL PRIVILEGES ON `alpha_shop`.* TO 'alpha_app'@'localhost'")
+		"GRANT ALL PRIVILEGES ON `alpha\\_shop`.* TO 'alpha_app'@'localhost'")
 	post(409, "/users", user)
 	post(200, "/users/alpha_app/password", map[string]string{"password": "it's a new pass\\phrase"}, `ALTER USER 'alpha_app'@'localhost' IDENTIFIED BY 'it\'s a new pass\\phrase'`)
 	if got := databaseList(t, f.handler, alphaID, cookie); len(got.Databases) != 1 || got.Databases[0].Name != "alpha_shop" || !slices.Equal(got.Databases[0].Users, []string{"alpha_app"}) || len(got.Users) != 1 || got.Users[0].Name != "alpha_app" {
@@ -835,8 +838,19 @@ func TestSiteDatabasesOverTheRegistry(t *testing.T) {
 	post(404, "/users/beta_wp/password", map[string]string{"password": databasePassword})
 	post(404, "/users", map[string]string{"name_suffix": "spy", "password": databasePassword, "database": "beta_wp"})
 
-	// Deleting the database runs one statement, and its user stays.
-	post(200, "/alpha_shop/delete", map[string]string{"confirm_name": "alpha_shop"}, "DROP DATABASE IF EXISTS `alpha_shop`")
+	// A name inside another website's prefix is refused before the server is
+	// asked: alpha's alpha_x_shop would be inside account alpha_x's.
+	broker.accounts = append(broker.accounts, hostaccounts.Account{ID: "cccccccccccccccccccccccccccccccc", Username: "alpha_x", Domain: "alphax.example", State: "active", Revision: 1})
+	post(422, "", map[string]string{"name_suffix": "x_shop"})
+	post(422, "/users", map[string]string{"name_suffix": "x_app", "password": databasePassword, "database": "alpha_shop"})
+
+	// Deleting the database drops it and every grant on it, and its user
+	// stays.
+	forget := ""
+	for _, table := range []string{"db", "tables_priv", "columns_priv", "procs_priv"} {
+		forget += "DELETE FROM mysql." + table + ` WHERE Db IN ('alpha\\_shop', 'alpha_shop');` + "\n"
+	}
+	post(200, "/alpha_shop/delete", map[string]string{"confirm_name": "alpha_shop"}, "DROP DATABASE IF EXISTS `alpha_shop`", forget+"FLUSH PRIVILEGES")
 	if got := databaseList(t, f.handler, alphaID, cookie); len(got.Databases) != 0 || len(got.Users) != 1 {
 		t.Fatalf("alpha's list after deleting the database %+v", got)
 	}

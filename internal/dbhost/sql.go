@@ -143,6 +143,13 @@ func sqlRevokeAll(db, user, host string) string {
 	return fmt.Sprintf("REVOKE ALL PRIVILEGES ON %s.* FROM %s@%s", quoteIdent(grantDB(db)), quoteString(user), quoteString(host))
 }
 
+// sqlRevokeAllPlain revokes a grant written before grantDB, with the plain
+// name. A REVOKE matches the grant's spelling exactly, so the escaped form
+// never removes it.
+func sqlRevokeAllPlain(db, user, host string) string {
+	return fmt.Sprintf("REVOKE ALL PRIVILEGES ON %s.* FROM %s@%s", quoteIdent(db), quoteString(user), quoteString(host))
+}
+
 // sqlForgetGrants removes every grant on db, for any user, whether its Db
 // was written escaped or, before grantDB, as a plain name. MariaDB keeps
 // grants when a database is dropped, so without this a later database of

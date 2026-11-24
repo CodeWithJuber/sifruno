@@ -133,6 +133,21 @@ func (s *LocalService) DropDatabase(ctx context.Context, owner, name string) err
 	return s.Registry.dropDatabase(name)
 }
 
+// revokeAll revokes every privilege user holds on db, under the escaped
+// spelling grants have now and under the plain one from before grantDB.
+// MariaDB answers 1141 for a spelling with no grant, which is no failure
+// here; held reports whether either spelling had one.
+func (s *LocalService) revokeAll(ctx context.Context, db, user string) (held bool, err error) {
+	for _, sql := range []string{sqlRevokeAll(db, user, s.host()), sqlRevokeAllPlain(db, user, s.host())} {
+		if _, err = s.Run.Run(ctx, sql); err == nil {
+			held = true
+		} else if !isNoSuchGrant(err) {
+			return held, err
+		}
+	}
+	return held, nil
+}
+
 // dropDatabaseAndGrants drops the database, then every grant on it, so no
 // user keeps access to a later database of the same name. Both steps are
 // safe to repeat after a failure.
@@ -308,9 +323,8 @@ func (s *LocalService) SetPrivileges(ctx context.Context, owner, user, db string
 		return err
 	}
 	// set semantics: revoke then grant — matches the reference's replace.
-	// MariaDB errors 1141 when nothing was granted yet; that is the normal
-	// first-grant path, not a failure.
-	if _, err := s.Run.Run(ctx, sqlRevokeAll(db, user, s.host())); err != nil && !isNoSuchGrant(err) {
+	// Nothing granted yet is the normal first-grant path, not a failure.
+	if _, err := s.revokeAll(ctx, db, user); err != nil {
 		return err
 	}
 	if _, err := s.Run.Run(ctx, sqlGrant(db, user, s.host(), privs)); err != nil {
@@ -345,7 +359,10 @@ func (s *LocalService) RevokeAccess(ctx context.Context, owner, user, db string)
 	if _, err := s.Probe(ctx); err != nil {
 		return err
 	}
-	if _, err := s.Run.Run(ctx, sqlRevokeAll(db, user, s.host())); err != nil {
+	if held, err := s.revokeAll(ctx, db, user); err != nil || !held {
+		if err == nil {
+			err = errors.New("no such grant: " + user + " has no privileges on " + db)
+		}
 		return err
 	}
 	for _, x := range s.Registry.databases("") {

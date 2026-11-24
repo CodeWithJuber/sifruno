@@ -21,6 +21,22 @@
 // there by an admission cookie made when its code is redeemed, bound to the
 // temporary user and ending with it; the proxy in proxy.go passes admitted
 // requests to OpenLiteSpeed's loopback listener.
+//
+// Known limits:
+//   - Browsers keep cookies apart by host name and path, not by port. A
+//     script on a phpMyAdmin page (an XSS from a tenant's table names or
+//     data) can therefore set cookies the browser also sends to the panel's
+//     host, a sifruno_operator for a /api/v1 path among them, and so sign
+//     the admin out of the panel or make its requests fail. It cannot read
+//     the panel's session cookie (HttpOnly, sent only to /api/v1, which
+//     phpMyAdmin's origin never serves), cannot read the panel's answers,
+//     and cannot forge a session: the cookie is sealed with the panel's own
+//     keys.
+//   - OpenLiteSpeed's phpMyAdmin listener is on loopback, so any local
+//     user, a tenant's PHP or cron job included, can reach phpMyAdmin there
+//     directly. It admits no one without a code: phpMyAdmin then sends the
+//     browser to the sign-in script, and a code redeems only once, only for
+//     phpMyAdmin's own user on the socket.
 package phpmyadmin
 
 import (

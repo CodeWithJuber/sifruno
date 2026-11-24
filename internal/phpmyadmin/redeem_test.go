@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -104,4 +105,28 @@ func TestTheSocketAnswersOnlyPhpMyAdminsUser(t *testing.T) {
 	if _, err := s.Redeem(code); err != nil {
 		t.Fatalf("a refused peer used up the code: %v", err)
 	}
+
+	// Other users holding connections open take no slot: phpMyAdmin's user
+	// is still answered. Here every connection is "another user", so the
+	// server must close each at once rather than keep it waiting in a slot.
+	held := make([]net.Conn, 0, 2*maxRedeemConns)
+	for i := 0; i < 2*maxRedeemConns; i++ {
+		conn, err := net.DialTimeout("unix", path, 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, conn)
+	}
+	for _, conn := range held {
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if n, err := conn.Read(make([]byte, 1)); n != 0 || err == nil || isTimeout(err) {
+			t.Fatalf("another user's connection was kept open: %d %v", n, err)
+		}
+		conn.Close()
+	}
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }

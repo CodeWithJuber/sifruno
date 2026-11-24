@@ -83,11 +83,18 @@ func (s *Service) ServeRedeem(ctx context.Context, l net.Listener, uid int) erro
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		// The peer is checked before it may take a slot, so other local
+		// users cannot hold every slot and starve phpMyAdmin's redemptions.
+		// Nothing is read from, or written to, anyone else.
+		if peer, err := peerUID(conn); err != nil || uid < 0 || peer != uid {
+			conn.Close()
+			continue
+		}
 		select {
 		case slots <- struct{}{}:
 			go func() {
 				defer func() { <-slots }()
-				s.answer(conn, uid)
+				s.answer(conn)
 			}()
 		default:
 			conn.Close()
@@ -95,14 +102,10 @@ func (s *Service) ServeRedeem(ctx context.Context, l net.Listener, uid int) erro
 	}
 }
 
-func (s *Service) answer(conn net.Conn, uid int) {
+// answer redeems one code for a peer ServeRedeem has already checked.
+func (s *Service) answer(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(redeemWait))
-	peer, err := peerUID(conn)
-	if err != nil || uid < 0 || peer != uid {
-		// Nothing is read from, or written to, anyone else.
-		return
-	}
 	line, err := bufio.NewReaderSize(conn, maxRedeemLine).ReadSlice('\n')
 	if err != nil {
 		return

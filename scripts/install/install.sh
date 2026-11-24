@@ -58,12 +58,28 @@ readonly RESTIC_VERSION=0.20.0
 readonly RESTIC_BZ2_SHA256=0ccd9fa7885074a24603b051e01bf9bd8b5e45d6a1791e9d9887e9e9372107f7
 readonly RESTIC_SHA256=c109579d3a1a4d26094bef5400ac5645fceb1043414c05f51b8fb48272001c72
 readonly WPCLI_SHA512=be928f6b8ca1e8dfb9d2f4b75a13aa4aee0896f8a9a0a1c45cd5d2c98605e6172e6d014dda2e27f88c98befc16c040cbb2bd1bfa121510ea5cdf5f6a30fe8832
-# phpMyAdmin for the panel's one-click sign-in. The download is checked
-# against the sha256 files.phpmyadmin.net publishes beside it (its .asc
-# signature is Isaac Bennetch's release key, 3D06 A59E CE73 0EB7 1B51 1C17
-# CE75 2F17 8259 BD92; both checked 2026-11-24; 5.2.3 is the release of
-# 2025-10-08 and fixes every advisory up to PMASA-2025-3); the unpacked tree,
-# without setup/ and examples/, against PMA_TREE_SHA256 (pma_tree_sha256).
+# phpMyAdmin for the panel's one-click sign-in. 5.2.3 is the release of
+# 2025-10-08 and fixes every advisory up to PMASA-2025-3. The pins below are
+# the trust root, as for restic and WP-CLI: the installer checks the
+# download against PMA_TARBALL_SHA256 and the unpacked tree, without setup/
+# and examples/, against PMA_TREE_SHA256 (pma_tree_sha256). It runs no gpg.
+#
+# The pins were made on 2026-11-24 from a tarball whose OpenPGP signature
+# was verified then. The signer is Isaac Bennetch, phpMyAdmin's release
+# manager, primary key fingerprint 3D06A59ECE730EB71B511C17CE752F178259BD92.
+# To check the pins again, in an empty folder:
+#   base=https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-english.tar.gz
+#   curl -fsSLO "$base" && curl -fsSLO "$base.asc" && curl -fsSLO "$base.sha256"
+#   curl -fsSL -o phpmyadmin.keyring https://files.phpmyadmin.net/phpmyadmin.keyring
+#   gpg --import phpmyadmin.keyring
+#   gpg --verify phpMyAdmin-5.2.3-english.tar.gz.asc phpMyAdmin-5.2.3-english.tar.gz
+#     (expect "Good signature from Isaac Bennetch" and the fingerprint above)
+#   sha256sum phpMyAdmin-5.2.3-english.tar.gz; cat phpMyAdmin-5.2.3-english.tar.gz.sha256
+#     (both must equal PMA_TARBALL_SHA256)
+#   mkdir tree && tar -xzf phpMyAdmin-5.2.3-english.tar.gz -C tree --strip-components=1 --no-same-owner --no-same-permissions
+#   rm -rf tree/setup tree/examples
+#   (cd tree && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum)
+#     (must equal PMA_TREE_SHA256)
 readonly PMA_VERSION=5.2.3
 readonly PMA_TARBALL_SHA256=03de2640bb25c9a6f96bc94eae316080b5fd5bd58d769e1318ba9dd94c83364c
 readonly PMA_TREE_SHA256=dd0f2c288f080c4bdd1468e178f6f5f49ee8227187bd017d7a4f2459444fcdb8

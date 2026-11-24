@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
-import { ArchiveRestore, ArrowLeft, CircleAlert, DatabaseBackup, HardDrive, LoaderCircle, ShieldCheck } from "lucide-react";
+import { ArchiveRestore, CircleAlert, DatabaseBackup, HardDrive, LoaderCircle, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -182,12 +182,7 @@ export function SiteBackups({ accountId }: { accountId: string }) {
     document.title = `Backups · ${domain} · Sifruno`;
   }, [domain]);
 
-  const back = <Link to="/websites/sites/$accountId" params={{ accountId }} className={linkButton("ghost", "w-fit px-2")} data-testid="back-to-website">
-    <ArrowLeft className="rtl:rotate-180" aria-hidden="true" />{domain ? <>Back to {domain}</> : "Back to the website"}
-  </Link>;
-
   if (!data) return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="site-backups">
-    {back}
     {problem
       ? <ProblemAlert problem={problem} onRetry={problem.status === 404 ? undefined : reload} testId="backups-problem" />
       : loading && <div className={`${panel} flex flex-col gap-4 p-5`} aria-busy="true"><span className="sr-only">Loading the backups</span><Skeleton className="h-8 w-1/2" /><Skeleton className="h-40 w-full" /></div>}
@@ -212,7 +207,6 @@ export function SiteBackups({ accountId }: { accountId: string }) {
   };
 
   return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="site-backups" data-account-id={accountId}>
-    {back}
     {problem && <ProblemAlert problem={{ ...problem, next: `${problem.next} What is shown below is from the last successful read.` }} onRetry={reload} testId="backups-problem" />}
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="backups-heading">
       <div className="flex flex-col gap-1">

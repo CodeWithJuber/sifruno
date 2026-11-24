@@ -22,7 +22,7 @@ const PanelPreview = lazy(() => import("@/PanelPreview"));
 const NewWebsite = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.NewWebsite })));
 const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.WebsiteJob })));
 const WebsitesList = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsitesList })));
-const WebsiteOverview = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsiteOverview })));
+const WebsiteLayout = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteLayout })));
 const BackupStorage = lazy(() => import("@/BackupStorage").then((m) => ({ default: m.BackupStorage })));
 const FilesSitePicker = lazy(() => import("@/SiteFiles").then((m) => ({ default: m.FilesSitePicker })));
 
@@ -142,9 +142,10 @@ export function WebsitesView() {
   return <WebsitesList />;
 }
 
-// Keyed by the id, so moving from one website to another starts fresh.
+// One website's page with its tabs. Keyed by the id, so moving from one
+// website to another starts fresh.
 export function WebsiteView({ accountId }: { accountId: string }) {
-  return <WebsiteOverview key={accountId} accountId={accountId} />;
+  return <WebsiteLayout key={accountId} accountId={accountId} />;
 }
 
 // Websites → Files: choose a website, then its Files page opens.

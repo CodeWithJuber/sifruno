@@ -23,42 +23,53 @@ function WebsiteJobRoute() {
   return <WebsiteJobView jobId={jobId} />;
 }
 
-// One website's Overview, by its hosting account's id.
+// One website's page, by its hosting account's id: a header and a tab bar,
+// with each tab a child route at its own address. The layout route's own
+// address is the Overview tab.
 const websiteRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId", component: WebsiteRoute, beforeLoad: privateOnly });
 function WebsiteRoute() {
   const { accountId } = websiteRoute.useParams();
   return <WebsiteView accountId={accountId} />;
 }
+const siteTab = (path: string, component: () => ReactNode) => createRoute({ getParentRoute: () => websiteRoute, path, component });
+const SiteOverviewTab = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteOverviewTab })));
+const SiteSettingsTab = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteSettingsTab })));
+const SiteCronTab = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteCronTab })));
+const SiteLogsTab = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteLogsTab })));
+const siteOverviewRoute = siteTab("/", () => <SiteOverviewTab />);
+const siteSettingsRoute = siteTab("settings", () => <SiteSettingsTab />);
+const siteCronRoute = siteTab("cron", () => <SiteCronTab />);
+const siteLogsRoute = siteTab("logs", () => <SiteLogsTab />);
 
-// One website's Databases page. Keyed by the id, so moving from one website
-// to another starts fresh.
+// The Databases tab. Keyed by the id, so moving from one website to another
+// starts fresh.
 const SiteDatabases = lazy(() => import("@/SiteDatabases").then((m) => ({ default: m.SiteDatabases })));
-const siteDatabasesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/databases", component: SiteDatabasesRoute, beforeLoad: privateOnly });
+const siteDatabasesRoute = createRoute({ getParentRoute: () => websiteRoute, path: "databases", component: SiteDatabasesRoute });
 function SiteDatabasesRoute() {
   const { accountId } = siteDatabasesRoute.useParams();
   return <SiteDatabases key={accountId} accountId={accountId} />;
 }
 
-// One website's Backups page, keyed by the id like Databases.
+// The Backups tab, keyed by the id like Databases.
 const SiteBackups = lazy(() => import("@/SiteBackups").then((m) => ({ default: m.SiteBackups })));
-const siteBackupsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/backups", component: SiteBackupsRoute, beforeLoad: privateOnly });
+const siteBackupsRoute = createRoute({ getParentRoute: () => websiteRoute, path: "backups", component: SiteBackupsRoute });
 function SiteBackupsRoute() {
   const { accountId } = siteBackupsRoute.useParams();
   return <SiteBackups key={accountId} accountId={accountId} />;
 }
 
-// One website's Domains page: its other domains and its redirects.
+// The Domains and SSL tab: the site's other domains and its redirects.
 const SiteDomains = lazy(() => import("@/SiteDomains").then((m) => ({ default: m.SiteDomains })));
-const siteDomainsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/domains", component: SiteDomainsRoute, beforeLoad: privateOnly });
+const siteDomainsRoute = createRoute({ getParentRoute: () => websiteRoute, path: "domains", component: SiteDomainsRoute });
 function SiteDomainsRoute() {
   const { accountId } = siteDomainsRoute.useParams();
   return <SiteDomains key={accountId} accountId={accountId} />;
 }
-// One website's Files page. The folder is in the address (?path=), so back,
-// reload and shared links open the same folder.
+// The Files tab. The folder is in the address (?path=), so back, reload and
+// shared links open the same folder.
 const SiteFiles = lazy(() => import("@/SiteFiles").then((m) => ({ default: m.SiteFiles })));
 const siteFilesRoute = createRoute({
-  getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/files", component: SiteFilesRoute, beforeLoad: privateOnly,
+  getParentRoute: () => websiteRoute, path: "files", component: SiteFilesRoute,
   validateSearch: (search: Record<string, unknown>): { path?: string } => typeof search.path === "string" && search.path ? { path: search.path } : {},
 });
 function SiteFilesRoute() {
@@ -73,11 +84,7 @@ const routeTree = rootRoute.addChildren([
   route("/websites", WebsitesView, privateOnly),
   route("/websites/new", NewWebsiteView, privateOnly),
   websiteJobRoute,
-  websiteRoute,
-  siteDatabasesRoute,
-  siteBackupsRoute,
-  siteDomainsRoute,
-  siteFilesRoute,
+  websiteRoute.addChildren([siteOverviewRoute, siteDomainsRoute, siteFilesRoute, siteDatabasesRoute, siteBackupsRoute, siteCronRoute, siteLogsRoute, siteSettingsRoute]),
   route("/websites/static", ShellRendered, privateOnly),
   route("/websites/static/files", ShellRendered, privateOnly),
   route("/websites/files", FilesView, privateOnly),

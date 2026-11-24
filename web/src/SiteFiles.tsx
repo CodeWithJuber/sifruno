@@ -174,12 +174,7 @@ export function SiteFiles({ accountId, path }: { accountId: string; path: string
     }
   };
 
-  const back = <Link to="/websites/sites/$accountId" params={{ accountId }} className={linkButton("ghost", "w-fit px-2")} data-testid="back-to-website">
-    <ArrowLeft className="rtl:rotate-180" aria-hidden="true" />{site ? <>Back to {site.domain}</> : "Back to the website"}
-  </Link>;
-
   if (!site) return <div className="flex w-full max-w-5xl flex-col gap-4" data-testid="site-files">
-    {back}
     {problem
       ? <ProblemAlert problem={problem} testId="files-problem">{problem.status !== 404 && <Button variant="outline" size="sm" onClick={reload}><RefreshCw aria-hidden="true" />Try again</Button>}</ProblemAlert>
       : <div className={`${panel} flex flex-col gap-4 p-5`} aria-busy="true" data-testid="files-loading"><span className="sr-only">Loading the files</span><Skeleton className="h-8 w-1/2" /><Skeleton className="h-64 w-full" /></div>}
@@ -193,7 +188,6 @@ export function SiteFiles({ accountId, path }: { accountId: string; path: string
 
   const trail = pathTrail(path);
   return <div className="flex w-full max-w-5xl flex-col gap-4" data-testid="site-files" data-account-id={site.account_id}>
-    {back}
     <section className={`${panel} flex flex-col gap-3 p-5 md:p-6`}>
       <div className="flex flex-col gap-1">
         <h2 ref={headingRef} tabIndex={-1} className="wrap-anywhere outline-none" data-testid="files-heading">Files for {site.domain}</h2>
@@ -203,7 +197,7 @@ export function SiteFiles({ accountId, path }: { accountId: string; path: string
         <LockKeyhole aria-hidden="true" />
         <AlertTitle>{site.state === "suspended" ? "This website is suspended, so its files are read-only." : "This website's files are read-only for now."}</AlertTitle>
         <AlertDescription className="text-start">
-          <div>{site.state === "suspended" ? "You can open, read and download its files. To change them, resume the website on its page." : "The hosting account needs a check before its files can change. You can still open and download them."}</div>
+          <div>{site.state === "suspended" ? "You can open, read and download its files. To change them, resume the website in its Settings tab." : "The hosting account needs a check before its files can change. You can still open and download them."}</div>
         </AlertDescription>
       </Alert>}
       {notice && <Alert role={undefined} className="text-start" data-testid="files-notice">

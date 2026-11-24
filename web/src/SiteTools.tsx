@@ -13,10 +13,11 @@ import type { CronJob, LogKind, WebsiteCron, WebsiteLog } from "@/lib/site-tools
 import type { Website, WebsiteUsage } from "@/lib/websites-api";
 import { useShell } from "@/shell/context";
 
-// A website's Usage, Scheduled jobs and Logs, below its Overview. Each
-// section reads on its own, so one that fails leaves the others usable. The
-// base styles colour <p> outside Tailwind's layers, so coloured text uses
-// div or span, as on the other Websites screens.
+// A website's Usage (on its Overview), Scheduled jobs and Logs (in its
+// Settings, or tabs of their own in Advanced view). Each section reads on
+// its own, so one that fails leaves the others usable. The base styles
+// colour <p> outside Tailwind's layers, so coloured text uses div or span,
+// as on the other Websites screens.
 
 const panel = "rounded-lg border border-border bg-card";
 const control = "h-9 pointer-coarse:h-11";
@@ -71,17 +72,9 @@ function useSectionRead<T>(load: (signal: AbortSignal) => Promise<T>, what: stri
 
 function SectionHeading({ id, title, children }: { id: string; title: string; children?: ReactNode }) {
   return <div className="flex flex-wrap items-center justify-between gap-2">
-    <h3 id={id}>{title}</h3>
+    <h2 id={id} tabIndex={-1} className="outline-none">{title}</h2>
     {children}
   </div>;
-}
-
-export function SiteTools({ site, onRevision }: { site: Website; onRevision: (revision: number) => void }) {
-  return <>
-    <SiteUsageSection site={site} />
-    <SiteCronSection site={site} onRevision={onRevision} />
-    <SiteLogsSection site={site} />
-  </>;
 }
 
 // ---- Usage --------------------------------------------------------------------
@@ -100,9 +93,12 @@ export function trafficText(usage: WebsiteUsage): string {
   return `${bytesLabel(usage.traffic_bytes)} in ${monthLabel(usage.traffic_month)}${usage.traffic_complete ? "" : " so far (older log lines are still being counted)"}`;
 }
 
-function SiteUsageSection({ site }: { site: Website }) {
+// onRead tells the Overview's health checklist what this section read, so
+// the usage is read once.
+export function SiteUsageSection({ site, onRead }: { site: Website; onRead?: (usage: WebsiteUsage | undefined, failed: boolean) => void }) {
   const ids = useId();
   const { data, problem, loading, retry } = useSectionRead((signal) => getUsage(site.account_id, { signal }), "The usage could not be loaded.");
+  useEffect(() => { onRead?.(data, Boolean(problem)); }, [data, problem, onRead]);
   return <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby={`${ids}-heading`} data-testid="site-usage">
     <SectionHeading id={`${ids}-heading`} title="Usage">
       <Button variant="ghost" size="sm" onClick={retry} disabled={loading} data-testid="usage-refresh"><RefreshCw aria-hidden="true" />Refresh<span className="sr-only"> usage</span></Button>
@@ -127,7 +123,7 @@ const customPreset = "custom";
 
 type FieldName = "schedule" | "command";
 
-function SiteCronSection({ site, onRevision }: { site: Website; onRevision: (revision: number) => void }) {
+export function SiteCronSection({ site, onRevision }: { site: Website; onRevision: (revision: number) => void }) {
   const ids = useId();
   const { data, problem, loading, retry, replace } = useSectionRead((signal) => getCron(site.account_id, { signal }), "The scheduled jobs could not be loaded.");
   const [preset, setPreset] = useState(cronPresets[0].id);
@@ -231,7 +227,7 @@ function SiteCronSection({ site, onRevision }: { site: Website; onRevision: (rev
       {outcome && <div className="flex items-center gap-2 text-sm text-foreground" data-testid="cron-outcome"><CircleCheck className="size-4 text-primary" aria-hidden="true" />{outcome}</div>}
       {failure && <ProblemAlert problem={failure} onRetry={() => { setFailure(undefined); retry(); }} testId="cron-save-problem" />}
       <form className="flex flex-col gap-3 border-t border-border pt-4" onSubmit={add} noValidate aria-labelledby={`${ids}-add`} data-testid="cron-add-form">
-        <h4 id={`${ids}-add`} className="m-0 text-sm font-medium text-foreground">Add a job</h4>
+        <h3 id={`${ids}-add`} className="m-0 text-sm font-medium text-foreground">Add a job</h3>
         {full
           ? <div className="text-sm text-muted-foreground" data-testid="cron-full">This site has {maxJobs} jobs, the most it can have. Remove one to add another.</div>
           : <>
@@ -321,7 +317,7 @@ function CronTable({ cron, headingId, busy, onRemove }: { cron: WebsiteCron; hea
 
 const logNames: Record<LogKind, string> = { access: "Access log", error: "Error log" };
 
-function SiteLogsSection({ site }: { site: Website }) {
+export function SiteLogsSection({ site }: { site: Website }) {
   const ids = useId();
   const [kind, setKind] = useState<LogKind>("access");
   return <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby={`${ids}-heading`} data-testid="site-logs">

@@ -2,8 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { ComponentProps, FormEvent, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
-import { ArrowLeft, CircleAlert, CircleCheck, CirclePause, ExternalLink, Globe, Lock, LockOpen, Plus, RefreshCw, TriangleAlert } from "lucide-react";
-import { DnsHelp } from "@/components/dns-help";
+import { CircleAlert, CircleCheck, CirclePause, ExternalLink, Globe, Lock, LockOpen, Plus, RefreshCw, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -15,35 +14,37 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { dateLabel } from "@/lib/api";
-import { adoptCurrentFolder, changePhpVersion, dayLabel, deletedSummary, deleteWebsite, folderNotice, getWebsite, httpsState, limitsSummary, listWebsites, phpChange, setWebsiteState, siteStatus, WebsitesApiError } from "@/lib/websites-api";
+import { adoptCurrentFolder, changePhpVersion, dayLabel, deleteWebsite, folderNotice, httpsState, listWebsites, phpChange, setWebsiteState, siteStatus, WebsitesApiError } from "@/lib/websites-api";
 import type { Website, WebsiteDeleted, WebsiteDetail } from "@/lib/websites-api";
 import { useShell } from "@/shell/context";
 import type { PageId } from "@/shell/pages";
-import { DiskMeter, SiteTools, trafficText } from "./SiteTools";
+import { DiskMeter, trafficText } from "./SiteTools";
 // The busy ring a working button shows, as on the wizard's screens.
 import "./new-website.css";
 
-// Websites: the WordPress and PHP sites the New website wizard made, and one site's
-// Overview with its actions. The base styles colour <p> and <a> outside
-// Tailwind's layers, so coloured text uses div or span and links drawn as
-// buttons mark their text colour important, as on the wizard's screens.
+// Websites: the WordPress and PHP sites the New website wizard made, and the
+// parts one site's page (WebsiteLayout) shares with the list: badges, links,
+// reads, problems and the site's actions. The base styles colour <p> and <a>
+// outside Tailwind's layers, so coloured text uses div or span and links
+// drawn as buttons mark their text colour important, as on the wizard's
+// screens.
 
-const panel = "rounded-lg border border-border bg-card";
-const control = "h-9 pointer-coarse:h-11";
-const linkButton = (variant: "default" | "outline" | "ghost", className = "") =>
+export const panel = "rounded-lg border border-border bg-card";
+export const control = "h-9 pointer-coarse:h-11";
+export const linkButton = (variant: "default" | "outline" | "ghost", className = "") =>
   cn(buttonVariants({ variant, className: `${control} ${variant === "default" ? "text-primary-foreground!" : ""} ${className}` }));
 
-interface Problem { what: string; why: string; next: string; technical: string; status: number }
+export interface Problem { what: string; why: string; next: string; technical: string; status: number }
 
-function problemFrom(error: unknown, what: string): Problem {
+export function problemFrom(error: unknown, what: string): Problem {
   if (error instanceof WebsitesApiError) return { what: error.message, why: error.why, next: error.next, technical: error.technical, status: error.status };
   return { what, why: "Something unexpected went wrong in the panel.", next: "Reload the page and try again.", technical: error instanceof Error ? error.name : "unknown error", status: 0 };
 }
 
 // One read of the server, again on the header's refresh and on Try again.
-// It reports to the shell, which drives the refresh button and the footer.
-function useRead<T>(pageId: PageId, load: (signal: AbortSignal) => Promise<T>, what: string) {
+// It reports to the shell, which drives the refresh button and the footer;
+// without a page id it does not report (another read on the page does).
+export function useRead<T>(pageId: PageId | undefined, load: (signal: AbortSignal) => Promise<T>, what: string) {
   const { revision, setPageResource } = useShell();
   const [data, setData] = useState<T>();
   const [problem, setProblem] = useState<Problem>();
@@ -63,7 +64,7 @@ function useRead<T>(pageId: PageId, load: (signal: AbortSignal) => Promise<T>, w
     return () => { live = false; controller.abort(); };
   }, [revision, attempt, what]);
   useEffect(() => {
-    setPageResource(pageId, { data, loading, error: problem?.what, loadedAt });
+    if (pageId) setPageResource(pageId, { data, loading, error: problem?.what, loadedAt });
   }, [pageId, data, loading, problem, loadedAt, setPageResource]);
   // replace takes the server's answer to a change as the newest read.
   const replace = (value: T) => { setData(value); setProblem(undefined); setLoadedAt(new Date()); };
@@ -81,7 +82,7 @@ function TechnicalDetails({ children }: { children: ReactNode }) {
 
 // What happened (the title), why, what to do next, and the request under
 // Technical details. role="alert": a failed read or change is announced at once.
-function ProblemAlert({ problem, onRetry, retryLabel = "Try again", testId = "websites-problem" }: { problem: Problem; onRetry?: () => void; retryLabel?: string; testId?: string }) {
+export function ProblemAlert({ problem, onRetry, retryLabel = "Try again", testId = "websites-problem" }: { problem: Problem; onRetry?: () => void; retryLabel?: string; testId?: string }) {
   return <Alert variant="destructive" className="text-start" data-testid={testId}>
     <CircleAlert aria-hidden="true" />
     <AlertTitle>{problem.what}</AlertTitle>
@@ -97,7 +98,7 @@ function ProblemAlert({ problem, onRetry, retryLabel = "Try again", testId = "we
 }
 
 // The state in words, with an icon that only repeats it.
-function StatusBadge({ state }: { state: string }) {
+export function StatusBadge({ state }: { state: string }) {
   const { label, tone } = siteStatus(state);
   const Icon = tone === "live" ? CircleCheck : tone === "suspended" ? CirclePause : TriangleAlert;
   return <Badge variant={tone === "live" ? "secondary" : tone === "suspended" ? "outline" : "destructive"} data-testid="website-status" data-state={state}>
@@ -105,7 +106,7 @@ function StatusBadge({ state }: { state: string }) {
   </Badge>;
 }
 
-function HttpsBadge({ site }: { site: Website }) {
+export function HttpsBadge({ site }: { site: Website }) {
   const https = httpsState(site.https);
   if (https.kind === "off") return <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
     <Badge variant="outline" data-testid="website-https" data-https="off"><LockOpen aria-hidden="true" />http</Badge>
@@ -135,7 +136,7 @@ function OtherDomains({ site }: { site: Website }) {
 
 // External links name the site, so each is distinct for a screen reader, and
 // say that they open a new tab.
-function SiteLink({ href, label, domain, variant, testId }: { href: string; label: string; domain: string; variant: "default" | "outline" | "ghost"; testId: string }) {
+export function SiteLink({ href, label, domain, variant, testId }: { href: string; label: string; domain: string; variant: "default" | "outline" | "ghost"; testId: string }) {
   return <a href={href} target="_blank" rel="noopener noreferrer" className={linkButton(variant)} data-testid={testId}>
     {label}<span className="sr-only"> {domain} (opens in a new tab)</span><ExternalLink aria-hidden="true" />
   </a>;
@@ -246,119 +247,6 @@ function SiteTable({ sites }: { sites: Website[] }) {
 }
 
 
-// ---- One website's Overview ---------------------------------------------------
-
-export function WebsiteOverview({ accountId }: { accountId: string }) {
-  const { data: site, problem, loading, retry, replace } = useRead<WebsiteDetail>("website", (signal) => getWebsite(accountId, { signal }), "This website could not be loaded.");
-  const [dnsOpen, setDnsOpen] = useState(false);
-  const [deleted, setDeleted] = useState<WebsiteDeleted>();
-  // One polite live region for the page: the outcome of each action.
-  const [announcement, setAnnouncement] = useState("");
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  const deletedRef = useRef<HTMLHeadingElement>(null);
-  const domain = site?.domain;
-  // Arriving from the list: start at the site's name, and name the tab after it.
-  useEffect(() => {
-    if (!domain) return;
-    headingRef.current?.focus();
-    document.title = `${domain} · Websites · Sifruno`;
-  }, [domain]);
-  // After a delete the dialog is gone and the page is reachable again: say
-  // what happened, and put focus on it instead of leaving it nowhere.
-  useEffect(() => {
-    if (!deleted) return;
-    deletedRef.current?.focus();
-    document.title = `${deleted.domain} deleted · Websites · Sifruno`;
-    // Focus reads the heading; the region adds what went.
-    setAnnouncement(deletedSummary(deleted) || `${deleted.domain} was deleted.`);
-  }, [deleted]);
-
-  const back = <Link to="/websites" className={linkButton("ghost", "w-fit px-2")} data-testid="back-to-websites"><ArrowLeft className="rtl:rotate-180" aria-hidden="true" />All websites</Link>;
-  // Keyed, so the same region stays in the page from one view to the next.
-  const announcer = <div key="announcer" aria-live="polite" className="sr-only" data-testid="website-announcer">{announcement}</div>;
-
-  if (deleted) return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="website-deleted">
-    {back}
-    <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`}>
-      <div className="flex flex-col gap-2">
-        <h2 ref={deletedRef} tabIndex={-1} className="wrap-anywhere outline-none">{deleted.domain} was deleted</h2>
-        <div className="text-sm text-foreground" data-testid="website-deleted-summary">{deletedSummary(deleted)}</div>
-      </div>
-      <Link to="/websites" className={linkButton("default", "w-fit")}>Back to all websites</Link>
-    </section>
-    {announcer}
-  </div>;
-
-  if (!site) return <div className="flex w-full max-w-3xl flex-col gap-4">
-    {back}
-    {problem
-      ? <ProblemAlert problem={problem} onRetry={problem.status === 404 ? undefined : retry} />
-      : loading && <div className={`${panel} flex flex-col gap-4 p-5`} aria-busy="true"><span className="sr-only">Loading the website</span><Skeleton className="h-8 w-1/2" /><Skeleton className="h-40 w-full" /></div>}
-    {announcer}
-  </div>;
-
-  const https = httpsState(site.https);
-  return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="website-overview" data-account-id={site.account_id}>
-    {back}
-    {problem && <ProblemAlert problem={{ ...problem, next: `${problem.next} The details below are from the last successful read.` }} onRetry={retry} />}
-    <section className={`${panel} flex flex-col gap-5 p-5 md:p-6`}>
-      <div className="flex flex-col gap-2">
-        <h2 id="website-heading" ref={headingRef} tabIndex={-1} className="wrap-anywhere outline-none" data-testid="website-domain">{site.domain}</h2>
-        <div className="flex flex-wrap items-center gap-2"><StatusBadge state={site.state} /><HttpsBadge site={site} /></div>
-      </div>
-      <Separator />
-      <div className="flex flex-col gap-3">
-        <h3>Overview</h3>
-        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm" data-testid="website-facts">
-          <dt className="text-muted-foreground">Domain</dt><dd className="wrap-anywhere text-foreground">{site.domain}</dd>
-          <dt className="text-muted-foreground">Other domains</dt>
-          <dd className="wrap-anywhere text-foreground" data-testid="website-aliases">
-            {site.aliases.length === 0 ? "None" : site.aliases.map((alias) => `${alias.name}${alias.https === "on" ? "" : " (http only for now)"}`).join(", ")}
-          </dd>
-          <dt className="text-muted-foreground">Redirects</dt>
-          <dd className="text-foreground" data-testid="website-redirects">{site.redirect_count === 0 ? "None" : site.redirect_count === 1 ? "1 redirect" : `${site.redirect_count} redirects`}</dd>
-          <dt className="text-muted-foreground">Status</dt><dd className="text-foreground" data-testid="website-status-fact">{siteStatus(site.state).label}</dd>
-          <dt className="text-muted-foreground">HTTPS</dt>
-          <dd className="text-foreground" data-testid="website-https-fact">
-            {https.kind === "off" ? "Off: the site uses http. It has no certificate yet."
-              : https.kind === "expired" ? `The certificate expired on ${dayLabel(https.since)}. Visitors see a security warning.`
-              : https.until ? `On. The certificate is valid until ${dateLabel(site.https.not_after)}.` : "On."}
-          </dd>
-          <dt className="text-muted-foreground">Type</dt><dd className="text-foreground" data-testid="website-type">{site.kind === "php" ? "PHP site" : "WordPress"}</dd>
-          <dt className="text-muted-foreground">PHP version</dt><dd className="text-foreground" data-testid="website-php">{site.php_version || "Not reported for this site"}</dd>
-          <dt className="text-muted-foreground">Resource limits</dt>
-          <dd className="text-foreground" data-testid="website-limits">
-            {site.limits
-              ? `${limitsSummary(site.limits)}, shared by everything the site runs: its PHP, SFTP sessions and scheduled jobs. The hosting plan sets them.`
-              : "Not reported for this site"}
-          </dd>
-          {site.kind === "wordpress" && <><dt className="text-muted-foreground">WordPress version</dt><dd className="text-foreground" data-testid="website-wordpress">{site.wordpress_version}</dd></>}
-          <dt className="text-muted-foreground">Hosting account</dt><dd className="text-foreground" data-testid="website-username"><code>{site.username}</code></dd>
-          {site.kind === "php" && <><dt className="text-muted-foreground">Files</dt><dd className="text-foreground" data-testid="website-files">Upload with SFTP as <code>{site.username}</code>, into <code>public_html</code>. SFTP signs in with an SSH key.</dd></>}
-          <dt className="text-muted-foreground">Created</dt><dd className="text-foreground">{dateLabel(site.created_at)}</dd>
-        </dl>
-      </div>
-      {/* A partly deleted site no longer serves and has no account for its databases page. */}
-      {site.state !== "partly_deleted" && <>
-        <div className="flex flex-wrap gap-2">
-          <SiteLink href={site.url} label="Open site" domain={site.domain} variant="default" testId="open-site" />
-          {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />}
-          <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
-          <Link to="/websites/sites/$accountId/domains" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-domains-link">Domains and redirects</Link>
-          <Link to="/websites/sites/$accountId/files" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-files-link">Files</Link>
-          <Link to="/websites/sites/$accountId/databases" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-databases-link">Databases</Link>
-          <Link to="/websites/sites/$accountId/backups" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-backups-link">Backups</Link>
-        </div>
-        <DnsHelp id="dns-help" domain={site.domain} hidden={!dnsOpen} />
-      </>}
-    </section>
-    <SiteActions site={site} onChanged={replace} onDeleted={setDeleted} onReload={retry} announce={setAnnouncement} />
-    {/* Usage, scheduled jobs and logs; a jobs change moves the account's revision on. */}
-    {site.state !== "partly_deleted" && <SiteTools site={site} onRevision={(revision) => replace({ ...site, revision })} />}
-    {announcer}
-  </div>;
-}
-
 // ---- The site's actions -------------------------------------------------------
 
 type ActionName = "folder" | "php" | "state" | "resuspend" | "delete";
@@ -375,8 +263,11 @@ function ActionButton({ busy, busyLabel, children, className = "", disabled, ...
 // The changes, one at a time: each sends the revision the page has, and the
 // server's answer becomes the page's newest read. The outcome is said in the
 // page's polite live region; a failure is an alert where the person is.
-function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
-  site: WebsiteDetail; onChanged: (site: WebsiteDetail) => void; onDeleted: (done: WebsiteDeleted) => void; onReload: () => void; announce: (text: string) => void;
+// Two sections on the site's Settings tab, PHP version first and Suspend or
+// delete last, with between (cron jobs and logs in Simple view) in the
+// middle. repair shows "Apply suspension again", which Advanced view adds.
+export function SiteActions({ site, repair, between, onChanged, onDeleted, onReload, announce }: {
+  site: WebsiteDetail; repair: boolean; between?: ReactNode; onChanged: (site: WebsiteDetail) => void; onDeleted: (done: WebsiteDeleted) => void; onReload: () => void; announce: (text: string) => void;
 }) {
   const [busy, setBusy] = useState<ActionName>();
   const [failure, setFailure] = useState<{ action: ActionName; problem: Problem }>();
@@ -447,12 +338,11 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
     ? <div className="flex items-center gap-2 text-sm text-foreground" data-testid="site-action-outcome"><CircleCheck className="size-4 text-primary" aria-hidden="true" />{outcome.text}</div>
     : null;
 
-  return <section className={`${panel} flex flex-col gap-5 p-5 md:p-6`} data-testid="site-actions" data-busy={busy ?? ""}>
-    <h3>Actions</h3>
-
+  const sectionClass = `${panel} flex flex-col gap-5 p-5 md:p-6`;
+  return <>
     {/* Part of the page from the start, so a named region rather than an alert that interrupts.
         Once the folder is used the notice and its button go; the outcome stays and takes focus. */}
-    {(folder || outcome?.action === "folder") && <>
+    {(folder || outcome?.action === "folder") && <section className={sectionClass} data-busy={busy ?? ""}>
       <div ref={folderRef} tabIndex={-1} className="flex flex-col gap-3 outline-none" data-testid="site-action-folder" data-kind={folder?.kind ?? "done"}>
         {folder && <>
           <Alert role="region" aria-labelledby={`${ids}-folder-title`} className="text-start" data-testid="site-folder-notice">
@@ -473,95 +363,99 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
         {succeeded("folder")}
         {failed("folder")}
       </div>
+    </section>}
+
+    <section className={sectionClass} aria-labelledby={`${ids}-php-heading`} data-testid="site-actions" data-busy={busy ?? ""}>
+      <div className="flex flex-col gap-3" data-testid="site-action-php">
+        <div className="flex flex-col gap-1">
+          <h2 id={`${ids}-php-heading`} tabIndex={-1} className="outline-none">PHP version</h2>
+          <div className="text-sm text-muted-foreground" id={`${ids}-php-hint`}>
+            {php.kind === "ready"
+              ? `${site.php_version ? `The site runs PHP ${site.php_version}. ` : ""}Changing it restarts PHP for this site; its files, database and disk quota stay as they are.`
+              : php.why}
+          </div>
+        </div>
+        {php.kind === "ready" && <div className="flex flex-wrap items-end gap-2">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={`${ids}-php`} className="text-sm font-medium text-foreground">Change to</label>
+            <NativeSelect id={`${ids}-php`} className={`min-w-32 [&>select]:h-9 pointer-coarse:[&>select]:h-11`} aria-describedby={`${ids}-php-hint`} value={chosen} disabled={Boolean(busy)}
+              onChange={(event) => setVersion(event.target.value)} data-testid="php-version-select">
+              {php.versions.map((option) => <NativeSelectOption key={option} value={option}>PHP {option}</NativeSelectOption>)}
+            </NativeSelect>
+          </div>
+          <ActionButton variant="outline" busy={busy === "php"} busyLabel="Changing PHP…" disabled={Boolean(busy)} onClick={changePhp} data-testid="change-php">Change PHP version</ActionButton>
+        </div>}
+        {succeeded("php")}
+        {failed("php")}
+      </div>
+    </section>
+
+    {between}
+
+    <section className={sectionClass} aria-labelledby={`${ids}-manage-heading`} data-testid="site-manage" data-busy={busy ?? ""}>
+      <h2 id={`${ids}-manage-heading`}>Suspend or delete</h2>
+      <div className="flex flex-col gap-3" data-testid="site-action-state">
+        <div className="flex flex-col gap-1">
+          <h3 className="m-0 text-sm font-medium text-foreground">{suspended ? "Resume website" : "Suspend website"}</h3>
+          <div className="text-sm text-muted-foreground">
+            {suspended ? "The site serves visitors again, and the hosting account can sign in again."
+              : canChangeState ? "Visitors get an error page (403) instead of the site, and the hosting account cannot sign in. Nothing is deleted, and you can resume it at any time."
+              : partly ? "The hosting account is already deleted, so the website cannot be suspended or resumed."
+              : "The hosting account needs a check by whoever runs this server before it can be suspended or resumed."}
+          </div>
+        </div>
+        {canChangeState && <div className="flex flex-wrap gap-2">
+          <ActionButton variant="outline" className="w-fit" busy={busy === "state"} busyLabel={suspended ? "Resuming…" : "Suspending…"} disabled={Boolean(busy)} onClick={changeState} data-testid="change-state">
+            {suspended ? "Resume website" : "Suspend website"}
+          </ActionButton>
+          {suspended && repair && <ActionButton variant="ghost" className="w-fit" busy={busy === "resuspend"} busyLabel="Applying…" disabled={Boolean(busy)} aria-describedby={`${ids}-resuspend-hint`} onClick={reapplySuspension} data-testid="reapply-suspension">
+            Apply suspension again
+          </ActionButton>}
+        </div>}
+        {suspended && repair && <div className="text-sm text-muted-foreground" id={`${ids}-resuspend-hint`}>Apply suspension again writes the suspended site's web server settings again, for a site that still answers visitors. It stays suspended.</div>}
+        {succeeded("state")}
+        {failed("state")}
+        {succeeded("resuspend")}
+        {failed("resuspend")}
+      </div>
+
       <Separator />
-    </>}
 
-    <div className="flex flex-col gap-3" data-testid="site-action-php">
-      <div className="flex flex-col gap-1">
-        <h4 className="m-0 text-sm font-medium text-foreground">PHP version</h4>
-        <div className="text-sm text-muted-foreground" id={`${ids}-php-hint`}>
-          {php.kind === "ready"
-            ? `${site.php_version ? `The site runs PHP ${site.php_version}. ` : ""}Changing it restarts PHP for this site; its files, database and disk quota stay as they are.`
-            : php.why}
+      <div className="flex flex-col gap-3" data-testid="site-action-delete">
+        <div className="flex flex-col gap-1">
+          <h3 className="m-0 text-sm font-medium text-foreground">Delete website</h3>
+          <div className="text-sm text-muted-foreground" data-testid="delete-website-hint">
+            {partly ? "The hosting account and the site's files are already deleted, but the site's database is still on this server. Delete the website again to remove it. This cannot be undone."
+              : "Removes the site's files, its database and its hosting account from this server. This cannot be undone."}
+          </div>
         </div>
+        <Button variant="destructive" className={`${control} w-fit`} disabled={Boolean(busy)} onClick={() => setDialog(true)} data-testid="delete-website">Delete website…</Button>
       </div>
-      {php.kind === "ready" && <div className="flex flex-wrap items-end gap-2">
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={`${ids}-php`} className="text-sm font-medium text-foreground">Change to</label>
-          <NativeSelect id={`${ids}-php`} className={`min-w-32 [&>select]:h-9 pointer-coarse:[&>select]:h-11`} aria-describedby={`${ids}-php-hint`} value={chosen} disabled={Boolean(busy)}
-            onChange={(event) => setVersion(event.target.value)} data-testid="php-version-select">
-            {php.versions.map((option) => <NativeSelectOption key={option} value={option}>PHP {option}</NativeSelectOption>)}
-          </NativeSelect>
-        </div>
-        <ActionButton variant="outline" busy={busy === "php"} busyLabel="Changing PHP…" disabled={Boolean(busy)} onClick={changePhp} data-testid="change-php">Change PHP version</ActionButton>
-      </div>}
-      {succeeded("php")}
-      {failed("php")}
-    </div>
 
-    <Separator />
-
-    <div className="flex flex-col gap-3" data-testid="site-action-state">
-      <div className="flex flex-col gap-1">
-        <h4 className="m-0 text-sm font-medium text-foreground">{suspended ? "Resume website" : "Suspend website"}</h4>
-        <div className="text-sm text-muted-foreground">
-          {suspended ? "The site serves visitors again, and the hosting account can sign in again."
-            : canChangeState ? "Visitors get an error page (403) instead of the site, and the hosting account cannot sign in. Nothing is deleted, and you can resume it at any time."
-            : partly ? "The hosting account is already deleted, so the website cannot be suspended or resumed."
-            : "The hosting account needs a check by whoever runs this server before it can be suspended or resumed."}
-        </div>
-      </div>
-      {canChangeState && <div className="flex flex-wrap gap-2">
-        <ActionButton variant="outline" className="w-fit" busy={busy === "state"} busyLabel={suspended ? "Resuming…" : "Suspending…"} disabled={Boolean(busy)} onClick={changeState} data-testid="change-state">
-          {suspended ? "Resume website" : "Suspend website"}
-        </ActionButton>
-        {suspended && <ActionButton variant="ghost" className="w-fit" busy={busy === "resuspend"} busyLabel="Applying…" disabled={Boolean(busy)} aria-describedby={`${ids}-resuspend-hint`} onClick={reapplySuspension} data-testid="reapply-suspension">
-          Apply suspension again
-        </ActionButton>}
-      </div>}
-      {suspended && <div className="text-sm text-muted-foreground" id={`${ids}-resuspend-hint`}>Apply suspension again writes the suspended site's web server settings again, for a site that still answers visitors. It stays suspended.</div>}
-      {succeeded("state")}
-      {failed("state")}
-      {succeeded("resuspend")}
-      {failed("resuspend")}
-    </div>
-
-    <Separator />
-
-    <div className="flex flex-col gap-3" data-testid="site-action-delete">
-      <div className="flex flex-col gap-1">
-        <h4 className="m-0 text-sm font-medium text-foreground">Delete website</h4>
-        <div className="text-sm text-muted-foreground" data-testid="delete-website-hint">
-          {partly ? "The hosting account and the site's files are already deleted, but the site's database is still on this server. Delete the website again to remove it. This cannot be undone."
-            : "Removes the site's files, its database and its hosting account from this server. This cannot be undone."}
-        </div>
-      </div>
-      <Button variant="destructive" className={`${control} w-fit`} disabled={Boolean(busy)} onClick={() => setDialog(true)} data-testid="delete-website">Delete website…</Button>
-    </div>
-
-    <Dialog open={confirming} onOpenChange={setDialog}>
-      <DialogContent className="sm:max-w-md" showCloseButton={false} initialFocus={confirmRef} data-testid="delete-website-dialog">
-        <form className="contents" onSubmit={removeSite} noValidate>
-          <DialogHeader>
-            <DialogTitle className="wrap-anywhere leading-snug">Delete {site.domain}?</DialogTitle>
-            <DialogDescription className="text-start">
-              {partly ? "This removes what is left of the website: its database. It cannot be undone."
-                : <>This removes the website's files, its database and the hosting account <code>{site.username}</code> from this server. It cannot be undone.</>}
-            </DialogDescription>
-          </DialogHeader>
-          <Field>
-            <FieldLabel htmlFor={`${ids}-confirm`} className="flex-wrap gap-x-1">Type <span className="font-mono wrap-anywhere">{site.domain}</span> to confirm</FieldLabel>
-            <Input id={`${ids}-confirm`} ref={confirmRef} className={control} type="text" inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={253}
-              aria-describedby={`${ids}-confirm-hint`} value={typed} readOnly={busy === "delete"} onChange={(event) => setTyped(event.target.value.trim().toLowerCase())} data-testid="confirm-domain" />
-            <FieldDescription id={`${ids}-confirm-hint`} className="text-start">The Delete website button works once the domain matches.</FieldDescription>
-          </Field>
-          {failure?.action === "delete" && <ProblemAlert problem={failure.problem} testId="site-action-problem" />}
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" className={control} />} disabled={busy === "delete"} data-testid="cancel-delete">Cancel</DialogClose>
-            <ActionButton type="submit" variant="destructive" busy={busy === "delete"} busyLabel="Deleting…" disabled={!matches} data-testid="confirm-delete">Delete website</ActionButton>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  </section>;
+      <Dialog open={confirming} onOpenChange={setDialog}>
+        <DialogContent className="sm:max-w-md" showCloseButton={false} initialFocus={confirmRef} data-testid="delete-website-dialog">
+          <form className="contents" onSubmit={removeSite} noValidate>
+            <DialogHeader>
+              <DialogTitle className="wrap-anywhere leading-snug">Delete {site.domain}?</DialogTitle>
+              <DialogDescription className="text-start">
+                {partly ? "This removes what is left of the website: its database. It cannot be undone."
+                  : <>This removes the website's files, its database and the hosting account <code>{site.username}</code> from this server. It cannot be undone.</>}
+              </DialogDescription>
+            </DialogHeader>
+            <Field>
+              <FieldLabel htmlFor={`${ids}-confirm`} className="flex-wrap gap-x-1">Type <span className="font-mono wrap-anywhere">{site.domain}</span> to confirm</FieldLabel>
+              <Input id={`${ids}-confirm`} ref={confirmRef} className={control} type="text" inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={253}
+                aria-describedby={`${ids}-confirm-hint`} value={typed} readOnly={busy === "delete"} onChange={(event) => setTyped(event.target.value.trim().toLowerCase())} data-testid="confirm-domain" />
+              <FieldDescription id={`${ids}-confirm-hint`} className="text-start">The Delete website button works once the domain matches.</FieldDescription>
+            </Field>
+            {failure?.action === "delete" && <ProblemAlert problem={failure.problem} testId="site-action-problem" />}
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="outline" className={control} />} disabled={busy === "delete"} data-testid="cancel-delete">Cancel</DialogClose>
+              <ActionButton type="submit" variant="destructive" busy={busy === "delete"} busyLabel="Deleting…" disabled={!matches} data-testid="confirm-delete">Delete website</ActionButton>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </section>
+  </>;
 }

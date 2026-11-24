@@ -221,7 +221,7 @@ export function AppShell() {
             </div>
           </header>
           <main id="panel-main" tabIndex={-1} className="mx-auto w-full max-w-[1600px] min-w-0 flex-1 px-4 py-5 outline-none md:px-7 md:py-6">
-            <div className="mb-5"><h1>{heading}</h1>{subtitle && <p className="mt-1.5 text-sm">{subtitle}</p>}</div>
+            {heading && <div className="mb-5"><h1>{heading}</h1>{subtitle && <p className="mt-1.5 text-sm">{subtitle}</p>}</div>}
             {publicPreview && page && page.id !== "home" && <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground" role="status"><Info className="size-4" aria-hidden="true" /><span>{page.id === "tour" ? "Public panel tour with sample content. Changes stay in the local panel." : "Public preview of real server monitoring. Websites, files and backups stay in the local panel."}</span></div>}
             <Theme theme={neutralTheme} mode={theme}>
               <Suspense fallback={<LoadingState label="Loading page" />}>

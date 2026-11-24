@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, FocusEvent, FormEvent, ReactNode } from "react";
-import { Link } from "@tanstack/react-router";
-import { cn } from "cn";
-import { ArrowLeft, ArrowRight, CircleAlert, CircleCheck, Globe, Info, Lock, LockOpen, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowRight, CircleAlert, CircleCheck, Globe, Info, Lock, LockOpen, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { DnsHelp } from "@/components/dns-help";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
@@ -30,8 +28,6 @@ import "./new-website.css";
 const panel = "rounded-lg border border-border bg-card";
 const control = "h-10 pointer-coarse:h-12";
 const rowControl = "h-9 pointer-coarse:h-11";
-const linkButton = (variant: "default" | "outline" | "ghost", className = "") =>
-  cn(buttonVariants({ variant, className: `${rowControl} ${variant === "default" ? "text-primary-foreground!" : ""} ${className}` }));
 
 interface Problem { what: string; why: string; next: string; technical: string; status: number }
 
@@ -329,13 +325,9 @@ export function SiteDomains({ accountId }: { accountId: string }) {
     document.title = `Domains · ${domain} · Sifruno`;
   }, [domain]);
 
-  const back = <Link to="/websites/sites/$accountId" params={{ accountId }} className={linkButton("ghost", "w-fit px-2")} data-testid="back-to-website">
-    <ArrowLeft className="rtl:rotate-180" aria-hidden="true" />{domain ? <>Back to {domain}</> : "Back to the website"}
-  </Link>;
   const region = <div aria-live="polite" className="sr-only" data-testid="domains-announcer">{spoken}</div>;
 
   if (!site) return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="site-domains">
-    {back}
     {problem
       ? <ProblemAlert problem={problem} onRetry={problem.status === 404 ? undefined : reload} testId="domains-problem" />
       : loading && <div className={`${panel} flex flex-col gap-4 p-5`} aria-busy="true"><span className="sr-only">Loading the domains</span><Skeleton className="h-8 w-1/2" /><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
@@ -378,7 +370,6 @@ export function SiteDomains({ accountId }: { accountId: string }) {
   const removingRedirects = removing ? site.redirects.filter((r) => r.from === removing) : [];
 
   return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="site-domains" data-account-id={site.account_id}>
-    {back}
     {problem && <ProblemAlert problem={{ ...problem, next: `${problem.next} The lists below are from the last successful read.` }} onRetry={reload} testId="domains-problem" />}
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`}>
       <div className="flex flex-col gap-1">
@@ -394,7 +385,7 @@ export function SiteDomains({ accountId }: { accountId: string }) {
         <AlertTitle>{site.state === "suspended" ? "This website is suspended." : "This website cannot change now."}</AlertTitle>
         <AlertDescription className="text-start text-sm">
           {site.state === "suspended"
-            ? "Its domains answer every visitor with an error page and its redirects are off. Resume the website on its page to change them."
+            ? "Its domains answer every visitor with an error page and its redirects are off. Resume the website in its Settings tab to change them."
             : "The hosting account needs a check by whoever runs this server before its domains or redirects can change."}
         </AlertDescription>
       </Alert>}

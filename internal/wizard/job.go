@@ -433,6 +433,20 @@ func (s *Store) Get(id string) (Job, bool) {
 	return Job{}, false
 }
 
+// sites returns copies of every kept job that names a site with its
+// account, newest first.
+func (s *Store) sites() []Job {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []Job{}
+	for i := len(s.jobs) - 1; i >= 0; i-- {
+		if j := s.jobs[i]; j.namesSite() && j.Result != nil && j.Result.AccountID != "" {
+			out = append(out, j.clone())
+		}
+	}
+	return out
+}
+
 // List returns copies of the newest jobs, newest first, at most limit.
 func (s *Store) List(limit int) []Job {
 	s.mu.Lock()

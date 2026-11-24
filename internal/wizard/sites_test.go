@@ -108,6 +108,30 @@ func TestSucceededListsEveryKeptSiteNewestFirst(t *testing.T) {
 	}
 }
 
+// Websites lists every site the store keeps, not only those among the
+// newest 50 jobs: 70 sites, then 50 newer failed jobs, are 70 sites.
+func TestSucceededListsSitesPastTheNewestFiftyJobs(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "wizard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 120 {
+		j := newJob(fmt.Sprintf("%032x", i+1), fmt.Sprintf("site%d.example", i+1), "local-operator", time.Now())
+		j.State = StateFailed
+		if i < 70 {
+			j.State = StateSucceeded
+			j.Result = &Result{URL: "https://" + j.Domain + "/", AccountID: fmt.Sprintf("%032x", 1000+i)}
+		}
+		if err = store.put(j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := New(&fakeAccounts{}, &fakeDatabases{}, store, nil).Succeeded()
+	if len(got) != 70 || got[0].ID != fmt.Sprintf("%032x", 70) || got[69].ID != fmt.Sprintf("%032x", 1) {
+		t.Fatalf("%d sites listed, want 70 newest first", len(got))
+	}
+}
+
 // Succeeded jobs are the sites Websites lists, so the store keeps them past
 // the 50 it keeps of the others; a running job is never dropped.
 func TestStoreKeepsSucceededJobs(t *testing.T) {

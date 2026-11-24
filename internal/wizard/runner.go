@@ -120,18 +120,10 @@ func (r *Runner) Get(id string) (Job, bool) { return r.store.Get(id) }
 // List returns the newest jobs, newest first, at most 20.
 func (r *Runner) List() []Job { return r.store.List(maxListed) }
 
-// Succeeded returns every kept job that made a site, newest first: all
-// 50 the store keeps, not only the 20 that List answers. A job whose site
-// was deleted since is left out.
-func (r *Runner) Succeeded() []Job {
-	out := []Job{}
-	for _, j := range r.store.List(maxJobs) {
-		if j.namesSite() && j.Result != nil && j.Result.AccountID != "" {
-			out = append(out, j)
-		}
-	}
-	return out
-}
+// Succeeded returns every kept job that made a site, newest first: all the
+// store keeps (up to maxSucceeded), not only the newest jobs that List
+// answers. A job whose site was deleted since is left out.
+func (r *Runner) Succeeded() []Job { return r.store.sites() }
 
 // Wait blocks until every started job has finished.
 func (r *Runner) Wait() { r.wg.Wait() }

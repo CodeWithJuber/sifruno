@@ -163,6 +163,9 @@ func (r *Runner) Start(ctx context.Context, in Input, actor string) (Job, error)
 		if a.Domain == in.Domain {
 			return Job{}, refuse(ErrConflict, "%s already belongs to the hosting account %s. Use another domain, or remove that account first.", in.Domain, a.Username)
 		}
+		if a.SiteDomains != nil && slices.Contains(a.SiteDomains.Aliases, in.Domain) {
+			return Job{}, refuse(ErrConflict, "%s is already a domain of the website %s. Use another domain, or remove it from that website first.", in.Domain, a.Domain)
+		}
 	}
 	if in.wantsDatabase() {
 		if _, err = r.databases.Probe(ctx); err != nil {

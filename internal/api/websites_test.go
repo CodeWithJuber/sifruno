@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -211,7 +212,11 @@ func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...st
 			}
 		}
 	})
-	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "created_at", "domain", "https", "kind", "php_version", "revision", "site_folder_changed", "state", "url", "username", "wordpress_version"}, more...)))
+	// The one-site read also lists the site's redirects.
+	if slices.Contains(more, "php_versions") {
+		more = append(more, "redirects")
+	}
+	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "aliases", "created_at", "domain", "https", "kind", "php_version", "redirect_count", "revision", "site_folder_changed", "state", "url", "username", "wordpress_version"}, more...)))
 	if !slices.Equal(keys, want) {
 		t.Fatalf("website keys %q", keys)
 	}
@@ -261,8 +266,8 @@ func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
 	}
 	want := Website{AccountID: second.Result.AccountID, Username: "second", Domain: "second.example", Kind: "wordpress", State: "active",
 		HTTPS: WebsiteHTTPS{On: true, NotAfter: "2027-02-21T12:30:00Z"}, PHPVersion: "8.3", WordPressVersion: "7.1.5",
-		URL: "http://second.example/", AdminURL: "http://second.example/wp-admin/", CreatedAt: second.CreatedAt, Revision: 2}
-	if sites[0] != want {
+		URL: "http://second.example/", AdminURL: "http://second.example/wp-admin/", CreatedAt: second.CreatedAt, Revision: 2, Aliases: []WebsiteDomain{}}
+	if !reflect.DeepEqual(sites[0], want) {
 		t.Fatalf("second site %+v\nwant %+v", sites[0], want)
 	}
 	if s := sites[1]; s.State != "suspended" || s.HTTPS != (WebsiteHTTPS{}) || s.PHPVersion != "8.2" || s.Username != "first" {
@@ -280,7 +285,7 @@ func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
 	}
 	checkWebsiteShape(t, one, "php_versions")
 	var got Website
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got != want {
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("one site %+v", got)
 	}
 	// Deleted, not made by the wizard, unknown, or not an ID: 404.

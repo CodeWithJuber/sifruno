@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -105,7 +106,7 @@ func actionsFixture(t *testing.T) (siteFixture, *wizard.Runner, *sitesBroker, *s
 	broker.changes = nil
 	account := broker.accounts[0]
 	broker.mu.Unlock()
-	return f, runner, broker, databases, website(account, job)
+	return f, runner, broker, databases, website(account, job, nil)
 }
 
 func sitePath(site Website, action string) string {
@@ -148,7 +149,7 @@ func TestWebsitePHPChangeKeepsTheQuota(t *testing.T) {
 	f, runner, broker, _, site := actionsFixture(t)
 	cookie, csrf := websiteSignIn(t, f)
 	one := decodeDetail(t, websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+site.AccountID, nil, cookie, ""))
-	if one.Website != site || !slices.Equal(one.PHPVersions, []string{"8.2", "8.3"}) || one.PHPVersion != "8.3" || one.Revision != 2 {
+	if !reflect.DeepEqual(one.Website, site) || !slices.Equal(one.PHPVersions, []string{"8.2", "8.3"}) || one.PHPVersion != "8.3" || one.Revision != 2 {
 		t.Fatalf("site %+v", one)
 	}
 

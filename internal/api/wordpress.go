@@ -73,6 +73,11 @@ var wizardFields = map[string][]wizardField{
 	"state":     {{name: "state"}, {name: "expected_revision", whole: true}},
 	"folder":    {{name: "expected_revision", whole: true}},
 	"delete":    {{name: "confirm_domain"}, {name: "expected_revision", whole: true}},
+	// The site page's domains and redirects.
+	"domain-add":      {{name: "domain"}, {name: "expected_revision", whole: true}},
+	"domain-remove":   {{name: "domain"}, {name: "expected_revision", whole: true}},
+	"redirect-add":    {{name: "from"}, {name: "to"}, {name: "status", whole: true}, {name: "expected_revision", whole: true}},
+	"redirect-remove": {{name: "from"}, {name: "expected_revision", whole: true}},
 }
 
 var wholeNumber = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)

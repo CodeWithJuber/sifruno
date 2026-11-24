@@ -43,6 +43,9 @@ type Website struct {
 	// Usage comes from the broker's usage read (site_tools.go), in the list
 	// only.
 	Usage *WebsiteUsage `json:"usage,omitempty" doc:"Disk use and this month's traffic. In the list only, and left out when the account service could not say within a few seconds."`
+	// Aliases and RedirectCount come from the broker's account list.
+	Aliases       []WebsiteDomain `json:"aliases" doc:"The website's other domains, which serve the same site, each with what its HTTPS is."`
+	RedirectCount int             `json:"redirect_count" doc:"How many redirects the website has; its own page lists them."`
 }
 
 // WebsiteLimits are the hosting account's limits, read only here: the
@@ -63,7 +66,8 @@ type WebsiteHTTPS struct {
 // WebsiteDetail is one site as its own page needs it.
 type WebsiteDetail struct {
 	Website
-	PHPVersions []string `json:"php_versions" doc:"The PHP versions installed on this server, which the site can change to."`
+	PHPVersions []string          `json:"php_versions" doc:"The PHP versions installed on this server, which the site can change to."`
+	Redirects   []WebsiteRedirect `json:"redirects" doc:"The website's redirects: whole domains first, then paths. Empty when the account service did not answer for them; redirect_count still says how many there are."`
 }
 
 // WebsitePHPBody, WebsiteStateBody and WebsiteDeleteBody are the site page's
@@ -159,7 +163,7 @@ const (
 
 var (
 	websiteAccountID  = regexp.MustCompile(websiteAccountForm)
-	websiteActionPath = regexp.MustCompile(`^/api/v1/websites/sites/[a-f0-9]{32}/(php|state|folder|delete)$`)
+	websiteActionPath = regexp.MustCompile(`^/api/v1/websites/sites/[a-f0-9]{32}/(php|state|folder|delete|domain-add|domain-remove|redirect-add|redirect-remove)$`)
 	websitePHP        = []string{"8.1", "8.2", "8.3", "8.4"}
 	// phpRoot holds the lsphpNN packages; tests point it at a directory of
 	// their own.
@@ -199,8 +203,8 @@ func registerWebsites(a huma.API, o Options) {
 	change := func(id, action string) huma.Operation {
 		return huma.Operation{OperationID: id, Method: http.MethodPost, Path: "/api/v1/websites/sites/{account_id}/" + action, MaxBodyBytes: 4096, BodyReadTimeout: 5 * time.Second, SkipValidateBody: true, SkipValidateParams: true}
 	}
-	detail := func(site Website) *websiteOutput {
-		return &websiteOutput{Body: WebsiteDetail{Website: site, PHPVersions: installedPHP()}}
+	detail := func(ctx context.Context, site Website) *websiteOutput {
+		return &websiteOutput{Body: WebsiteDetail{Website: site, PHPVersions: installedPHP(), Redirects: websiteRedirects(ctx, o, site)}}
 	}
 	huma.Register(a, op("list-websites", "/api/v1/websites/sites"), func(ctx context.Context, _ *struct{}) (*websiteListOutput, error) {
 		sites, err := listWebsites(ctx, o)
@@ -214,7 +218,7 @@ func registerWebsites(a huma.API, o Options) {
 		if err != nil {
 			return nil, err
 		}
-		return detail(site), nil
+		return detail(ctx, site), nil
 	})
 	huma.Register(a, change("set-website-php", "php"), func(ctx context.Context, in *websitePHPInput) (*websiteOutput, error) {
 		site, account, err := findWebsite(ctx, o, in.AccountID)
@@ -249,7 +253,7 @@ func registerWebsites(a huma.API, o Options) {
 			return nil, websiteChangeError(err, "The web server's configuration test failed with PHP "+version+", so the site kept PHP "+account.Web.PHPVersion+". PHP "+version+" may not be installed on this server.")
 		}
 		site.PHPVersion, site.Revision = res.Web.PHPVersion, res.Account.Revision
-		return detail(site), nil
+		return detail(ctx, site), nil
 	})
 	huma.Register(a, change("set-website-state", "state"), func(ctx context.Context, in *websiteStateInput) (*websiteOutput, error) {
 		site, account, err := findWebsite(ctx, o, in.AccountID)
@@ -283,7 +287,7 @@ func registerWebsites(a huma.API, o Options) {
 			return nil, websiteChangeError(err, rejected)
 		}
 		site.State, site.Revision = changed.State, changed.Revision
-		return detail(site), nil
+		return detail(ctx, site), nil
 	})
 	huma.Register(a, change("use-website-folder", "folder"), func(ctx context.Context, in *websiteFolderInput) (*websiteOutput, error) {
 		site, account, err := findWebsite(ctx, o, in.AccountID)
@@ -316,7 +320,7 @@ func registerWebsites(a huma.API, o Options) {
 			return nil, websiteChangeError(err, "")
 		}
 		site.State, site.Revision, site.SiteFolderChanged = changed.State, changed.Revision, changed.SiteFolderChanged
-		return detail(site), nil
+		return detail(ctx, site), nil
 	})
 	huma.Register(a, change("delete-website", "delete"), func(ctx context.Context, in *websiteDeleteInput) (*websiteDeletedOutput, error) {
 		switch {
@@ -409,7 +413,7 @@ func listWebsites(ctx context.Context, o Options) ([]Website, error) {
 			continue
 		}
 		if a, ok := byID[id]; ok {
-			sites = append(sites, website(a, j))
+			sites = append(sites, website(a, j, o.Certificates))
 		} else if j.DeleteRevision > 0 {
 			sites = append(sites, partlyDeletedWebsite(j))
 		} else {
@@ -446,7 +450,7 @@ func findWebsite(ctx context.Context, o Options, id string) (Website, hostaccoun
 		}
 		for _, a := range accounts {
 			if a.ID == id {
-				return website(a, j), a, nil
+				return website(a, j, o.Certificates), a, nil
 			}
 		}
 		if j.DeleteRevision > 0 {
@@ -463,19 +467,22 @@ func partlyDeletedWebsite(j wizard.Job) Website {
 	return Website{
 		AccountID: j.Result.AccountID, Username: j.Username, Domain: j.Domain, Kind: j.Kind, State: partlyDeleted,
 		WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: j.DeleteRevision,
+		Aliases: []WebsiteDomain{},
 	}
 }
 
-func website(a hostaccounts.Account, j wizard.Job) Website {
+func website(a hostaccounts.Account, j wizard.Job, certs SiteCertificates) Website {
 	https := WebsiteHTTPS{On: a.Certificate != (hostaccounts.CertificateState{})}
 	if a.Certificate.NotAfter > 0 {
 		https.NotAfter = time.Unix(a.Certificate.NotAfter, 0).UTC().Format(time.RFC3339)
 	}
-	return Website{
+	site := Website{
 		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: j.Kind, State: a.State, HTTPS: https,
 		PHPVersion: a.Web.PHPVersion, WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: a.Revision,
 		SiteFolderChanged: a.SiteFolderChanged, Limits: websiteLimits(a.Limits),
 	}
+	site.Aliases, site.RedirectCount = websiteAliases(a, certs)
+	return site
 }
 
 // websiteLimits is nil when the account service reports no limits (a

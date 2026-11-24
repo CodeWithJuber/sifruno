@@ -54,6 +54,12 @@ type Options struct {
 	// Backups runs website backups through the broker. Nil answers 503 on
 	// the backup routes.
 	Backups *sitebackups.Manager
+	// Certificates brings a website's certificate up to date after its
+	// domains change; nil when website certificates are not set up.
+	Certificates SiteCertificates
+	// PanelHosts are the panel's own --panel-host names, which no website
+	// may take as a domain.
+	PanelHosts []string
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -80,6 +86,7 @@ func New(o Options) http.Handler {
 	registerAccounts(api, o)
 	registerWizard(api, o)
 	registerWebsites(api, o)
+	registerWebsiteDomains(api, o)
 	registerSiteDatabases(api, o)
 	registerSiteBackups(api, o)
 	registerSiteTools(api, o)

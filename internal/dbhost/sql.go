@@ -127,12 +127,34 @@ func sqlSetPassword(user, host, password string) string {
 	return fmt.Sprintf("ALTER USER %s@%s IDENTIFIED BY %s", quoteString(user), quoteString(host), quoteString(password))
 }
 
+// grantDB is a database name as a database-level GRANT or REVOKE must spell
+// it. There, and in the Db column of the grant tables, "_" and "%" are
+// wildcards: a grant on `acct_x_wp` would also cover another account's
+// `acctyx_wp`. Escaped, the grant names exactly one database.
+func grantDB(db string) string {
+	return strings.NewReplacer(`\`, `\\`, `_`, `\_`, `%`, `\%`).Replace(db)
+}
+
 func sqlGrant(db, user, host string, privs []string) string {
-	return fmt.Sprintf("GRANT %s ON %s.* TO %s@%s", strings.Join(privs, ", "), quoteIdent(db), quoteString(user), quoteString(host))
+	return fmt.Sprintf("GRANT %s ON %s.* TO %s@%s", strings.Join(privs, ", "), quoteIdent(grantDB(db)), quoteString(user), quoteString(host))
 }
 
 func sqlRevokeAll(db, user, host string) string {
-	return fmt.Sprintf("REVOKE ALL PRIVILEGES ON %s.* FROM %s@%s", quoteIdent(db), quoteString(user), quoteString(host))
+	return fmt.Sprintf("REVOKE ALL PRIVILEGES ON %s.* FROM %s@%s", quoteIdent(grantDB(db)), quoteString(user), quoteString(host))
+}
+
+// sqlForgetGrants removes every grant on db, for any user, whether its Db
+// was written escaped or, before grantDB, as a plain name. MariaDB keeps
+// grants when a database is dropped, so without this a later database of
+// the same name would open to the old users.
+func sqlForgetGrants(db string) string {
+	names := quoteString(grantDB(db)) + ", " + quoteString(db)
+	var b strings.Builder
+	for _, table := range []string{"db", "tables_priv", "columns_priv", "procs_priv"} {
+		fmt.Fprintf(&b, "DELETE FROM mysql.%s WHERE Db IN (%s);\n", table, names)
+	}
+	b.WriteString("FLUSH PRIVILEGES")
+	return b.String()
 }
 
 func sqlRenameUser(user, host, newUser string) string {

@@ -40,7 +40,9 @@ func sqlTablesIn(db string) string {
 // the new one (mysql.db rows carry Db literally; RENAME TABLE does not
 // touch them).
 func sqlMoveGrants(oldDB, newDB string) string {
-	return fmt.Sprintf("UPDATE mysql.db SET Db=%s WHERE Db=%s", quoteString(newDB), quoteString(oldDB))
+	// Rows carry the name escaped (grantDB) or, from before grantDB, plain.
+	return fmt.Sprintf("UPDATE mysql.db SET Db=%s WHERE Db IN (%s, %s)",
+		quoteString(grantDB(newDB)), quoteString(grantDB(oldDB)), quoteString(oldDB))
 }
 
 const sqlFlushPrivileges = "FLUSH PRIVILEGES"

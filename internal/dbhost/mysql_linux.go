@@ -127,10 +127,21 @@ func (s *LocalService) DropDatabase(ctx context.Context, owner, name string) err
 	if _, err := s.Probe(ctx); err != nil {
 		return err
 	}
-	if _, err := s.Run.Run(ctx, sqlDropDatabase(name)); err != nil {
+	if err := s.dropDatabaseAndGrants(ctx, name); err != nil {
 		return err
 	}
 	return s.Registry.dropDatabase(name)
+}
+
+// dropDatabaseAndGrants drops the database, then every grant on it, so no
+// user keeps access to a later database of the same name. Both steps are
+// safe to repeat after a failure.
+func (s *LocalService) dropDatabaseAndGrants(ctx context.Context, name string) error {
+	if _, err := s.Run.Run(ctx, sqlDropDatabase(name)); err != nil {
+		return err
+	}
+	_, err := s.Run.Run(ctx, sqlForgetGrants(name))
+	return err
 }
 
 func (s *LocalService) CreateUser(ctx context.Context, owner, name, password string) error {

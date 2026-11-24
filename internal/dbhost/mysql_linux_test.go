@@ -118,6 +118,51 @@ func TestStrictCreatesRunExactSQLAndRegister(t *testing.T) {
 	}
 }
 
+// MariaDB keeps a database's grants when the database is dropped. A drop
+// removes them too, so a later database of the same name (account "bob_x"
+// can name one bob_x_wp just as "bob" can) does not open to the old users.
+func TestDroppedDatabasesTakeTheirGrants(t *testing.T) {
+	ctx := context.Background()
+	svc, f := newTestService(t)
+	for _, name := range []string{"bob_x_wp", "bob_old"} {
+		if err := svc.CreateDatabaseStrict(ctx, "bob", name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.stmts = nil
+	if err := svc.DropDatabase(ctx, "bob", "bob_x_wp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, purgeErrs := svc.PurgeOwner(ctx, "bob"); len(purgeErrs) > 0 {
+		t.Fatal(purgeErrs)
+	}
+	want := []string{
+		sqlDropDatabase("bob_x_wp"), sqlForgetGrants("bob_x_wp"),
+		sqlDropDatabase("bob_old"), sqlForgetGrants("bob_old"),
+	}
+	var got []string
+	for _, s := range f.stmts {
+		if strings.HasPrefix(s, "DROP DATABASE") || strings.HasPrefix(s, "DELETE FROM mysql.") {
+			got = append(got, s)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("statements\n%q\nwant\n%q", got, want)
+	}
+	// The grants go only after the database: a failed drop leaves both.
+	f.errs = map[string]error{sqlDropDatabase("bob_y"): errors.New("ERROR 1010 (HY000)")}
+	if err := svc.CreateDatabaseStrict(ctx, "bob", "bob_y"); err != nil {
+		t.Fatal(err)
+	}
+	f.stmts = nil
+	if err := svc.DropDatabase(ctx, "bob", "bob_y"); err == nil || slices.Contains(f.stmts, sqlForgetGrants("bob_y")) {
+		t.Fatalf("a failed drop: err %v, statements %q", err, f.stmts)
+	}
+	if _, ok := svc.Registry.ownerOf("bob_y"); !ok {
+		t.Fatal("a failed drop removed the registry entry")
+	}
+}
+
 // Made on the server but not recorded: ErrNotRegistered, and the caller can
 // still remove it.
 func TestStrictCreatesReportAnUnrecordedObject(t *testing.T) {

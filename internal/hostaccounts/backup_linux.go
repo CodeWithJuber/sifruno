@@ -591,13 +591,13 @@ func (e *resticEngine) Restore(ctx context.Context, t BackupTarget, r record, in
 	defer stage.Close()
 	stagePath := filepath.Join(e.stage, l.Op)
 	if in.Files {
-		out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, nil, "restore", "--json", in.Snapshot+":"+r.Account.Home, "--target", stagePath+"/files")
+		out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, nil, restoreArgs(in.Snapshot+":"+r.Account.Home, stagePath+"/files", false)...)
 		if err != nil || code != 0 {
 			return backupFailed("restore", out)
 		}
 	}
 	if len(in.Databases) > 0 {
-		out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, nil, "restore", "--json", in.Snapshot+":"+dumpDir(e.dir, r.Account.ID), "--target", stagePath+"/db")
+		out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, nil, restoreArgs(in.Snapshot+":"+dumpDir(e.dir, r.Account.ID), stagePath+"/db", false)...)
 		if err != nil || code != 0 {
 			return backupFailed("restore", out)
 		}
@@ -750,7 +750,7 @@ func (e *resticEngine) Drill(ctx context.Context, t BackupTarget, r record, l ba
 	defer stage.Close()
 	stagePath := filepath.Join(e.stage, l.Op)
 	// The drill's folder stays root-only: nothing runs as the site user.
-	out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, nil, "restore", "--json", "--verify", latest.ID, "--target", stagePath+"/all")
+	out, code, err := e.restic(ctx, t, "known_hosts", backupTimeout, nil, restoreArgs(latest.ID, stagePath+"/all", true)...)
 	if err != nil || code != 0 {
 		return DrillResult{}, backupFailed("restore", out)
 	}

@@ -195,8 +195,10 @@ func restoreUserName() (string, error) {
 	return "sifruno_rst_" + hex.EncodeToString(b[:]), nil
 }
 
-// backupAccount looks the account up under the broker lock; the backup
-// itself runs outside it, one backup operation at a time.
+// backupReady looks the account up under the broker lock; the backup,
+// list or drill itself runs outside it. They change no account, so another
+// account's unfinished operation does not stop them: only this account
+// must have none.
 func (s *store) backupReady(ctx context.Context, id string) (record, []string, error) {
 	if snapshotReentry(ctx, s) {
 		return record{}, nil, ErrConflict
@@ -209,7 +211,13 @@ func (s *store) backupReady(ctx context.Context, id string) (record, []string, e
 	if s.backup == nil {
 		return record{}, nil, ErrUnavailable
 	}
-	items, err := s.mutationReady(ctx)
+	if ctx.Err() != nil || s.healthy() != nil {
+		return record{}, nil, ErrUnavailable
+	}
+	if s.refresh(ctx, false) != nil {
+		return record{}, nil, ErrRecovery
+	}
+	items, err := s.records()
 	if err != nil {
 		return record{}, nil, err
 	}
@@ -218,11 +226,24 @@ func (s *store) backupReady(ctx context.Context, id string) (record, []string, e
 		names = append(names, r.Account.Username)
 	}
 	for _, r := range items {
-		if r.Account.ID == id {
-			return r, names, nil
+		if r.Account.ID != id {
+			continue
 		}
+		if r.Pending != nil || r.Account.State == "recovery_required" {
+			return record{}, nil, ErrRecovery
+		}
+		return r, names, nil
 	}
 	return record{}, nil, ErrNotFound
+}
+
+// backupKey makes the key pair and password the first time and reads the
+// public key. It has its own lock, so the status never waits for a backup
+// that may run for hours.
+func (s *store) backupKey(ctx context.Context) (string, bool, error) {
+	s.backupKeyMu.Lock()
+	defer s.backupKeyMu.Unlock()
+	return s.backup.Status(ctx)
 }
 
 func (s *store) configuredTarget() (BackupTarget, error) {
@@ -247,9 +268,7 @@ func (s *store) backupStatus(ctx context.Context) (BackupStatus, error) {
 	if s.backup == nil {
 		return BackupStatus{}, ErrUnavailable
 	}
-	s.backupMu.Lock()
-	defer s.backupMu.Unlock()
-	key, ready, err := s.backup.Status(ctx)
+	key, ready, err := s.backupKey(ctx)
 	if err != nil {
 		return BackupStatus{}, err
 	}
@@ -276,11 +295,15 @@ func (s *store) setBackupTarget(ctx context.Context, in BackupTargetInput, actor
 	if s.backup == nil {
 		return BackupTargetResult{}, ErrUnavailable
 	}
-	s.backupMu.Lock()
+	// A target change does not wait behind a running backup: it would apply
+	// long after the caller gave up, with the password shown to no one.
+	if !s.backupMu.TryLock() {
+		return BackupTargetResult{}, ErrConflict
+	}
 	defer s.backupMu.Unlock()
 	work, cancel := backupContext(ctx, backupTargetTimeout)
 	defer cancel()
-	if _, _, err := s.backup.Status(work); err != nil {
+	if _, _, err := s.backupKey(work); err != nil {
 		return BackupTargetResult{}, err
 	}
 	if err := s.cleanBackupLeftovers(work); err != nil {
@@ -305,7 +328,7 @@ func (s *store) setBackupTarget(ctx context.Context, in BackupTargetInput, actor
 	if err = s.writeBackup("target", storedTarget{Target: t, PasswordShown: true, Actor: actor, Reason: in.Reason, UpdatedAt: time.Now().UTC()}); err != nil {
 		return BackupTargetResult{}, err
 	}
-	key, ready, err := s.backup.Status(work)
+	key, ready, err := s.backupKey(work)
 	if err != nil {
 		return BackupTargetResult{}, err
 	}

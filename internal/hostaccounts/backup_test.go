@@ -370,6 +370,40 @@ func TestBackupPasswordIsShownOnce(t *testing.T) {
 	}
 }
 
+// The status never waits for a running backup, and a target change does
+// not queue behind one: it is refused at once.
+func TestBackupStatusAndTargetDoNotWaitForABackup(t *testing.T) {
+	s, _ := backupStore(t)
+	configureTarget(t, s)
+	s.backupMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.backupStatus(context.Background())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the status waited for the backup lock")
+	}
+	if _, err := s.setBackupTarget(context.Background(), targetInput(), "test operator"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a target change during a backup: %v", err)
+	}
+	s.backupMu.Unlock()
+}
+
+func TestRestoreArgumentsLeaveSELinuxLabels(t *testing.T) {
+	if got := restoreArgs("abc:/home/fixtureacct", "/var/lib/sifruno-restore/op/files", false); !slices.Equal(got, []string{"restore", "--json", "--exclude-xattr", "security.selinux", "abc:/home/fixtureacct", "--target", "/var/lib/sifruno-restore/op/files"}) {
+		t.Fatalf("restore arguments %q", got)
+	}
+	if got := restoreArgs("abc", "/x/all", true); !slices.Contains(got, "--verify") {
+		t.Fatalf("drill restore arguments %q", got)
+	}
+}
+
 func TestBackupNeedsATargetAndJournalsNothing(t *testing.T) {
 	s, f := backupStore(t)
 	ctx := context.Background()

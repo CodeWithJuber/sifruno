@@ -494,7 +494,18 @@ func dbObjectsSQL(db string) string {
 		" UNION ALL SELECT 'view' FROM information_schema.VIEWS WHERE TABLE_SCHEMA=" + q +
 		" UNION ALL SELECT 'trigger' FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=" + q +
 		" UNION ALL SELECT 'routine' FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=" + q +
-		" UNION ALL SELECT 'event' FROM information_schema.EVENTS WHERE EVENT_SCHEMA=" + q
+		" UNION ALL SELECT 'event' FROM information_schema.EVENTS WHERE EVENT_SCHEMA=" + q + ";\n"
+}
+
+// restoreArgs restores a snapshot, or one folder of it, into target. The
+// SELinux label of each file is not restored: the staged files take the
+// staging folder's, and the copy gives the home's files the home's.
+func restoreArgs(source, target string, verify bool) []string {
+	args := []string{"restore", "--json", "--exclude-xattr", "security.selinux"}
+	if verify {
+		args = append(args, "--verify")
+	}
+	return append(args, source, "--target", target)
 }
 
 // restorePrivileges are what a table-and-rows dump needs: no TRIGGER, no

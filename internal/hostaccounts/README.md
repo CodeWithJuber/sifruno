@@ -356,6 +356,12 @@ Each operation is fixed and typed; nothing goes through a shell.
 | `POST /v1/accounts/{id}/drill` | `reason`. A restore drill of the latest snapshot. |
 | `POST /v1/backup/prune` | `reason`. Keeps 7 daily and 4 weekly snapshots per site. |
 
+One backup operation runs at a time, outside the broker lock, so a long
+backup holds no other account; another account's unfinished operation does
+not stop a backup, list or drill, only the account's own does. The status
+never waits for a running operation, and a target change during one is
+refused (409) rather than queued.
+
 A failed step answers 422 `backup_failed` with the step (`target`,
 `connect`, `password`, `repository`, `database`, `dump`, `backup`,
 `snapshot`, `restore`, `copy`, `import`, `compare`, `check`, `prune`) and the
@@ -400,7 +406,9 @@ busy meanwhile, so a delete, suspend, web change or install gets 409):
 1. The snapshot must be the account's own (host, tag and paths), holding
    each database asked for.
 2. restic restores, as root, into a fresh staging folder
-   `/var/lib/sifruno-restore/<op>` (0700). It is outside every home and
+   `/var/lib/sifruno-restore/<op>` (0700), without the files' SELinux
+   labels (`--exclude-xattr security.selinux`): the copy gives the home's
+   files the home's. The folder is outside every home and
    outside the 0700 state, so the site user can be let in: the broker makes
    `/var/lib/sifruno-restore` root 0711 with `mkdirat`.
 3. The staged home is given the account's owner and mode 0750, and the

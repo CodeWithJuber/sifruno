@@ -117,6 +117,9 @@ type store struct {
 	// holds no other account.
 	backup   backupEngine
 	backupMu sync.Mutex
+	// backupKeyMu guards making the backup key and password, so reading
+	// the backup status never waits for backupMu.
+	backupKeyMu sync.Mutex
 	// auditAfter is the ID of the last account the rotating full check
 	// reached. Keying the rotation on an ID, not a position, keeps it fair
 	// while accounts are created and deleted between requests.

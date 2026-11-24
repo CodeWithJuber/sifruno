@@ -75,11 +75,13 @@ func (s *Service) ServeRedeem(ctx context.Context, l net.Listener, uid int) erro
 			if ctx.Err() != nil {
 				return nil
 			}
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
-				continue
+			if errors.Is(err, net.ErrClosed) {
+				return err
 			}
-			return err
+			// Out of file descriptors and the like: wait, as net/http does,
+			// rather than stop answering for good.
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 		select {
 		case slots <- struct{}{}:

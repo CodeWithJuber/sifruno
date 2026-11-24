@@ -152,6 +152,43 @@ func TestMoveAWebsiteHereRoutes(t *testing.T) {
 	}
 }
 
+// An API token may not start a migration or read its key: the key signs in
+// to another server as root.
+func TestMoveAWebsiteHereRefusesAPITokens(t *testing.T) {
+	f, _, spy := migrationFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	w := websiteRequest(f.handler, "POST", "/api/v1/session/tokens", map[string]any{"name": "Billing", "expires_in_days": 30}, cookie, csrf)
+	var created struct {
+		Token string `json:"token"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &created) != nil || created.Token == "" {
+		t.Fatalf("create token: %d %s", w.Code, w.Body.String())
+	}
+	for _, c := range []struct{ method, path string }{
+		{"POST", "/api/v1/websites/migrations/sources"},
+		{"GET", "/api/v1/websites/migrations/sources/" + testSourceID},
+		{"GET", "/api/v1/websites/migrations/sources/" + testSourceID + "/accounts"},
+		{"POST", "/api/v1/websites/migrations"},
+		{"POST", "/api/v1/websites/migrations/" + strings.Repeat("0", 32) + "/ready"},
+	} {
+		var body any
+		if c.method == "POST" {
+			body = map[string]any{}
+		}
+		w := clientRequest(f.handler, false, c.method, c.path, created.Token, body)
+		if w.Code != 403 || problemError(t, w) != "token_not_allowed" {
+			t.Fatalf("%s %s with a token: %d %s", c.method, c.path, w.Code, w.Body.String())
+		}
+	}
+	if spy.pinned || spy.finished != 0 {
+		t.Fatal("a token reached the broker")
+	}
+	// The website jobs a token may read are unchanged.
+	if w := clientRequest(f.handler, false, "GET", "/api/v1/websites/jobs", created.Token, nil); w.Code != 200 {
+		t.Fatalf("jobs with a token: %d", w.Code)
+	}
+}
+
 func TestMoveAWebsiteHereUnavailable(t *testing.T) {
 	f, _, _ := sitesFixture(t)
 	cookie, csrf := websiteSignIn(t, f)

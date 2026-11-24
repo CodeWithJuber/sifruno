@@ -305,8 +305,9 @@ var tokenAreas = []string{"/api/v1/accounts", "/api/v1/server", "/api/v1/service
 
 // tokenRefused are routes inside those areas that set up credentials: backup
 // storage holds the storage server's details and shows the repository
-// password until it is saved. They are for a signed-in admin only.
-var tokenRefused = []string{"/api/v1/websites/backup-storage"}
+// password until it is saved, and a migration holds a key that signs in to
+// another server as root. They are for a signed-in admin only.
+var tokenRefused = []string{"/api/v1/websites/backup-storage", "/api/v1/websites/migrations"}
 
 // tokenRefusedSiteBackups are a website's backup routes a token may not
 // use: a restore overwrites the site's files and database, and a drill

@@ -254,7 +254,7 @@ func (s *store) records() ([]record, error) {
 			if !canonicalSSHKeys(r.SSHKeys) || (r.SSHKeysNext != "" && (r.Pending == nil || r.Pending.Action != "ssh_keys")) {
 				return ErrRecovery
 			}
-			if (r.Web.enabled() && !validWebState(r.Web)) || (!r.Web.enabled() && r.Web != WebState{}) || (r.WebNext != WebState{} && (r.Pending == nil || r.Pending.Action != "web")) {
+			if (r.Web.enabled() && !validWebState(r.Web)) || (!r.Web.enabled() && r.Web != WebState{}) || (r.WebNext != WebState{} && (r.Pending == nil || r.Pending.Action != "web")) || r.Account.Web != (WebState{}) {
 				return ErrRecovery
 			}
 			if (r.TLS.installed() && !validCertificateState(r.TLS)) || (!r.TLS.installed() && r.TLS != CertificateState{}) || r.Account.Certificate != r.TLS || (r.TLSNext != CertificateState{} && (r.Pending == nil || r.Pending.Action != "certificate")) {
@@ -838,6 +838,8 @@ func (s *store) list(ctx context.Context) ([]Account, error) {
 		if r.Pending != nil {
 			a.State = "recovery_required"
 		}
+		// The settings applied now; an unfinished web change is not shown.
+		a.Web = r.Web
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })

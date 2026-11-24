@@ -166,6 +166,11 @@ free. Delete takes the site out of the config before the user and home go;
 if that config fails its test, the delete ends `rejected` with the account
 unchanged (422), and after any other failure the user is kept.
 
+The account list shows `web` (`php_version`, `quota_mib`) for each account
+with a live site, so the panel can change one setting and keep the other.
+The list reads it from the record: the stored account and the journal's rows
+do not carry it, and a stored account that does is refused as damaged.
+
 Limits for now:
 
 - Delete of an account with a live site needs the web operation on: a broker

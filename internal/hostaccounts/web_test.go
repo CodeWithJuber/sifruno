@@ -2,7 +2,9 @@ package hostaccounts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +72,46 @@ func TestWebOperationGoesLiveAndJournals(t *testing.T) {
 	r := recordFor(t, s, a.ID)
 	if r.Web != got.Web || r.WebNext != (WebState{}) || r.Pending != nil {
 		t.Fatal("record not updated")
+	}
+}
+
+func TestAccountListShowsTheLiveSitesSettings(t *testing.T) {
+	s, _ := webStore(t)
+	a := createFixture(t, s)
+	ctx := context.Background()
+	listed := func() Account {
+		t.Helper()
+		items, err := s.list(ctx)
+		if err != nil || len(items) != 1 {
+			t.Fatalf("list: %v %+v", err, items)
+		}
+		return items[0]
+	}
+	// No site: no settings, and no key in the JSON.
+	raw, _ := json.Marshal(listed())
+	if listed().Web != (WebState{}) || strings.Contains(string(raw), `"web"`) {
+		t.Fatalf("an account without a site lists web settings: %s", raw)
+	}
+	if _, err := s.setWeb(ctx, a.ID, WebInput{PHPVersion: "8.3", QuotaMiB: 200, ExpectedRevision: a.Revision, Reason: "Go live"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(listed())
+	if listed().Web != (WebState{PHPVersion: "8.3", QuotaMiB: 200}) || !strings.Contains(string(raw), `"web":{"php_version":"8.3","quota_mib":200}`) {
+		t.Fatalf("the live site's settings are not listed: %s", raw)
+	}
+	// The list fills them in from the record: the stored account, which the
+	// journal's rows must equal, does not carry them.
+	r := recordFor(t, s, a.ID)
+	if r.Account.Web != (WebState{}) {
+		t.Fatalf("the stored account carries web settings: %+v", r.Account.Web)
+	}
+	// A stored account that does carry them is not trusted.
+	r.Account.Web = WebState{PHPVersion: "8.1", QuotaMiB: 64}
+	if err := s.save(r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.list(ctx); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("a stored account with web settings: %v", err)
 	}
 }
 

@@ -52,6 +52,11 @@ type Account struct {
 	// is none. It always equals the record's TLS, so the account list shows
 	// it and the journal's before and after rows record it.
 	Certificate CertificateState `json:"certificate,omitzero"`
+	// Web is the live site's PHP version and quota, left out when there is no
+	// site. Only the account list fills it in, from the record's Web: the
+	// stored account and the journal's rows never carry it, so the accounts
+	// and journals written before this field need no change.
+	Web WebState `json:"web,omitzero"`
 }
 type CreateInput struct {
 	Username string `json:"username"`

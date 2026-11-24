@@ -34,9 +34,9 @@ const control = "h-10 pointer-coarse:h-12";
 const linkButton = (variant: "default" | "outline" | "ghost") =>
   cn(buttonVariants({ variant, className: variant === "default" ? `${control} text-primary-foreground!` : control }));
 
-interface Problem { what: string; why: string; next: string; technical: string; status: number }
+export interface Problem { what: string; why: string; next: string; technical: string; status: number }
 
-function problemFrom(error: unknown, what: string): Problem {
+export function problemFrom(error: unknown, what: string): Problem {
   if (error instanceof WordPressApiError) return { what: error.message, why: error.detail, next: error.next, technical: error.technical, status: error.status };
   return { what, why: "Something unexpected went wrong in the panel.", next: "Reload the page and try again.", technical: error instanceof Error ? error.name : "unknown error", status: 0 };
 }
@@ -45,14 +45,14 @@ function problemFrom(error: unknown, what: string): Problem {
 // outside Tailwind's layers, so spacing here comes from gaps on parents and
 // coloured text uses div.
 
-function TechnicalDetails({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function TechnicalDetails({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <details className={`text-sm ${className}`}>
     <summary className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">Technical details</summary>
     <div className="mt-2 rounded-md border border-border bg-muted p-3 font-mono text-xs break-words whitespace-pre-wrap text-foreground">{children}</div>
   </details>;
 }
 
-function Explanation({ problem }: { problem: Pick<Problem, "why" | "next"> }) {
+export function Explanation({ problem }: { problem: Pick<Problem, "why" | "next"> }) {
   return <div className="flex flex-col gap-1.5 text-sm">
     {problem.why && <div className="text-foreground">{problem.why}</div>}
     {/* next can list things the setup could not remove, one per line. */}
@@ -414,7 +414,7 @@ function StepIcon({ state }: { state: ShownState }) {
   return <Icon className={`mt-0.5 size-4 shrink-0 ${tone}`} aria-hidden="true" />;
 }
 
-function StepList({ steps, ended }: { steps: JobStep[]; ended: boolean }) {
+export function StepList({ steps, ended }: { steps: JobStep[]; ended: boolean }) {
   return <div className="flex flex-col gap-2">
     <h3 id="job-steps-heading">Steps</h3>
     {/* role="list" keeps list semantics in Safari once list markers are removed. */}
@@ -516,12 +516,16 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
   }, [job, loading, problem, loadedAt, setPageResource]);
 
   const view = badId ? "missing" : job ? job.state : problem ? "problem" : "loading";
+  // A website move has its own page, with the comparison and the cutover.
+  useEffect(() => {
+    if (job?.kind === "migration") void navigate({ to: "/websites/move/$jobId", params: { jobId: job.id }, replace: true });
+  }, [job, navigate]);
   // Each change of view (progress, result, failure) starts at its heading.
   useEffect(() => { if (view !== "loading") headingRef.current?.focus(); }, [view]);
 
   const backToForm = () => {
     if (!job) return;
-    retryDraft = loadDraft(job.id) ?? { ...emptyDraft, kind: job.kind, domain: job.domain };
+    retryDraft = loadDraft(job.id) ?? { ...emptyDraft, kind: job.kind === "migration" ? "wordpress" : job.kind, domain: job.domain };
     void navigate({ to: "/websites/new" });
   };
   const retry = () => setAttempt((value) => value + 1);

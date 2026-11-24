@@ -2,7 +2,7 @@ import { lazy } from "react";
 import type { ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { AppShell, isPublicPreview } from "@/shell/AppShell";
-import { AccountView, ActivityView, ApiTokensView, CustomerSetupView, CustomersView, BackupStorageView, FilesView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
+import { AccountView, ActivityView, ApiTokensView, CustomerSetupView, CustomersView, BackupStorageView, FilesView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView, MoveJobView, MoveWebsiteView } from "@/shell/views";
 
 // Every page has its own URL, so back, reload and shared links work. The Go
 // server already answers unknown extension-less paths with index.html.
@@ -21,6 +21,13 @@ const websiteJobRoute = createRoute({ getParentRoute: () => rootRoute, path: "/w
 function WebsiteJobRoute() {
   const { jobId } = websiteJobRoute.useParams();
   return <WebsiteJobView jobId={jobId} />;
+}
+
+// One website move's progress, comparison and cutover, by its job's id.
+const moveJobRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/move/$jobId", component: MoveJobRoute, beforeLoad: privateOnly });
+function MoveJobRoute() {
+  const { jobId } = moveJobRoute.useParams();
+  return <MoveJobView jobId={jobId} />;
 }
 
 // One website's page, by its hosting account's id: a header and a tab bar,
@@ -84,6 +91,8 @@ const routeTree = rootRoute.addChildren([
   route("/websites", WebsitesView, privateOnly),
   route("/websites/new", NewWebsiteView, privateOnly),
   websiteJobRoute,
+  route("/websites/move", MoveWebsiteView, privateOnly),
+  moveJobRoute,
   websiteRoute.addChildren([siteOverviewRoute, siteDomainsRoute, siteFilesRoute, siteDatabasesRoute, siteBackupsRoute, siteCronRoute, siteLogsRoute, siteSettingsRoute]),
   route("/websites/static", ShellRendered, privateOnly),
   route("/websites/static/files", ShellRendered, privateOnly),

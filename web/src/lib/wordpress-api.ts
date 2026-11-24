@@ -1,4 +1,6 @@
 import { validSession } from "./sites-api";
+import { parseMigration } from "./migration-record";
+import type { MigrationRecord } from "./migration-record";
 
 // Client for the "New website" wizard: a WordPress site, or a PHP site (an
 // empty site with its own PHP version and, if asked, a database). The server
@@ -22,6 +24,9 @@ export type WordPressField = keyof WordPressInput;
 
 export const websiteKinds = ["wordpress", "php"] as const;
 export type WebsiteKind = (typeof websiteKinds)[number];
+// A job is one of the wizard's kinds, or a website moved from another server
+// ("Move a website here").
+export type JobKind = WebsiteKind | "migration";
 
 // A PHP site: database "create" also makes a database and its user, with the
 // password chosen here; with "none" the password stays empty.
@@ -42,7 +47,8 @@ export interface JobError { step: string; what: string; why: string; next: strin
 export interface JobResult { url: string; admin_url: string; wordpress_version: string; account_id: string; database: string }
 export interface WebsiteJob {
   id: string;
-  kind: WebsiteKind;
+  kind: JobKind;
+  // Empty only while a migration reads the old server.
   domain: string;
   username: string;
   // The PHP version asked for; empty in a job saved before it was recorded.
@@ -55,6 +61,8 @@ export interface WebsiteJob {
   actor: string;
   created_at: string;
   updated_at: string;
+  // A moved website's record; null for the wizard's kinds.
+  migration: MigrationRecord | null;
 }
 
 export const createTimeoutMs = 20000;
@@ -216,29 +224,34 @@ function parseError(v: unknown): JobError | null | undefined {
 // A database name is <username>_<suffix>: [a-z0-9_], at most 64 characters.
 const databaseName = (v: unknown) => v === undefined || (text(v) && /^(?:[a-z][a-z0-9_]{0,63})?$/.test(v));
 
-function parseResult(v: unknown, kind: WebsiteKind): JobResult | null | undefined {
+function parseResult(v: unknown, kind: JobKind): JobResult | null | undefined {
   if (v === null || v === undefined) return null;
   if (!object(v) || !webURL(v.url) || !text(v.wordpress_version) || !optionalText(v.account_id) || !databaseName(v.database)) return undefined;
-  // A WordPress site links to its admin; a PHP site has none.
-  if (kind === "wordpress" ? !webURL(v.admin_url) : v.admin_url !== "" || v.wordpress_version !== "") return undefined;
+  // A WordPress site links to its admin; a PHP site has none; a moved site
+  // links to it when its files are WordPress.
+  if (kind === "migration" ? !(v.admin_url === "" || webURL(v.admin_url)) || v.wordpress_version !== ""
+    : kind === "wordpress" ? !webURL(v.admin_url) : v.admin_url !== "" || v.wordpress_version !== "") return undefined;
   return { url: v.url, admin_url: v.admin_url as string, wordpress_version: v.wordpress_version, account_id: (v.account_id as string | undefined) ?? "", database: (v.database as string | undefined) ?? "" };
 }
 
 export function parseJob(v: unknown): WebsiteJob | undefined {
-  if (!object(v) || !validJobId(v.id) || !(websiteKinds as readonly unknown[]).includes(v.kind) || !text(v.domain) || !v.domain || v.domain.length > 253) return undefined;
+  if (!object(v)) return undefined;
+  const known = (websiteKinds as readonly unknown[]).includes(v.kind) || v.kind === "migration";
+  if (!validJobId(v.id) || !known || !text(v.domain) || (!v.domain && v.kind !== "migration") || v.domain.length > 253) return undefined;
   if (!text(v.username) || !/^(?:[a-z][a-z0-9_]{2,31})?$/.test(v.username) || !jobStates.includes(String(v.state))) return undefined;
   if (!Array.isArray(v.steps) || v.steps.length < 1 || v.steps.length > 20) return undefined;
   const steps = v.steps.map(parseStep);
   if (steps.some((step) => !step)) return undefined;
-  const kind = v.kind as WebsiteKind;
+  const kind = v.kind as JobKind;
   const error = parseError(v.error), result = parseResult(v.result, kind);
-  if (error === undefined || result === undefined) return undefined;
+  const migration = parseMigration(v.migration);
+  if (error === undefined || result === undefined || migration === undefined || (kind === "migration") !== (migration !== null)) return undefined;
   if (!optionalText(v.actor) || !date(v.created_at) || !date(v.updated_at) || !(v.php_version === undefined || v.php_version === "" || phpVersion(v.php_version))) return undefined;
   if (v.state === "succeeded" && !result) return undefined;
   return {
     id: v.id, kind, domain: v.domain, username: v.username, php_version: (v.php_version as string | undefined) ?? "", state: v.state as JobState,
     steps: steps as JobStep[], error, result, actor: (v.actor as string | undefined) ?? "",
-    created_at: v.created_at, updated_at: v.updated_at,
+    created_at: v.created_at, updated_at: v.updated_at, migration,
   };
 }
 
@@ -267,7 +280,7 @@ export class WordPressApiError extends Error {
   ) { super(what); this.name = "WordPressApiError"; }
 }
 
-type Operation = "create" | "read" | "list";
+export type Operation = "create" | "read" | "list";
 
 const whatFailed: Record<Operation, string> = {
   create: "The website was not created.",
@@ -302,9 +315,12 @@ function explain(operation: Operation, status: number, detail: string): { why: s
 
 // ---- Requests ---------------------------------------------------------------
 
-interface RequestOptions { method?: "GET" | "POST"; body?: unknown; csrf?: string; timeoutMs: number; signal?: AbortSignal }
+// what, when given, is what failed in the caller's own words (a migration's
+// step); otherwise the operation's.
+export interface RequestOptions { method?: "GET" | "POST"; body?: unknown; csrf?: string; timeoutMs: number; signal?: AbortSignal; what?: string }
 
-async function request(operation: Operation, url: string, options: RequestOptions): Promise<unknown> {
+export async function request(operation: Operation, url: string, options: RequestOptions): Promise<unknown> {
+  const failed = options.what ?? whatFailed[operation];
   const method = options.method ?? "GET";
   const where = `${method} ${url}`;
   const controller = new AbortController();
@@ -331,9 +347,9 @@ async function request(operation: Operation, url: string, options: RequestOption
         const next = operation === "create"
           ? "Wait a minute, then try again. If the domain is reported as in use, the first try worked."
           : "This page tries again by itself. The setup keeps running on the server.";
-        throw new WordPressApiError(0, operation === "create" ? "The panel could not confirm the new website." : whatFailed[operation], `The server did not answer within ${seconds} seconds.`, next, `${where}: no answer within ${seconds} s`);
+        throw new WordPressApiError(0, options.what ?? (operation === "create" ? "The panel could not confirm the new website." : whatFailed[operation]), `The server did not answer within ${seconds} seconds.`, next, `${where}: no answer within ${seconds} s`);
       }
-      throw new WordPressApiError(0, whatFailed[operation], options.signal?.aborted ? "The request was cancelled." : "The panel could not reach its server.", "Check that Sifruno is running and this computer is online, then try again.", `${where}: ${options.signal?.aborted ? "cancelled" : "network error"}`);
+      throw new WordPressApiError(0, failed, options.signal?.aborted ? "The request was cancelled." : "The panel could not reach its server.", "Check that Sifruno is running and this computer is online, then try again.", `${where}: ${options.signal?.aborted ? "cancelled" : "network error"}`);
     }
     const value: unknown = await response.json().catch(() => undefined);
     if (!response.ok) {
@@ -341,7 +357,7 @@ async function request(operation: Operation, url: string, options: RequestOption
       const detail = serverText(problem.detail);
       const title = serverText(problem.title, 100);
       const { why, next } = explain(operation, response.status, detail);
-      throw new WordPressApiError(response.status, whatFailed[operation], why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}`);
+      throw new WordPressApiError(response.status, failed, why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}`);
     }
     return value;
   } finally {
@@ -355,7 +371,7 @@ const unexpected = (operation: Operation, where: string) =>
 
 // The CSRF token comes from the current session, as for every other change
 // the panel makes.
-async function csrfToken(signal?: AbortSignal): Promise<string> {
+export async function csrfToken(signal?: AbortSignal): Promise<string> {
   let value: unknown;
   try {
     value = await request("create", "/api/v1/session", { timeoutMs: readTimeoutMs, signal });

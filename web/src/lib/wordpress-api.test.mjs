@@ -6,7 +6,10 @@ import test from "node:test";
 
 const moduleURL = (source) => `data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source, { mode: "transform" })).toString("base64")}`;
 const sitesURL = moduleURL(readFileSync(new URL("./sites-api.ts", import.meta.url), "utf8"));
-const api = await import(moduleURL(readFileSync(new URL("./wordpress-api.ts", import.meta.url), "utf8").replace('"./sites-api"', JSON.stringify(sitesURL))));
+const recordURL = moduleURL(readFileSync(new URL("./migration-record.ts", import.meta.url), "utf8"));
+const wordpressURL = moduleURL(readFileSync(new URL("./wordpress-api.ts", import.meta.url), "utf8").replace('"./sites-api"', JSON.stringify(sitesURL)).replace('"./migration-record"', JSON.stringify(recordURL)));
+const api = await import(wordpressURL);
+const migrations = await import(moduleURL(readFileSync(new URL("./migration-api.ts", import.meta.url), "utf8").replace('"./wordpress-api"', JSON.stringify(wordpressURL))));
 
 const jobId = "0123456789abcdef0123456789abcdef";
 const password = "correct horse battery";
@@ -357,5 +360,86 @@ test("create a PHP site posts exactly its four fields, the password only with a 
 test("server text is kept to one short line", async () => {
   await withFetch(async () => json({ status: 503, detail: `line one\nline two\u0000${"x".repeat(900)}` }, 503), async () => {
     await assert.rejects(api.getWebsiteJob(jobId), (error) => !/[\n\u0000]/.test(error.detail) && error.detail.length <= 500);
+  });
+});
+
+// ---- Move a website here ------------------------------------------------------
+
+const sourceId = "c".repeat(32);
+const migrationSteps = (states) => ["source", "account", "web", "files", "database", "cron", "verify", "key"].map((name, i) => ({ name, title: name, state: states[i] ?? "pending", message: "", started_at: "", finished_at: "" }));
+const migrationRecord = (change = {}) => ({
+  source: sourceId, source_host: "old.example.test", source_user: "shopone", tier: "native", php_source: "ea-php81", wordpress: true,
+  databases: ["shopone_wp"], database_users: ["shopone_wpu"], tables: [], notes: [], probes: [{ path: "/private/", kind: "deny" }],
+  verify: { running: false, ran: true, cutover_allowed: true, verdict: "CUTOVER ALLOWED", pages_compared: 5, pages_pass: 5, pages_warn: 0, pages_fail: 0, probes_pass: 1, probes_fail: 0, lines: [], finished_at: "2026-11-24T10:00:00Z" },
+  gate: "open", address: "203.0.113.7", key_removed: true, activity: [{ at: "2026-11-24T10:00:00Z", actor: "local-operator", what: "Started." }], ...change,
+});
+const migrationJob = (change = {}) => job({
+  kind: "migration", domain: "shop.example.test", username: "shopone", state: "succeeded", steps: migrationSteps(Array(8).fill("done")),
+  result: { url: "http://shop.example.test/", admin_url: "http://shop.example.test/wp-admin/", wordpress_version: "", account_id: "a".repeat(32), database: "shopone_wp" },
+  migration: migrationRecord(), ...change,
+});
+
+test("a move's job is read with its migration record, and a running one without a domain yet", () => {
+  const parsed = api.parseJob(migrationJob());
+  assert.equal(parsed.kind, "migration");
+  assert.equal(parsed.migration.gate, "open");
+  assert.equal(parsed.migration.verify.pages_compared, 5);
+  const running = api.parseJob(migrationJob({ domain: "", state: "running", result: null, steps: migrationSteps(["running"]) }));
+  assert.equal(running.domain, "");
+  // A wizard job still needs its domain and has no migration record.
+  assert.equal(api.parseJob(job({ domain: "" })), undefined);
+  assert.equal(api.parseJob({ ...succeeded(), migration: migrationRecord() }), undefined);
+  // A move without its record, or with a gate the panel does not know, is refused.
+  assert.equal(api.parseJob(migrationJob({ migration: null })), undefined);
+  assert.equal(api.parseJob(migrationJob({ migration: migrationRecord({ gate: "half-open" }) })), undefined);
+});
+
+test("the move's inputs are checked before anything is sent", () => {
+  for (const host of ["", "root@old.example.test", "old.example.test:22", "OLD.example.test", "localhost", "127.0.0.1", "x/y"]) assert.ok(migrations.checkSourceHost(host), host);
+  assert.equal(migrations.checkSourceHost("203.0.113.5"), undefined);
+  for (const port of ["", "0", "65536", "22a"]) assert.ok(migrations.checkSourcePort(port), port);
+  assert.equal(migrations.checkSourcePort("2222"), undefined);
+  assert.ok(migrations.checkAcceptReason("   "));
+  assert.ok(migrations.checkAcceptReason("a\nb"));
+  assert.equal(migrations.checkAcceptReason("Known plugin difference"), undefined);
+});
+
+test("opening a source posts only host and port and trusts only a source with its key line", async () => {
+  const source = { id: sourceId, host: "old.example.test", port: 22, key_line: `restrict ssh-ed25519 AAAA sifruno-migration-${sourceId}`, install_command: "echo ... >> /root/.ssh/authorized_keys", host_keys: [{ type: "ssh-ed25519", fingerprint: "SHA256:abc" }], pinned_fingerprint: "", expires_at: "2026-11-25T10:00:00Z" };
+  const posts = [];
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    posts.push({ url, options }); return json({ source });
+  }, async () => {
+    const opened = await migrations.openSource("old.example.test", 22);
+    assert.equal(opened.host_keys[0].fingerprint, "SHA256:abc");
+  });
+  assert.equal(posts[0].url, "/api/v1/websites/migrations/sources");
+  assert.deepEqual(JSON.parse(posts[0].options.body), { host: "old.example.test", port: 22 });
+  assert.equal(posts[0].options.headers["X-CSRF-Token"], "fixture-csrf");
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ source: { ...source, key_line: "ssh-ed25519 AAAA someone-else" } }), async () => {
+    await assert.rejects(migrations.openSource("old.example.test", 22), { status: 0 });
+  });
+  // A refusal keeps the server's reason and says what to do next.
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ status: 422, detail: "Sifruno could not reach the old server over SSH." }, 422), async () => {
+    await assert.rejects(migrations.openSource("old.example.test", 22), (error) => error.status === 422 && error.message === "Sifruno could not connect to the old server." && error.detail.includes("SSH"));
+  });
+});
+
+test("accepting red lines sends the trimmed reason and expects the move back", async () => {
+  const posts = [];
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    posts.push({ url, body: JSON.parse(options.body) });
+    return json({ job: migrationJob({ migration: migrationRecord({ gate: "accepted", accepted: { actor: "local-operator", at: "2026-11-24T10:05:00Z", reason: "checked" } }) }) });
+  }, async () => {
+    const accepted = await migrations.acceptMigration(jobId, "  checked  ");
+    assert.equal(accepted.migration.gate, "accepted");
+    assert.equal(accepted.migration.accepted.reason, "checked");
+  });
+  assert.deepEqual(posts, [{ url: `/api/v1/websites/migrations/${jobId}/accept`, body: { reason: "checked" } }]);
+  // A wizard job in the answer is not a move.
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ job: succeeded() }), async () => {
+    await assert.rejects(migrations.readyMigration(jobId), { status: 0 });
   });
 });

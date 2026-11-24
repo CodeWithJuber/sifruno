@@ -21,6 +21,8 @@ const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ def
 const PanelPreview = lazy(() => import("@/PanelPreview"));
 const NewWebsite = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.NewWebsite })));
 const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.WebsiteJob })));
+const MoveWebsite = lazy(() => import("@/MoveWebsite").then((m) => ({ default: m.MoveWebsite })));
+const MoveJob = lazy(() => import("@/MoveWebsite").then((m) => ({ default: m.MoveJob })));
 const WebsitesList = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsitesList })));
 const WebsiteLayout = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteLayout })));
 const BackupStorage = lazy(() => import("@/BackupStorage").then((m) => ({ default: m.BackupStorage })));
@@ -154,6 +156,15 @@ export function NewWebsiteView() {
 // Keyed by the id, so moving from one setup job to another starts fresh.
 export function WebsiteJobView({ jobId }: { jobId: string }) {
   return <WebsiteJob key={jobId} jobId={jobId} />;
+}
+
+export function MoveWebsiteView() {
+  return <MoveWebsite />;
+}
+
+// Keyed by the id, so moving from one move to another starts fresh.
+export function MoveJobView({ jobId }: { jobId: string }) {
+  return <MoveJob key={jobId} jobId={jobId} />;
 }
 
 export function WebsitesView() {

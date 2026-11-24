@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Clock, Database, DatabaseBackup, Folder, Globe, History, Home, KeyRound, Layers, ListChecks, Network, Plus, ScrollText, Server, Settings, ShieldCheck, HardDrive, UserRound, Users } from "lucide-react";
+import { Archive, ArchiveRestore, Clock, Database, DatabaseBackup, Folder, Globe, History, Home, KeyRound, Layers, ListChecks, Network, Plus, ScrollText, Server, Settings, ShieldCheck, HardDrive, UserRound, Users, ArrowRightLeft } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 // One list drives the sidebar, the command palette, the breadcrumb and the
@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 // Change trail and AI budget screens live under Customers, Security,
 // Activity and Settings. testId keeps the ids the browser QA scripts click.
 
-export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "site-backups" | "site-domains" | "site-files" | "site-settings" | "site-cron" | "site-logs" | "static-sites" | "static-files" | "files" | "backups" | "activity" | "customers" | "hosting-accounts" | "account" | "setup" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
+export type PageId = "home" | "websites" | "new-website" | "website-job" | "move-website" | "move-job" | "website" | "site-databases" | "site-backups" | "site-domains" | "site-files" | "site-settings" | "site-cron" | "site-logs" | "static-sites" | "static-files" | "files" | "backups" | "activity" | "customers" | "hosting-accounts" | "account" | "setup" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
 
 export interface Page {
   id: PageId;
@@ -42,6 +42,8 @@ export const pages: readonly Page[] = [
   { id: "websites", path: "/websites", label: "Websites", title: "Websites", subtitle: "The WordPress and PHP websites on this server.", icon: Globe, testId: "nav-websites", audience: "private", group: "main", needs: websitesRead },
   { id: "new-website", path: "/websites/new", label: "New website", title: "New website", subtitle: "Create a WordPress website on this server.", icon: Plus, testId: "nav-new-website", audience: "private", group: "main", parent: "websites" },
   { id: "website-job", path: "/websites/jobs/$jobId", label: "Website setup", title: "Website setup", subtitle: "Follow each step while the panel creates the website.", icon: ListChecks, testId: "nav-website-job", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/jobs\/[^/]+$/ },
+  { id: "move-website", path: "/websites/move", label: "Move a website here", title: "Move a website here", subtitle: "Copy a website from a cPanel server you run, compare it, then point DNS here.", icon: ArrowRightLeft, testId: "nav-move-website", audience: "private", group: "main", parent: "websites" },
+  { id: "move-job", path: "/websites/move/$jobId", label: "Website move", title: "Website move", subtitle: "Follow the copy, compare it with the old site, then cut over.", icon: ArrowRightLeft, testId: "nav-move-job", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/move\/[^/]+$/ },
   // One website's page: one entry for each of its tabs.
   { id: "website", path: "/websites/sites/$accountId", label: "Overview", title: "", subtitle: "", icon: Globe, testId: "nav-website", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+$/ },
   { id: "site-databases", path: "/websites/sites/$accountId/databases", label: "Databases", title: "", subtitle: "", icon: Database, testId: "nav-site-databases", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/sites\/[^/]+\/databases$/ },

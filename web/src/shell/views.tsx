@@ -23,6 +23,7 @@ const NewWebsite = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.N
 const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.WebsiteJob })));
 const WebsitesList = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsitesList })));
 const WebsiteOverview = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsiteOverview })));
+const BackupStorage = lazy(() => import("@/BackupStorage").then((m) => ({ default: m.BackupStorage })));
 
 export function LoadingState({ label }: { label: string }) {
   return <div className="flex flex-col gap-4" role="status" aria-label={label}><Skeleton className="h-28 w-full" /><Skeleton className="h-64 w-full" /><span className="sr-only">{label}</span></div>;
@@ -62,8 +63,11 @@ export function HomeView() {
 }
 
 export function ServerTabs({ active }: { active: PageId }) {
-  return <nav aria-label="Server sections" className="mb-5 flex gap-1 border-b border-border">
-    {serverTabs.map((id) => {
+  const { publicPreview } = useShell();
+  // The public demo has no backup storage; it shows only its own tabs.
+  const tabs = serverTabs.filter((id) => !publicPreview || pageById(id).audience !== "private");
+  return <nav aria-label="Server sections" className="mb-5 flex flex-wrap gap-1 border-b border-border">
+    {tabs.map((id) => {
       const page = pageById(id);
       const current = id === active;
       return <Link key={id} to={page.path} activeOptions={{ exact: true }} data-testid={id === "server" ? "tab-services" : page.testId} aria-current={current ? "page" : undefined}
@@ -87,6 +91,10 @@ export function StorageView() {
 export function NetworkView() {
   const shell = useShell();
   return <><ServerTabs active="network" /><DataState resource={shell.server} retry={shell.refresh}>{shell.server.data && <NetworkResources report={shell.server.data} range={shell.range} setRange={shell.setRange} />}</DataState></>;
+}
+
+export function BackupStorageView() {
+  return <><ServerTabs active="backup-storage" /><BackupStorage /></>;
 }
 
 export function ActivityView() {

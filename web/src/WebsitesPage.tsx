@@ -312,6 +312,7 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
           <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />
           <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
           <Link to="/websites/sites/$accountId/databases" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-databases-link">Databases</Link>
+          <Link to="/websites/sites/$accountId/backups" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-backups-link">Backups</Link>
         </div>
         <DnsHelp id="dns-help" domain={site.domain} hidden={!dnsOpen} />
       </>}

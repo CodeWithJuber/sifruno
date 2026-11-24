@@ -2,7 +2,7 @@ import { lazy } from "react";
 import type { ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { AppShell, isPublicPreview } from "@/shell/AppShell";
-import { ActivityView, ApiTokensView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
+import { ActivityView, ApiTokensView, BackupStorageView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
 
 // Every page has its own URL, so back, reload and shared links work. The Go
 // server already answers unknown extension-less paths with index.html.
@@ -39,6 +39,14 @@ function SiteDatabasesRoute() {
   return <SiteDatabases key={accountId} accountId={accountId} />;
 }
 
+// One website's Backups page, keyed by the id like Databases.
+const SiteBackups = lazy(() => import("@/SiteBackups").then((m) => ({ default: m.SiteBackups })));
+const siteBackupsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/websites/sites/$accountId/backups", component: SiteBackupsRoute, beforeLoad: privateOnly });
+function SiteBackupsRoute() {
+  const { accountId } = siteBackupsRoute.useParams();
+  return <SiteBackups key={accountId} accountId={accountId} />;
+}
+
 const routeTree = rootRoute.addChildren([
   route("/", HomeView),
   route("/tour", TourView, previewOnly),
@@ -47,6 +55,7 @@ const routeTree = rootRoute.addChildren([
   websiteJobRoute,
   websiteRoute,
   siteDatabasesRoute,
+  siteBackupsRoute,
   route("/websites/static", ShellRendered, privateOnly),
   route("/websites/files", ShellRendered, privateOnly),
   route("/websites/backups", ShellRendered, privateOnly),
@@ -55,6 +64,7 @@ const routeTree = rootRoute.addChildren([
   route("/server", ServicesView),
   route("/server/storage", StorageView),
   route("/server/network", NetworkView),
+  route("/server/backups", BackupStorageView, privateOnly),
   route("/security", SecurityView, privateOnly),
   route("/security/api-tokens", ApiTokensView, privateOnly),
   route("/settings", SettingsView, privateOnly),

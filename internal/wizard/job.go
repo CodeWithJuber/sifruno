@@ -75,16 +75,19 @@ type Failure struct {
 	Technical string `json:"technical"`
 }
 
-// Result is where the new site is.
+// Result is where the new site is. A PHP site has no admin URL or WordPress
+// version; Database names its database and user when it asked for one.
 type Result struct {
 	URL              string `json:"url"`
 	AdminURL         string `json:"admin_url"`
 	WordPressVersion string `json:"wordpress_version"`
 	AccountID        string `json:"account_id"`
+	Database         string `json:"database,omitempty"`
 }
 
 const (
 	KindWordPress = "wordpress"
+	KindPHP       = "php"
 
 	StateRunning   = "running"
 	StateSucceeded = "succeeded"
@@ -98,21 +101,46 @@ const (
 	StepSkipped = "skipped"
 )
 
-// Step names, in the order they run.
+// Step names, in the order they run. A WordPress site ends with
+// StepWordPress, a PHP site with StepPlaceholder.
 const (
-	StepAccount   = "account"
-	StepWeb       = "web"
-	StepSSL       = "ssl"
-	StepDatabase  = "database"
-	StepWordPress = "wordpress"
+	StepAccount     = "account"
+	StepWeb         = "web"
+	StepSSL         = "ssl"
+	StepDatabase    = "database"
+	StepWordPress   = "wordpress"
+	StepPlaceholder = "placeholder"
 )
 
-var stepTitles = []struct{ name, title string }{
+type stepTitle struct{ name, title string }
+
+var stepTitles = []stepTitle{
 	{StepAccount, "Create the hosting account"},
 	{StepWeb, "Put the site live with PHP"},
 	{StepSSL, "Turn on https"},
 	{StepDatabase, "Create the database"},
 	{StepWordPress, "Install WordPress"},
+}
+
+// phpStepTitles are a PHP site's steps. Its database step is skipped when
+// the person did not ask for a database.
+var phpStepTitles = []stepTitle{
+	{StepAccount, "Create the hosting account"},
+	{StepWeb, "Put the site live with PHP"},
+	{StepSSL, "Turn on https"},
+	{StepDatabase, "Create the database"},
+	{StepPlaceholder, "Add a placeholder page"},
+}
+
+// titlesFor is the step list of a kind of site, or nil for an unknown kind.
+func titlesFor(kind string) []stepTitle {
+	switch kind {
+	case KindWordPress:
+		return stepTitles
+	case KindPHP:
+		return phpStepTitles
+	}
+	return nil
 }
 
 // Restart texts, as the contract fixes them.
@@ -150,12 +178,17 @@ func newJobID() (string, error) {
 func timestamp(t time.Time) string { return t.UTC().Format(timestampStyle) }
 
 func newJob(id, domain, actor string, now time.Time) Job {
-	steps := make([]Step, len(stepTitles))
-	for i, s := range stepTitles {
+	return newKindJob(id, KindWordPress, domain, actor, now)
+}
+
+func newKindJob(id, kind, domain, actor string, now time.Time) Job {
+	titles := titlesFor(kind)
+	steps := make([]Step, len(titles))
+	for i, s := range titles {
 		steps[i] = Step{Name: s.name, Title: s.title, State: StepPending}
 	}
 	at := timestamp(now)
-	return Job{ID: id, Kind: KindWordPress, Domain: domain, State: StateRunning, Steps: steps, Actor: actor, CreatedAt: at, UpdatedAt: at}
+	return Job{ID: id, Kind: kind, Domain: domain, State: StateRunning, Steps: steps, Actor: actor, CreatedAt: at, UpdatedAt: at}
 }
 
 // clone copies a job so callers never share its slices or pointers.
@@ -282,8 +315,10 @@ func readStore(path string) ([]Job, error) {
 		return nil, fmt.Errorf("website job store version %d is not supported", data.Version)
 	}
 	for _, j := range data.Jobs {
-		// A job from before the "ssl" step has one step fewer; it is kept.
-		if !ValidID(j.ID) || (len(j.Steps) != len(stepTitles) && len(j.Steps) != len(stepTitles)-1) {
+		// A WordPress job from before the "ssl" step has one step fewer; it
+		// is kept.
+		n := len(titlesFor(j.Kind))
+		if !ValidID(j.ID) || n == 0 || (len(j.Steps) != n && (j.Kind != KindWordPress || len(j.Steps) != n-1)) {
 			return nil, errors.New("website job store holds an invalid job")
 		}
 	}

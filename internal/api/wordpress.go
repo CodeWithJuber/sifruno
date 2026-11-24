@@ -31,6 +31,19 @@ type WordPressCreateBody struct {
 }
 
 type wordpressCreateInput struct{ Body WordPressCreateBody }
+
+// PHPSiteCreateBody is the wizard's request for a PHP site: an empty site
+// with its own PHP version, a placeholder page and, if asked, a database.
+// The middleware has already checked that it holds only these keys, each
+// once, each a string.
+type PHPSiteCreateBody struct {
+	Domain           string `json:"domain" maxLength:"253" doc:"Lowercase domain name, such as example.com."`
+	PHPVersion       string `json:"php_version" enum:"8.1,8.2,8.3,8.4" doc:"PHP version for the site."`
+	Database         string `json:"database" enum:"none,create" doc:"create also makes a database and its user, both named <username>_wp, with every privilege on that database."`
+	DatabasePassword string `json:"database_password" maxLength:"128" format:"password" writeOnly:"true" doc:"The database user's password when database is create: 12 to 128 bytes, no control characters, no space at the start or end. Empty or left out otherwise. Held only in memory, never stored or returned."`
+}
+
+type phpSiteCreateInput struct{ Body PHPSiteCreateBody }
 type websiteJobInput struct {
 	ID string `path:"id"`
 }
@@ -55,6 +68,7 @@ type wizardField struct {
 
 var wizardFields = map[string][]wizardField{
 	"wordpress": {{name: "domain"}, {name: "title"}, {name: "admin_user"}, {name: "admin_email"}, {name: "admin_password"}, {name: "php_version"}},
+	"php-site":  {{name: "domain"}, {name: "php_version"}, {name: "database"}, {name: "database_password"}},
 	"php":       {{name: "php_version"}, {name: "expected_revision", whole: true}},
 	"state":     {{name: "state"}, {name: "expected_revision", whole: true}},
 	"folder":    {{name: "expected_revision", whole: true}},
@@ -68,8 +82,11 @@ func wizardRoute(r *http.Request) string {
 	if r.Method != http.MethodPost {
 		return ""
 	}
-	if r.URL.Path == "/api/v1/websites/wordpress" {
+	switch r.URL.Path {
+	case "/api/v1/websites/wordpress":
 		return "wordpress"
+	case "/api/v1/websites/php":
+		return "php-site"
 	}
 	return websiteAction(r.URL.Path)
 }
@@ -106,6 +123,30 @@ func registerWizard(a huma.API, o Options) {
 		b := in.Body
 		job, err := runner.Start(ctx, wizard.Input{Domain: b.Domain, Title: b.Title, AdminUser: b.AdminUser, AdminEmail: b.AdminEmail, AdminPassword: b.AdminPassword, PHPVersion: b.PHPVersion}, siteActor(ctx))
 		b.AdminPassword = ""
+		if err != nil {
+			return nil, wizardError(err)
+		}
+		return &websiteJobOutput{Body: websiteJobBody{Job: job}}, nil
+	})
+	huma.Register(a, op("create-php-website", http.MethodPost, "/api/v1/websites/php", http.StatusAccepted), func(ctx context.Context, in *phpSiteCreateInput) (*websiteJobOutput, error) {
+		// As for WordPress: the handler drops its references to the
+		// database password when it returns, the job after the database step
+		// or after undoing a failed job.
+		defer func() { in.Body.DatabasePassword = "" }()
+		if runner == nil {
+			return nil, huma.Error503ServiceUnavailable(wizardUnavailable)
+		}
+		b := in.Body
+		database := false
+		switch b.Database {
+		case "create":
+			database = true
+		case "none":
+		default:
+			return nil, huma.Error422UnprocessableEntity("database must be none or create.")
+		}
+		job, err := runner.Start(ctx, wizard.Input{Kind: wizard.KindPHP, Domain: b.Domain, PHPVersion: b.PHPVersion, Database: database, DBPassword: b.DatabasePassword}, siteActor(ctx))
+		b.DatabasePassword = ""
 		if err != nil {
 			return nil, wizardError(err)
 		}

@@ -186,7 +186,7 @@ func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...st
 			}
 		}
 	})
-	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "created_at", "domain", "https", "php_version", "revision", "site_folder_changed", "state", "url", "username", "wordpress_version"}, more...)))
+	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "created_at", "domain", "https", "kind", "php_version", "revision", "site_folder_changed", "state", "url", "username", "wordpress_version"}, more...)))
 	if !slices.Equal(keys, want) {
 		t.Fatalf("website keys %q", keys)
 	}
@@ -234,7 +234,7 @@ func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
 	if len(sites) != 2 || sites[0].AccountID != second.Result.AccountID || sites[1].AccountID != first.Result.AccountID {
 		t.Fatalf("sites %+v", sites)
 	}
-	want := Website{AccountID: second.Result.AccountID, Username: "second", Domain: "second.example", State: "active",
+	want := Website{AccountID: second.Result.AccountID, Username: "second", Domain: "second.example", Kind: "wordpress", State: "active",
 		HTTPS: WebsiteHTTPS{On: true, NotAfter: "2027-02-21T12:30:00Z"}, PHPVersion: "8.3", WordPressVersion: "7.1.5",
 		URL: "http://second.example/", AdminURL: "http://second.example/wp-admin/", CreatedAt: second.CreatedAt, Revision: 2}
 	if sites[0] != want {

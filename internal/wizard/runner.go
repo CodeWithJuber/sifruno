@@ -27,6 +27,7 @@ type Accounts interface {
 	SetState(context.Context, string, hostaccounts.StateInput, string) (hostaccounts.Account, error)
 	SetWeb(context.Context, string, hostaccounts.WebInput, string) (hostaccounts.WebResult, error)
 	InstallWordPress(context.Context, string, hostaccounts.WordPressInput, string) (hostaccounts.WordPressResult, error)
+	InstallPlaceholder(context.Context, string, hostaccounts.PlaceholderInput, string) (hostaccounts.PlaceholderResult, error)
 }
 
 // Broker joins the broker client's interfaces into Accounts.
@@ -34,6 +35,7 @@ type Broker struct {
 	hostaccounts.Service
 	hostaccounts.WebService
 	hostaccounts.WordPressService
+	hostaccounts.PlaceholderService
 }
 
 // Certificates gets a certificate for the site and installs it on the
@@ -71,11 +73,14 @@ const (
 	sslWait        = 6 * time.Minute  // the least the certificate step gets: issuing takes at most 3, then the broker applies it as it does a web change
 	refreshLimit   = 30 * time.Second // reading the account's revision after the certificate step
 	installWait    = 12 * time.Minute // the least InstallWordPress gets: the broker allows the install 10
+	pageWait       = 2 * time.Minute  // the least InstallPlaceholder gets: the broker allows it 1
 	undoLimit      = 3 * time.Minute  // removing what a failed job created
 	quotaMiB       = 1024
 	brokerReason   = "WordPress wizard"
 	undoReason     = "WordPress wizard: removed after a later step failed"
-	dbSuffix       = "_wp"
+	phpReason      = "PHP site wizard"
+	phpUndoReason  = "PHP site wizard: removed after a later step failed"
+	dbSuffix       = "_wp" // both kinds of site: site delete (remove.go) finds the database and its user by this name
 	dbPasswordLen  = 24
 	technicalLimit = 512
 )
@@ -104,7 +109,7 @@ type Runner struct {
 // the certificate service. certificates may be nil: the "ssl" step is then
 // skipped and sites use http.
 func New(accounts Accounts, databases Databases, store *Store, certificates Certificates) *Runner {
-	return &Runner{accounts: accounts, databases: databases, certificates: certificates, store: store, running: map[string]string{}, digits: randomDigits, limit: jobLimit, waits: map[string]time.Duration{StepWeb: webWait, StepSSL: sslWait, StepWordPress: installWait}}
+	return &Runner{accounts: accounts, databases: databases, certificates: certificates, store: store, running: map[string]string{}, digits: randomDigits, limit: jobLimit, waits: map[string]time.Duration{StepWeb: webWait, StepSSL: sslWait, StepWordPress: installWait, StepPlaceholder: pageWait}}
 }
 
 // stepContext is the job's context with its deadline moved, if need be, to
@@ -159,14 +164,16 @@ func (r *Runner) Start(ctx context.Context, in Input, actor string) (Job, error)
 			return Job{}, refuse(ErrConflict, "%s already belongs to the hosting account %s. Use another domain, or remove that account first.", in.Domain, a.Username)
 		}
 	}
-	if _, err = r.databases.Probe(ctx); err != nil {
-		return Job{}, refuse(ErrUnavailable, "The database server is not answering, so no website was started. Check that it is running, then try again.")
+	if in.wantsDatabase() {
+		if _, err = r.databases.Probe(ctx); err != nil {
+			return Job{}, refuse(ErrUnavailable, "The database server is not answering, so no website was started. Check that it is running, then try again.")
+		}
 	}
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, refuse(ErrUnavailable, "The panel could not create a job ID, so no website was started. Try again.")
 	}
-	job := newJob(id, in.Domain, actor, time.Now())
+	job := newKindJob(id, in.Kind, in.Domain, actor, time.Now())
 	job.PHPVersion = in.PHPVersion
 	if err = r.store.put(job); err != nil {
 		r.store.forget(id)
@@ -177,13 +184,13 @@ func (r *Runner) Start(ctx context.Context, in Input, actor string) (Job, error)
 	r.mu.Unlock()
 	reserved = false
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.limit)
-	// The run keeps the password; the goroutine captures the domain, not
-	// the input, and Start drops its own reference. Go strings cannot be
+	// The run keeps the passwords; the goroutine captures the domain, not
+	// the input, and Start drops its own references. Go strings cannot be
 	// zeroed: dropping a reference lets the memory be reused, it does not
 	// erase it.
-	j := &run{runner: r, job: job.clone(), in: in, actor: actor, secrets: []string{in.AdminPassword}}
+	j := &run{runner: r, job: job.clone(), in: in, actor: actor, secrets: []string{in.AdminPassword, in.DBPassword}}
 	domain := in.Domain
-	in.AdminPassword = ""
+	in.AdminPassword, in.DBPassword = "", ""
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
@@ -256,9 +263,13 @@ func (j *run) execute(ctx context.Context) {
 		// Drop the run's last references to the passwords when it ends,
 		// whatever happened: right after the install step, or after a failed
 		// job's undo. This does not erase the bytes; Go cannot zero a string.
-		j.in.AdminPassword, j.dbPassword, j.secrets = "", "", nil
+		j.in.AdminPassword, j.in.DBPassword, j.dbPassword, j.secrets = "", "", "", nil
 	}()
-	steps := []func(context.Context) (string, *stepError){j.account, j.web, j.ssl, j.database, j.wordpress}
+	last := j.wordpress
+	if j.in.Kind == KindPHP {
+		last = j.placeholder
+	}
+	steps := []func(context.Context) (string, *stepError){j.account, j.web, j.ssl, j.database, last}
 	for i, step := range steps {
 		j.begin(i)
 		stepCtx, cancel := stepContext(ctx, j.runner.waits[j.job.Steps[i].Name])
@@ -269,6 +280,9 @@ func (j *run) execute(ctx context.Context) {
 			if expired {
 				failure.why = "It took longer than the panel waits for this step, so it stopped waiting."
 				failure.next = "Try again. If it is slow again, check the server's load and its connection to wordpress.org."
+				if j.in.Kind == KindPHP {
+					failure.next = "Try again. If it is slow again, check the server's load."
+				}
 				if j.job.Steps[i].Name == StepDatabase && j.job.Username != "" {
 					// MariaDB may have made the database or user after the
 					// panel stopped waiting; the job cannot tell, so undo
@@ -286,7 +300,7 @@ func (j *run) execute(ctx context.Context) {
 			j.fail(i, failure)
 			return
 		}
-		if j.job.Steps[i].Name == StepSSL && !j.https {
+		if name := j.job.Steps[i].Name; (name == StepSSL && !j.https) || (name == StepDatabase && !j.in.wantsDatabase()) {
 			j.skip(i, message)
 			continue
 		}
@@ -297,8 +311,23 @@ func (j *run) execute(ctx context.Context) {
 		scheme = "https://"
 	}
 	j.job.State = StateSucceeded
-	j.job.Result = &Result{URL: scheme + j.in.Domain + "/", AdminURL: scheme + j.in.Domain + "/wp-admin/", WordPressVersion: j.wpVersion, AccountID: j.accountID}
+	if j.in.Kind == KindPHP {
+		j.job.Result = &Result{URL: scheme + j.in.Domain + "/", AccountID: j.accountID}
+		if j.dbCreated {
+			j.job.Result.Database = j.dbName
+		}
+	} else {
+		j.job.Result = &Result{URL: scheme + j.in.Domain + "/", AdminURL: scheme + j.in.Domain + "/wp-admin/", WordPressVersion: j.wpVersion, AccountID: j.accountID}
+	}
 	j.touch()
+}
+
+// reasons are what the job tells the broker it is doing, for the journal.
+func (j *run) reasons() (create, undo string) {
+	if j.in.Kind == KindPHP {
+		return phpReason, phpUndoReason
+	}
+	return brokerReason, undoReason
 }
 
 func (j *run) touch() {
@@ -339,7 +368,8 @@ func (j *run) account(ctx context.Context) (string, *stepError) {
 			last = errNameInUse
 			continue
 		}
-		a, err := j.runner.accounts.Create(ctx, hostaccounts.CreateInput{Username: name, Domain: j.in.Domain, Reason: brokerReason}, j.actor)
+		reason, _ := j.reasons()
+		a, err := j.runner.accounts.Create(ctx, hostaccounts.CreateInput{Username: name, Domain: j.in.Domain, Reason: reason}, j.actor)
 		if err == nil {
 			j.accountID, j.revision = a.ID, a.Revision
 			j.job.Username = a.Username
@@ -411,7 +441,8 @@ func (j *run) domainOwner(ctx context.Context) (string, bool) {
 
 // web puts the account's site live with the chosen PHP.
 func (j *run) web(ctx context.Context) (string, *stepError) {
-	res, err := j.runner.accounts.SetWeb(ctx, j.accountID, hostaccounts.WebInput{PHPVersion: j.in.PHPVersion, QuotaMiB: quotaMiB, ExpectedRevision: j.revision, Reason: brokerReason}, j.actor)
+	reason, _ := j.reasons()
+	res, err := j.runner.accounts.SetWeb(ctx, j.accountID, hostaccounts.WebInput{PHPVersion: j.in.PHPVersion, QuotaMiB: quotaMiB, ExpectedRevision: j.revision, Reason: reason}, j.actor)
 	if err != nil {
 		if errors.Is(err, hostaccounts.ErrWebRejected) {
 			return "", &stepError{why: "The web server's configuration test failed with the new site, so the server kept its old configuration.", next: "Ask whoever runs this server to check the web server, then create the website again.", technical: j.technical(err)}
@@ -479,7 +510,12 @@ func (j *run) refreshRevision(ctx context.Context) {
 }
 
 // database creates the database and its user, with every privilege on it.
+// A WordPress site's user gets a password the panel makes; a PHP site's the
+// one the person chose, and a PHP site without a database skips the step.
 func (j *run) database(ctx context.Context) (string, *stepError) {
+	if !j.in.wantsDatabase() {
+		return "No database was asked for.", nil
+	}
 	owner := j.job.Username
 	name := dbhost.PrefixedName(owner, strings.TrimPrefix(dbSuffix, "_"))
 	j.dbName = name
@@ -500,12 +536,20 @@ func (j *run) database(ctx context.Context) (string, *stepError) {
 	if err != nil {
 		return "", j.createFailure(name, err)
 	}
-	j.dbPassword, err = newDBPassword()
-	if err != nil {
-		return "", &stepError{why: "The panel could not make a password for the database.", next: "Try again.", technical: j.technical(err)}
+	if j.in.Kind == KindPHP {
+		j.dbPassword = j.in.DBPassword
+	} else {
+		j.dbPassword, err = newDBPassword()
+		if err != nil {
+			return "", &stepError{why: "The panel could not make a password for the database.", next: "Try again.", technical: j.technical(err)}
+		}
+		j.secrets = append(j.secrets, j.dbPassword)
 	}
-	j.secrets = append(j.secrets, j.dbPassword)
 	err = j.runner.databases.CreateUserStrict(ctx, owner, name, j.dbPassword)
+	if j.in.Kind == KindPHP {
+		// The user's create is the last use of the person's password.
+		j.in.DBPassword, j.dbPassword = "", ""
+	}
 	j.userCreated = err == nil || errors.Is(err, dbhost.ErrNotRegistered)
 	if err != nil {
 		return "", j.createFailure(name, err)
@@ -513,7 +557,27 @@ func (j *run) database(ctx context.Context) (string, *stepError) {
 	if err = j.runner.databases.SetPrivileges(ctx, owner, name, name, []string{"ALL PRIVILEGES"}); err != nil {
 		return "", j.databaseFailure(err)
 	}
+	if j.in.Kind == KindPHP {
+		return "Created the database " + name + " and its user " + name + ".", nil
+	}
 	return "Created the database " + name + " and its user.", nil
+}
+
+// placeholder puts the placeholder page into the PHP site's public_html,
+// if the folder is empty.
+func (j *run) placeholder(ctx context.Context) (string, *stepError) {
+	res, err := j.runner.accounts.InstallPlaceholder(ctx, j.accountID, hostaccounts.PlaceholderInput{ExpectedRevision: j.revision}, j.actor)
+	if err != nil {
+		var install *hostaccounts.InstallError
+		if errors.As(err, &install) {
+			return "", &stepError{why: "The site's PHP could not write the placeholder page into public_html as the site's user.", next: "Open Technical details to see why, fix the cause, then create the website again.", technical: scrub(install.Step+": "+install.Detail, j.secrets...)}
+		}
+		return "", j.brokerFailure(err)
+	}
+	if !res.Written {
+		return "public_html already had files, so the panel left them as they are and added no placeholder page.", nil
+	}
+	return "Added a placeholder page, public_html/index.php. Replace it with your website's files.", nil
 }
 
 // wordpress installs WordPress with the person's admin details.
@@ -544,7 +608,7 @@ func (j *run) wordpress(ctx context.Context) (string, *stepError) {
 		return "", j.brokerFailure(err)
 	}
 	j.wpVersion = res.Version
-	return "Installed WordPress " + res.Version + ".", nil
+	return "Installed WordPress " + res.Version + " with the LiteSpeed Cache plugin " + hostaccounts.LSCachePluginVersion + ".", nil
 }
 
 // brokerFailure explains the broker's typed errors.
@@ -588,10 +652,11 @@ func (j *run) databaseFailure(err error) *stepError {
 }
 
 var stepWhat = map[string]string{
-	StepAccount:   "The hosting account could not be created.",
-	StepWeb:       "The site could not be put live.",
-	StepDatabase:  "The database could not be created.",
-	StepWordPress: "WordPress could not be installed.",
+	StepAccount:     "The hosting account could not be created.",
+	StepWeb:         "The site could not be put live.",
+	StepDatabase:    "The database could not be created.",
+	StepWordPress:   "WordPress could not be installed.",
+	StepPlaceholder: "The placeholder page could not be added.",
 }
 
 // fail records the failed step, skips the rest, and undoes what the job
@@ -680,7 +745,8 @@ func (j *run) undo() (left, notes []string) {
 	}
 	var err error
 	if !gone {
-		_, err = j.runner.accounts.Delete(ctx, j.accountID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: undoReason}, j.actor)
+		_, reason := j.reasons()
+		_, err = j.runner.accounts.Delete(ctx, j.accountID, hostaccounts.DeleteInput{ExpectedRevision: revision, Reason: reason}, j.actor)
 		if errors.Is(err, hostaccounts.ErrNotFound) {
 			gone, err = true, nil
 		}

@@ -12,17 +12,27 @@ import (
 	"unicode/utf8"
 )
 
-// Input is what the person typed. AdminPassword is held in memory only and
-// never stored; the run drops its references when it ends, after the install
-// step or after undoing a failed job.
+// Input is what the person typed. Kind is KindWordPress ("" means it too) or
+// KindPHP. A WordPress site has a title and an admin account; a PHP site has
+// neither, and a database only if Database is set, with the password the
+// person chose for its user. The passwords are held in memory only and never
+// stored; the run drops its references when it ends, after the step that
+// last uses them or after undoing a failed job.
 type Input struct {
+	Kind          string
 	Domain        string
 	Title         string
 	AdminUser     string
 	AdminEmail    string
 	AdminPassword string
 	PHPVersion    string
+	Database      bool
+	DBPassword    string
 }
+
+// wantsDatabase reports whether the site gets a database: a WordPress site
+// always, a PHP site when the person asked for one.
+func (in Input) wantsDatabase() bool { return in.Kind != KindPHP || in.Database }
 
 var (
 	// ErrInvalid, ErrConflict and ErrUnavailable classify a refused start.
@@ -57,8 +67,22 @@ var deniedNames = map[string]bool{"root": true, "daemon": true, "bin": true, "sy
 
 // Validate checks every field the way the broker will, so a request it
 // would refuse is refused here, before anything is created. It returns the
-// input with the title's outer spaces removed (the broker refuses them).
+// input with the title's outer spaces removed (the broker refuses them) and
+// Kind set.
 func Validate(in Input) (Input, error) {
+	if in.Kind == "" {
+		in.Kind = KindWordPress
+	}
+	switch in.Kind {
+	case KindWordPress:
+		if in.Database || in.DBPassword != "" {
+			return in, refuse(ErrInvalid, "A WordPress site always gets its own database; the panel makes its password.")
+		}
+	case KindPHP:
+		return validatePHP(in)
+	default:
+		return in, refuse(ErrInvalid, "The website type must be WordPress or PHP site.")
+	}
 	in.Title = strings.TrimSpace(in.Title)
 	switch {
 	case !validDomain(in.Domain):
@@ -73,6 +97,25 @@ func Validate(in Input) (Input, error) {
 		return in, refuse(ErrInvalid, "admin_password must be 12 to 128 characters, with no control characters and no space at the start or end.")
 	case !phpVersions[in.PHPVersion]:
 		return in, refuse(ErrInvalid, "php_version must be 8.1, 8.2, 8.3 or 8.4.")
+	}
+	return in, nil
+}
+
+// validatePHP checks a PHP site: its domain and PHP version, and the
+// database user's password when it asks for a database. It has no WordPress
+// fields.
+func validatePHP(in Input) (Input, error) {
+	switch {
+	case !validDomain(in.Domain):
+		return in, refuse(ErrInvalid, "domain must be a lowercase domain name with at least one dot, such as example.com.")
+	case !phpVersions[in.PHPVersion]:
+		return in, refuse(ErrInvalid, "php_version must be 8.1, 8.2, 8.3 or 8.4.")
+	case in.Title != "" || in.AdminUser != "" || in.AdminEmail != "" || in.AdminPassword != "":
+		return in, refuse(ErrInvalid, "A PHP site has no WordPress title or admin account.")
+	case in.Database && !validPassword(in.DBPassword):
+		return in, refuse(ErrInvalid, "database_password must be 12 to 128 characters, with no control characters and no space at the start or end.")
+	case !in.Database && in.DBPassword != "":
+		return in, refuse(ErrInvalid, "database_password is only for a site that gets a database. Leave it empty, or ask for a database.")
 	}
 	return in, nil
 }

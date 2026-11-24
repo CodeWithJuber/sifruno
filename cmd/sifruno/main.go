@@ -257,8 +257,9 @@ func run() error {
 		broker := hostaccounts.NewClient(*accountsSocket)
 		web, okWeb := broker.(hostaccounts.WebService)
 		wordpress, okWordPress := broker.(hostaccounts.WordPressService)
-		if !okWeb || !okWordPress {
-			return errors.New("the account broker client lacks the web or WordPress operation")
+		placeholder, okPlaceholder := broker.(hostaccounts.PlaceholderService)
+		if !okWeb || !okWordPress || !okPlaceholder {
+			return errors.New("the account broker client lacks the web, WordPress or placeholder operation")
 		}
 		jobs, jerr := wizard.OpenStore(filepath.Join(dir, "wizard"))
 		if jerr != nil {
@@ -278,7 +279,7 @@ func run() error {
 				certificates, certs = m, m
 			}
 		}
-		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress}, dbSvc, jobs, certs)
+		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress, PlaceholderService: placeholder}, dbSvc, jobs, certs)
 		// Website backups: the broker runs restic; the panel schedules the
 		// nightly backups, the weekly prune and drill, and the jobs a person
 		// starts. Nothing runs until backup storage is set up.

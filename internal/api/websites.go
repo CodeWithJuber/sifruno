@@ -26,6 +26,7 @@ type Website struct {
 	AccountID        string       `json:"account_id"`
 	Username         string       `json:"username"`
 	Domain           string       `json:"domain"`
+	Kind             string       `json:"kind" enum:"wordpress,php" doc:"What the wizard made: wordpress, or php for a PHP site with no WordPress (its wordpress_version and admin_url are empty)."`
 	State            string       `json:"state" doc:"The hosting account's state: active, suspended or recovery_required; partly_deleted when a delete removed the hosting account but not yet the site's database."`
 	HTTPS            WebsiteHTTPS `json:"https"`
 	PHPVersion       string       `json:"php_version" doc:"The PHP version the site runs with. Empty when the account service reports none."`
@@ -439,7 +440,7 @@ func findWebsite(ctx context.Context, o Options, id string) (Website, hostaccoun
 // but not yet its database: the job is all that is left to describe it.
 func partlyDeletedWebsite(j wizard.Job) Website {
 	return Website{
-		AccountID: j.Result.AccountID, Username: j.Username, Domain: j.Domain, State: partlyDeleted,
+		AccountID: j.Result.AccountID, Username: j.Username, Domain: j.Domain, Kind: j.Kind, State: partlyDeleted,
 		WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: j.DeleteRevision,
 	}
 }
@@ -450,7 +451,7 @@ func website(a hostaccounts.Account, j wizard.Job) Website {
 		https.NotAfter = time.Unix(a.Certificate.NotAfter, 0).UTC().Format(time.RFC3339)
 	}
 	return Website{
-		AccountID: a.ID, Username: a.Username, Domain: a.Domain, State: a.State, HTTPS: https,
+		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: j.Kind, State: a.State, HTTPS: https,
 		PHPVersion: a.Web.PHPVersion, WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: a.Revision,
 		SiteFolderChanged: a.SiteFolderChanged,
 	}

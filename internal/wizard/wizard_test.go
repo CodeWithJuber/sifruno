@@ -46,6 +46,7 @@ type fakeAccounts struct {
 	webFn    func(context.Context) error
 	install  hostaccounts.WordPressInput
 	installF func(context.Context) error
+	pageF    func(context.Context) (bool, error) // InstallPlaceholder, in php_site_test.go
 	listErr  error
 	delErr   error
 	delCtx   error

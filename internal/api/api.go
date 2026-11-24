@@ -90,6 +90,7 @@ func New(o Options) http.Handler {
 	registerSiteDatabases(api, o)
 	registerSiteBackups(api, o)
 	registerSiteTools(api, o)
+	registerWebsiteFiles(mux, api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)
@@ -258,7 +259,7 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedBackupMutation(r) || allowedCronMutation(r) || allowedSessionMutation(r)
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedBackupMutation(r) || allowedCronMutation(r) || allowedFileMutation(r) || allowedSessionMutation(r)
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -335,6 +336,9 @@ func New(o Options) http.Handler {
 				if allowedCronMutation(r) {
 					prepare = prepareCronJSON
 				}
+				if allowedFileMutation(r) {
+					prepare = prepareFileJSON
+				}
 				if !prepare(w, r) {
 					return
 				}
@@ -353,6 +357,9 @@ func New(o Options) http.Handler {
 			}
 			if mutation && allowedBackupMutation(r) {
 				wait = backupWait(r)
+			}
+			if files := fileRouteWait(r); files > 0 {
+				wait = files
 			}
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait))
 		}

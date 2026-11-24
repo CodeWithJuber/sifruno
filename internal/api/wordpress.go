@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -196,6 +197,12 @@ func prepareWizardJSON(w http.ResponseWriter, r *http.Request) bool {
 // Go's decoder would accept a key in another case, so keys are compared
 // exactly. Nothing from the body is echoed back.
 func prepareStrictJSON(w http.ResponseWriter, r *http.Request, fields []wizardField) bool {
+	return prepareStrictJSONWithin(w, r, fields, 4096)
+}
+
+// prepareStrictJSONWithin is prepareStrictJSON with its own size bound,
+// for a body that carries a file's text.
+func prepareStrictJSONWithin(w http.ResponseWriter, r *http.Request, fields []wizardField, limit int64) bool {
 	names := make([]string, len(fields))
 	whole := map[string]bool{}
 	for i, f := range fields {
@@ -207,15 +214,20 @@ func prepareStrictJSON(w http.ResponseWriter, r *http.Request, fields []wizardFi
 		operator.WriteError(w, 415, "invalid_request", "Send the request as JSON.")
 		return false
 	}
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(5 * time.Second))
+	// A file's text takes longer to arrive than a form's few fields.
+	wait, size := 5*time.Second, strconv.FormatInt(limit>>10, 10)+" KiB"
+	if limit > 64<<10 {
+		wait, size = 30*time.Second, strconv.FormatInt(limit>>20, 10)+" MiB"
+	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(wait))
 	defer http.NewResponseController(w).SetReadDeadline(time.Time{})
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4097))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
 	if err != nil {
 		operator.WriteError(w, 400, "invalid_request", "The request could not be read.")
 		return false
 	}
-	if len(raw) > 4096 {
-		operator.WriteError(w, 413, "invalid_request", "The request is larger than 4 KiB.")
+	if int64(len(raw)) > limit {
+		operator.WriteError(w, 413, "invalid_request", "The request is larger than "+size+".")
 		return false
 	}
 	trimmed := bytes.TrimSpace(raw)

@@ -485,6 +485,9 @@ function OpenPhpMyAdmin({ accountId, hasDatabases, announcer }: { accountId: str
       {hasDatabases ? "Opens in a new tab on phpMyAdmin's own address, signed in to this website's databases only, for up to an hour."
         : "Create a database first: phpMyAdmin shows this website's databases only."}
     </div>
+    {hasDatabases && <div className="text-sm text-muted-foreground" data-testid="phpmyadmin-definers">
+      Triggers, views and stored routines need this website's own database user: phpMyAdmin's sign-in cannot make them.
+    </div>}
     {blocked && <Alert role={undefined} className="text-start" data-testid="phpmyadmin-blocked">
       <TriangleAlert aria-hidden="true" />
       <AlertTitle>Your browser did not open a new tab.</AlertTitle>

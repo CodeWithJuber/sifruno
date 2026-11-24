@@ -181,6 +181,7 @@ function explain(operation: Operation, status: number, detail: string): { why: s
   if (operation === "openPhpMyAdmin") {
     switch (status) {
       case 409: return { why: detail || "This website has no database yet.", next: "Create a database below, then choose Open phpMyAdmin again." };
+      case 429: return { why: detail || "Too many phpMyAdmin sign-ins are open.", next: "Use a phpMyAdmin tab you already have open, or try again later: each sign-in ends one hour after it was opened." };
       case 503: return { why: detail || "phpMyAdmin or the database server is not available right now.", next: "If phpMyAdmin is not set up, run Sifruno's installer (install.sh) on the server again. Otherwise check the database server, then try again." };
       case 502: return { why: detail || "The database server refused to make phpMyAdmin's temporary user.", next: "Try again. If it keeps failing, check the database server's log." };
     }

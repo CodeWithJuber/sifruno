@@ -267,7 +267,8 @@ test("a phpMyAdmin that does not open says what happened, why and what to do", a
   const cases = [
     [problem(409, "This website has no database yet, so phpMyAdmin would have nothing to show. Create a database first."), /no database yet/, /Create a database below/],
     [problem(503, "phpMyAdmin is not set up on this server. Run Sifruno's installer (install.sh) again to add it."), /not set up/, /install\.sh/],
-    [problem(429, "Too many phpMyAdmin sign-ins are open on this server."), /Too many/, /Wait a minute/],
+    [problem(429, "Too many phpMyAdmin sign-ins are open on this server."), /Too many/, /tab you already have open/],
+    [problem(429, "You already have 3 phpMyAdmin sign-ins open for this website, the most one person may have."), /already have 3/, /one hour after it was opened/],
     [problem(502, "The database server refused to make phpMyAdmin's temporary user. Open Technical details to see why.", [{ message: "ERROR 1045 (28000): Access denied" }]), /temporary user/, /database server's log/],
     [problem(403, "An API token cannot use this part of the panel API."), /API token/, /Reload the page/],
   ];

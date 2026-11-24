@@ -603,9 +603,13 @@ Checked before anything is journaled:
   If the leaf lists extended key usages, `serverAuth` is one of them. The
   key is one EC key on P-256 or P-384 (SEC 1 or PKCS #8) or one RSA key of
   2048 to 4096 bits (PKCS #1 or PKCS #8), and it matches the leaf.
-- Fit (422 `certificate_rejected`): the leaf's DNS names include the
-  account's domain exactly (the common name is ignored, and a wildcard does
-  not count), and NotBefore <= now < NotAfter.
+- Fit (422 `certificate_rejected`): the leaf names DNS names only (no IP
+  address, email or URI), each once and each one of the site's domains (the
+  account's own and its aliases, see Domains and redirects), the account's
+  own domain among them (the common name is ignored, and a wildcard is no
+  site's domain), and NotBefore <= now < NotAfter. A domain of the site the
+  leaf leaves out, because its DNS does not point here yet, is served over
+  http only.
 - Account (409 `conflict`): the revision matches, the account is active, its
   site is live, no WordPress install is running, and its identity verifies.
 
@@ -626,7 +630,8 @@ written beside its target with `O_EXCL|O_NOFOLLOW`, synced and renamed.
    back, checked again and compared with the journaled leaf, then written as
    `cert.pem` (full chain) and `key.pem`. Every site with a certificate is
    rendered with a `vhssl` block, and the HTTPS listener (`*:443`,
-   `sifruno-https`) is rendered, mapping only those sites. The listener's
+   `sifruno-https`) is rendered, mapping only those sites, each with only
+   the domains its certificate names that the site still has. The listener's
    own certificate, `/etc/sifruno/tls/listener.crt` and `listener.key`, is
    made in Go when the first site gets a certificate (self-signed, CN
    `sifruno`, ECDSA P-256, ten years) and made again only if it is missing,
@@ -645,16 +650,23 @@ broker finishes it from the staged pair, or ends it `rejected` if the config
 now fails its test. If the staged pair is missing or names another
 certificate, the operation stays pending for a person: the broker does not
 guess what to install. The account list shows `certificate` (`not_after` in
-Unix seconds, `fingerprint` as lowercase hex SHA-256 of the leaf) for each
-account that has one, so the panel can renew in time; the journal's before
-and after rows record it too. Delete takes the site out of the config first,
+Unix seconds, `fingerprint` as lowercase hex SHA-256 of the leaf, `names`
+as the leaf's DNS names sorted and joined with commas) for each account
+that has one, so the panel can renew in time and see which domains are
+covered; the journal's before and after rows record it too. A certificate
+installed before the broker kept its names has none listed and covers the
+account's own domain only. Delete takes the site out of the config first,
 then removes the site's TLS directory with the user: only the live and
 staged pairs and `writeAt`'s temporary names, and an unexpected file keeps
 the delete pending rather than being removed.
 
 Limits for now:
 
-- One certificate per site, for the account's own domain only.
+- One certificate per site, for the account's own domain and those of its
+  aliases it names. An alias added later, or one whose DNS pointed
+  elsewhere, is served over http until the panel installs a certificate
+  that names it; one removed stays named by the installed certificate until
+  the next, but is no longer mapped.
 - A suspended site answers 403 to challenges as to everything else, so it
   cannot renew while suspended.
 - OpenLiteSpeed refuses a challenge context whose directory is missing, so

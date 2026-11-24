@@ -18,6 +18,7 @@ import (
 	"math/big"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"sifruno/internal/olsweb"
@@ -30,7 +31,8 @@ import (
 // graceful restart, as the web operation does. It needs the web operation on.
 
 // CertificateInput is a certificate chain (leaf first, 1 to 4 certificates)
-// and its private key for the account's own domain, each PEM at most 64 KiB.
+// and its private key for the account's own domain and any of its aliases,
+// each PEM at most 64 KiB.
 type CertificateInput struct {
 	ExpectedRevision uint64 `json:"expected_revision"`
 	CertPEM          string `json:"cert_pem"`
@@ -43,6 +45,11 @@ type CertificateInput struct {
 type CertificateState struct {
 	NotAfter    int64  `json:"not_after"`   // Unix seconds of the leaf's NotAfter
 	Fingerprint string `json:"fingerprint"` // SHA-256 of the leaf DER, lowercase hex
+	// Names are the leaf's DNS names, sorted and joined with commas, each
+	// one of the site's domains when it was installed. Empty for a
+	// certificate installed before the broker kept them: it named the
+	// account's own domain. A string, so an Account stays comparable.
+	Names string `json:"names,omitempty"`
 }
 
 type CertificateResult struct {
@@ -57,8 +64,9 @@ type CertificateService interface {
 }
 
 // ErrCertificateRejected means a well-formed certificate does not fit the
-// site now: its leaf does not name the account's domain, or it is expired or
-// not yet valid. Nothing was journaled or changed.
+// site now: its leaf does not name the account's domain, names a name the
+// site does not have, or it is expired or not yet valid. Nothing was
+// journaled or changed.
 var ErrCertificateRejected = errors.New("certificate rejected")
 
 const (
@@ -90,7 +98,7 @@ var (
 func (c CertificateState) installed() bool { return c.Fingerprint != "" }
 
 func validCertificateState(c CertificateState) bool {
-	return c.NotAfter > 0 && certificateFingerprintPattern.MatchString(c.Fingerprint)
+	return c.NotAfter > 0 && certificateFingerprintPattern.MatchString(c.Fingerprint) && (c.Names == "" || validCertificateNames(c.Names))
 }
 
 // certificateDigest is the journal target for a certificate operation.
@@ -172,22 +180,76 @@ func parseCertificate(certPEM, keyPEM string) (certificateBundle, error) {
 		return certificateBundle{}, ErrInvalid
 	}
 	sum := sha256.Sum256(leaf.Raw)
+	state := CertificateState{NotAfter: leaf.NotAfter.Unix(), Fingerprint: hex.EncodeToString(sum[:])}
+	names := slices.Sorted(slices.Values(leaf.DNSNames))
+	if joined := strings.Join(names, ","); validCertificateNames(joined) {
+		state.Names = joined
+	}
 	return certificateBundle{
 		leaf:     leaf,
 		chainPEM: chainPEM.Bytes(),
 		keyPEM:   pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}),
-		state:    CertificateState{NotAfter: leaf.NotAfter.Unix(), Fingerprint: hex.EncodeToString(sum[:])},
+		state:    state,
 	}, nil
 }
 
-// fits returns ErrCertificateRejected unless the leaf names domain exactly
-// among its DNS names (the common name is ignored) and NotBefore <= now <
-// NotAfter.
-func (b certificateBundle) fits(domain string, now time.Time) error {
-	if !slices.Contains(b.leaf.DNSNames, domain) || now.Before(b.leaf.NotBefore) || !now.Before(b.leaf.NotAfter) {
+// fits returns ErrCertificateRejected unless the leaf's names are exactly
+// domains the site has: DNS names only (no IP address, email or URI), each
+// one of domains, each once, the account's own domain (primary) among them
+// (the common name is ignored, and a wildcard is no site's domain), and
+// NotBefore <= now < NotAfter. A domain of the site that the leaf leaves out
+// is served over http only (its DNS may not point here yet).
+func (b certificateBundle) fits(domains []string, primary string, now time.Time) error {
+	leaf := b.leaf
+	if len(leaf.IPAddresses) != 0 || len(leaf.EmailAddresses) != 0 || len(leaf.URIs) != 0 || b.state.Names == "" {
+		return ErrCertificateRejected
+	}
+	for _, name := range leaf.DNSNames {
+		if !slices.Contains(domains, name) {
+			return ErrCertificateRejected
+		}
+	}
+	if !slices.Contains(leaf.DNSNames, primary) || now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
 		return ErrCertificateRejected
 	}
 	return nil
+}
+
+// validCertificateNames checks a certificate's names as the record holds
+// them: 1 to olsweb.MaxDomainsPerSite valid domains, sorted, each once,
+// joined with commas.
+func validCertificateNames(s string) bool {
+	names := strings.Split(s, ",")
+	if s == "" || len(names) > olsweb.MaxDomainsPerSite {
+		return false
+	}
+	for i, name := range names {
+		if !validDomain(name) || (i > 0 && names[i-1] >= name) {
+			return false
+		}
+	}
+	return true
+}
+
+// coveredDomains are the site's domains its certificate names, in the
+// site's order: those in state.Names, or the account's own domain alone for
+// a certificate recorded before the broker kept its names (fits required
+// the domain then). The account's own domain is always one of them.
+func coveredDomains(state CertificateState, domains []string, primary string) []string {
+	if state.Names == "" {
+		return []string{primary}
+	}
+	names := strings.Split(state.Names, ",")
+	out := []string{}
+	for _, d := range domains {
+		if slices.Contains(names, d) {
+			out = append(out, d)
+		}
+	}
+	if !slices.Contains(out, primary) {
+		out = append([]string{primary}, out...)
+	}
+	return out
 }
 
 // pemBlocks splits data into PEM blocks. Anything but whitespace before,

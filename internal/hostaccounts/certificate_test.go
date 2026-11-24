@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -155,10 +156,16 @@ type testChain struct {
 
 func newTestChain(t *testing.T, domain string) testChain {
 	t.Helper()
+	return newTestChainFor(t, domain)
+}
+
+// newTestChainFor is a chain whose leaf names these domains.
+func newTestChainFor(t *testing.T, domains ...string) testChain {
+	t.Helper()
 	root := newTestIssuer(t, "Test Root", nil)
 	mid := newTestIssuer(t, "Test Intermediate", root)
 	key := newTestKey(t, elliptic.P256())
-	leaf, leafPEM := mid.leaf(t, leafSpec{dns: []string{domain}, eku: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, key: key})
+	leaf, leafPEM := mid.leaf(t, leafSpec{dns: domains, eku: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, key: key})
 	return testChain{leaf: leaf, leafPEM: leafPEM, intermediate: pemOf("CERTIFICATE", mid.cert.Raw), root: pemOf("CERTIFICATE", root.cert.Raw), key: key}
 }
 
@@ -181,7 +188,7 @@ func TestParseCertificateAcceptsAndCanonicalises(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.state != (CertificateState{NotAfter: c.leaf.NotAfter.Unix(), Fingerprint: fingerprintOf(c.leaf)}) || !validCertificateState(b.state) {
+	if b.state != (CertificateState{NotAfter: c.leaf.NotAfter.Unix(), Fingerprint: fingerprintOf(c.leaf), Names: "fixture.test"}) || !validCertificateState(b.state) {
 		t.Fatalf("state %+v", b.state)
 	}
 	if string(b.chainPEM) != c.certPEM() {
@@ -282,20 +289,122 @@ func TestCertificateFitsTheAccount(t *testing.T) {
 		}
 		return b
 	}
-	if err := parse(leafSpec{dns: []string{"www.fixture.test", "fixture.test"}}).fits("fixture.test", now); err != nil {
-		t.Fatalf("a SAN match: %v", err)
+	site := []string{"fixture.test", "www.fixture.test", "shop.fixture.test"}
+	if err := parse(leafSpec{dns: []string{"fixture.test"}}).fits(site, "fixture.test", now); err != nil {
+		t.Fatalf("the account's domain alone: %v", err)
+	}
+	every := parse(leafSpec{dns: []string{"www.fixture.test", "shop.fixture.test", "fixture.test"}})
+	if err := every.fits(site, "fixture.test", now); err != nil || every.state.Names != "fixture.test,shop.fixture.test,www.fixture.test" {
+		t.Fatalf("every domain of the site: %v, names %q", err, every.state.Names)
 	}
 	for name, spec := range map[string]leafSpec{
-		"wrong domain":       {dns: []string{"other.test"}},
-		"only in the CN":     {dns: []string{"other.test"}, cn: "fixture.test"},
-		"wildcard":           {dns: []string{"*.test"}},
-		"expired":            {dns: []string{"fixture.test"}, notBefore: now.Add(-48 * time.Hour), notAfter: now.Add(-time.Hour)},
-		"not yet valid":      {dns: []string{"fixture.test"}, notBefore: now.Add(time.Hour), notAfter: now.Add(48 * time.Hour)},
-		"different spelling": {dns: []string{"FIXTURE.test"}},
+		"wrong domain":                {dns: []string{"other.test"}},
+		"only in the CN":              {dns: []string{"other.test"}, cn: "fixture.test"},
+		"wildcard":                    {dns: []string{"*.test"}},
+		"a wildcard beside":           {dns: []string{"fixture.test", "*.fixture.test"}},
+		"a name the site lacks":       {dns: []string{"fixture.test", "www.fixture.test", "other.test"}},
+		"the aliases without it":      {dns: []string{"www.fixture.test", "shop.fixture.test"}},
+		"a name twice":                {dns: []string{"fixture.test", "fixture.test"}},
+		"no names":                    {cn: "fixture.test"},
+		"expired":                     {dns: []string{"fixture.test"}, notBefore: now.Add(-48 * time.Hour), notAfter: now.Add(-time.Hour)},
+		"not yet valid":               {dns: []string{"fixture.test"}, notBefore: now.Add(time.Hour), notAfter: now.Add(48 * time.Hour)},
+		"different spelling":          {dns: []string{"FIXTURE.test"}},
+		"a different spelling beside": {dns: []string{"fixture.test", "WWW.fixture.test"}},
 	} {
-		if err := parse(spec).fits("fixture.test", now); !errors.Is(err, ErrCertificateRejected) {
+		if err := parse(spec).fits(site, "fixture.test", now); !errors.Is(err, ErrCertificateRejected) {
 			t.Errorf("%s: %v, want ErrCertificateRejected", name, err)
 		}
+	}
+	// Names other than DNS names make the certificate something else.
+	ipLeaf := &x509.Certificate{SerialNumber: testSerial(t), DNSNames: []string{"fixture.test"}, IPAddresses: []net.IP{net.ParseIP("192.0.2.1")}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, ipLeaf, root.cert, key.Public(), root.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := parseCertificate(string(pemOf("CERTIFICATE", der)), string(sec1PEM(t, key)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.fits(site, "fixture.test", now); !errors.Is(err, ErrCertificateRejected) {
+		t.Errorf("an IP address beside the domain: %v", err)
+	}
+}
+
+// TestCertificateForEveryDomainOfTheSite: a certificate may name the site's
+// aliases; the HTTPS listener maps the names it covers, and no others.
+func TestCertificateForEveryDomainOfTheSite(t *testing.T) {
+	s, f, a := liveCertificateStore(t)
+	ctx := context.Background()
+	live := recordFor(t, s, a.ID)
+	got, err := s.setSiteDomains(ctx, a.ID, domainsInput(live, []string{"www.fixture.test", "shop.fixture.test", "later.fixture.test"}), "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// later.fixture.test does not point here yet: the certificate leaves it out.
+	c := newTestChainFor(t, "fixture.test", "www.fixture.test", "shop.fixture.test")
+	installed, err := s.setCertificate(ctx, a.ID, c.input(t, got.Account.Revision), "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed.Certificate.Names != "fixture.test,shop.fixture.test,www.fixture.test" || installed.Account.Certificate != installed.Certificate {
+		t.Fatalf("installed %+v", installed.Certificate)
+	}
+	site := siteOf(t, f.sites, a.ID)
+	if !sameSiteTLS(site, "fixture.test", "shop.fixture.test", "www.fixture.test") {
+		t.Fatalf("HTTPS maps %v", site.TLS.Domains)
+	}
+	files, err := renderUnderHome(f.sites)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := string(files[olsweb.ServerConfigPath])
+	https := server[strings.Index(server, "listener sifruno-https {"):]
+	if !strings.Contains(https, " fixture.test, shop.fixture.test, www.fixture.test\n") || strings.Contains(https, "later.fixture.test") || !strings.Contains(server, "later.fixture.test") {
+		t.Fatalf("listeners:\n%s", server)
+	}
+	// A certificate naming a domain the site does not have is refused, and
+	// so is one that leaves out the account's own domain.
+	for name, chain := range map[string]testChain{
+		"another account's name": newTestChainFor(t, "fixture.test", "other.test"),
+		"without the domain":     newTestChainFor(t, "www.fixture.test"),
+	} {
+		if _, err := s.setCertificate(ctx, a.ID, chain.input(t, installed.Account.Revision), "test operator"); !errors.Is(err, ErrCertificateRejected) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// Removing an alias the certificate names takes it off HTTPS too.
+	live = recordFor(t, s, a.ID)
+	if _, err := s.setSiteDomains(ctx, a.ID, domainsInput(live, []string{"www.fixture.test", "later.fixture.test"}), "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if site := siteOf(t, f.sites, a.ID); !sameSiteTLS(site, "fixture.test", "www.fixture.test") {
+		t.Fatalf("after removing shop, HTTPS maps %v", site.TLS.Domains)
+	}
+	// The record keeps what the certificate names; a damaged list is refused.
+	r := recordFor(t, s, a.ID)
+	if r.TLS.Names != "fixture.test,shop.fixture.test,www.fixture.test" {
+		t.Fatalf("record names %q", r.TLS.Names)
+	}
+	for _, bad := range []string{"www.fixture.test,fixture.test", "fixture.test,fixture.test", "fixture.test,bad name", ","} {
+		damaged := r
+		damaged.TLS.Names, damaged.Account.Certificate.Names = bad, bad
+		if err := s.save(damaged); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.list(ctx); !errors.Is(err, ErrRecovery) {
+			t.Errorf("names %q: %v", bad, err)
+		}
+	}
+	if err := s.save(r); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A certificate recorded before the broker kept its names covers the
+// account's own domain only.
+func TestCertificateWithoutNamesCoversTheDomain(t *testing.T) {
+	if got := coveredDomains(CertificateState{NotAfter: 1, Fingerprint: strings.Repeat("ab", 32)}, []string{"fixture.test", "www.fixture.test"}, "fixture.test"); strings.Join(got, ",") != "fixture.test" {
+		t.Fatalf("covered %v", got)
 	}
 }
 
@@ -390,7 +499,7 @@ func TestCertificateInstallsAndJournals(t *testing.T) {
 	s, f, a := liveCertificateStore(t)
 	ctx := context.Background()
 	c := newTestChain(t, a.Domain)
-	want := CertificateState{NotAfter: c.leaf.NotAfter.Unix(), Fingerprint: fingerprintOf(c.leaf)}
+	want := CertificateState{NotAfter: c.leaf.NotAfter.Unix(), Fingerprint: fingerprintOf(c.leaf), Names: a.Domain}
 	got, err := s.setCertificate(ctx, a.ID, c.input(t, a.Revision), "test operator")
 	if err != nil {
 		t.Fatal(err)
@@ -552,7 +661,7 @@ func TestCertificateInterruptedApplyIsFinishedByRefresh(t *testing.T) {
 	s, f, a := liveCertificateStore(t)
 	ctx := context.Background()
 	c := newTestChain(t, a.Domain)
-	want := CertificateState{NotAfter: c.leaf.NotAfter.Unix(), Fingerprint: fingerprintOf(c.leaf)}
+	want := CertificateState{NotAfter: c.leaf.NotAfter.Unix(), Fingerprint: fingerprintOf(c.leaf), Names: a.Domain}
 	f.failure = "cert-after"
 	if _, err := s.setCertificate(ctx, a.ID, c.input(t, a.Revision), "test operator"); !errors.Is(err, ErrRecovery) {
 		t.Fatalf("failed apply: %v", err)

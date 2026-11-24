@@ -9,8 +9,9 @@ import (
 // setCertificate installs a certificate for an account's live site.
 //
 // Everything about the input is checked before anything is journaled: its
-// form (400), whether it names the account's domain and is valid now (422
-// certificate_rejected), and the account's state and revision (409). Then the
+// form (400), whether its names are the site's domains, the account's own
+// among them, and it is valid now (422 certificate_rejected), and the
+// account's state and revision (409). Then the
 // canonical chain and key are staged root-only beside the site's live files,
 // so the intent never names a certificate the broker cannot finish
 // installing. After the intent is journaled, the staged pair becomes the
@@ -54,7 +55,11 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 	if r.Account.Revision != in.ExpectedRevision || r.Account.State != "active" || !r.Web.enabled() || s.installing[id] {
 		return CertificateResult{}, ErrConflict
 	}
-	if bundle.fits(r.Account.Domain, time.Now()) != nil {
+	// The leaf names the account's domain and may name its aliases; every
+	// name must be one of them. No operation is pending, so the recorded
+	// aliases are the ones served.
+	domains := append([]string{r.Account.Domain}, recordSiteDomains(r).Aliases...)
+	if bundle.fits(domains, r.Account.Domain, time.Now()) != nil {
 		return CertificateResult{}, ErrCertificateRejected
 	}
 	if r.Account.Revision == ^uint64(0) {

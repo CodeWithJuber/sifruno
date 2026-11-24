@@ -129,10 +129,11 @@ func webSites(items []record, except string) []olsweb.Site {
 			Isolation: olsweb.Isolation{Namespace: true, CGroups: true},
 		}
 		if certificate.installed() {
-			// The certificate names the account's own domain; the HTTPS
-			// listener maps no alias it does not cover.
+			// The HTTPS listener maps only the domains the certificate
+			// names, so an alias it does not cover (its DNS may not point
+			// here yet, or it was added since) is served over http only.
 			site.TLS = siteTLS(site.Name)
-			site.TLS.Domains = []string{r.Account.Domain}
+			site.TLS.Domains = coveredDomains(certificate, site.Domains, r.Account.Domain)
 		}
 		sites = append(sites, site)
 	}

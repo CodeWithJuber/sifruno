@@ -190,9 +190,9 @@ func (c *client) SetWeb(ctx context.Context, id string, in WebInput, actor strin
 
 // SetCertificate asks the broker to install a certificate and key for the
 // account's live site. A 422 certificate_rejected answer means the leaf does
-// not name the account's domain or is not valid now; 422 web_rejected means
-// the config with it failed its test and was restored. Either way the
-// account is unchanged.
+// not name the account's domain, names one the site does not have, or is
+// not valid now; 422 web_rejected means the config with it failed its test
+// and was restored. Either way the account is unchanged.
 func (c *client) SetCertificate(ctx context.Context, id string, in CertificateInput, actor string) (CertificateResult, error) {
 	if !idPattern.MatchString(id) || !validCertificateInput(in, actor) {
 		return CertificateResult{}, ErrInvalid

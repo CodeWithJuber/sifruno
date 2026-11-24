@@ -34,11 +34,17 @@ type Databases interface {
 }
 
 // The nightly backup starts at 02:30 server time; the weekly prune and
-// drill follow the first nightly run of each ISO week.
+// drill follow the first complete night of each ISO week.
 const (
 	NightlyHour   = 2
 	NightlyMinute = 30
 )
+
+// SiteLimit bounds one site's scheduled backup or drill. The broker stops
+// a backup of its own at two hours; this is a little longer, so the panel
+// gives up only on a broker that stopped answering, and the next site goes
+// on instead of waiting for it.
+const SiteLimit = 2*time.Hour + 5*time.Minute
 
 // BackupJob is the job a site has in progress.
 type BackupJob struct {
@@ -91,10 +97,16 @@ type BackupPrune struct {
 type siteState struct {
 	LastBackup  *BackupResult `json:"last_backup,omitempty"`
 	LastRestore *BackupResult `json:"last_restore,omitempty"`
+	// Nightly is the night (YYYY-MM-DD, server time) whose scheduled backup
+	// of this site has ended, whether it succeeded or not, and NightlyEnded
+	// when: the next night starts with the site that waited longest.
+	Nightly      string    `json:"nightly,omitempty"`
+	NightlyEnded time.Time `json:"nightly_ended,omitzero"`
 }
 
 type state struct {
-	Version       int                   `json:"version"`
+	Version int `json:"version"`
+	// LastNightly is the last night whose every site's backup has ended.
 	LastNightly   string                `json:"last_nightly"`
 	LastPruneWeek string                `json:"last_prune_week"`
 	LastDrillWeek string                `json:"last_drill_week"`
@@ -135,6 +147,8 @@ type Manager struct {
 	path   string
 	now    func() time.Time
 	loc    *time.Location
+	// siteLimit is SiteLimit; a test shortens it.
+	siteLimit time.Duration
 
 	mu      sync.Mutex
 	st      state
@@ -147,7 +161,7 @@ func Open(path string, broker Broker, dbs Databases) (*Manager, error) {
 	if broker == nil || dbs == nil {
 		return nil, errors.New("site backups need the broker and the database registry")
 	}
-	m := &Manager{broker: broker, dbs: dbs, path: path, now: time.Now, loc: time.Local, running: map[string]BackupJob{}, st: state{Version: 1, Sites: map[string]*siteState{}}}
+	m := &Manager{broker: broker, dbs: dbs, path: path, now: time.Now, loc: time.Local, siteLimit: SiteLimit, running: map[string]BackupJob{}, st: state{Version: 1, Sites: map[string]*siteState{}}}
 	raw, err := os.ReadFile(path)
 	if err == nil {
 		var st state
@@ -442,10 +456,40 @@ func liveSites(accounts []hostaccounts.Account) []hostaccounts.Account {
 	return out
 }
 
+// nightlyOrder leaves out the sites whose backup tonight has ended and puts
+// the rest in the order their last scheduled backup ended, never first and
+// then oldest first, so a site a long or interrupted night did not reach
+// goes first the next time.
+func (m *Manager) nightlyOrder(sites []hostaccounts.Account, night string) []hostaccounts.Account {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ended := map[string]time.Time{}
+	out := []hostaccounts.Account{}
+	for _, a := range sites {
+		s := m.st.Sites[a.ID]
+		if s != nil && s.Nightly == night {
+			continue
+		}
+		if s != nil {
+			ended[a.ID] = s.NightlyEnded
+		}
+		out = append(out, a)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if a, b := ended[out[i].ID], ended[out[j].ID]; !a.Equal(b) {
+			return a.Before(b)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
 // RunDue runs the nightly backups once a day after 02:30 server time, then,
-// once per ISO week, the prune and a drill of the next site in turn. A day
-// counts as done when it starts, so a panel restarted during the night
-// does not start it again. Nothing runs until backup storage is set up.
+// once per ISO week, the prune and a drill of the next site in turn. A site
+// counts as done for the night when its backup has ended, failed or not,
+// and the night when every site has: a panel restarted mid-run goes on with
+// the sites not yet done. Each site has SiteLimit, so one that hangs does
+// not hold up the rest. Nothing runs until backup storage is set up.
 func (m *Manager) RunDue(ctx context.Context, now time.Time) {
 	local := now.In(m.loc)
 	today := local.Format("2006-01-02")
@@ -472,21 +516,39 @@ func (m *Manager) RunDue(ctx context.Context, now time.Time) {
 	if err != nil {
 		return
 	}
-	m.mu.Lock()
-	m.st.LastNightly = today
-	_ = m.save()
-	m.mu.Unlock()
 	sites := liveSites(accounts)
-	for _, a := range sites {
+	for _, a := range m.nightlyOrder(sites, today) {
 		if ctx.Err() != nil {
 			return
 		}
 		started, err := m.begin(a.ID, "backup", "scheduler")
 		if err != nil {
-			continue // a job a person started is running for this site
+			continue // a job a person started is running: tried again next minute
 		}
-		m.backup(ctx, a, "scheduler", "Nightly backup", started)
+		site, cancel := context.WithTimeout(ctx, m.siteLimit)
+		m.backup(site, a, "scheduler", "Nightly backup", started)
+		cancel()
+		if ctx.Err() != nil {
+			// The panel is stopping: this backup did not end here, so the
+			// site is tried again when the panel is back.
+			return
+		}
+		m.mu.Lock()
+		s := m.site(&m.st, a.ID)
+		s.Nightly, s.NightlyEnded = today, m.now().UTC()
+		_ = m.save()
+		m.mu.Unlock()
 	}
+	m.mu.Lock()
+	for _, a := range sites {
+		if s := m.st.Sites[a.ID]; s == nil || s.Nightly != today {
+			m.mu.Unlock()
+			return // a site is still to do
+		}
+	}
+	m.st.LastNightly = today
+	_ = m.save()
+	m.mu.Unlock()
 	week := isoWeek(local)
 	m.mu.Lock()
 	prune := m.st.LastPruneWeek != week
@@ -527,7 +589,9 @@ func (m *Manager) RunDue(ctx context.Context, now time.Time) {
 	m.mu.Unlock()
 	if drill {
 		if _, err := m.begin(next.ID, "drill", "scheduler"); err == nil {
-			m.drill(ctx, next, "scheduler", "Weekly restore drill")
+			site, cancel := context.WithTimeout(ctx, m.siteLimit)
+			m.drill(site, next, "scheduler", "Weekly restore drill")
+			cancel()
 		}
 	}
 }

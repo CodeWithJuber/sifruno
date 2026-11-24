@@ -22,6 +22,10 @@ type fakeBroker struct {
 	backupErr  error
 	drill      hostaccounts.DrillResult
 	restoreIn  []hostaccounts.RestoreInput
+	// hang names a site (by its id's first letter) whose backup waits until
+	// its context ends; during runs before a backup is answered.
+	hang   string
+	during func(id string)
 }
 
 func (b *fakeBroker) record(call string) {
@@ -44,8 +48,17 @@ func (b *fakeBroker) ShowBackupPassword(context.Context, hostaccounts.BackupPass
 func (b *fakeBroker) ConfirmBackupPassword(context.Context, hostaccounts.BackupPasswordInput, string) (hostaccounts.BackupStatus, error) {
 	return hostaccounts.BackupStatus{Ready: true, Configured: b.configured, PasswordSaved: true}, nil
 }
-func (b *fakeBroker) BackupAccount(_ context.Context, id string, in hostaccounts.BackupInput, actor string) (hostaccounts.Snapshot, error) {
+func (b *fakeBroker) BackupAccount(ctx context.Context, id string, in hostaccounts.BackupInput, actor string) (hostaccounts.Snapshot, error) {
 	b.record("backup " + id[:1] + " [" + strings.Join(in.Databases, ",") + "] " + actor)
+	if b.during != nil {
+		b.during(id)
+	}
+	if b.hang == id[:1] {
+		<-ctx.Done()
+	}
+	if ctx.Err() != nil {
+		return hostaccounts.Snapshot{}, ctx.Err()
+	}
 	if b.backupErr != nil {
 		return hostaccounts.Snapshot{}, b.backupErr
 	}
@@ -157,6 +170,79 @@ func TestNightlyBackupsPruneAndDrillRotation(t *testing.T) {
 	}
 }
 
+// A panel stopped during the night goes on with the sites not yet done
+// when it is back; the weekly work waits until every site is done.
+func TestANightResumesAfterARestart(t *testing.T) {
+	b := &fakeBroker{configured: true, accounts: []hostaccounts.Account{site("a", "alpha", true), site("b", "beta", true)}, drill: hostaccounts.DrillResult{Passed: true}}
+	m, now := testManager(t, b)
+	*now = now.Add(time.Hour)
+	ctx, stop := context.WithCancel(context.Background())
+	b.during = func(id string) {
+		if id[:1] == "b" {
+			stop() // the panel stops while beta's backup runs
+		}
+	}
+	m.RunDue(ctx, *now)
+	if !slices.Equal(b.calls, []string{"backup a [alpha_wp] scheduler", "backup b [beta_shop,beta_wp] scheduler"}) {
+		t.Fatalf("before the stop %q", b.calls)
+	}
+	again, err := Open(m.path, b, fakeRegistry{"alpha": {"alpha_wp"}, "beta": {"beta_wp", "beta_shop"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.st.LastNightly != "" || again.st.Sites[strings.Repeat("a", 32)].Nightly != "2026-11-23" || again.st.Sites[strings.Repeat("b", 32)].Nightly != "" {
+		t.Fatalf("state after the stop: %+v a=%+v b=%+v", again.st, again.st.Sites[strings.Repeat("a", 32)], again.st.Sites[strings.Repeat("b", 32)])
+	}
+	again.loc, again.now = time.UTC, m.now
+	b.calls, b.during = nil, nil
+	again.RunDue(context.Background(), *now)
+	if !slices.Equal(b.calls, []string{"backup b [beta_shop,beta_wp] scheduler", "prune", "drill a"}) {
+		t.Fatalf("after the restart %q", b.calls)
+	}
+	b.calls = nil
+	again.RunDue(context.Background(), now.Add(time.Hour))
+	if len(b.calls) != 0 || again.st.LastNightly != "2026-11-23" {
+		t.Fatalf("the night ran again %q", b.calls)
+	}
+}
+
+// A site whose backup hangs is given up after the site limit, counts as
+// done for the night, and the next site goes on.
+func TestAHangingSiteDoesNotHoldUpTheNight(t *testing.T) {
+	b := &fakeBroker{configured: true, hang: "a", accounts: []hostaccounts.Account{site("a", "alpha", true), site("b", "beta", true)}, drill: hostaccounts.DrillResult{Passed: true}}
+	m, now := testManager(t, b)
+	m.siteLimit = 50 * time.Millisecond
+	if SiteLimit <= 2*time.Hour {
+		t.Fatal("the panel must wait longer than the broker's own two-hour limit")
+	}
+	*now = now.Add(time.Hour)
+	m.RunDue(context.Background(), *now)
+	if !slices.Equal(b.calls, []string{"backup a [alpha_wp] scheduler", "backup b [beta_shop,beta_wp] scheduler", "prune", "drill a"}) {
+		t.Fatalf("night %q", b.calls)
+	}
+	if got := m.Site(strings.Repeat("a", 32)).LastBackup; got == nil || got.Status != "failed" {
+		t.Fatalf("the hanging site's result %+v", got)
+	}
+	if got := m.Site(strings.Repeat("b", 32)).LastBackup; got == nil || got.Status != "succeeded" || m.st.LastNightly != "2026-11-23" {
+		t.Fatalf("the next site's result %+v", got)
+	}
+}
+
+// The next night starts with the site that waited longest: never backed up
+// first, then the oldest end, so a site a long night did not reach is not
+// left last again.
+func TestNightlyOrderStartsWithTheLongestWaiting(t *testing.T) {
+	b := &fakeBroker{configured: true, accounts: []hostaccounts.Account{site("a", "alpha", true), site("b", "beta", true), site("c", "gamma", true)}}
+	m, now := testManager(t, b)
+	m.st.LastPruneWeek, m.st.LastDrillWeek = isoWeek(*now), isoWeek(*now)
+	m.st.Sites[strings.Repeat("a", 32)] = &siteState{Nightly: "2026-11-22", NightlyEnded: time.Date(2026, 11, 22, 3, 0, 0, 0, time.UTC)}
+	m.st.Sites[strings.Repeat("b", 32)] = &siteState{Nightly: "2026-11-21", NightlyEnded: time.Date(2026, 11, 21, 4, 0, 0, 0, time.UTC)}
+	m.RunDue(context.Background(), now.Add(time.Hour))
+	if !slices.Equal(b.calls, []string{"backup c [] scheduler", "backup b [beta_shop,beta_wp] scheduler", "backup a [alpha_wp] scheduler"}) {
+		t.Fatalf("order %q", b.calls)
+	}
+}
+
 func TestNothingRunsWithoutStorage(t *testing.T) {
 	b := &fakeBroker{accounts: []hostaccounts.Account{site("a", "alpha", true)}}
 	m, now := testManager(t, b)
@@ -214,6 +300,9 @@ func TestExplain(t *testing.T) {
 		{&hostaccounts.BackupError{Step: "target"}, "backup", "Backup storage is not set up, so nothing was backed up."},
 		{&hostaccounts.BackupError{Step: "database", Detail: "The database alpha_wp has views, triggers, stored routines or events (trigger)."}, "backup", "The database alpha_wp has views"},
 		{&hostaccounts.BackupError{Step: "database", Detail: "ERROR 2002 (HY000): Can't connect"}, "backup", "MariaDB did not answer"},
+		{&hostaccounts.BackupError{Step: "database", Detail: "The database alpha_wp does not exist on this server, so it cannot be restored into."}, "restore", "cannot be restored into. The site was not changed."},
+		{&hostaccounts.BackupError{Step: "space", Detail: "The backup needs up to 3.0 GiB of disk to restore."}, "restore", "There is not enough free disk space on this server, so the site was not changed. The backup needs up to 3.0 GiB"},
+		{&hostaccounts.BackupError{Step: "space"}, "drill", "so the drill could not finish. Free up disk space"},
 		{&hostaccounts.BackupError{Step: "compare"}, "drill", "did not match the backup's own file list"},
 		{&hostaccounts.BackupError{Step: "import"}, "restore", "may be partly restored"},
 		{hostaccounts.ErrUnavailable, "backup", "Run the installer again"},

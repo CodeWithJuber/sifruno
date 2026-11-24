@@ -58,9 +58,14 @@ func stepMessage(step, detail, kind string) string {
 		return "The storage server answered, but the backup repository there could not be opened, so " + done + ". Open Technical details for restic's message."
 	case "database":
 		if human {
-			return detail + " Nothing was backed up."
+			return detail + " " + strings.ToUpper(done[:1]) + done[1:] + "."
 		}
-		return "MariaDB did not answer the check of this site's databases, so nothing was backed up. Check that MariaDB is running, then try again."
+		return "MariaDB did not answer the check of this site's databases, so " + done + ". Check that MariaDB is running, then try again."
+	case "space":
+		if human {
+			return "There is not enough free disk space on this server, so " + done + ". " + detail
+		}
+		return "There is not enough free disk space on this server, so " + done + ". Free up disk space on the server, then try again."
 	case "dump":
 		return "MariaDB could not dump this site's database, so nothing was backed up. Check that MariaDB is running, then try again."
 	case "backup":

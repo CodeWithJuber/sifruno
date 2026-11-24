@@ -519,12 +519,7 @@ export function SiteDatabases({ accountId }: { accountId: string }) {
     if (list !== "none") (list === "database" ? databasesHeading : usersHeading).current?.focus();
   };
 
-  const back = <Link to="/websites/sites/$accountId" params={{ accountId }} className={linkButton("ghost", "w-fit px-2")} data-testid="back-to-website">
-    <ArrowLeft className="rtl:rotate-180" aria-hidden="true" />{domain ? <>Back to {domain}</> : "Back to the website"}
-  </Link>;
-
   if (!data) return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="site-databases">
-    {back}
     {problem
       ? <ProblemAlert problem={problem} onRetry={problem.status === 404 ? undefined : reload} testId="databases-problem" />
       : loading && <div className={`${panel} flex flex-col gap-4 p-5`} aria-busy="true" data-testid="databases-loading"><span className="sr-only">Loading the databases</span><Skeleton className="h-8 w-1/2" /><Skeleton className="h-28 w-full" /><Skeleton className="h-28 w-full" /></div>}
@@ -547,7 +542,6 @@ export function SiteDatabases({ accountId }: { accountId: string }) {
   };
 
   return <div className="flex w-full max-w-3xl flex-col gap-4" data-testid="site-databases" data-account-id={site.account_id}>
-    {back}
     {problem && <ProblemAlert problem={{ ...problem, next: `${problem.next} The lists below are from the last successful read.` }} onRetry={reload} testId="databases-problem" />}
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`}>
       <div className="flex flex-col gap-1">

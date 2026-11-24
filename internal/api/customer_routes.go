@@ -57,6 +57,12 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/session/customer-setup/finish": customerOpen,
 	// An admin viewing as a customer must be able to go back.
 	"POST /api/v1/session/view-as/end": customerOpen,
+	// The signed-in person's own password and authenticator app. The
+	// operator refuses an admin viewing as a customer: the login is the
+	// customer's.
+	"POST /api/v1/session/password":             customerOpen,
+	"POST /api/v1/session/authenticator/begin":  customerOpen,
+	"POST /api/v1/session/authenticator/finish": customerOpen,
 	// The panel's own management: admins only.
 	"GET /api/v1/session/sessions":                         adminOnly,
 	"POST /api/v1/session/sessions/{id}/revoke":            adminOnly,

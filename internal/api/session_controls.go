@@ -16,7 +16,8 @@ func allowedSessionMutation(r *http.Request) bool {
 	case "/api/v1/session/login", "/api/v1/session/logout", "/api/v1/session/revoke-others",
 		"/api/v1/session/setup/totp", "/api/v1/session/setup/admin", "/api/v1/session/tokens",
 		"/api/v1/session/customers", "/api/v1/session/customer-setup/begin", "/api/v1/session/customer-setup/finish",
-		"/api/v1/session/view-as", "/api/v1/session/view-as/end":
+		"/api/v1/session/view-as", "/api/v1/session/view-as/end",
+		"/api/v1/session/password", "/api/v1/session/authenticator/begin", "/api/v1/session/authenticator/finish":
 		return true
 	}
 	for _, prefix := range []string{"/api/v1/session/sessions/", "/api/v1/session/tokens/"} {

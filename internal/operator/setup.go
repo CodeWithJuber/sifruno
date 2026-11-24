@@ -102,12 +102,13 @@ func (m *Manager) passwordLogin(w http.ResponseWriter, r *http.Request, username
 	m.adminMu.Lock()
 	defer m.adminMu.Unlock()
 	// Re-read under the lock: another sign-in may have used a code
-	// meanwhile, and an admin may have changed the customer's login.
+	// meanwhile, an admin may have changed the customer's login, and the
+	// person may have changed the password (credentials.go).
 	if customer {
 		return true, m.recordCustomerCodeLocked(w, username, hash, code)
 	}
 	i, found := m.admins.find(username)
-	if !found {
+	if !found || m.admins.Admins[i].Password != hash {
 		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
 		return false, false
 	}

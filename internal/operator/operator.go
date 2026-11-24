@@ -109,6 +109,9 @@ type Manager struct {
 	pending       map[string]pendingSetup
 	dummy         passwordHash
 	hashSlots     chan struct{}
+	// authenticatorPending holds, by session ID, the new key a signed-in
+	// person is moving to (credentials.go), under adminMu.
+	authenticatorPending map[string]pendingSetup
 
 	// Customer logins (customers.go). Writers hold adminMu and store a new
 	// snapshot; readers, every customer request among them, load one
@@ -223,7 +226,7 @@ func Open(dir string) (*Manager, error) {
 	m := &Manager{keyPath: accessPath, keyHash: sha256.Sum256(access[:43]), cookies: cookies,
 		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession),
 		dir: dir, admins: admins, pending: map[string]pendingSetup{}, dummy: dummy, hashSlots: make(chan struct{}, 2),
-		customerPending: map[string]pendingSetup{}}
+		customerPending: map[string]pendingSetup{}, authenticatorPending: map[string]pendingSetup{}}
 	m.customers.Store(&customers)
 	if _, err := rand.Read(m.bucketKey[:]); err != nil {
 		return nil, errors.New("operator admin accounts unavailable")
@@ -586,6 +589,9 @@ func (m *Manager) Register(mux interface {
 		{"POST /api/v1/session/customer-setup/finish", m.finishCustomerSetup},
 		{"POST /api/v1/session/view-as", m.beginViewAs},
 		{"POST /api/v1/session/view-as/end", m.endViewAs},
+		{"POST /api/v1/session/password", m.changePassword},
+		{"POST /api/v1/session/authenticator/begin", m.beginAuthenticatorChange},
+		{"POST /api/v1/session/authenticator/finish", m.finishAuthenticatorChange},
 	} {
 		mux.HandleFunc(route.pattern, sessionOnly(route.handler))
 	}

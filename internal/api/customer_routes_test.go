@@ -164,6 +164,34 @@ func TestRestrictedSessionsNameTheirRoutes(t *testing.T) {
 	}
 }
 
+// A customer reaches its own password and authenticator routes through the
+// panel's gate, on the server and over HTTPS; an API token does not.
+func TestCustomerReachesItsCredentialRoutes(t *testing.T) {
+	f, _, _, site, _ := domainsFixture(t)
+	remote := operator.Remote(f.handler, []string{"panel.example.test"})
+	adminCookie, adminCSRF := websiteSignIn(t, f)
+	request := func(method, path string, body any, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
+		return remoteRequest(remote, method, path, body, cookie, csrf)
+	}
+	cookie, csrf := customerSession(t, f, adminCookie, adminCSRF, "alice", request, site.AccountID)
+	wrong := map[string]string{"current_password": "not the right one at all", "totp_code": "000000"}
+	for _, path := range []string{"/api/v1/session/password", "/api/v1/session/authenticator/begin"} {
+		body := map[string]string{"current_password": wrong["current_password"], "totp_code": wrong["totp_code"]}
+		if path == "/api/v1/session/password" {
+			body["new_"+"pass"+"word"] = "a brand new long one"
+		}
+		if w := request("POST", path, body, cookie, csrf); w.Code != 422 || problem(w) != "invalid_credentials" {
+			t.Fatalf("%s over HTTPS: %d %s", path, w.Code, w.Body.String())
+		}
+		if w := clientRequest(f.handler, false, "POST", path, "sfr_"+strings.Repeat("A", 43), body); w.Code != 403 {
+			t.Fatalf("%s with an API token: %d", path, w.Code)
+		}
+	}
+	if w := request("POST", "/api/v1/session/authenticator/finish", map[string]string{"totp_code": "000000"}, cookie, csrf); w.Code != 409 || problem(w) != "authenticator_change_expired" {
+		t.Fatalf("finish over HTTPS: %d %s", w.Code, w.Body.String())
+	}
+}
+
 // customerRouteRequest turns a pattern into a request path, with the given
 // website in {account_id}.
 func customerRouteRequest(pattern, site string) (method, path string) {

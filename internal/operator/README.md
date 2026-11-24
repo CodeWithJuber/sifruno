@@ -41,6 +41,16 @@ A customer (a site owner) signs in on the same form as an admin and reaches only
 - The API checks a restricted session twice: a gate on every request (`Scope`), so a customer cookie meets the table even on routes loopback serves without a session, and again inside Authorize, because an admin's session can start or stop viewing between the two.
 - A restricted session's answers (sign-in, setup finish, `GET /api/v1/session`, view-as) carry `routes`: the routes the table allows, which the API hands over at start (`SetCustomerRoutes`). The panel shows a restricted viewer only the controls these allow, so it cannot drift from the table; the list decides nothing on the server. An admin's own session carries none. `web/src/lib/customer-routes.json` is the table for the panel's tests; a Go test keeps it equal (`go test ./internal/api -run TestCustomerRoutesFileMatchesTable -update` rewrites it).
 
+## Your own password and authenticator app
+
+A signed-in admin or customer changes its own password, or moves its codes to a new authenticator app (the panel's Account page). Code in `credentials.go`.
+
+- Both start like a sign-in: the current password and a current code from the app in use. Every try takes one from the username's sign-in bucket first (the same keyed limiter as sign-in, so a stolen session cookie gets no more password guesses than the sign-in form, and the two share the limit; Jev chose counting every try, 0.86), the Argon2id work is bounded the same way, a wrong password and a wrong code get one answer (422 `invalid_credentials`), and the code's step is saved with the change, so a code works once.
+- `POST /api/v1/session/password` takes the current password, a code and the new password (the setup rules, and not the current one), saves the new Argon2id hash and ends every other session of that login (an admin's, viewing as a customer or not); this one stays. A sign-in that checked the old password while the change was saved is refused when it records its code.
+- `POST /api/v1/session/authenticator/begin` takes the current password and a code and issues a new key to this session for 10 minutes; the old app keeps working until `/authenticator/finish` gets a code from the new key, which then replaces the old one. Other sessions stay (Jev, 0.62).
+- They need the person's own session with Origin and CSRF, signed in with a username: not an API token, not the access key (403 `admin_sign_in_required`; it has no password), and not an admin viewing as a customer (403 `viewing_as_customer`; the login is the customer's). A customer's whose login was turned off has no session left.
+- A customer that lost its phone still asks an admin for a new setup link: re-enrolling needs a code from the app in use.
+
 ## Over the network
 
 `--https-listen` serves the same panel over TLS for the host names in `--panel-host`. `Remote` (remote.go) marks a request remote only when it came through that listener, over TLS, for one of those names; anything else gets 421 before the API sees it. For a remote request:
@@ -81,7 +91,7 @@ The plan moves this file into the single SQLite store with the broker rework.
 
 ## Not done yet
 
-- More than one admin, password change, an admin's 2FA reset from the UI, passkeys. A customer cannot change its own password or see its own sessions yet; an admin resets it with a new setup link.
+- More than one admin, a reset for an admin who lost its password or phone, passkeys. A customer cannot see its own sessions yet.
 - Resellers and plans (Phase 2).
 - Token scopes: every token has full admin API access. An audit log of admin actions, including token use.
 - Sliding session renewal; sessions still end after 15 minutes.

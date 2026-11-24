@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | backups | broker-isolation | wordpress-wizard | panel-shell | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | backups | broker-isolation | wordpress-wizard | whmcs-module | panel-shell | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -58,6 +58,14 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 https with a certificate from the VM's Pebble test CA. Needs
                 Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the
                 web packages.
+  whmcs-module  The WHMCS module (integrations/whmcs) with the VM's lsphp
+                CLI against the real panel and broker: the panel also serves
+                HTTPS with its self-signed certificate, an API token is made
+                through the session API, and the module tests the connection
+                (a wrong token and no certificate file are refused), creates a
+                WordPress site whose service login signs in, suspends it
+                (403), unsuspends and terminates it; no token or password is
+                in its log.
   panel-shell   Phase 1 panel shell and admin sign-in: the panel runs in the VM
                 with throwaway state and a browser on this host drives it
                 (first-run admin setup with 2FA, sign-in, code replay and rate
@@ -294,6 +302,29 @@ case "${1:-}" in
     } 2>&1 | tee "$transcript"
     echo "Transcript: $transcript (screenshots in $run/)"
     [ ! -e "$stage/failed" ]
+    ;;
+  whmcs-module)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    guest="/var/lib/sifpanel/whmcs-$stamp"
+    build "$stage/sifruno" ./cmd/sifruno
+    build "$stage/hostbroker" ./cmd/hostbroker
+    tar -czf "$stage/whmcs.tgz" -C "$REPO/integrations/whmcs" modules tests/stubs.php -C "$HERE/proofs" whmcs-module.drive.php
+    "$HERE/vm.sh" ssh "systemctl stop sifruno-broker-proof 2>/dev/null; pkill -x sifruno; install -d -m 0755 /opt/sifruno-proof; install -d -o sifpanel -g sifpanel -m 0700 $guest" || true
+    "$HERE/vm.sh" put "$stage/hostbroker" /opt/sifruno-proof/hostbroker
+    for file in sifruno whmcs.tgz; do
+      "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/whmcs-module.guest.sh" /opt/sifruno-proof/whmcs-module.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/whmcs-module.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/whmcs-module-$stamp.txt"
+    domain="whmcs$(date +%s | tail -c 6).proof.test"
+    status=0
+    "$HERE/vm.sh" ssh "/opt/sifruno-proof/whmcs-module.guest.sh $guest $domain" | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
     ;;
   panel-shell)
     stage="$(mktemp -d)"

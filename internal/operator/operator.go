@@ -1,7 +1,6 @@
 // Package operator signs people in to the panel: with the server's local
-// access key, or as an admin with a password and an authenticator code. It is
-// loopback-only until the panel is served over HTTPS, and has no roles yet.
-// See README.md.
+// access key, or as an admin or a customer with a password and an
+// authenticator code. A customer reaches only its own websites. See README.md.
 package operator
 
 import (
@@ -22,6 +21,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -36,15 +36,26 @@ const (
 	sessionLifetime = 15 * time.Minute
 	maxSessions     = 128
 	maxLoginBytes   = 2048
+	// Customers share the session table with admins, so they get at most
+	// three quarters of it, and each customer at most four sessions (a new
+	// sign-in ends that customer's oldest). Customers signing in cannot
+	// keep an admin out.
+	maxCustomerSessions    = 96
+	maxSessionsPerCustomer = 4
 )
 
 type Session struct {
 	Authenticated bool      `json:"authenticated"`
 	CSRFToken     string    `json:"csrf_token,omitempty"`
 	ExpiresAt     time.Time `json:"expires_at,omitempty"`
-	// Username is set for an admin's password-and-code session and empty for
-	// a session opened with the local access key.
+	// Username is set for a password-and-code session, an admin's or a
+	// customer's, and empty for a session opened with the local access key.
 	Username string `json:"username,omitempty"`
+	// Role is "admin" (the access key, an admin) or "customer".
+	Role string `json:"role,omitempty"`
+	// ViewAs names the customer an admin is viewing the panel as. While it
+	// is set the session has only that customer's access.
+	ViewAs string `json:"view_as,omitempty"`
 }
 
 type activeSession struct {
@@ -53,6 +64,19 @@ type activeSession struct {
 	managementID string
 	created      time.Time
 	username     string
+	// customer marks a customer's session; it never changes. viewAs is an
+	// admin session viewing the panel as that customer, set and cleared by
+	// the view-as routes (viewas.go).
+	customer bool
+	viewAs   string
+}
+
+func (a activeSession) public(csrf string) Session {
+	role := "admin"
+	if a.customer {
+		role = "customer"
+	}
+	return Session{Authenticated: true, CSRFToken: csrf, ExpiresAt: a.expires, Username: a.username, Role: role, ViewAs: a.viewAs}
 }
 
 type Manager struct {
@@ -80,6 +104,19 @@ type Manager struct {
 	pending       map[string]pendingSetup
 	dummy         passwordHash
 	hashSlots     chan struct{}
+
+	// Customer logins (customers.go). Writers hold adminMu and store a new
+	// snapshot; readers, every customer request among them, load one
+	// without a lock, so a slow disk never stalls a session check.
+	// customerPending holds setup secrets by setup-link hash, under
+	// adminMu. Wrong setup links are limited like wrong API tokens.
+	customers          atomic.Pointer[customerFile]
+	customerPending    map[string]pendingSetup
+	setupLimiter       *rate.Limiter
+	remoteSetupLimiter *rate.Limiter
+	remoteSetupBuckets [remoteLoginBuckets]*rate.Limiter
+	publicAddress      atomic.Pointer[string]
+	websiteCheck       atomic.Pointer[WebsiteCheck]
 
 	// API tokens (tokens.go). tokenMu guards the token file, its cached copy
 	// and the bearer limiters. It is never held together with adminMu; when
@@ -150,6 +187,10 @@ func Open(dir string) (*Manager, error) {
 	if err != nil {
 		return nil, errors.New("operator admin accounts unavailable")
 	}
+	customers, err := loadCustomers(dir, admins)
+	if err != nil {
+		return nil, errors.New("operator customer logins unavailable: " + customersFile + " in the panel's private folder is damaged, has the wrong mode (it must be 0600) or shares a username with an admin. Move it aside and start the panel again; then give the customers new logins")
+	}
 	// Unknown usernames are checked against this hash so a wrong username
 	// costs the same time as a wrong password.
 	dummy, err := hashPassword("unknown-user-timing-equalizer")
@@ -175,7 +216,9 @@ func Open(dir string) (*Manager, error) {
 	cookies.Options = &sessions.Options{Path: "/api/v1", MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, SameSite: http.SameSiteStrictMode}
 	m := &Manager{keyPath: accessPath, keyHash: sha256.Sum256(access[:43]), cookies: cookies,
 		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession),
-		dir: dir, admins: admins, pending: map[string]pendingSetup{}, dummy: dummy, hashSlots: make(chan struct{}, 2)}
+		dir: dir, admins: admins, pending: map[string]pendingSetup{}, dummy: dummy, hashSlots: make(chan struct{}, 2),
+		customerPending: map[string]pendingSetup{}}
+	m.customers.Store(&customers)
 	if _, err := rand.Read(m.bucketKey[:]); err != nil {
 		return nil, errors.New("operator admin accounts unavailable")
 	}
@@ -192,6 +235,11 @@ func Open(dir string) (*Manager, error) {
 	m.remoteBearerLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
 	for i := range m.remoteBearerBuckets {
 		m.remoteBearerBuckets[i] = newAccountLimiter()
+	}
+	m.setupLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
+	m.remoteSetupLimiter = rate.NewLimiter(rate.Every(3*time.Second), 20)
+	for i := range m.remoteSetupBuckets {
+		m.remoteSetupBuckets[i] = newAccountLimiter()
 	}
 	return m, nil
 }
@@ -350,51 +398,83 @@ func (m *Manager) pruneLocked() {
 // request with an Authorization header is checked as an API token instead
 // (tokens.go): a token is not a session, so it needs no cookie, Origin or
 // CSRF token.
+// The answer is the actor the broker records: see AuthorizePrincipal.
 func (m *Manager) Authorize(w http.ResponseWriter, r *http.Request, mutation bool) (string, bool) {
+	p, ok := m.AuthorizePrincipal(w, r, mutation)
+	return p.Actor, ok
+}
+
+// AuthorizePrincipal is Authorize, answering who the request acts for. An API
+// token acts as an admin.
+func (m *Manager) AuthorizePrincipal(w http.ResponseWriter, r *http.Request, mutation bool) (Principal, bool) {
 	if len(r.Header.Values("Authorization")) > 0 {
 		if !admitted(r) {
 			WriteError(w, 403, "local_access_required", "Local operator access required")
-			return "", false
+			return Principal{}, false
 		}
-		return m.authorizeToken(w, r)
+		actor, ok := m.authorizeToken(w, r)
+		return Principal{Actor: actor}, ok
 	}
-	return m.authorizeSession(w, r, mutation)
+	_, id, a, ok := m.checkSession(w, r, mutation)
+	if !ok {
+		return Principal{}, false
+	}
+	return m.sessionPrincipal(w, id, a)
 }
 
 // authorizeSession admits a session only. The /api/v1/session routes use it
 // directly, so an API token never works there.
 func (m *Manager) authorizeSession(w http.ResponseWriter, r *http.Request, mutation bool) (string, bool) {
-	if !admitted(r) {
-		WriteError(w, 403, "local_access_required", "Local operator access required")
+	_, id, a, ok := m.checkSession(w, r, mutation)
+	if !ok {
 		return "", false
 	}
-	s, _, a, ok := m.session(r)
+	p, ok := m.sessionPrincipal(w, id, a)
+	return p.Actor, ok
+}
+
+// checkSession admits a live session cookie: on loopback or the HTTPS
+// listener, not an access-key session over the network, and for a mutation
+// with the exact Origin and the session's CSRF token. It says nothing about
+// what the session may reach; sessionPrincipal does.
+func (m *Manager) checkSession(w http.ResponseWriter, r *http.Request, mutation bool) (*sessions.Session, string, activeSession, bool) {
+	if !admitted(r) {
+		WriteError(w, 403, "local_access_required", "Local operator access required")
+		return nil, "", activeSession{}, false
+	}
+	s, id, a, ok := m.session(r)
 	if !ok {
 		WriteError(w, 401, "unauthorized", "Operator session required")
-		return "", false
+		return nil, "", activeSession{}, false
 	}
 	// A session opened with the access key on the server is not accepted over
 	// the network, even if its cookie travels there.
 	if IsRemote(r) && a.username == "" {
 		WriteError(w, 403, "admin_sign_in_required", "Sign in with your admin account. The access key works only on the server itself.")
-		return "", false
+		return nil, "", activeSession{}, false
 	}
 	if mutation {
 		if !sameOrigin(r) {
 			WriteError(w, 403, "origin_not_allowed", "Exact local Origin required")
-			return "", false
+			return nil, "", activeSession{}, false
 		}
 		csrf := r.Header.Get("X-CSRF-Token")
 		supplied := sha256.Sum256([]byte(csrf))
 		if !validToken(csrf) || subtle.ConstantTimeCompare(a.csrf[:], supplied[:]) != 1 || s.Values["csrf"] != csrf {
 			WriteError(w, 403, "csrf_invalid", "Valid session CSRF token required")
-			return "", false
+			return nil, "", activeSession{}, false
 		}
 	}
-	return "local-operator", true
+	return s, id, a, true
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any, allowEmpty bool) bool {
+	return decodeJSONWithin(w, r, target, allowEmpty, maxLoginBytes)
+}
+
+// decodeJSONWithin is decodeJSON with its own size bound, for a request that
+// carries a list (a customer's websites).
+func decodeJSONWithin(w http.ResponseWriter, r *http.Request, target any, allowEmpty bool, limit int) bool {
 	ct, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || ct != "application/json" || (params["charset"] != "" && !strings.EqualFold(params["charset"], "utf-8")) {
 		WriteError(w, 415, "invalid_request", "JSON content type required")
@@ -402,12 +482,12 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any, allowEmpty b
 	}
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(5 * time.Second))
 	defer http.NewResponseController(w).SetReadDeadline(time.Time{})
-	b, err := io.ReadAll(io.LimitReader(r.Body, maxLoginBytes+1))
+	b, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
 	if err != nil {
 		WriteError(w, 400, "invalid_request", "Invalid JSON request")
 		return false
 	}
-	if len(b) > maxLoginBytes {
+	if len(b) > limit {
 		WriteError(w, 413, "invalid_request", "Request body too large")
 		return false
 	}
@@ -468,9 +548,12 @@ func DecodeObject(b []byte, target any) error {
 
 // Register serves the /api/v1/session routes. Every one refuses a request
 // that carries an Authorization header (sessionOnly): sign-in, sessions,
-// first-run setup and API token management are for a person with a session.
-// Credential management added later belongs under this prefix too.
-func (m *Manager) Register(mux *http.ServeMux) {
+// first-run setup, API tokens, customer logins and their setup links, and
+// viewing as a customer are for a person with a session. Credential
+// management added later belongs under this prefix too.
+func (m *Manager) Register(mux interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}) {
 	for _, route := range []struct {
 		pattern string
 		handler http.HandlerFunc
@@ -487,6 +570,16 @@ func (m *Manager) Register(mux *http.ServeMux) {
 		{"GET /api/v1/session/tokens", m.listTokens},
 		{"POST /api/v1/session/tokens", m.createToken},
 		{"POST /api/v1/session/tokens/{id}/revoke", m.revokeToken},
+		{"GET /api/v1/session/customers", m.listCustomers},
+		{"POST /api/v1/session/customers", m.createCustomer},
+		{"POST /api/v1/session/customers/{username}/websites", m.setCustomerWebsites},
+		{"POST /api/v1/session/customers/{username}/state", m.setCustomerState},
+		{"POST /api/v1/session/customers/{username}/setup-link", m.newCustomerSetupLink},
+		{"POST /api/v1/session/customers/{username}/delete", m.deleteCustomer},
+		{"POST /api/v1/session/customer-setup/begin", m.beginCustomerSetup},
+		{"POST /api/v1/session/customer-setup/finish", m.finishCustomerSetup},
+		{"POST /api/v1/session/view-as", m.beginViewAs},
+		{"POST /api/v1/session/view-as/end", m.endViewAs},
 	} {
 		mux.HandleFunc(route.pattern, sessionOnly(route.handler))
 	}
@@ -519,12 +612,12 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input, false) {
 		return
 	}
-	username := ""
+	username, customer := "", false
 	adminFields := input.Username != "" || input.Password != "" || input.TOTPCode != ""
 	switch {
 	case !adminFields:
 		if IsRemote(r) {
-			WriteError(w, 403, "local_access_required", "The access key works only on the server itself. Sign in with your admin account.")
+			WriteError(w, 403, "local_access_required", "The access key works only on the server itself. Sign in with your username, password and code.")
 			return
 		}
 		supplied := sha256.Sum256([]byte(input.AccessKey))
@@ -534,7 +627,8 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case input.AccessKey == "" && input.Username != "" && input.Password != "" && input.TOTPCode != "":
-		if !m.adminLogin(w, r, input.Username, input.Password, input.TOTPCode) {
+		var ok bool
+		if customer, ok = m.passwordLogin(w, r, input.Username, input.Password, input.TOTPCode); !ok {
 			return
 		}
 		username = input.Username
@@ -542,12 +636,12 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 400, "invalid_request", "Send either the local access key, or a username, password and 6-digit code")
 		return
 	}
-	m.startSession(w, r, username)
+	m.startSession(w, r, username, customer)
 }
 
 // startSession replaces any session the request carried with a new one, so a
 // session ID is never reused across a sign-in.
-func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username string) {
+func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username string, customer bool) {
 	_, oldID, _, _ := m.session(r)
 	id, err := randomToken()
 	if err != nil {
@@ -570,6 +664,11 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 	if oldID != "" {
 		delete(m.active, oldID)
 	}
+	if customer && !m.customerSessionRoomLocked(username) {
+		m.mu.Unlock()
+		WriteError(w, 429, "rate_limited", "Too many people are signed in to this panel right now. Wait a few minutes and sign in again.")
+		return
+	}
 	if len(m.active) >= maxSessions {
 		m.mu.Unlock()
 		WriteError(w, 429, "rate_limited", "Active session limit reached")
@@ -577,7 +676,8 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 	}
 	created := m.now().UTC().Truncate(time.Second)
 	expires := created.Add(sessionLifetime)
-	m.active[id] = activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf)), managementID: managementID, created: created, username: username}
+	session := activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf)), managementID: managementID, created: created, username: username, customer: customer}
+	m.active[id] = session
 	m.mu.Unlock()
 	s := sessions.NewSession(m.cookies, cookieName)
 	s.Values = map[any]any{"id": id, "csrf": csrf, "expires": expires.Unix()}
@@ -591,23 +691,22 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 		WriteError(w, 503, "operator_unavailable", "Operator session unavailable")
 		return
 	}
-	writeJSON(w, Session{Authenticated: true, CSRFToken: csrf, ExpiresAt: expires, Username: username})
+	writeJSON(w, session.public(csrf))
 }
 
 func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
-	if _, ok := m.authorizeSession(w, r, false); !ok {
-		return
-	}
-	s, _, a, ok := m.session(r)
+	s, id, a, ok := m.checkSession(w, r, false)
 	if !ok {
-		WriteError(w, 401, "unauthorized", "Operator session required")
 		return
 	}
-	writeJSON(w, Session{Authenticated: true, CSRFToken: s.Values["csrf"].(string), ExpiresAt: a.expires, Username: a.username})
+	if _, ok := m.sessionPrincipal(w, id, a); !ok {
+		return
+	}
+	writeJSON(w, a.public(s.Values["csrf"].(string)))
 }
 
 func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
-	if _, ok := m.authorizeSession(w, r, true); !ok {
+	if _, _, _, ok := m.checkSession(w, r, true); !ok {
 		return
 	}
 	var input struct{}

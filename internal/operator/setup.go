@@ -68,59 +68,99 @@ func (m *Manager) acquireHash(r *http.Request) bool {
 }
 func (m *Manager) releaseHash() { <-m.hashSlots }
 
-// adminLogin checks a password and a one-time code. Every failure gets the
-// same answer, so the response does not reveal which part was wrong or
-// whether the account exists. A used code is recorded before the session
-// starts and cannot be replayed.
-func (m *Manager) adminLogin(w http.ResponseWriter, r *http.Request, username, password, code string) bool {
+// passwordLogin checks a password and a one-time code for an admin or a
+// customer; customer reports which signed in. Admins and customers never
+// share a username. Every failure gets the same answer, so the response does
+// not reveal which part was wrong, whether the login exists, or whether a
+// customer's login is turned off or not set up yet. A used code is recorded
+// before the session starts and cannot be replayed.
+func (m *Manager) passwordLogin(w http.ResponseWriter, r *http.Request, username, password, code string) (customer, ok bool) {
 	m.adminMu.Lock()
 	allowed := m.loginBucket(username, r).Allow()
-	i, found := m.admins.find(username)
-	var record adminRecord
-	if found {
-		record = m.admins.Admins[i]
+	hash, found := m.dummy, false
+	if i, admin := m.admins.find(username); admin {
+		hash, found = m.admins.Admins[i].Password, true
+	} else if c, ok := m.loginCustomerLocked(username); ok {
+		hash, found, customer = *c.Password, true, true
 	}
 	m.adminMu.Unlock()
 	if !allowed {
 		w.Header().Set("Retry-After", "60")
 		WriteError(w, 429, "rate_limited", "Too many sign-in attempts for this username. Wait a minute and try again.")
-		return false
+		return false, false
 	}
 	if !m.acquireHash(r) {
 		WriteError(w, 503, "operator_unavailable", "Sign-in was interrupted. Try again.")
-		return false
-	}
-	hash := m.dummy
-	if found {
-		hash = record.Password
+		return false, false
 	}
 	passwordOK := hash.matches(password) && found
 	m.releaseHash()
 	if !passwordOK {
 		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
-		return false
+		return false, false
 	}
 	m.adminMu.Lock()
 	defer m.adminMu.Unlock()
-	// Re-read under the lock: another sign-in may have used a code meanwhile.
-	i, found = m.admins.find(username)
+	// Re-read under the lock: another sign-in may have used a code
+	// meanwhile, and an admin may have changed the customer's login.
+	if customer {
+		return true, m.recordCustomerCodeLocked(w, username, hash, code)
+	}
+	i, found := m.admins.find(username)
 	if !found {
 		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
-		return false
+		return false, false
 	}
 	step, ok := verifyTOTP(m.admins.Admins[i].TOTP.Secret, code, m.now(), m.admins.Admins[i].TOTP.LastStep)
 	if !ok {
 		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
-		return false
+		return false, false
 	}
 	next := m.admins
 	next.Admins = append([]adminRecord(nil), m.admins.Admins...)
 	next.Admins[i].TOTP.LastStep = step
 	if err := saveAdmins(m.dir, next); err != nil {
 		WriteError(w, 503, "operator_unavailable", "Sign-in could not be recorded on the server. Try again; if it keeps failing, check the panel's disk.")
-		return false
+		return false, false
 	}
 	m.admins = next
+	return false, true
+}
+
+// loginCustomerLocked is the customer record a sign-in may check: one that
+// is set up and turned on. Called with adminMu held.
+func (m *Manager) loginCustomerLocked(username string) (customerRecord, bool) {
+	customers := m.customers.Load()
+	i, found := customers.find(username)
+	if !found || !customers.Customers[i].ready() {
+		return customerRecord{}, false
+	}
+	return customers.Customers[i], true
+}
+
+// recordCustomerCodeLocked finishes a customer's sign-in once the password
+// matched: the login must still be ready with the same password, and the
+// code must be new. The code's step is saved before the session starts.
+// Called with adminMu held.
+func (m *Manager) recordCustomerCodeLocked(w http.ResponseWriter, username string, checked passwordHash, code string) bool {
+	c, ok := m.loginCustomerLocked(username)
+	if !ok || *c.Password != checked {
+		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
+		return false
+	}
+	step, ok := verifyTOTP(c.TOTP.Secret, code, m.now(), c.TOTP.LastStep)
+	if !ok {
+		WriteError(w, 401, "invalid_credentials", "The username, password or code is wrong. Check them and try again.")
+		return false
+	}
+	next := m.customers.Load().clone()
+	i, _ := next.find(username)
+	next.Customers[i].TOTP.LastStep = step
+	if err := saveCustomers(m.dir, next, m.admins); err != nil {
+		WriteError(w, 503, "operator_unavailable", "Sign-in could not be recorded on the server. Try again; if it keeps failing, ask whoever runs this server to check the panel's disk.")
+		return false
+	}
+	m.customers.Store(&next)
 	return true
 }
 
@@ -183,6 +223,10 @@ func (m *Manager) beginSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validUsername(input.Username) {
 		WriteError(w, 422, "invalid_username", "Choose a username of 3 to 32 lowercase letters, digits, dots, dashes or underscores, starting with a letter.")
+		return
+	}
+	if _, taken := m.customers.Load().find(input.Username); taken {
+		WriteError(w, 409, "username_taken", "A customer already signs in with this username. Choose another one for the admin.")
 		return
 	}
 	secret, err := newTOTPSecret()
@@ -248,6 +292,11 @@ func (m *Manager) finishSetup(w http.ResponseWriter, r *http.Request) {
 	if len(m.admins.Admins) > 0 {
 		m.adminMu.Unlock()
 		WriteError(w, 409, "setup_complete", "An admin account already exists. Sign in with it instead.")
+		return
+	}
+	if _, taken := m.customers.Load().find(input.Username); taken {
+		m.adminMu.Unlock()
+		WriteError(w, 409, "username_taken", "A customer already signs in with this username. Start again and choose another one for the admin.")
 		return
 	}
 	// The session may have been revoked while the password was hashed; decide

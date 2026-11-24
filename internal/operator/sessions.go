@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sort"
 	"time"
+
+	"github.com/gorilla/sessions"
 )
 
 // ManagedSession exposes a revocation handle, not an authentication credential.
@@ -62,15 +64,31 @@ func (m *Manager) authorizingSessionLocked(id string, expected activeSession) bo
 	actual, ok := m.active[id]
 	return ok && actual == expected
 }
+
+// managementAuthorization admits the panel's own management (sessions,
+// tokens, setup, customer logins, viewing as a customer) to an admin's
+// session only: never a customer's, and never an admin's while it views the
+// panel as a customer.
 func (m *Manager) managementAuthorization(w http.ResponseWriter, r *http.Request, mutation bool) (string, activeSession, bool) {
-	if _, ok := m.authorizeSession(w, r, mutation); !ok {
-		return "", activeSession{}, false
-	}
-	_, id, a, ok := m.session(r)
-	if !ok {
-		WriteError(w, 401, "unauthorized", "Operator session required")
-	}
+	_, id, a, ok := m.adminSession(w, r, mutation)
 	return id, a, ok
+}
+
+// adminSession is managementAuthorization, also returning the cookie session.
+func (m *Manager) adminSession(w http.ResponseWriter, r *http.Request, mutation bool) (*sessions.Session, string, activeSession, bool) {
+	s, id, a, ok := m.checkSession(w, r, mutation)
+	if !ok {
+		return nil, "", activeSession{}, false
+	}
+	switch {
+	case a.customer:
+		WriteError(w, 403, "admin_only", "Only an admin can do this. Your login manages your own websites.")
+		return nil, "", activeSession{}, false
+	case a.viewAs != "":
+		WriteError(w, 403, "admin_only", "You are viewing the panel as a customer. Go back to your admin view first, then try again.")
+		return nil, "", activeSession{}, false
+	}
+	return s, id, a, true
 }
 func (m *Manager) getSessions(w http.ResponseWriter, r *http.Request) {
 	id, a, ok := m.managementAuthorization(w, r, false)
@@ -84,8 +102,12 @@ func (m *Manager) getSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	inventory := Inventory{Items: make([]ManagedSession, 0, len(m.active)), Capacity: maxSessions, LifetimeSeconds: int(sessionLifetime.Seconds())}
+	// Customers' sessions are theirs: the admin's list and its "sign out
+	// everywhere else" leave them alone.
 	for rawID, entry := range m.active {
-		inventory.Items = append(inventory.Items, ManagedSession{entry.managementID, entry.created, entry.expires, rawID == id})
+		if !entry.customer {
+			inventory.Items = append(inventory.Items, ManagedSession{entry.managementID, entry.created, entry.expires, rawID == id})
+		}
 	}
 	m.mu.Unlock()
 	sort.Slice(inventory.Items, func(i, j int) bool {
@@ -123,7 +145,7 @@ func (m *Manager) revokeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	found := ""
 	for rawID, entry := range m.active {
-		if entry.managementID == target {
+		if entry.managementID == target && !entry.customer {
 			found = rawID
 			break
 		}
@@ -155,8 +177,8 @@ func (m *Manager) revokeOthers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	count := 0
-	for other := range m.active {
-		if other != id {
+	for other, entry := range m.active {
+		if other != id && !entry.customer {
 			delete(m.active, other)
 			count++
 		}

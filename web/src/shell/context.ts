@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { PlatformReport, Resource, ServerReport, ServicesReport } from "@/lib/api";
+import type { AuthSession } from "@/lib/auth-api";
 import type { RestoreHandoff } from "@/lib/restoreHandoff";
 import type { PageId } from "@/shell/pages";
 
@@ -22,6 +23,14 @@ export interface Shell {
   // Pages with their own data report it here for the refresh button and footer.
   setPageResource: (id: PageId, value: Resource<unknown>) => void;
   open: (target: ScreenTarget) => void;
+  // Who is signed in. restricted: a customer's session, or an admin's while
+  // it views the panel as a customer (viewAs).
+  viewer: { session: AuthSession | null; restricted: boolean };
+  viewAs: (username: string) => Promise<void>;
+  endViewAs: () => Promise<void>;
+  signOut: () => void;
+  // A sign-in made on a page (a customer's setup) hands its session here.
+  setSession: (session: AuthSession) => void;
 }
 
 export const ShellContext = createContext<Shell | null>(null);

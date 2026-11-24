@@ -25,6 +25,9 @@ const WebsitesList = lazy(() => import("@/WebsitesPage").then((m) => ({ default:
 const WebsiteLayout = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteLayout })));
 const BackupStorage = lazy(() => import("@/BackupStorage").then((m) => ({ default: m.BackupStorage })));
 const FilesSitePicker = lazy(() => import("@/SiteFiles").then((m) => ({ default: m.FilesSitePicker })));
+const Customers = lazy(() => import("@/Customers").then((m) => ({ default: m.Customers })));
+const CustomerAccount = lazy(() => import("@/CustomerLogin").then((m) => ({ default: m.CustomerAccount })));
+const CustomerSetup = lazy(() => import("@/CustomerLogin").then((m) => ({ default: m.CustomerSetup })));
 
 export function LoadingState({ label }: { label: string }) {
   return <div className="flex flex-col gap-4" role="status" aria-label={label}><Skeleton className="h-28 w-full" /><Skeleton className="h-64 w-full" /><span className="sr-only">{label}</span></div>;
@@ -53,6 +56,8 @@ function useReport(id: PageId, resource: Resource<unknown>) {
 export function HomeView() {
   const shell = useShell();
   const navigate = useNavigate();
+  // A customer's Home is its websites; the server's readings are the admin's.
+  if (shell.viewer.restricted) return <WebsitesList />;
   return <div className="content-stack dashboard-stack">
     <HostingWorkspace publicPreview={shell.publicPreview} platform={shell.platform.data} onNavigate={shell.open} onPreview={() => navigate({ to: "/tour" })} />
     <section className="monitoring-workspace" aria-labelledby="monitoring-heading">
@@ -119,6 +124,19 @@ export function SecurityView() {
   const { revision, setPageResource } = useShell();
   const onStatus = useCallback((value: Resource<unknown>) => setPageResource("security", value), [setPageResource]);
   return <Access revision={revision} onStatus={onStatus} />;
+}
+
+export function CustomersView() {
+  return <Customers />;
+}
+
+export function AccountView() {
+  return <CustomerAccount />;
+}
+
+// Where a customer's setup link lands; the secret is in the address's #.
+export function CustomerSetupView() {
+  return <CustomerSetup />;
 }
 
 export function ApiTokensView() {

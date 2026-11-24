@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Clock, Database, DatabaseBackup, Folder, Globe, History, Home, KeyRound, Layers, ListChecks, Network, Plus, ScrollText, Server, Settings, ShieldCheck, HardDrive, Users } from "lucide-react";
+import { Archive, ArchiveRestore, Clock, Database, DatabaseBackup, Folder, Globe, History, Home, KeyRound, Layers, ListChecks, Network, Plus, ScrollText, Server, Settings, ShieldCheck, HardDrive, UserRound, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 // One list drives the sidebar, the command palette, the breadcrumb and the
@@ -7,7 +7,7 @@ import type { LucideIcon } from "lucide-react";
 // Change trail and AI budget screens live under Customers, Security,
 // Activity and Settings. testId keeps the ids the browser QA scripts click.
 
-export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "site-backups" | "site-domains" | "site-files" | "site-settings" | "site-cron" | "site-logs" | "static-sites" | "static-files" | "files" | "backups" | "activity" | "customers" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
+export type PageId = "home" | "websites" | "new-website" | "website-job" | "website" | "site-databases" | "site-backups" | "site-domains" | "site-files" | "site-settings" | "site-cron" | "site-logs" | "static-sites" | "static-files" | "files" | "backups" | "activity" | "customers" | "hosting-accounts" | "account" | "setup" | "server" | "storage" | "network" | "backup-storage" | "security" | "api-tokens" | "settings" | "tour";
 
 export interface Page {
   id: PageId;
@@ -50,7 +50,13 @@ export const pages: readonly Page[] = [
   { id: "static-files", path: "/websites/static/files", label: "Static site files (old)", title: "Static site files (old)", subtitle: "Files of the websites made with the old static-file model.", icon: Folder, testId: "nav-static-files", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/static\/files$/ },
   { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },
   { id: "activity", path: "/activity", label: "Activity", title: "Activity", subtitle: "Recent changes to website files, and how to recover them.", icon: History, testId: "nav-trail", audience: "private", group: "main" },
-  { id: "customers", path: "/customers", label: "Customers", title: "Customers", subtitle: "Customer accounts on this server and their home folders.", icon: Users, testId: "nav-accounts", audience: "private", group: "admin" },
+  // A customer's own page: its login and its websites.
+  { id: "account", path: "/account", label: "Account", title: "Account", subtitle: "Your login and the websites it manages.", icon: UserRound, testId: "nav-account", audience: "private", group: "main" },
+  // Where a customer lands from its setup link. It needs no session.
+  { id: "setup", path: "/setup", label: "Set up your login", title: "Set up your login", subtitle: "Choose a password and connect an authenticator app.", icon: ShieldCheck, testId: "nav-setup", audience: "private", group: "main", pattern: /^\/setup$/ },
+  { id: "customers", path: "/customers", label: "Customers", title: "Customers", subtitle: "Who can sign in to manage which websites.", icon: Users, testId: "nav-customers", audience: "private", group: "admin" },
+  // The older hosting-accounts screen; it keeps the nav id the QA scripts click.
+  { id: "hosting-accounts", path: "/customers/accounts", label: "Hosting accounts", title: "Hosting accounts", subtitle: "Linux accounts on this server and their home folders.", icon: Users, testId: "nav-accounts", audience: "private", group: "admin", parent: "customers" },
   { id: "server", path: "/server", label: "Server", title: "Server", subtitle: "Services, storage and network on this server.", icon: Server, testId: "nav-services", audience: "both", group: "admin" },
   { id: "storage", path: "/server/storage", label: "Storage", title: "Server", subtitle: "Services, storage and network on this server.", icon: HardDrive, testId: "nav-storage", audience: "both", group: "admin", parent: "server" },
   { id: "network", path: "/server/network", label: "Network", title: "Server", subtitle: "Services, storage and network on this server.", icon: Network, testId: "nav-network", audience: "both", group: "admin", parent: "server" },
@@ -68,6 +74,17 @@ export function pageById(id: PageId): Page {
   return page;
 }
 
-export function visiblePages(publicPreview: boolean): Page[] {
-  return pages.filter((p) => !p.pattern && (p.audience === "both" || (publicPreview ? p.audience === "preview" : p.audience === "private")));
+// A customer (a site owner) sees Home, Websites with each website's tabs, and
+// Account (plan, "Panel ka dhancha"); so does an admin viewing the panel as
+// a customer. The server decides what a customer may do; this only shapes
+// the menu and keeps admin pages out of the way.
+export type MenuRole = "admin" | "customer";
+
+export function customerPage(p: Page): boolean {
+  return p.id === "home" || p.id === "websites" || p.id === "files" || p.id === "account" || p.id === "setup" || p.path.startsWith("/websites/sites/");
+}
+
+export function visiblePages(publicPreview: boolean, role: MenuRole = "admin"): Page[] {
+  return pages.filter((p) => !p.pattern && (p.audience === "both" || (publicPreview ? p.audience === "preview" : p.audience === "private"))
+    && (role === "customer" ? customerPage(p) : p.id !== "account"));
 }

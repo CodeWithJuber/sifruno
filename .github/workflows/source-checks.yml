@@ -53,7 +53,7 @@ jobs:
           npm run panel:typecheck
           npm run panel:build
       - name: Private session, schedule, restore preview and website wizard UI contract checks
-        run: node --test web/src/lib/sites-api.test.mjs web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs web/src/lib/restorePreview.test.mjs web/src/lib/wordpress-api.test.mjs web/src/lib/websites-api.test.mjs web/src/lib/databases-api.test.mjs web/src/lib/site-backups-api.test.mjs web/src/lib/site-domains-api.test.mjs web/src/lib/files-api.test.mjs
+        run: node --test web/src/lib/sites-api.test.mjs web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs web/src/lib/restorePreview.test.mjs web/src/lib/wordpress-api.test.mjs web/src/lib/websites-api.test.mjs web/src/lib/databases-api.test.mjs web/src/lib/site-backups-api.test.mjs web/src/lib/site-domains-api.test.mjs web/src/lib/files-api.test.mjs web/src/lib/customers-api.test.mjs
       - name: Runtime package policy and controller layout report checks
         run: node --test scripts/runtime-package.test.mjs lab/controller-layout-guest/report.test.mjs
       - name: Native preview tool identities and report checks

@@ -2,7 +2,7 @@ import { lazy } from "react";
 import type { ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter, redirect } from "@tanstack/react-router";
 import { AppShell, isPublicPreview } from "@/shell/AppShell";
-import { ActivityView, ApiTokensView, BackupStorageView, FilesView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
+import { AccountView, ActivityView, ApiTokensView, CustomerSetupView, CustomersView, BackupStorageView, FilesView, HomeView, NetworkView, NewWebsiteView, NotFoundView, SecurityView, ServicesView, SettingsView, ShellRendered, StorageView, TourView, WebsiteJobView, WebsitesView, WebsiteView } from "@/shell/views";
 
 // Every page has its own URL, so back, reload and shared links work. The Go
 // server already answers unknown extension-less paths with index.html.
@@ -90,7 +90,10 @@ const routeTree = rootRoute.addChildren([
   route("/websites/files", FilesView, privateOnly),
   route("/websites/backups", ShellRendered, privateOnly),
   route("/activity", ActivityView, privateOnly),
-  route("/customers", ShellRendered, privateOnly),
+  route("/customers", CustomersView, privateOnly),
+  route("/customers/accounts", ShellRendered, privateOnly),
+  route("/account", AccountView, privateOnly),
+  route("/setup", CustomerSetupView, privateOnly),
   route("/server", ServicesView),
   route("/server/storage", StorageView),
   route("/server/network", NetworkView),

@@ -1126,7 +1126,9 @@ pma_settings() {
   ensure_dir root root 0755 "$PMA_STATE"
   ensure_dir "$PMA_USER" "$PMA_USER" 0700 "$PMA_STATE/sessions"
   ensure_dir "$PMA_USER" "$PMA_USER" 0700 "$PMA_STATE/tmp"
-  relabel "$PMA_ETC" "$target" "$PMA_STATE" "$PMA_STATE/sessions" "$PMA_STATE/tmp"
+  # PHP's errors go to a log here, which only sifpma can write (and root read).
+  ensure_dir "$PMA_USER" "$PMA_USER" 0700 "$PMA_STATE/logs"
+  relabel "$PMA_ETC" "$target" "$PMA_STATE" "$PMA_STATE/sessions" "$PMA_STATE/tmp" "$PMA_STATE/logs"
 }
 
 # The server-level fragment httpd_config.conf includes: phpMyAdmin's vhost
@@ -1158,7 +1160,8 @@ CONF
 }
 
 # phpMyAdmin's vhost: its own lsphp 8.3 run as $PMA_USER through the CGI
-# daemon, PHP held to phpMyAdmin's folders, no access log (a sign-in link's
+# daemon, PHP held to phpMyAdmin's folders and its errors logged to a file
+# only $PMA_USER writes (never shown on a page), no access log (a sign-in link's
 # code is in its query string), and phpMyAdmin at the root without its
 # libraries, templates, vendor code or dot files, and nothing under /api
 # (the panel's API path on the panel's own port).
@@ -1222,6 +1225,10 @@ php_admin_flag allow_url_fopen off
 php_admin_value upload_max_filesize 64M
 php_admin_value post_max_size 64M
 php_admin_value max_execution_time 600
+php_admin_flag display_errors off
+php_admin_flag display_startup_errors off
+php_admin_flag log_errors on
+php_admin_value error_log "$PMA_STATE/logs/php-error.log"
 }
 
 rewrite  {

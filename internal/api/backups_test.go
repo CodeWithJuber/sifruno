@@ -145,6 +145,10 @@ func TestBackupStorageShowsThePasswordOnce(t *testing.T) {
 	if w.Code != 422 || !strings.Contains(detail, "could not reach the backup storage server") || !slices.Contains(technical, "step: connect") || !slices.Contains(technical, "Host key verification failed.") {
 		t.Fatalf("refused target %d: %s", w.Code, w.Body)
 	}
+	b.targetErr = hostaccounts.ErrConflict
+	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage", storageBody(), cookie, csrf); w.Code != 409 || problemDetail(t, w) != backupStorageBusy {
+		t.Fatalf("a target change during a backup %d: %s", w.Code, w.Body)
+	}
 	b.targetErr = hostaccounts.ErrInvalid
 	w = websiteRequest(f.handler, "POST", "/api/v1/websites/backup-storage", storageBody(), cookie, csrf)
 	if detail, _ := problemTexts(t, w); w.Code != 422 || detail != backupStorageRule {

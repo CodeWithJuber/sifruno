@@ -155,7 +155,7 @@ func TestNothingRunsWithoutStorage(t *testing.T) {
 	b := &fakeBroker{accounts: []hostaccounts.Account{site("a", "alpha", true)}}
 	m, now := testManager(t, b)
 	m.RunDue(context.Background(), now.Add(time.Hour))
-	if len(b.calls) != 0 || m.st.LastNightly != "" {
+	if len(b.calls) != 0 || m.st.LastNightly != "2026-11-23" {
 		t.Fatalf("ran without storage: %q", b.calls)
 	}
 }

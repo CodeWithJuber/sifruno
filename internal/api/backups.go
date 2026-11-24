@@ -98,6 +98,7 @@ const (
 	backupsNoStorage  = "Backup storage is not set up, so nothing was started. Set it up on the Backup storage page first."
 	backupsBusy       = "This site already has a backup, restore or drill running. Wait for it to finish, then try again."
 	backupsNoAnswer   = "The account service did not answer, so the panel cannot show the backups. Reload the page to try again."
+	backupStorageBusy = "A backup, restore or drill is running, so the backup storage was not changed. Try again when it has finished."
 	backupNotFound    = "That backup was not found among this site's backups. It may have been removed by the weekly clean-up. Reload the page to see the backups there are now."
 	backupStorageRule = "Check the fields: the host is a DNS name or IP address, the port 1 to 65535, the user lowercase letters, digits, _ . or -, the folder an absolute path of letters, digits and . _ - /, and the host key one or more lines from ssh-keyscan for that host."
 	backupStorageWait = 5 * time.Minute // the broker allows three for opening or making a repository
@@ -193,6 +194,9 @@ func registerSiteBackups(a huma.API, o Options) {
 		ctx, cancel := context.WithTimeout(ctx, backupStorageWait-30*time.Second)
 		defer cancel()
 		res, err := o.Backups.SetTarget(ctx, hostaccounts.BackupTargetInput{Host: strings.TrimSpace(b.Host), Port: b.Port, User: strings.TrimSpace(b.User), Path: strings.TrimSpace(b.Path), KnownHosts: b.KnownHosts, Reason: "Backup storage set on the Backup storage page"}, siteActor(ctx))
+		if errors.Is(err, hostaccounts.ErrConflict) {
+			return nil, huma.Error409Conflict(backupStorageBusy, errors.New("account service: "+err.Error()))
+		}
 		if err != nil {
 			return nil, backupError(err, "backup", backupStorageRule)
 		}

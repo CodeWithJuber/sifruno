@@ -456,7 +456,16 @@ func (m *Manager) RunDue(ctx context.Context, now time.Time) {
 		return
 	}
 	status, err := m.broker.BackupStatus(ctx)
-	if err != nil || !status.Configured {
+	if err != nil {
+		return // the broker did not answer: try again next minute
+	}
+	if !status.Configured {
+		// Nothing to back up to: the night counts as done, so the broker
+		// is asked once a day, not once a minute.
+		m.mu.Lock()
+		m.st.LastNightly = today
+		_ = m.save()
+		m.mu.Unlock()
 		return
 	}
 	accounts, err := m.broker.List(ctx)

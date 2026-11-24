@@ -37,6 +37,17 @@ type Website struct {
 	Revision         uint64       `json:"revision" doc:"The hosting account's revision, or for a partly deleted site the one its delete was asked at. A change sends it back as expected_revision."`
 	// SiteFolderChanged comes from the broker's account list.
 	SiteFolderChanged bool `json:"site_folder_changed" doc:"The hosting account itself renamed, replaced or removed public_html, or changed the permissions of its home or public_html. Until the folder is back or the current one is used (the folder action), the site's PHP version, HTTPS and WordPress cannot change. Other websites are not affected."`
+	// Limits come from the broker's account list; a partly deleted site has
+	// no account and none.
+	Limits *WebsiteLimits `json:"limits,omitempty" doc:"What all of the hosting account's processes may use together: the site's PHP, SFTP sessions and scheduled jobs. Left out for a partly deleted site."`
+}
+
+// WebsiteLimits are the hosting account's limits, read only here: the
+// account's plan sets them.
+type WebsiteLimits struct {
+	Processes  int `json:"processes" doc:"Processes and threads the account may run at once."`
+	MemoryMiB  int `json:"memory_mib" doc:"Memory the account may use, in MiB, file cache included."`
+	CPUPercent int `json:"cpu_percent" doc:"CPU time the account may use; 100 is one CPU."`
 }
 
 // WebsiteHTTPS says whether the account has a certificate installed, and
@@ -453,6 +464,15 @@ func website(a hostaccounts.Account, j wizard.Job) Website {
 	return Website{
 		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: j.Kind, State: a.State, HTTPS: https,
 		PHPVersion: a.Web.PHPVersion, WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: a.Revision,
-		SiteFolderChanged: a.SiteFolderChanged,
+		SiteFolderChanged: a.SiteFolderChanged, Limits: websiteLimits(a.Limits),
 	}
+}
+
+// websiteLimits is nil when the account service reports no limits (a
+// broker before limits), so the page says so rather than show zeros.
+func websiteLimits(l hostaccounts.AccountLimits) *WebsiteLimits {
+	if l == (hostaccounts.AccountLimits{}) {
+		return nil
+	}
+	return &WebsiteLimits{Processes: l.Processes, MemoryMiB: l.MemoryMiB, CPUPercent: l.CPUPercent}
 }

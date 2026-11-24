@@ -179,6 +179,22 @@ func decodeSites(t *testing.T, body []byte) []Website {
 func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...string) {
 	t.Helper()
 	delete(item, "$schema")
+	// limits are there when the account service reports them, with exactly
+	// their three whole numbers.
+	if raw, ok := item["limits"]; ok {
+		var limits map[string]json.Number
+		dec := json.NewDecoder(strings.NewReader(string(raw)))
+		dec.UseNumber()
+		if dec.Decode(&limits) != nil || len(limits) != 3 {
+			t.Fatalf("limits %s", raw)
+		}
+		for _, key := range []string{"processes", "memory_mib", "cpu_percent"} {
+			if _, err := limits[key].Int64(); err != nil {
+				t.Fatalf("limits.%s %s", key, raw)
+			}
+		}
+		delete(item, "limits")
+	}
 	keys := slices.Sorted(func(yield func(string) bool) {
 		for k := range item {
 			if !yield(k) {
@@ -336,5 +352,33 @@ func TestWebsitesListNotAvailable(t *testing.T) {
 				t.Fatalf("%s %s: %d %s", name, path, w.Code, w.Body.String())
 			}
 		}
+	}
+}
+
+// A site shows its hosting account's limits as the broker reports them,
+// read only; without them (a broker before limits) the key is left out.
+func TestWebsiteShowsAccountLimits(t *testing.T) {
+	f, runner, broker := sitesFixture(t)
+	limited := makeSite(t, runner, "limited.example", "8.3")
+	plain := makeSite(t, runner, "plain.example", "8.3")
+	broker.change(limited.Result.AccountID, func(a *hostaccounts.Account) {
+		a.Limits = hostaccounts.AccountLimits{Processes: 100, MemoryMiB: 1024, CPUPercent: 100}
+	})
+	cookie, _ := websiteSignIn(t, f)
+	w := websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+limited.Result.AccountID, nil, cookie, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"limits":{"processes":100,"memory_mib":1024,"cpu_percent":100}`) {
+		t.Fatalf("site with limits %d: %s", w.Code, w.Body.String())
+	}
+	var got Website
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Limits == nil || *got.Limits != (WebsiteLimits{Processes: 100, MemoryMiB: 1024, CPUPercent: 100}) {
+		t.Fatalf("decoded %+v", got)
+	}
+	w = websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+plain.Result.AccountID, nil, cookie, "")
+	if w.Code != 200 || strings.Contains(w.Body.String(), `"limits"`) {
+		t.Fatalf("site without limits %d: %s", w.Code, w.Body.String())
+	}
+	w = websiteRequest(f.handler, "GET", "/api/v1/websites/sites", nil, cookie, "")
+	if sites := decodeSites(t, w.Body.Bytes()); len(sites) != 2 {
+		t.Fatalf("list %+v", sites)
 	}
 }

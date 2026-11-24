@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +25,31 @@ import (
 // (its staging folder and temporary MariaDB users) goes through the backup
 // leftover list, so a broker stopped mid-copy removes it at start.
 var migrateBucket = []byte("hostbroker-migrate-v1")
+
+// staleKeyBucket lists key lines the broker could not prove gone from an
+// old server: a migration that expired, or was finished, while the source
+// did not remove its line. They stay until the admin says the line is
+// removed (POST /v1/migrations/{id}/stale-cleared).
+var staleKeyBucket = []byte("hostbroker-migrate-stale-v1")
+
+// maxStaleKeys bounds that list; past it an expired migration is kept, key
+// and all, rather than forgotten without a trace.
+const maxStaleKeys = 256
+
+// StaleMigrationKey is a key line that may still be in root's
+// authorized_keys on an old server: the line ending in Comment on Host.
+type StaleMigrationKey struct {
+	ID      string    `json:"id"`
+	Host    string    `json:"host"`
+	Port    int       `json:"port"`
+	Comment string    `json:"comment"`
+	Detail  string    `json:"detail"`
+	At      time.Time `json:"at"`
+}
+
+func (k StaleMigrationKey) valid() bool {
+	return idPattern.MatchString(k.ID) && validMigrationHost(k.Host) && k.Port >= 1 && k.Port <= 65535 && k.Comment == cpsource.KeyComment(k.ID) && len(k.Detail) <= 1024 && !k.At.IsZero()
+}
 
 // migrateEngine is the Linux side of a migration: the migration's folder
 // with its key and known_hosts, and the programs it runs. Tests use a fake.
@@ -127,6 +155,131 @@ func (s *store) dropMigration(id string) error {
 	return nil
 }
 
+func (s *store) staleKeys() ([]StaleMigrationKey, error) {
+	items := []StaleMigrationKey{}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(staleKeyBucket)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			var item StaleMigrationKey
+			d := json.NewDecoder(bytes.NewReader(v))
+			d.DisallowUnknownFields()
+			if d.Decode(&item) != nil || string(k) != item.ID || !item.valid() {
+				return ErrUnavailable
+			}
+			items = append(items, item)
+			return nil
+		})
+	})
+	if err != nil || len(items) > maxStaleKeys {
+		return nil, ErrUnavailable
+	}
+	return items, nil
+}
+
+func (s *store) staleKey(id string) (StaleMigrationKey, bool, error) {
+	items, err := s.staleKeys()
+	if err != nil {
+		return StaleMigrationKey{}, false, err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return item, true, nil
+		}
+	}
+	return StaleMigrationKey{}, false, nil
+}
+
+// putStaleKey records a line that may still be on the source, before the
+// migration that knew it is forgotten.
+func (s *store) putStaleKey(m migrationRecord, detail string) error {
+	items, err := s.staleKeys()
+	if err != nil {
+		return err
+	}
+	if len(items) >= maxStaleKeys {
+		return ErrUnavailable
+	}
+	item := StaleMigrationKey{ID: m.ID, Host: m.Host, Port: m.Port, Comment: cpsource.KeyComment(m.ID), Detail: installDetail([]byte(detail)), At: time.Now().UTC()}
+	if !item.valid() {
+		return ErrUnavailable
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if s.db.Update(func(tx *bolt.Tx) error {
+		b, e := tx.CreateBucketIfNotExists(staleKeyBucket)
+		if e != nil {
+			return e
+		}
+		return b.Put([]byte(item.ID), raw)
+	}) != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// manualRemoval names exactly the line to remove and where.
+func manualRemoval(m migrationRecord) string {
+	return "Remove the line ending in " + cpsource.KeyComment(m.ID) + " from /root/.ssh/authorized_keys on " + m.Host + " (SSH port " + strconv.Itoa(m.Port) + ")."
+}
+
+// expireMigration ends a migration whose day is over. With a confirmed host
+// key the source is asked to remove the line, with the key the broker still
+// holds; whatever is not proved removed is recorded as a stale line, with
+// the exact line and server, before the migration and its key are
+// forgotten. Callers hold migrateMu.
+func (s *store) expireMigration(ctx context.Context, m migrationRecord) error {
+	result := MigrationFinishResult{Detail: "The old server's host key was never confirmed, so Sifruno never signed in there. If the key line was added there, it is still there. " + manualRemoval(m)}
+	if m.Pinned != "" {
+		result = s.removeSourceKey(ctx, m)
+	}
+	if !result.RemovedFromSource {
+		if err := s.putStaleKey(m, "The migration expired before it ended. "+result.Detail); err != nil {
+			return err
+		}
+	}
+	return s.forgetMigration(m.ID)
+}
+
+// clearStaleKey drops a stale line the admin says is removed.
+func (s *store) clearStaleKey(ctx context.Context, id string, in MigrationFinishInput, actor string) error {
+	if ctx == nil || !idPattern.MatchString(id) || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return ErrInvalid
+	}
+	s.migrateMu.Lock()
+	defer s.migrateMu.Unlock()
+	if _, found, err := s.staleKey(id); err != nil || !found {
+		if err != nil {
+			return err
+		}
+		return ErrNotFound
+	}
+	if s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(staleKeyBucket)
+		if b == nil {
+			return nil
+		}
+		return b.Delete([]byte(id))
+	}) != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// listStaleKeys lists the key lines that may still be on old servers.
+func (s *store) listStaleKeys(ctx context.Context) ([]StaleMigrationKey, error) {
+	if ctx == nil {
+		return nil, ErrInvalid
+	}
+	s.migrateMu.Lock()
+	defer s.migrateMu.Unlock()
+	return s.staleKeys()
+}
+
 // forgetMigration removes the migration's folder, then its record; a
 // folder that cannot be removed keeps the record, for the next sweep.
 func (s *store) forgetMigration(id string) error {
@@ -136,9 +289,10 @@ func (s *store) forgetMigration(id string) error {
 	return s.dropMigration(id)
 }
 
-// sweepMigrations removes every expired migration, and every folder no
-// record names (a broker stopped between the two). Callers hold migrateMu.
-func (s *store) sweepMigrations(now time.Time) error {
+// sweepMigrations ends every expired migration (expireMigration), and
+// removes every folder no record names (a broker stopped between the two).
+// Callers hold migrateMu.
+func (s *store) sweepMigrations(ctx context.Context, now time.Time) error {
 	items, err := s.migrationRecords()
 	if err != nil {
 		return err
@@ -147,8 +301,12 @@ func (s *store) sweepMigrations(now time.Time) error {
 	known := map[string]bool{}
 	for _, m := range items {
 		if m.expired(now) {
-			if s.forgetMigration(m.ID) != nil {
+			work, cancel := backupContext(ctx, migrateFinishTimeout)
+			err := s.expireMigration(work, m)
+			cancel()
+			if err != nil {
 				failed = true
+				known[m.ID] = true
 			}
 			continue
 		}
@@ -169,19 +327,50 @@ func (s *store) sweepMigrations(now time.Time) error {
 	return nil
 }
 
-// sweepMigrationsAtStart runs once before the socket accepts requests.
-func (s *store) sweepMigrationsAtStart() error {
+// expireMigrations sweeps at once and then every interval until ctx ends,
+// so a migration nobody finishes still has its key line removed from the
+// source on the day it expires, not at the next migration or restart. Each
+// expired migration's removal has its own minute.
+func (s *store) expireMigrations(ctx context.Context, interval time.Duration) {
 	if s.migrate == nil {
-		return nil
+		return
 	}
-	s.migrateMu.Lock()
-	defer s.migrateMu.Unlock()
-	return s.sweepMigrations(time.Now().UTC())
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		s.migrateMu.Lock()
+		err := s.sweepMigrations(ctx, time.Now().UTC())
+		s.migrateMu.Unlock()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sifruno broker: an expired migration could not be ended yet (its key line or folder); the next sweep tries again")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
 
-// migration reads one live migration; an expired one is removed and is not
-// found. pinned requires the admin's confirmed host key.
+// migration reads one live migration; an expired one is not found (the
+// sweep ends it, removing its key line from the source first). pinned
+// requires the admin's confirmed host key.
 func (s *store) migration(id string, pinned bool) (migrationRecord, error) {
+	m, err := s.anyMigration(id)
+	if err != nil {
+		return migrationRecord{}, err
+	}
+	if m.expired(time.Now().UTC()) {
+		return migrationRecord{}, ErrNotFound
+	}
+	if pinned && m.Pinned == "" {
+		return migrationRecord{}, &MigrationError{Step: "host_key", Detail: "The old server's host key has not been confirmed yet."}
+	}
+	return m, nil
+}
+
+// anyMigration reads one migration, expired or not.
+func (s *store) anyMigration(id string) (migrationRecord, error) {
 	if !idPattern.MatchString(id) {
 		return migrationRecord{}, ErrInvalid
 	}
@@ -193,17 +382,9 @@ func (s *store) migration(id string, pinned bool) (migrationRecord, error) {
 		return migrationRecord{}, err
 	}
 	for _, m := range items {
-		if m.ID != id {
-			continue
+		if m.ID == id {
+			return m, nil
 		}
-		if m.expired(time.Now().UTC()) {
-			_ = s.forgetMigration(id)
-			return migrationRecord{}, ErrNotFound
-		}
-		if pinned && m.Pinned == "" {
-			return migrationRecord{}, &MigrationError{Step: "host_key", Detail: "The old server's host key has not been confirmed yet."}
-		}
-		return m, nil
 	}
 	return migrationRecord{}, ErrNotFound
 }
@@ -218,7 +399,7 @@ func (s *store) openMigration(ctx context.Context, in MigrationOpenInput, actor 
 	s.migrateMu.Lock()
 	defer s.migrateMu.Unlock()
 	now := time.Now().UTC()
-	if err := s.sweepMigrations(now); err != nil {
+	if err := s.sweepMigrations(ctx, now); err != nil {
 		return Migration{}, err
 	}
 	items, err := s.migrationRecords()
@@ -731,24 +912,46 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 
 // finishMigration removes the key's line from the source's authorized_keys,
 // proves it with a sign-in that is then refused, and removes the local key
-// and the record whatever the source answered.
+// and the record whatever the source answered; a line not proved removed
+// is kept as a stale line. An expired migration is finished the same way
+// with the key the broker still holds. A migration already ended answers
+// what is known of its line: a stale line, never "removed".
 func (s *store) finishMigration(ctx context.Context, id string, in MigrationFinishInput, actor string) (MigrationFinishResult, error) {
 	if ctx == nil || !validText(in.Reason, 500) || !validText(actor, 120) {
 		return MigrationFinishResult{}, ErrInvalid
 	}
 	s.migrateMu.Lock()
 	defer s.migrateMu.Unlock()
-	m, err := s.migration(id, false)
+	if !idPattern.MatchString(id) {
+		return MigrationFinishResult{}, ErrInvalid
+	}
+	if s.migrate == nil {
+		return MigrationFinishResult{}, ErrUnavailable
+	}
+	m, err := s.anyMigration(id)
+	if errors.Is(err, ErrNotFound) {
+		stale, found, serr := s.staleKey(id)
+		switch {
+		case serr != nil:
+			return MigrationFinishResult{}, serr
+		case found:
+			return MigrationFinishResult{Detail: stale.Detail}, nil
+		}
+		return MigrationFinishResult{}, ErrNotFound
+	}
 	if err != nil {
 		return MigrationFinishResult{}, err
 	}
-	result := MigrationFinishResult{}
-	if m.Pinned == "" {
-		result.Detail = "The old server's host key was never confirmed, so Sifruno never signed in there. If you added the key line on the old server, remove it from /root/.ssh/authorized_keys."
-	} else {
+	result := MigrationFinishResult{Detail: "The old server's host key was never confirmed, so Sifruno never signed in there. If the key line was added there, it is still there. " + manualRemoval(m)}
+	if m.Pinned != "" {
 		work, cancel := backupContext(ctx, migrateFinishTimeout)
 		result = s.removeSourceKey(work, m)
 		cancel()
+	}
+	if !result.RemovedFromSource {
+		if err = s.putStaleKey(m, result.Detail); err != nil {
+			return MigrationFinishResult{}, err
+		}
 	}
 	if err = s.forgetMigration(id); err != nil {
 		return MigrationFinishResult{}, err
@@ -757,7 +960,7 @@ func (s *store) finishMigration(ctx context.Context, id string, in MigrationFini
 }
 
 func (s *store) removeSourceKey(ctx context.Context, m migrationRecord) MigrationFinishResult {
-	manual := " Remove the line ending in " + cpsource.KeyComment(m.ID) + " from /root/.ssh/authorized_keys on the old server."
+	manual := " " + manualRemoval(m)
 	command, err := cpsource.RemoveKeyCommand(m.ID)
 	if err != nil {
 		return MigrationFinishResult{Detail: "The removal could not be built." + manual}

@@ -192,6 +192,8 @@ type MigrationService interface {
 	MigrateFiles(context.Context, string, MigrateFilesInput, string) (MigrateFilesResult, error)
 	MigrateDatabase(context.Context, string, MigrateDatabaseInput, string) (MigrateDatabaseResult, error)
 	FinishMigration(context.Context, string, MigrationFinishInput, string) (MigrationFinishResult, error)
+	StaleMigrationKeys(context.Context) ([]StaleMigrationKey, error)
+	ClearStaleMigrationKey(context.Context, string, MigrationFinishInput, string) error
 }
 
 // validMigrationHost is a lowercase DNS name or an IPv4 address: rsync

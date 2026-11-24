@@ -101,4 +101,28 @@ func (c *client) FinishMigration(ctx context.Context, id string, in MigrationFin
 	return out, err
 }
 
+// StaleMigrationKeys lists key lines that may still be in root's
+// authorized_keys on old servers.
+func (c *client) StaleMigrationKeys(ctx context.Context) ([]StaleMigrationKey, error) {
+	var out struct {
+		Items []StaleMigrationKey `json:"items"`
+	}
+	if err := c.send(ctx, c.http, "GET", "/v1/migrations/stale", nil, &out, maxResponseBytes); err != nil {
+		return nil, err
+	}
+	if out.Items == nil {
+		out.Items = []StaleMigrationKey{}
+	}
+	return out.Items, nil
+}
+
+// ClearStaleMigrationKey records that the admin removed that line.
+func (c *client) ClearStaleMigrationKey(ctx context.Context, id string, in MigrationFinishInput, actor string) error {
+	if !idPattern.MatchString(id) || !validText(in.Reason, 500) || !validText(actor, 120) {
+		return ErrInvalid
+	}
+	var out struct{}
+	return c.send(ctx, c.http, "POST", "/v1/migrations/"+id+"/stale-cleared", migrationBody[MigrationFinishInput]{in, actor}, &out, maxResponseBytes)
+}
+
 var _ MigrationService = (*client)(nil)

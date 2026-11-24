@@ -20,6 +20,8 @@ var testSourceID = strings.Repeat("e", 32)
 type migrationSpy struct {
 	pinned   bool
 	finished int
+	stale    []hostaccounts.StaleMigrationKey
+	cleared  []string
 }
 
 func (m *migrationSpy) view() hostaccounts.Migration {
@@ -64,6 +66,13 @@ func (m *migrationSpy) MigrateDatabase(context.Context, string, hostaccounts.Mig
 func (m *migrationSpy) FinishMigration(context.Context, string, hostaccounts.MigrationFinishInput, string) (hostaccounts.MigrationFinishResult, error) {
 	m.finished++
 	return hostaccounts.MigrationFinishResult{RemovedFromSource: true}, nil
+}
+func (m *migrationSpy) StaleMigrationKeys(context.Context) ([]hostaccounts.StaleMigrationKey, error) {
+	return m.stale, nil
+}
+func (m *migrationSpy) ClearStaleMigrationKey(_ context.Context, id string, _ hostaccounts.MigrationFinishInput, _ string) error {
+	m.cleared = append(m.cleared, id)
+	return nil
 }
 func (m *migrationSpy) SetCron(context.Context, string, hostaccounts.CronInput, string) (hostaccounts.CronResult, error) {
 	return hostaccounts.CronResult{}, nil

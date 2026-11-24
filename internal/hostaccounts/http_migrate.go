@@ -17,15 +17,17 @@ import (
 //	GET  /v1/migrations/{id}/accounts           the source's accounts
 //	POST /v1/migrations/{id}/plan               username, reason
 //	POST /v1/migrations/{id}/finish             reason
+//	GET  /v1/migrations/stale                   key lines that may still be on old servers
+//	POST /v1/migrations/{id}/stale-cleared      reason: the admin removed that line
 //	POST /v1/accounts/{id}/migrate-files        migration, expected_revision, reason
 //	POST /v1/accounts/{id}/migrate-database     migration, database, expected_revision, reason
 var (
-	migrationPath   = regexp.MustCompile(`^/v1/migrations/([a-f0-9]{32})(/host-key|/accounts|/plan|/finish)?$`)
+	migrationPath   = regexp.MustCompile(`^/v1/migrations/([a-f0-9]{32})(/host-key|/accounts|/plan|/finish|/stale-cleared)?$`)
 	migrateCopyPath = regexp.MustCompile(`^/v1/accounts/([a-f0-9]{32})/(migrate-files|migrate-database)$`)
 )
 
 func migrateRoute(path string) bool {
-	return path == "/v1/migrations" || migrationPath.MatchString(path) || migrateCopyPath.MatchString(path)
+	return path == "/v1/migrations" || path == "/v1/migrations/stale" || migrationPath.MatchString(path) || migrateCopyPath.MatchString(path)
 }
 
 // answerMigration writes the result, or 422 migration_failed with the step
@@ -61,6 +63,17 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 		}
 		result, err := s.openMigration(ctx, in.Input, in.Actor)
 		answerMigration(w, result, err)
+		return
+	}
+	if r.URL.Path == "/v1/migrations/stale" {
+		if r.Method != "GET" || !noBody(r) {
+			writeError(w, ErrInvalid)
+			return
+		}
+		items, err := s.listStaleKeys(ctx)
+		answerMigration(w, struct {
+			Items []StaleMigrationKey `json:"items"`
+		}{items}, err)
 		return
 	}
 	if m := migrateCopyPath.FindStringSubmatch(r.URL.Path); m != nil {
@@ -129,6 +142,13 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 		}
 		result, err := s.planMigration(ctx, id, in.Input, in.Actor)
 		answerMigration(w, result, err)
+	case action == "/stale-cleared" && r.Method == "POST":
+		var in body[MigrationFinishInput]
+		if decodeBody(w, r, &in, []string{"reason"}) != nil {
+			writeError(w, ErrInvalid)
+			return
+		}
+		answerMigration(w, struct{}{}, s.clearStaleKey(ctx, id, in.Input, in.Actor))
 	case action == "/finish" && r.Method == "POST":
 		var in body[MigrationFinishInput]
 		if decodeBody(w, r, &in, []string{"reason"}) != nil {

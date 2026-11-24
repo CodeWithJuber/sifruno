@@ -1212,9 +1212,11 @@ root step. The design, with the owner's choices recorded from Jev on
   `POST /v1/migrations/{id}/host-key` (`fingerprint`, `reason`) pins the
   offered key whose fingerprint the admin compared with the old server's
   own (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`); before that no
-  command runs there. A migration lives 24 hours, at most 16 at a time;
-  an expired one, or a folder no record names, is removed at start and by
-  every migration operation.
+  command runs there. A migration lives 24 hours, at most 16 at a time.
+  An expired one is ended as a finish ends it, with the key the broker
+  still holds, by a sweep that runs in the background at start and every
+  30 minutes, and before a new migration opens; a folder no record names
+  is removed then too.
 - Every source command is fixed: `internal/cpsource` builds it from fixed
   words and names that passed strict patterns, and cites cPanel's public
   API page for each (`whmapi1 listaccts`, `domainuserdata`,
@@ -1283,8 +1285,14 @@ root step. The design, with the owner's choices recorded from Jev on
   the source (`sed` on whole lines `restrict ssh-ed25519 <blob>
   sifruno-migration-<id>`), proves
   it by a sign-in that is then refused with `Permission denied`, and
-  removes the local folder and record whatever the source answered; the
-  answer says when the line must be removed by hand.
+  removes the local folder and record whatever the source answered. A
+  line not proved removed (the source unreachable, the removal refused, a
+  migration whose host key was never confirmed) is kept as a stale line
+  before the migration is forgotten: its server, SSH port and the exact
+  line to remove. `GET /v1/migrations/stale` lists them; `POST
+  /v1/migrations/{id}/stale-cleared` (`reason`) drops one once the admin
+  removed it by hand. A finish of a migration already ended answers its
+  stale line, never "removed"; one with neither is not found.
 - Locks: `migrateMu` guards the records only; no source command runs
   under it, so a plan waiting for `backupMu` behind a long backup never
   holds up the admin's finish.
@@ -1308,8 +1316,7 @@ Known gaps, found in review and not fixed in v1:
   it (`tier`) and the panel's job removes the account it made. Fail-closed,
   but later than the plan promises.
 - A finish, or an expiry, does not stop a copy already running with the
-  key (up to its two hours); an expired migration's line stays in the
-  source's `authorized_keys` until the admin removes it.
+  key (up to its two hours).
 - A home holding files the account may not read (root's, another
   user's) cannot be moved until they are given to the account or removed
   on the old server.

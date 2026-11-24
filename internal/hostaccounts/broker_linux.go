@@ -202,9 +202,10 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	// migration's key, or a folder no record names, goes before the socket
 	// accepts requests; each migration operation sweeps again.
 	s.migrate = newMigrator(s.opts.StateDir, engine)
-	if s.sweepMigrationsAtStart() != nil {
-		fmt.Fprintln(os.Stderr, "sifruno broker: an expired migration's key could not be removed at start; the next migration operation tries again")
-	}
+	// Expired migrations are ended in the background, now and every 30
+	// minutes: removing a key line from an old server may wait on its SSH
+	// port, which must not hold up the socket.
+	go s.expireMigrations(ctx, 30*time.Minute)
 	// Every account's limits go to its slice drop-in before the socket
 	// accepts requests: accounts made before limits were recorded get the
 	// defaults, and a deleted account's leftover goes. A failure does not

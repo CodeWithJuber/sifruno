@@ -265,10 +265,9 @@ func (f *fakeRemoveFails) Remote(_ context.Context, _ migrationRecord, _ string,
 	return []byte("sed: couldn't open temporary file"), 4, nil
 }
 
-func TestExpiredMigrationsAreSwept(t *testing.T) {
-	s, f, _ := migrateStore(t)
-	m := openFixtureMigration(t, s)
-	rec, err := s.migration(m.ID, false)
+func expire(t *testing.T, s *store, id string) {
+	t.Helper()
+	rec, err := s.anyMigration(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,15 +275,91 @@ func TestExpiredMigrationsAreSwept(t *testing.T) {
 	if err = s.putMigration(rec); err != nil {
 		t.Fatal(err)
 	}
-	f.folders[strings.Repeat("d", 32)] = true // a folder no record names
-	if err = s.sweepMigrationsAtStart(); err != nil {
+}
+
+func sweep(t *testing.T, s *store) {
+	t.Helper()
+	s.migrateMu.Lock()
+	defer s.migrateMu.Unlock()
+	if err := s.sweepMigrations(context.Background(), time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.folders) != 0 {
-		t.Fatalf("folders left: %v", f.folders)
+}
+
+// An expired migration's line is removed from the source with the key the
+// broker still holds before the key is forgotten; only what is proved
+// removed is not recorded as a stale line.
+func TestExpiredMigrationsRemoveTheirKeyLine(t *testing.T) {
+	s, f, _ := migrateStore(t)
+	ctx := context.Background()
+	m := pinnedMigration(t, s)
+	expire(t, s, m.ID)
+	if _, err := s.getMigration(ctx, m.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an expired migration is still served: %v", err)
 	}
-	if _, err = s.getMigration(context.Background(), m.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("an expired migration: %v", err)
+	f.folders[strings.Repeat("d", 32)] = true // a folder no record names
+	sweep(t, s)
+	if len(f.folders) != 0 || !f.removed {
+		t.Fatalf("folders left %v, line removed %v", f.folders, f.removed)
+	}
+	if items, _ := s.staleKeys(); len(items) != 0 {
+		t.Fatalf("a removed line was recorded as stale: %+v", items)
+	}
+	// A source that does not remove the line: it is recorded, with the
+	// exact line and server, and never reported removed.
+	f.removed = false
+	m = pinnedMigration(t, s)
+	expire(t, s, m.ID)
+	s.migrate = &fakeRemoveFails{fakeMigrate: f}
+	sweep(t, s)
+	items, err := s.staleKeys()
+	if err != nil || len(items) != 1 || items[0].ID != m.ID || items[0].Host != "source.example.test" || items[0].Comment != "sifruno-migration-"+m.ID ||
+		!strings.Contains(items[0].Detail, "sifruno-migration-"+m.ID+" from /root/.ssh/authorized_keys on source.example.test") {
+		t.Fatalf("stale lines: %+v %v", items, err)
+	}
+	if f.folders[m.ID] {
+		t.Fatal("the expired key stayed on this server")
+	}
+	// A job finishing it later hears the same, not "removed".
+	got, err := s.finishMigration(ctx, m.ID, MigrationFinishInput{Reason: "Migration ended"}, "test operator")
+	if err != nil || got.RemovedFromSource || !strings.Contains(got.Detail, "on source.example.test") {
+		t.Fatalf("finish of an expired migration: %+v %v", got, err)
+	}
+	listed, err := s.listStaleKeys(ctx)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list: %+v %v", listed, err)
+	}
+	if err = s.clearStaleKey(ctx, m.ID, MigrationFinishInput{Reason: "Removed by hand"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if items, _ = s.staleKeys(); len(items) != 0 {
+		t.Fatalf("cleared line still listed: %+v", items)
+	}
+	if _, err = s.finishMigration(ctx, m.ID, MigrationFinishInput{Reason: "x"}, "test operator"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown migration: %v", err)
+	}
+	// Never signed in (no confirmed host key): recorded, as the admin may
+	// have added the line anyway.
+	s.migrate = f
+	m = openFixtureMigration(t, s)
+	expire(t, s, m.ID)
+	sweep(t, s)
+	if items, _ = s.staleKeys(); len(items) != 1 || !strings.Contains(items[0].Detail, "never confirmed") {
+		t.Fatalf("an unconfirmed expired migration: %+v", items)
+	}
+}
+
+// A finish whose removal the source refuses keeps the line as stale.
+func TestFinishKeepsALineItCouldNotRemove(t *testing.T) {
+	s, f, _ := migrateStore(t)
+	m := pinnedMigration(t, s)
+	s.migrate = &fakeRemoveFails{fakeMigrate: f}
+	got, err := s.finishMigration(context.Background(), m.ID, MigrationFinishInput{Reason: "Migration ended"}, "test operator")
+	if err != nil || got.RemovedFromSource {
+		t.Fatalf("finish: %+v %v", got, err)
+	}
+	if items, _ := s.staleKeys(); len(items) != 1 || items[0].ID != m.ID {
+		t.Fatalf("stale lines: %+v", items)
 	}
 }
 

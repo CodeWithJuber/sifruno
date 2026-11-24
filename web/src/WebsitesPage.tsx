@@ -20,6 +20,7 @@ import { adoptCurrentFolder, changePhpVersion, dayLabel, deletedSummary, deleteW
 import type { Website, WebsiteDeleted, WebsiteDetail } from "@/lib/websites-api";
 import { useShell } from "@/shell/context";
 import type { PageId } from "@/shell/pages";
+import { DiskMeter, SiteTools, trafficText } from "./SiteTools";
 // The busy ring a working button shows, as on the wizard's screens.
 import "./new-website.css";
 
@@ -195,6 +196,7 @@ function SiteTable({ sites }: { sites: Website[] }) {
             <TableHead scope="col" className="text-start text-muted-foreground">HTTPS</TableHead>
             <TableHead scope="col" className="text-start text-muted-foreground">PHP</TableHead>
             <TableHead scope="col" className="text-start text-muted-foreground">Type</TableHead>
+            <TableHead scope="col" className="text-start text-muted-foreground">Usage</TableHead>
             <TableHead scope="col" className="text-end text-muted-foreground"><span className="sr-only">Actions</span></TableHead>
           </TableRow>
         </TableHeader>
@@ -209,6 +211,9 @@ function SiteTable({ sites }: { sites: Website[] }) {
             <TableCell data-label="PHP" className={stackedCell} data-testid="website-php">{site.php_version || <span className="text-muted-foreground">Not reported</span>}</TableCell>
             <TableCell data-label="Type" className={stackedCell} data-testid="website-type">{site.kind === "php" ? "PHP site"
               : <span>WordPress <span className="text-muted-foreground" data-testid="website-wordpress">{site.wordpress_version}</span></span>}</TableCell>
+            <TableCell data-label="Usage" className={`${stackedCell} whitespace-normal`} data-testid="website-usage">{site.usage
+              ? <span className="flex flex-col gap-1"><DiskMeter usage={site.usage} /><span className="text-xs text-muted-foreground">Traffic: {trafficText(site.usage)}</span></span>
+              : <span className="text-muted-foreground">Not reported</span>}</TableCell>
             <TableCell className={`text-end ${stacked} @max-[62rem]:px-0 @max-[62rem]:pt-3 @max-[62rem]:text-start`}>
               <div className="inline-flex flex-nowrap gap-2 @max-[62rem]:flex @max-[62rem]:flex-wrap">
                 {site.state !== "partly_deleted" && <>
@@ -327,6 +332,8 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
       </>}
     </section>
     <SiteActions site={site} onChanged={replace} onDeleted={setDeleted} onReload={retry} announce={setAnnouncement} />
+    {/* Usage, scheduled jobs and logs; a jobs change moves the account's revision on. */}
+    {site.state !== "partly_deleted" && <SiteTools site={site} onRevision={(revision) => replace({ ...site, revision })} />}
     {announcer}
   </div>;
 }

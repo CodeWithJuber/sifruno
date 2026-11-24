@@ -47,6 +47,28 @@ export interface Website {
   site_folder_changed: boolean;
   // Left out when the server reports none (a partly deleted site).
   limits?: WebsiteLimits;
+  // In the list only, and only when the account service answered in time.
+  usage?: WebsiteUsage;
+}
+// Disk use against the quota, and the response bytes the site served this
+// month by its access log. traffic_complete is false while older log lines
+// are still being counted, so the number can still grow.
+export interface WebsiteUsage {
+  disk_used_bytes: number;
+  // 0 when no quota is set.
+  disk_limit_bytes: number;
+  // YYYY-MM on the server's clock.
+  traffic_month: string;
+  traffic_bytes: number;
+  traffic_complete: boolean;
+}
+const count = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
+export function parseWebsiteUsage(v: unknown): WebsiteUsage | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const u = v as Record<string, unknown>;
+  if (!count(u.disk_used_bytes) || !count(u.disk_limit_bytes) || !count(u.traffic_bytes) || typeof u.traffic_complete !== "boolean") return undefined;
+  if (typeof u.traffic_month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(u.traffic_month)) return undefined;
+  return { disk_used_bytes: u.disk_used_bytes, disk_limit_bytes: u.disk_limit_bytes, traffic_month: u.traffic_month, traffic_bytes: u.traffic_bytes, traffic_complete: u.traffic_complete };
 }
 // One site as its own page reads it: with the PHP versions installed on the
 // server, which are the ones it can change to.
@@ -98,12 +120,15 @@ export function parseWebsite(v: unknown): Website | undefined {
   if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 1 || typeof v.site_folder_changed !== "boolean") return undefined;
   const limits = v.limits === undefined ? undefined : parseLimits(v.limits);
   if (v.limits !== undefined && !limits) return undefined;
+  const usage = v.usage === undefined ? undefined : parseWebsiteUsage(v.usage);
+  if (v.usage !== undefined && !usage) return undefined;
   return {
     account_id: v.account_id, username: v.username, domain: v.domain, kind: v.kind, state: v.state,
     https: { on: https.on, not_after: https.not_after as string },
     php_version: v.php_version, wordpress_version: v.wordpress_version, url: v.url, admin_url: v.admin_url as string, created_at: v.created_at,
     revision: v.revision as number, site_folder_changed: v.site_folder_changed,
     ...(limits ? { limits } : {}),
+    ...(usage ? { usage } : {}),
   };
 }
 

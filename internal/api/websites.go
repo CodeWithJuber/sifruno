@@ -20,19 +20,20 @@ import (
 // Website is one site the New website wizard made. The broker's account
 // list is the authority for the domain, the state, the certificate, the PHP
 // version and the revision; the rest comes from the newest succeeded wizard
-// job for that account.
+// job for that account. A site whose delete removed the account but not yet
+// its database comes from the job alone, as partly_deleted.
 type Website struct {
 	AccountID        string       `json:"account_id"`
 	Username         string       `json:"username"`
 	Domain           string       `json:"domain"`
-	State            string       `json:"state" doc:"The hosting account's state: active, suspended or recovery_required."`
+	State            string       `json:"state" doc:"The hosting account's state: active, suspended or recovery_required; partly_deleted when a delete removed the hosting account but not yet the site's database."`
 	HTTPS            WebsiteHTTPS `json:"https"`
 	PHPVersion       string       `json:"php_version" doc:"The PHP version the site runs with. Empty when the account service reports none."`
 	WordPressVersion string       `json:"wordpress_version"`
 	URL              string       `json:"url"`
 	AdminURL         string       `json:"admin_url"`
 	CreatedAt        string       `json:"created_at" doc:"When the wizard job started, RFC 3339."`
-	Revision         uint64       `json:"revision" doc:"The hosting account's revision. A change sends it back as expected_revision."`
+	Revision         uint64       `json:"revision" doc:"The hosting account's revision, or for a partly deleted site the one its delete was asked at. A change sends it back as expected_revision."`
 }
 
 // WebsiteHTTPS says whether the account has a certificate installed, and
@@ -109,6 +110,8 @@ const (
 	websiteRefused     = "The account service refused the request as invalid, so nothing changed."
 	websiteNoQuota     = "The account service did not report this site's disk quota, so the panel cannot change PHP and keep the quota. Update and restart the account service, then try again."
 	websiteNotActive   = "Only a live website can change its PHP version. Resume the website first."
+	websitePartly      = "This website's hosting account is already deleted, so nothing else can change. Delete the website again to remove what is left."
+	partlyDeleted      = "partly_deleted"
 	websitePHPChanged  = "PHP version changed on the website's page"
 	websiteSuspended   = "Suspended on the website's page"
 	websiteResumed     = "Resumed on the website's page"
@@ -180,6 +183,9 @@ func registerWebsites(a huma.API, o Options) {
 		if err != nil {
 			return nil, err
 		}
+		if site.State == partlyDeleted {
+			return nil, huma.Error409Conflict(websitePartly)
+		}
 		version := in.Body.PHPVersion
 		web, ok := o.Accounts.(hostaccounts.WebService)
 		switch {
@@ -211,6 +217,9 @@ func registerWebsites(a huma.API, o Options) {
 		site, account, err := findWebsite(ctx, o, in.AccountID)
 		if err != nil {
 			return nil, err
+		}
+		if site.State == partlyDeleted {
+			return nil, huma.Error409Conflict(websitePartly)
 		}
 		reason, rejected := websiteSuspended, "The web server's configuration test failed with the site suspended, so the site was not suspended and nothing changed. Ask whoever runs this server to check the web server."
 		switch {
@@ -303,7 +312,8 @@ func websiteRemoveError(err error) error {
 
 // listWebsites joins the broker's accounts with the wizard's succeeded jobs,
 // newest job first, one entry per account. An account the broker no longer
-// has is left out, and so is one no kept job made.
+// has is left out, unless a delete from the site's page removed it and the
+// site's database is still to go; so is one no kept job made.
 func listWebsites(ctx context.Context, o Options) ([]Website, error) {
 	if o.Accounts == nil || o.Wizard == nil {
 		return nil, huma.Error503ServiceUnavailable(websitesNotSetUp)
@@ -319,12 +329,18 @@ func listWebsites(ctx context.Context, o Options) ([]Website, error) {
 	sites := []Website{}
 	listed := map[string]bool{}
 	for _, j := range o.Wizard.Succeeded() {
-		a, ok := byID[j.Result.AccountID]
-		if !ok || listed[a.ID] {
+		id := j.Result.AccountID
+		if listed[id] {
 			continue
 		}
-		listed[a.ID] = true
-		sites = append(sites, website(a, j))
+		if a, ok := byID[id]; ok {
+			sites = append(sites, website(a, j))
+		} else if j.DeleteRevision > 0 {
+			sites = append(sites, partlyDeletedWebsite(j))
+		} else {
+			continue
+		}
+		listed[id] = true
 	}
 	return sites, nil
 }
@@ -342,17 +358,30 @@ func findWebsite(ctx context.Context, o Options, id string) (Website, hostaccoun
 	if err != nil {
 		return Website{}, hostaccounts.Account{}, huma.Error503ServiceUnavailable(websitesNoBroker)
 	}
-	for _, a := range accounts {
-		if a.ID != id {
+	for _, j := range o.Wizard.Succeeded() {
+		if j.Result.AccountID != id {
 			continue
 		}
-		for _, j := range o.Wizard.Succeeded() {
-			if j.Result.AccountID == id {
+		for _, a := range accounts {
+			if a.ID == id {
 				return website(a, j), a, nil
 			}
 		}
+		if j.DeleteRevision > 0 {
+			return partlyDeletedWebsite(j), hostaccounts.Account{}, nil
+		}
+		break
 	}
 	return Website{}, hostaccounts.Account{}, huma.Error404NotFound(websiteNotFound)
+}
+
+// partlyDeletedWebsite is a site whose delete removed its hosting account
+// but not yet its database: the job is all that is left to describe it.
+func partlyDeletedWebsite(j wizard.Job) Website {
+	return Website{
+		AccountID: j.Result.AccountID, Username: j.Username, Domain: j.Domain, State: partlyDeleted,
+		WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: j.DeleteRevision,
+	}
 }
 
 func website(a hostaccounts.Account, j wizard.Job) Website {

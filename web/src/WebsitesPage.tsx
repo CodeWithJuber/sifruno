@@ -210,8 +210,10 @@ function SiteTable({ sites }: { sites: Website[] }) {
             <TableCell data-label="WordPress" className={stackedCell} data-testid="website-wordpress">{site.wordpress_version}</TableCell>
             <TableCell className={`text-end ${stacked} @max-[62rem]:px-0 @max-[62rem]:pt-3 @max-[62rem]:text-start`}>
               <div className="inline-flex flex-nowrap gap-2 @max-[62rem]:flex @max-[62rem]:flex-wrap">
-                <SiteLink href={site.url} label="Open site" domain={site.domain} variant="outline" testId="open-site" />
-                <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />
+                {site.state !== "partly_deleted" && <>
+                  <SiteLink href={site.url} label="Open site" domain={site.domain} variant="outline" testId="open-site" />
+                  <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />
+                </>}
                 <Link to="/websites/sites/$accountId" params={{ accountId: site.account_id }} className={linkButton("ghost")} data-testid="website-details-link">
                   Details<span className="sr-only"> for {site.domain}</span>
                 </Link>
@@ -303,13 +305,16 @@ export function WebsiteOverview({ accountId }: { accountId: string }) {
           <dt className="text-muted-foreground">Created</dt><dd className="text-foreground">{dateLabel(site.created_at)}</dd>
         </dl>
       </div>
-      <div className="flex flex-wrap gap-2">
-        <SiteLink href={site.url} label="Open site" domain={site.domain} variant="default" testId="open-site" />
-        <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />
-        <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
-        <Link to="/websites/sites/$accountId/databases" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-databases-link">Databases</Link>
-      </div>
-      <DnsHelp id="dns-help" domain={site.domain} hidden={!dnsOpen} />
+      {/* A partly deleted site no longer serves and has no account for its databases page. */}
+      {site.state !== "partly_deleted" && <>
+        <div className="flex flex-wrap gap-2">
+          <SiteLink href={site.url} label="Open site" domain={site.domain} variant="default" testId="open-site" />
+          <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />
+          <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
+          <Link to="/websites/sites/$accountId/databases" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-databases-link">Databases</Link>
+        </div>
+        <DnsHelp id="dns-help" domain={site.domain} hidden={!dnsOpen} />
+      </>}
     </section>
     <SiteActions site={site} onChanged={replace} onDeleted={setDeleted} onReload={retry} announce={setAnnouncement} />
     {announcer}
@@ -350,6 +355,8 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
   const chosen = php.kind === "ready" ? (php.versions.includes(version) ? version : php.versions[0]) : "";
   const suspended = site.state === "suspended";
   const canChangeState = site.state === "active" || suspended;
+  // A delete removed the hosting account but not yet the database.
+  const partly = site.state === "partly_deleted";
   const matches = typed === site.domain;
 
   // run does one change: done takes the server's answer and gives the
@@ -428,6 +435,7 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
         <div className="text-sm text-muted-foreground">
           {suspended ? "The site serves visitors again, and the hosting account can sign in again."
             : canChangeState ? "Visitors get an error page (403) instead of the site, and the hosting account cannot sign in. Nothing is deleted, and you can resume it at any time."
+            : partly ? "The hosting account is already deleted, so the website cannot be suspended or resumed."
             : "The hosting account needs a check by whoever runs this server before it can be suspended or resumed."}
         </div>
       </div>
@@ -443,7 +451,10 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
     <div className="flex flex-col gap-3" data-testid="site-action-delete">
       <div className="flex flex-col gap-1">
         <h4 className="m-0 text-sm font-medium text-foreground">Delete website</h4>
-        <div className="text-sm text-muted-foreground">Removes the site's files, its database and its hosting account from this server. This cannot be undone.</div>
+        <div className="text-sm text-muted-foreground" data-testid="delete-website-hint">
+          {partly ? "The hosting account and the site's files are already deleted, but the site's database is still on this server. Delete the website again to remove it. This cannot be undone."
+            : "Removes the site's files, its database and its hosting account from this server. This cannot be undone."}
+        </div>
       </div>
       <Button variant="destructive" className={`${control} w-fit`} disabled={Boolean(busy)} onClick={() => setDialog(true)} data-testid="delete-website">Delete website…</Button>
     </div>
@@ -454,7 +465,8 @@ function SiteActions({ site, onChanged, onDeleted, onReload, announce }: {
           <DialogHeader>
             <DialogTitle className="wrap-anywhere leading-snug">Delete {site.domain}?</DialogTitle>
             <DialogDescription className="text-start">
-              This removes the website's files, its database and the hosting account <code>{site.username}</code> from this server. It cannot be undone.
+              {partly ? "This removes what is left of the website: its database. It cannot be undone."
+                : <>This removes the website's files, its database and the hosting account <code>{site.username}</code> from this server. It cannot be undone.</>}
             </DialogDescription>
           </DialogHeader>
           <Field>

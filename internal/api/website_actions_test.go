@@ -301,17 +301,35 @@ func TestWebsiteDelete(t *testing.T) {
 		t.Fatalf("a refused delete removed something: %q %q", databases.drops, broker.changes)
 	}
 
-	// The database will not go: the delete stops and says what is left.
+	// The account goes first; then the database will not go: the delete
+	// stops and says what is left.
 	databases.dropErr = errors.New("ERROR 1010: database directory not empty")
 	w := del("example.com", site.Revision)
-	left := "The database server did not remove the database example_wp. Removed before that: the database user example_wp. Still on the server: the database example_wp, the hosting account example with its files and its site on the web server."
-	if w.Code != 503 || problemDetail(t, w) != left || problemTechnical(t, w) != "ERROR 1010: database directory not empty" || len(broker.changes) != 0 {
+	left := "The database server did not remove the database example_wp. Removed before that: the hosting account example with its files and its site on the web server, the database user example_wp. Still on the server: the database example_wp. " +
+		"The hosting account is gone, so Websites lists this website as partly deleted. Delete it again to remove the rest."
+	want := fmt.Sprintf(`delete %s rev=%d reason="Deleted from the website's page" actor=local-operator`, site.AccountID, site.Revision)
+	if w.Code != 503 || problemDetail(t, w) != left || problemTechnical(t, w) != "ERROR 1010: database directory not empty" || !slices.Equal(broker.changes, []string{want}) {
 		t.Fatalf("stopped delete %d: %s", w.Code, w.Body.String())
 	}
-	if w := websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+site.AccountID, nil, cookie, ""); w.Code != 200 {
-		t.Fatalf("the site left the list although its account is still there: %d", w.Code)
-	}
 	databases.dropErr = nil
+
+	// The site stays listed, partly deleted, with the revision its delete
+	// was asked at; nothing else can change it.
+	partly := decodeDetail(t, websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+site.AccountID, nil, cookie, ""))
+	if partly.State != "partly_deleted" || partly.Revision != site.Revision || partly.Domain != "example.com" || partly.Username != "example" || partly.PHPVersion != "" || partly.HTTPS.On {
+		t.Fatalf("partly deleted site %+v", partly)
+	}
+	if w := websiteRequest(f.handler, "GET", "/api/v1/websites/sites", nil, cookie, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"state":"partly_deleted"`) {
+		t.Fatalf("list with a partly deleted site %d: %s", w.Code, w.Body.String())
+	}
+	for action, body := range map[string]map[string]any{
+		"php":   {"php_version": "8.2", "expected_revision": site.Revision},
+		"state": {"state": "suspended", "expected_revision": site.Revision},
+	} {
+		if w := websiteRequest(f.handler, "POST", sitePath(site, action), body, cookie, csrf); w.Code != 409 || problemDetail(t, w) != websitePartly {
+			t.Fatalf("%s of a partly deleted site %d: %s", action, w.Code, w.Body.String())
+		}
+	}
 
 	// Asked again, it carries on and finishes.
 	w = del("example.com", site.Revision)
@@ -323,13 +341,12 @@ func TestWebsiteDelete(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &done); err != nil {
 		t.Fatal(err)
 	}
-	if done.Domain != "example.com" || !slices.Equal(done.Removed, []string{"the database example_wp", "the hosting account example with its files and its site on the web server"}) || done.Kept == nil || len(done.Kept) != 0 {
+	if done.Domain != "example.com" || !slices.Equal(done.Removed, []string{"the database example_wp"}) || done.Kept == nil || len(done.Kept) != 0 {
 		t.Fatalf("deleted %+v", done)
 	}
 	if !slices.Equal(databases.drops, []string{"user example example_wp", "database example example_wp", "database example example_wp"}) {
 		t.Fatalf("drops %q", databases.drops)
 	}
-	want := fmt.Sprintf(`delete %s rev=%d reason="Deleted from the website's page" actor=local-operator`, site.AccountID, site.Revision)
 	if !slices.Equal(broker.changes, []string{want}) {
 		t.Fatalf("broker changes %q", broker.changes)
 	}

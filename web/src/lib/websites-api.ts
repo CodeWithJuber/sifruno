@@ -14,7 +14,9 @@ export interface Website {
   account_id: string;
   username: string;
   domain: string;
-  // "active", "suspended" or "recovery_required" today; any other word is shown as unknown.
+  // "active", "suspended", "recovery_required" or "partly_deleted" (a delete
+  // removed the hosting account but not yet the database) today; any other
+  // word is shown as unknown.
   state: string;
   https: WebsiteHttps;
   // Empty when the account service reports none.
@@ -105,6 +107,7 @@ export function siteStatus(state: string): { label: string; tone: StatusTone } {
     case "active": return { label: "Live", tone: "live" };
     case "suspended": return { label: "Suspended", tone: "suspended" };
     case "recovery_required": return { label: "Needs review", tone: "attention" };
+    case "partly_deleted": return { label: "Partly deleted", tone: "attention" };
     default: return { label: "Unknown status", tone: "attention" };
   }
 }
@@ -132,6 +135,7 @@ export type PhpChange = { kind: "ready"; versions: string[] } | { kind: "blocked
 
 export function phpChange(site: WebsiteDetail): PhpChange {
   if (site.state === "suspended") return { kind: "blocked", why: "Resume the website to change its PHP version." };
+  if (site.state === "partly_deleted") return { kind: "blocked", why: "The hosting account is already deleted, so the PHP version cannot change." };
   if (site.state !== "active") return { kind: "blocked", why: "The PHP version cannot change until the hosting account has been checked." };
   if (site.php_versions.length === 0) return { kind: "blocked", why: "The panel found no PHP versions installed on this server." };
   const versions = site.php_versions.filter((version) => version !== site.php_version);

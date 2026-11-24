@@ -59,6 +59,7 @@ test("status names the state in words: Live, Suspended, or needing attention", (
   assert.deepEqual(api.siteStatus("active"), { label: "Live", tone: "live" });
   assert.deepEqual(api.siteStatus("suspended"), { label: "Suspended", tone: "suspended" });
   assert.deepEqual(api.siteStatus("recovery_required"), { label: "Needs review", tone: "attention" });
+  assert.deepEqual(api.siteStatus("partly_deleted"), { label: "Partly deleted", tone: "attention" });
   assert.deepEqual(api.siteStatus("something_new"), { label: "Unknown status", tone: "attention" });
 });
 
@@ -148,6 +149,7 @@ test("the PHP action offers only other installed versions, and only for a live s
   assert.match(api.phpChange(detail({ php_versions: [] })).why, /found no PHP versions/);
   assert.match(api.phpChange(detail({ state: "suspended" })).why, /Resume the website/);
   assert.match(api.phpChange(detail({ state: "recovery_required" })).why, /has been checked/);
+  assert.match(api.phpChange(detail({ state: "partly_deleted" })).why, /already deleted/);
 });
 
 const removedAll = ["the database example_wp", "the hosting account example with its files and its site on the web server"];

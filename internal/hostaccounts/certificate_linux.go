@@ -152,7 +152,7 @@ func (n *linuxSystem) ApplyCertificate(ctx context.Context, r record, next Certi
 		return abort(ErrRecovery)
 	}
 	bundle, e := parseCertificate(string(chain), string(key))
-	if e != nil || bundle.state != next {
+	if e != nil || !stagedIsJournaled(bundle.state, next) {
 		return abort(ErrRecovery)
 	}
 	certChanged, e := t.write(site, siteCertFile, bundle.chainPEM, rootPrivate)

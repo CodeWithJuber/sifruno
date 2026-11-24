@@ -877,3 +877,24 @@ func TestCertificateClientChecksBeforeSending(t *testing.T) {
 		}
 	}
 }
+
+// An install journaled by a broker that kept no names is finished from its
+// staged pair after an upgrade, not left pending for every account.
+func TestStagedPairMatchesItsIntentAcrossTheUpgrade(t *testing.T) {
+	staged := CertificateState{NotAfter: 1803311049, Fingerprint: strings.Repeat("ab", 32), Names: "fixture.test,www.fixture.test"}
+	for name, tc := range map[string]struct {
+		journaled CertificateState
+		want      bool
+	}{
+		"the same":                {staged, true},
+		"journaled with no names": {CertificateState{NotAfter: staged.NotAfter, Fingerprint: staged.Fingerprint}, true},
+		"other names":             {CertificateState{NotAfter: staged.NotAfter, Fingerprint: staged.Fingerprint, Names: "fixture.test"}, false},
+		"another leaf":            {CertificateState{NotAfter: staged.NotAfter, Fingerprint: strings.Repeat("cd", 32), Names: staged.Names}, false},
+		"another expiry":          {CertificateState{NotAfter: staged.NotAfter + 1, Fingerprint: staged.Fingerprint, Names: staged.Names}, false},
+		"another leaf, no names":  {CertificateState{NotAfter: staged.NotAfter, Fingerprint: strings.Repeat("cd", 32)}, false},
+	} {
+		if got := stagedIsJournaled(staged, tc.journaled); got != tc.want {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
+	}
+}

@@ -215,6 +215,15 @@ func (b certificateBundle) fits(domains []string, primary string, now time.Time)
 	return nil
 }
 
+// stagedIsJournaled reports whether a re-read staged pair is the certificate
+// its intent journaled: the same leaf (fingerprint and expiry), and the same
+// names unless the intent was journaled by a broker that kept none. An
+// install interrupted across that upgrade is then finished, not left
+// pending, which would hold up every account.
+func stagedIsJournaled(staged, journaled CertificateState) bool {
+	return staged.Fingerprint == journaled.Fingerprint && staged.NotAfter == journaled.NotAfter && (journaled.Names == "" || staged.Names == journaled.Names)
+}
+
 // validCertificateNames checks a certificate's names as the record holds
 // them: 1 to olsweb.MaxDomainsPerSite valid domains, sorted, each once,
 // joined with commas.

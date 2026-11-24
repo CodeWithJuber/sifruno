@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | whmcs-module | panel-shell | customer-login | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -89,6 +89,18 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 https with a certificate from the VM's Pebble test CA. Needs
                 Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the
                 web packages.
+  phpmyadmin    One-click phpMyAdmin: this release's installer step runs twice
+                (the second changes nothing) and OpenLiteSpeed serves
+                phpMyAdmin on 127.0.0.1:8090 only; the panel (a proof build
+                whose temporary users last 2 minutes) runs as sifpanel; a
+                browser on this host makes two PHP sites with a database each,
+                clicks Open phpMyAdmin on the first one's Databases tab and
+                lands in phpMyAdmin signed in, listing that site's database
+                and not the other's; the used link is refused; the VM checks
+                the temporary user's grants, that its password is in no
+                process argument or log, and that the sweeper drops it. Needs
+                Node, Playwright's Chromium (or SIFRUNO_PROOF_CHROME) and the
+                web packages, and files.phpmyadmin.net from the VM.
   whmcs-module  The WHMCS module (integrations/whmcs) with the VM's lsphp
                 CLI against the real panel and broker: the panel also serves
                 HTTPS with its self-signed certificate, an API token is made
@@ -424,6 +436,54 @@ case "${1:-}" in
       "$HERE/vm.sh" ssh "/opt/sifruno-proof/wordpress-wizard.guest.sh check $guest $domain" || touch "$stage/failed"
       # The browser run also made a PHP site with a database at php-<domain>.
       "$HERE/vm.sh" ssh "/opt/sifruno-proof/wordpress-wizard.guest.sh check-php $guest php-$domain" || touch "$stage/failed"
+    } 2>&1 | tee "$transcript"
+    echo "Transcript: $transcript (screenshots in $run/)"
+    [ ! -e "$stage/failed" ]
+    ;;
+  phpmyadmin)
+    stage="$(mktemp -d)"
+    tunnel=""
+    trap 'if [ -n "$tunnel" ]; then kill "$tunnel" 2>/dev/null; fi; rm -rf -- "$stage"' EXIT
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    guest="/var/lib/sifpanel/phpmyadmin-$stamp"
+    port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+    # The panel is a proof build: only the sifruno_proof tag gives it
+    # --phpmyadmin-test-login-ttl, which a release binary does not have.
+    (cd "$REPO" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -buildvcs=false -tags sifruno_proof -o "$stage/sifruno" ./cmd/sifruno)
+    build "$stage/hostbroker" ./cmd/hostbroker
+    (cd "$REPO" && npm run --silent panel:build >/dev/null)
+    # Seed the state here so the browser can read its operator key from a
+    # file; a few seconds is enough to create it.
+    timeout 5 "$stage/sifruno" --listen 127.0.0.1:0 --sites-listen "" --state "$stage/state" --ui "$REPO/web/dist" >/dev/null 2>&1 || true
+    test -s "$stage/state/operator/access.key"
+    tar -czf "$stage/dist.tgz" -C "$REPO/web" dist
+    tar -czf "$stage/state.tgz" -C "$stage" state
+    "$HERE/vm.sh" ssh "systemctl stop sifruno-broker-proof 2>/dev/null; pkill -x sifruno; install -d -m 0755 /opt/sifruno-proof /opt/sifruno-proof/install /opt/sifruno-proof/install/phpmyadmin; install -d -o sifpanel -g sifpanel -m 0700 $guest" || true
+    "$HERE/vm.sh" put "$stage/hostbroker" /opt/sifruno-proof/hostbroker
+    for file in sifruno dist.tgz state.tgz; do
+      "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
+    done
+    # The installer's step reads its phpmyadmin/ files from beside install.sh.
+    "$HERE/vm.sh" put "$REPO/scripts/install/install.sh" /opt/sifruno-proof/install/install.sh
+    for file in config.inc.php sifruno-signon.php; do
+      "$HERE/vm.sh" put "$REPO/scripts/install/phpmyadmin/$file" "/opt/sifruno-proof/install/phpmyadmin/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/phpmyadmin.guest.sh" /opt/sifruno-proof/phpmyadmin.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/install/install.sh /opt/sifruno-proof/phpmyadmin.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    run="$OUT/phpmyadmin-$stamp"
+    transcript="$run.txt"
+    domain="pma$(date +%s | tail -c 6).proof.test"
+    "$HERE/vm.sh" forward "$port" &
+    tunnel=$!
+    # Steps run inside the pipe to tee (a subshell), so a failure leaves a
+    # marker file rather than a variable.
+    {
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/phpmyadmin.guest.sh install" || touch "$stage/failed"
+      "$HERE/vm.sh" ssh "/opt/sifruno-proof/phpmyadmin.guest.sh start $guest $port" || touch "$stage/failed"
+      for _ in $(seq 30); do curl -fs -o /dev/null "http://127.0.0.1:$port/" && break; sleep 1; done
+      (cd "$REPO" && node scripts/devvm/proofs/phpmyadmin.qa.mjs "http://127.0.0.1:$port" "$stage/state" "$run" "$domain" \
+        "$HERE/vm.sh" "$guest" "${SIFRUNO_PROOF_CHROME:-}") || touch "$stage/failed"
     } 2>&1 | tee "$transcript"
     echo "Transcript: $transcript (screenshots in $run/)"
     [ ! -e "$stage/failed" ]

@@ -41,7 +41,7 @@ readonly PACKAGES=(openlitespeed
   lsphp83 lsphp83-common lsphp83-mysqlnd lsphp83-gd lsphp83-mbstring lsphp83-xml
   lsphp83-opcache lsphp83-intl lsphp83-zip lsphp83-process lsphp83-bcmath lsphp83-pdo
   mariadb-server podman openssh-clients rsync tar unzip bzip2 policycoreutils-python-utils xfsprogs quota
-  httpd httpd-tools)
+  cronie httpd httpd-tools)
 # The broker runs this file only while its bytes match the sha512 pinned in
 # internal/hostaccounts/wordpress_linux.go (WP-CLI 2.12.0's published one).
 readonly WPCLI_VERSION=2.12.0
@@ -968,13 +968,15 @@ step_restic() {
 
 step_services() {
   local unit
-  for unit in mariadb lsws; do
+  # crond runs the sites' scheduled jobs, which the broker writes to
+  # /var/spool/cron as each site's own user.
+  for unit in mariadb lsws crond; do
     if ! systemctl is-enabled --quiet "$unit" 2>/dev/null || ! systemctl is-active --quiet "$unit"; then
       systemctl enable --now "$unit"
       changed "$unit enabled and started"
     fi
   done
-  systemctl is-active mariadb lsws | sed 's/^/service: /'
+  systemctl is-active mariadb lsws crond | sed 's/^/service: /'
 }
 
 step_db_admin() {
@@ -1365,7 +1367,7 @@ main() {
     printf '\nPlan (dry run: none of this is done now)\n'
   fi
   step "Add the LiteSpeed, EPEL, CRB and Remi repositories" step_repositories
-  step "Install OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman and Apache (for the Compat tier; left off)" step_packages
+  step "Install OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman, cronie and Apache (for the Compat tier; left off)" step_packages
   step "Label $HOMES, create the system user $PANEL_USER and Sifruno's folders in /etc and /var/lib" step_host_folders
   step "Set passwd, group and shadow in $NSSWITCH to files (backup, check, automatic rollback)" step_nsswitch
   step "Write the sshd policy $SSHD_DROPIN (backup, sshd -t, automatic rollback, reload)" step_sshd
@@ -1374,7 +1376,7 @@ main() {
   step "Bound each hosting account to 4096 processes, the largest plan, in PAM sessions: $LIMITS_FILE" step_limits
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
   step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
-  step "Enable and start MariaDB and OpenLiteSpeed" step_services
+  step "Enable and start MariaDB, OpenLiteSpeed and crond" step_services
   step "Create the panel's MariaDB admin user and its 0600 option file $DB_ADMIN_CNF" step_db_admin
   step "Create the ACME challenge folder $ACME_DIR" step_acme
   step "Install the programs in $BIN_DIR and the panel UI in $UI_DIR" step_programs

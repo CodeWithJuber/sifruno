@@ -86,7 +86,7 @@ export function TechnicalDetails({ children }: { children: ReactNode }) {
 
 export function ChartLegend({ first, second }: { first: string; second: string }) {
   return <div className="flex items-center justify-center gap-6 text-xs text-muted-foreground">
-    <span className="flex items-center gap-2"><i className="inline-block size-2 rounded-full bg-primary" />{first}</span>
+    <span className="flex items-center gap-2"><i className="inline-block size-2 rounded-full bg-(--chart-primary)" />{first}</span>
     <span className="flex items-center gap-2"><i className="inline-block size-2 rounded-full bg-(--chart-memory)" />{second}</span>
   </div>;
 }
@@ -200,7 +200,7 @@ export function ResourceChart({ report, range, setRange }: { report: ServerRepor
           <line className={chartGrid} x1={left + index * (right - left) / 4} x2={left + index * (right - left) / 4} y1="35" y2="200" />
           {history.length > 1 && (!compact || index % 2 === 0) && <text className={chartText} x={left + index * (right - left) / 4} y="226" textAnchor={index === 0 ? "start" : index === 4 ? "end" : "middle"}>{chartTime(new Date(start + (end - start) * index / 4).toISOString())}</text>}
         </g>)}
-        <g data-testid="cpu-chart" className="text-primary">
+        <g data-testid="cpu-chart" className="text-(--chart-primary)">
           <path d={paths(history, "cpu_usage_percent", x)} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           {history.map((s) => s.cpu_usage_percent === null ? null : <circle key={s.sampled_at} cx={x(s)} cy={200 - s.cpu_usage_percent * 1.65} r={history.length === 1 ? 3 : 2} fill="currentColor"><title>{chartTime(s.sampled_at)} · CPU {percent(s.cpu_usage_percent)}</title></circle>)}
         </g>

@@ -1277,7 +1277,8 @@ root step. The design, with the owner's choices recorded from Jev on
   became (`converted`), or why a file was refused (`tier_refusals`). A site
   with anything else OpenLiteSpeed would ignore (an unconverted access
   rule, an unknown directive, a `.htaccess` below a converted folder or in
-  the home above public_html) is not put live, not even on the preview:
+  the home above public_html, or a rewrite rule whose result could be a
+  file path, which OpenLiteSpeed would serve without the folder's check) is not put live, not even on the preview:
   OpenLiteSpeed would open the protected folder. The panel stops before it
   creates anything, and `migrate-files` scans and converts the copied files
   again and refuses before they reach the home.

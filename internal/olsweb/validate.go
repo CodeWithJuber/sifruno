@@ -101,6 +101,9 @@ func normalize(s Server) ([]site, error) {
 		}
 		out = append(out, v)
 	}
+	if err := checkFolderListeners(s.Listeners, s.Sites); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

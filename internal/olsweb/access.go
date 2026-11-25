@@ -315,6 +315,36 @@ func renderFolders(b *bytes.Buffer, v site) {
 	}
 }
 
+// checkFolderListeners refuses a folder closed to some networks only
+// (except) while a listener has an IPv6 address. A "*" listener binds IPv4
+// only (src/socket/gsockaddr.cpp: an address without '[' is AF_INET, "*"
+// INADDR_ANY), so every client is an IPv4 address there. An IPv6 listener
+// is dual-stack on Linux and sees IPv4 clients as ::ffff:a.b.c.d, which
+// AccessControl::hasAccess(const in6_addr&) (src/util/accesscontrol.cpp)
+// looks up in the IPv6 lists only: addIPControl and addSubNetControl store
+// mapped and IPv4 entries in the IPv4 lists, so an IPv4 deny entry would
+// miss and the client would be let in. A folder open to some networks only
+// fails closed there (deny ALL covers both families) and is kept.
+func checkFolderListeners(listeners []Listener, sites []Site) error {
+	ipv6 := false
+	for _, l := range listeners {
+		if a, err := netip.ParseAddr(l.Address); err == nil && a.Is6() {
+			ipv6 = true
+		}
+	}
+	if !ipv6 {
+		return nil
+	}
+	for i, s := range sites {
+		for j, f := range s.Folders {
+			if f.Hosts == HostsExcept {
+				return fieldErr(fmt.Sprintf("sites[%d].folders[%d].hosts", i, j), "a folder closed to some networks needs IPv4 listeners only: an IPv6 listener sees IPv4 clients as ::ffff: addresses its deny list misses")
+			}
+		}
+	}
+	return nil
+}
+
 // FolderRealmFiles lists the user files a site's folders name, in order.
 func FolderRealmFiles(folders []Folder) []string {
 	var out []string

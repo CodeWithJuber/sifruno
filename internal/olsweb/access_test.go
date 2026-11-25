@@ -68,6 +68,27 @@ func TestFolderValidation(t *testing.T) {
 	}
 }
 
+// TestExceptFolderNeedsIPv4Listeners: a deny list would miss IPv4 clients
+// that an IPv6 listener sees as ::ffff: addresses, so it is refused there;
+// an allow list fails closed and is kept.
+func TestExceptFolderNeedsIPv4Listeners(t *testing.T) {
+	except := Folder{Path: "/a/", Hosts: HostsExcept, Networks: []string{"203.0.113.0/24"}}
+	only := Folder{Path: "/a/", Hosts: HostsOnly, Networks: []string{"203.0.113.0/24"}}
+	s := folderSite(except)
+	if err := Validate(s); err != nil {
+		t.Fatalf("IPv4 listener: %v", err)
+	}
+	s.Listeners = append(s.Listeners, Listener{Name: "http6", Address: "::", Port: 8080})
+	var fe *FieldError
+	if err := Validate(s); !errors.As(err, &fe) || fe.Field != "sites[0].folders[0].hosts" {
+		t.Fatalf("IPv6 listener: %v", err)
+	}
+	s.Sites[0].Folders = []Folder{only}
+	if err := Validate(s); err != nil {
+		t.Fatalf("allow list with an IPv6 listener: %v", err)
+	}
+}
+
 func TestFolderPattern(t *testing.T) {
 	cases := map[string]Folder{
 		`(?s)^/a[.]b/c/.*`: {Path: "/a.b/c/", Hosts: HostsNone},

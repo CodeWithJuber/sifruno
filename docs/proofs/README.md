@@ -202,3 +202,17 @@ Run on 2026-11-25 without root and without the dev VM: the panel binary and UI o
 Screenshots are in [phase1-ui-astryx-1/](phase1-ui-astryx-1/): each screen at 1440 and 390 px in light and dark, the public-preview Home, the revoke confirmation, and the service list's unavailable state.
 
 What this run does not show: the dev VM (the readings are the runner host's, minus its service names), Security's own access-key form (the shell's sign-in comes first, so the page opens signed in), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left and covers the content there).
+
+## Phase 1: Hosting accounts and Backups on the design system
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary of `04697ba` (its Go code is unchanged since) and the UI of `48f1887`, with throwaway state on loopback and the static-site backup runner switched on, driven by Chrome 158 through agent-browser. Jev chose to rebuild both pages rather than remove them: no newer screen lists every Linux account, makes a bare one or suspends one with a reason, and none touches the old static sites' ZIP backups.
+
+Backups ran on real data: two static sites, two ZIP backups made with the rebuilt button around real file edits, and a daily schedule saved through the rebuilt form. This run has no Linux account broker, so Hosting accounts shows the real "no configured broker" answer once; its other screens show a synthetic four-account inventory the browser put in place of the broker's answers. Two error states (a refused account and a refused ZIP backup) were answered by the browser too; the transcript names each replaced answer.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Hosting accounts and Backups rebuilt on shadcn/ui: no horizontal scroll at 1440 and 390 px in light and dark, keyboard focus, dialog focus and Esc, restore preview, schedule save, error copy with Technical details, right-to-left layout | [phase1-ui-astryx-2.txt](phase1-ui-astryx-2.txt) | 42 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-2/](phase1-ui-astryx-2/): both pages at 1440 and 390 px in light and dark, Backups with no websites, the restore, remove and schedule confirmations, Hosting accounts with no broker, its web configuration preview, the create and suspend dialogs, an error on each page, and both pages right to left.
+
+What this run does not show: the dev VM, a real Linux account broker (no account was created or suspended; the create and suspend dialogs were opened, not confirmed), a confirmed restore, removal, download or ZIP upload, the pages' own access-key forms (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left).

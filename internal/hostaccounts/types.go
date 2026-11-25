@@ -75,6 +75,13 @@ type Account struct {
 	// none stored and runs with DefaultLimits; the account list shows the
 	// limits in force either way.
 	Limits AccountLimits `json:"limits,omitzero"`
+	// PlainHTTP says the site's owner turned "Always use HTTPS" off: plain
+	// http serves the site even while its certificate is in force. False,
+	// the default, sends plain http for each domain the certificate covers
+	// to https (web.go). The stored account and the journal's rows carry
+	// it, so every change of it is recorded; an account stored before it
+	// existed reads false.
+	PlainHTTP bool `json:"plain_http,omitempty"`
 	// Web is the live site's PHP version and quota, left out when there is no
 	// site. Only the account list and a state change's answer fill it in,
 	// from the record's Web: the stored account and the journal's rows never

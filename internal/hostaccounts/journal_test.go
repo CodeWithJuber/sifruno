@@ -524,3 +524,49 @@ func TestDomainsIntentKeepsTheState(t *testing.T) {
 		}
 	}
 }
+
+// TestHTTPSIntentTurnsOnlyTheSwitch: an https intent's after is its before
+// with the next revision and "Always use HTTPS" turned over; one that
+// changes anything else, or leaves the switch as it was, is refused.
+func TestHTTPSIntentTurnsOnlyTheSwitch(t *testing.T) {
+	s, _, _ := setupStore(t)
+	s.web = &WebOptions{ServerUser: "nobody"}
+	a := webChanges(t, s, createFixture(t, s), 1)
+	r := recordFor(t, s, a.ID)
+	rows := historyRows(t, s, a.ID)
+	intent, result := rows[len(rows)-2], rows[len(rows)-1]
+	errRollback := errors.New("roll back")
+	for name, c := range map[string]struct {
+		edit     func(*Account)
+		accepted bool
+	}{
+		"the switch turned off":  {func(a *Account) { a.PlainHTTP = true }, true},
+		"the switch left as is":  {func(*Account) {}, false},
+		"the plan changed too":   {func(a *Account) { a.PlainHTTP, a.Plan = true, "other" }, false},
+		"the limits changed too": {func(a *Account) { a.PlainHTTP, a.Limits = true, AccountLimits{Processes: 1} }, false},
+	} {
+		err := s.db.Update(func(tx *bolt.Tx) error {
+			i, res := intent, result
+			i.Action, res.Action = "https", "https"
+			i.After = *i.Before
+			i.After.Revision++
+			c.edit(&i.After)
+			res.Status, res.After = "rejected", *res.Before
+			for _, row := range []operationEvent{i, res} {
+				raw, _ := json.Marshal(row)
+				if err := tx.Bucket(historyBucket).Put(eventKey(a.ID, row.Sequence), raw); err != nil {
+					return err
+				}
+			}
+			forged := r
+			forged.Account = *res.Before
+			if accepted := verifyHistory(tx, forged) == nil; accepted != c.accepted {
+				t.Errorf("%s: accepted %v", name, accepted)
+			}
+			return errRollback
+		})
+		if !errors.Is(err, errRollback) {
+			t.Fatal(err)
+		}
+	}
+}

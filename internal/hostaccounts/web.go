@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"time"
 
 	"sifruno/internal/olsweb"
 )
@@ -78,7 +79,9 @@ func softQuotaMiB(hard int) int { return hard - hard/10 }
 // name, without the account named by except (used while removing a site).
 // Settings in flight are used for the account they belong to, so a recovery
 // renders the same config as the interrupted write. A site with a
-// certificate gets its files in olsweb.TLSRoot/<site name>/. A suspended
+// certificate gets its files in olsweb.TLSRoot/<site name>/, and plain
+// http for the domains it covers is redirected to https while it is valid,
+// unless the account's PlainHTTP says otherwise. A suspended
 // account's site stays in the list marked suspended, so OpenLiteSpeed
 // refuses every request for it; a state change in flight counts as done.
 func webSites(items []record, except string) []olsweb.Site {
@@ -101,6 +104,10 @@ func webSites(items []record, except string) []olsweb.Site {
 		state := r.Account.State
 		if r.Pending != nil && r.Pending.Action == "state" {
 			state = r.Pending.Target
+		}
+		plainHTTP := r.Account.PlainHTTP
+		if r.Pending != nil && r.Pending.Action == "https" {
+			plainHTTP = r.Pending.Target == "off"
 		}
 		limits := recordLimits(r)
 		// The account's own domain first, then its aliases; a domains
@@ -135,6 +142,11 @@ func webSites(items []record, except string) []olsweb.Site {
 			// here yet, or it was added since) is served over http only.
 			site.TLS = siteTLS(site.Name)
 			site.TLS.Domains = coveredDomains(certificate, site.Domains, r.Account.Domain)
+			// "Always use HTTPS": plain http for those domains goes to
+			// https while the certificate is valid, unless the owner
+			// turned it off. One past its NotAfter is not in force, so the
+			// next render after it expires serves plain http again.
+			site.AlwaysHTTPS = !plainHTTP && time.Now().Unix() < certificate.NotAfter
 		}
 		sites = append(sites, site)
 	}

@@ -400,7 +400,7 @@ func (s *store) records() ([]record, error) {
 			}
 			failed = r
 			if r.Pending != nil {
-				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron" || r.Pending.Action == "domains" || r.Pending.Action == "folders"
+				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron" || r.Pending.Action == "domains" || r.Pending.Action == "folders" || r.Pending.Action == "https"
 				validTarget := false
 				switch r.Pending.Action {
 				case "create", "state", "conflict":
@@ -423,6 +423,8 @@ func (s *store) records() ([]record, error) {
 					validTarget = domainsDigestPattern.MatchString(r.Pending.Target) && validStoredDomains(r.Account.Domain, r.DomainsNext) && r.Pending.Target == domainsDigest(r.DomainsNext)
 				case "folders":
 					validTarget = foldersDigestPattern.MatchString(r.Pending.Target) && r.FoldersNext != "" && validStoredFolders(r.Account.ID, r.FoldersNext) && r.Pending.Target == foldersDigest(r.FoldersNext)
+				case "https":
+					validTarget = r.Pending.Target == "on" || r.Pending.Target == "off"
 				}
 				if !idPattern.MatchString(r.Pending.OperationID) || !validText(r.Pending.Actor, 120) || !validText(r.Pending.Reason, 500) || !validAction || !validTarget {
 					return ErrRecovery
@@ -621,6 +623,11 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				continue
 			} else if r.Pending.Action == "folders" {
 				if s.finishFolders(ctx, items, r) != nil {
+					return ErrRecovery
+				}
+				continue
+			} else if r.Pending.Action == "https" {
+				if s.finishAlwaysHTTPS(ctx, items, r) != nil {
 					return ErrRecovery
 				}
 				continue

@@ -122,8 +122,8 @@ the panel starts there, under the broker lock, with every account settled. It
 does not run while the account list or a snapshot is read, so a snapshot
 lease never sees a record change under it.
 
-The operations a tenant can reach (web, domains, cron, certificate, adopt, SFTP
-keys, plan) are refused (409) before anything is journaled once fewer than 19
+The operations a tenant can reach (web, domains, Always use HTTPS, cron,
+certificate, adopt, SFTP keys, plan) are refused (409) before anything is journaled once fewer than 19
 rows are free: their two rows and a spare, plus 16 that stay for the
 operator's suspend, resume and delete and the broker's own conflict record,
 which are refused only when fewer than 3 rows are free (an adopt that ends a
@@ -832,6 +832,49 @@ Limits for now:
 - A suspended site's domains and redirects do not change; resume it first.
 - That OpenLiteSpeed 1.9.4 applies the `RewriteCond` lines as Apache does
   is read from its documentation; the site-domains dev VM proof runs it.
+
+## Always use HTTPS
+
+A live site whose certificate is in force sends plain http to https: for
+each domain the certificate covers, olsweb renders a rule after the site's
+own redirects that answers 301 to the same address on https, path and
+query kept (`RewriteCond %{HTTPS} !on`, the Host header with or without a
+port, and not the ACME challenge path, so HTTP-01 renewal still works over
+http). It is on by default: the account's `plain_http` is false unless the
+site's owner turned the switch off, and an account stored before the field
+existed reads false. No rule is rendered while the site has no certificate
+or its certificate's NotAfter has passed, for a domain the certificate does
+not cover, or for a suspended site.
+
+`SetAlwaysHTTPS` (`POST /v1/accounts/{id}/always-https`) turns it on or
+off. The input is exactly `always_https` (`true` or `false`, required),
+`expected_revision` and `reason`; it needs the web operation on. The setting
+is kept with or without a certificate and takes effect once one is in force.
+
+Checked before anything is journaled: the form (400 `invalid`), and the
+account (409 `conflict`) as for a domains change: the revision matches, the
+account is active, its site is live, no WordPress install is running, and
+its identity and folders verify. An unchanged setting changes nothing.
+
+The intent is journaled (action `https`, target `on` or `off`); its after
+is the account with the next revision and `plain_http` turned over, and
+replay refuses an https intent that changes anything else. Then the site
+list is rendered, tested and reloaded as for a domains change: a failed
+test restores the old files and ends it `rejected` with the account
+unchanged (422 `web_rejected`); any other failure leaves it pending, and
+the next start finishes it or ends it rejected. The answer is the account,
+and the account list shows `plain_http` when it is true.
+
+Limits for now:
+
+- The rule is rendered when the site list is installed: at every web
+  change, about five seconds after the broker starts (the .htaccess
+  watcher's first restart, which also brings an upgraded broker's rules
+  into force), and after a tenant's .htaccess changes. A certificate that
+  expires between two of them keeps http redirected until the next.
+- OpenLiteSpeed reads `%{HTTPS}` as `on` when the request carries
+  `X-Forwarded-Proto: https` (olsweb doc.go), so a client that sends it on
+  plain http is not redirected. That only keeps the client itself on http.
 
 ## Certificates
 

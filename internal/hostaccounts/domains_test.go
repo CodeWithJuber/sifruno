@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	bolt "go.etcd.io/bbolt"
 	"sifruno/internal/olsweb"
 )
 
@@ -430,5 +432,356 @@ func TestSiteDomainsHTTP(t *testing.T) {
 	handler(s).ServeHTTP(w, req)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"redirects":[{"domain":"www.fixture.test","target":"https://fixture.test","status":301}]`) {
 		t.Fatalf("read: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func alwaysHTTPSInput(r record, on bool) AlwaysHTTPSInput {
+	return AlwaysHTTPSInput{AlwaysHTTPS: &on, ExpectedRevision: r.Account.Revision, Reason: "Always use HTTPS changed on the website's page"}
+}
+
+// lastEvent is the account's newest journal row.
+func lastEvent(t *testing.T, s *store, id string) operationEvent {
+	t.Helper()
+	var e operationEvent
+	err := s.db.View(func(tx *bolt.Tx) error {
+		_, v := tx.Bucket(historyBucket).Cursor().Seek(eventKey(id, recordFor(t, s, id).HistorySequence))
+		return json.Unmarshal(v, &e)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// securedFixture is a live site with a certificate for its own domain and
+// www., and an alias the certificate leaves out.
+func securedFixture(t *testing.T, s *store, live record) record {
+	t.Helper()
+	ctx := context.Background()
+	got, err := s.setSiteDomains(ctx, live.Account.ID, domainsInput(live, []string{"www.fixture.test", "later.fixture.test"}), "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newTestChainFor(t, "fixture.test", "www.fixture.test")
+	if _, err := s.setCertificate(ctx, live.Account.ID, c.input(t, got.Account.Revision), "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	return recordFor(t, s, live.Account.ID)
+}
+
+// TestAlwaysHTTPSOnByDefault: once a certificate is in force, plain http for
+// the domains it covers goes to https without anyone asking; before that,
+// and for a domain it does not cover, plain http serves the site.
+func TestAlwaysHTTPSOnByDefault(t *testing.T) {
+	s, f := webStore(t)
+	live := liveFixture(t, s)
+	if siteOf(t, f.sites, live.Account.ID).AlwaysHTTPS {
+		t.Fatal("a site with no certificate redirects to https")
+	}
+	secured := securedFixture(t, s, live)
+	if secured.Account.PlainHTTP {
+		t.Fatalf("the switch is off by default: %+v", secured.Account)
+	}
+	site := siteOf(t, f.sites, live.Account.ID)
+	if !site.AlwaysHTTPS {
+		t.Fatalf("a site with a certificate keeps plain http: %+v", site)
+	}
+	files, err := renderUnderHome(f.sites)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vh := string(files[olsweb.VhostConfigPath(site.Name)])
+	for _, d := range []string{"fixture.test", "www.fixture.test"} {
+		if !strings.Contains(vh, "RewriteCond %{HTTPS} !on\nRewriteCond %{HTTP_HOST} ^"+strings.ReplaceAll(d, ".", `\.`)+"(:[0-9]+)?$ [NC]\nRewriteCond %{REQUEST_URI} !^/\\.well-known/acme-challenge/\nRewriteRule ^/?(.*)$ https://"+d+"/$1 [R=301,L]\n") {
+			t.Errorf("no https rule for %s:\n%s", d, vh)
+		}
+	}
+	if strings.Contains(vh, "https://later.fixture.test/") {
+		t.Errorf("a domain the certificate leaves out is redirected:\n%s", vh)
+	}
+	items, err := s.list(context.Background())
+	if err != nil || items[0].PlainHTTP {
+		t.Fatalf("list %v %+v", err, items)
+	}
+}
+
+// TestWebSitesRedirectOnlyWhileTheCertificateIsValid: no redirect with no
+// certificate, with one past its NotAfter, or with the switch off, and a
+// change in flight counts as done.
+func TestWebSitesRedirectOnlyWhileTheCertificateIsValid(t *testing.T) {
+	now := time.Now().UTC()
+	mk := func(notAfter time.Time, plainHTTP bool) record {
+		cert := CertificateState{NotAfter: notAfter.Unix(), Fingerprint: strings.Repeat("ab", 32)}
+		return record{Account: Account{ID: strings.Repeat("a", 32), Username: "secureacct", Domain: "secureacct.test", PublicHTML: "/home/secureacct/public_html", Certificate: cert, PlainHTTP: plainHTTP, CreatedAt: now, UpdatedAt: now}, Web: WebState{PHPVersion: "8.3", QuotaMiB: 200}, TLS: cert}
+	}
+	redirects := func(r record) bool {
+		t.Helper()
+		sites := webSites([]record{r}, "")
+		if _, err := olsweb.Render(webServer(sites)); err != nil {
+			t.Fatal(err)
+		}
+		return sites[0].AlwaysHTTPS
+	}
+	valid, expired := mk(now.Add(time.Hour), false), mk(now.Add(-time.Second), false)
+	none := valid
+	none.TLS, none.Account.Certificate = CertificateState{}, CertificateState{}
+	if !redirects(valid) || redirects(expired) || redirects(none) || redirects(mk(now.Add(time.Hour), true)) {
+		t.Fatal("redirects for a valid certificate only, with the switch on")
+	}
+	turningOff, turningOn := valid, mk(now.Add(time.Hour), true)
+	turningOff.Pending = &pending{Action: "https", Target: "off"}
+	turningOn.Pending = &pending{Action: "https", Target: "on"}
+	if redirects(turningOff) || !redirects(turningOn) {
+		t.Fatal("a pending switch is not rendered as it will be")
+	}
+}
+
+func TestAlwaysHTTPSSwitchIsJournaled(t *testing.T) {
+	s, f := webStore(t)
+	secured := securedFixture(t, s, liveFixture(t, s))
+	id := secured.Account.ID
+	ctx := context.Background()
+	off, err := s.setAlwaysHTTPS(ctx, id, alwaysHTTPSInput(secured, false), "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !off.PlainHTTP || off.Revision != secured.Account.Revision+1 || off.Certificate != secured.Account.Certificate {
+		t.Fatalf("turned off: %+v", off)
+	}
+	if h := historyActions(t, s, id); strings.Join(h[len(h)-2:], " ") != "https:intended https:succeeded" {
+		t.Fatalf("journal %v", h)
+	}
+	// The journal's rows record the switch itself.
+	if e := lastEvent(t, s, id); e.Before == nil || e.Before.PlainHTTP || !e.After.PlainHTTP {
+		t.Fatalf("journal row %+v", e)
+	}
+	r := recordFor(t, s, id)
+	if r.Pending != nil || !r.Account.PlainHTTP || r.Account.Revision != off.Revision {
+		t.Fatalf("record %+v", r)
+	}
+	if site := siteOf(t, f.sites, id); site.AlwaysHTTPS || site.TLS.CertFile == "" {
+		t.Fatalf("site with the switch off %+v", site)
+	}
+	files, err := renderUnderHome(f.sites)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vh := string(files[olsweb.VhostConfigPath(siteName(id))]); strings.Contains(vh, "%{HTTPS}") {
+		t.Fatalf("https rules with the switch off:\n%s", vh)
+	}
+
+	// The same setting again changes nothing.
+	applies := f.siteApplies
+	same, err := s.setAlwaysHTTPS(ctx, id, alwaysHTTPSInput(r, false), "test operator")
+	if err != nil || same.Revision != off.Revision || f.siteApplies != applies {
+		t.Fatalf("unchanged switch: %v %+v", err, same)
+	}
+	on, err := s.setAlwaysHTTPS(ctx, id, alwaysHTTPSInput(r, true), "test operator")
+	if err != nil || on.PlainHTTP || on.Revision != off.Revision+1 || !siteOf(t, f.sites, id).AlwaysHTTPS {
+		t.Fatalf("turned on: %v %+v", err, on)
+	}
+	// The setting is kept for a site with no certificate yet.
+	created := createFixtureNamed(t, s, "plainacct", "plain.test")
+	if _, err := s.setWeb(ctx, created.ID, WebInput{PHPVersion: "8.3", QuotaMiB: 200, ExpectedRevision: created.Revision, Reason: "Go live"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	plain := recordFor(t, s, created.ID)
+	kept, err := s.setAlwaysHTTPS(ctx, plain.Account.ID, alwaysHTTPSInput(plain, false), "test operator")
+	if err != nil || !kept.PlainHTTP || siteOf(t, f.sites, plain.Account.ID).AlwaysHTTPS {
+		t.Fatalf("no certificate: %v %+v", err, kept)
+	}
+}
+
+func TestAlwaysHTTPSRefusalsJournalNothing(t *testing.T) {
+	s, f := webStore(t)
+	secured := securedFixture(t, s, liveFixture(t, s))
+	id := secured.Account.ID
+	ctx := context.Background()
+	applies := f.siteApplies
+	noReason := alwaysHTTPSInput(secured, false)
+	noReason.Reason = ""
+	for name, in := range map[string]AlwaysHTTPSInput{
+		"no setting":  {ExpectedRevision: secured.Account.Revision, Reason: "x"},
+		"no revision": {AlwaysHTTPS: alwaysHTTPSInput(secured, false).AlwaysHTTPS, Reason: "x"},
+		"no reason":   noReason,
+	} {
+		if _, err := s.setAlwaysHTTPS(ctx, id, in, "test operator"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := s.setAlwaysHTTPS(ctx, "x", alwaysHTTPSInput(secured, false), "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad id: %v", err)
+	}
+	stale := alwaysHTTPSInput(secured, false)
+	stale.ExpectedRevision++
+	if _, err := s.setAlwaysHTTPS(ctx, id, stale, "test operator"); !errors.Is(err, ErrConflict) {
+		t.Errorf("stale revision: %v", err)
+	}
+	if after := recordFor(t, s, id); after != secured || f.siteApplies != applies {
+		t.Fatalf("a refusal changed the record or the config: %+v, %d applies", after, f.siteApplies-applies)
+	}
+	// Not for a suspended site, an account with no live site, or with the
+	// web operation off.
+	suspended, err := suspend(s, secured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := recordFor(t, s, id)
+	if _, err := s.setAlwaysHTTPS(ctx, id, alwaysHTTPSInput(r, false), "test operator"); !errors.Is(err, ErrConflict) || recordFor(t, s, id).Account.Revision != suspended.Revision {
+		t.Errorf("suspended site: %v", err)
+	}
+	bare := createFixtureNamed(t, s, "bareacct", "bare.test")
+	off := false
+	if _, err := s.setAlwaysHTTPS(ctx, bare.ID, AlwaysHTTPSInput{AlwaysHTTPS: &off, ExpectedRevision: bare.Revision, Reason: "x"}, "test operator"); !errors.Is(err, ErrConflict) {
+		t.Errorf("no live site: %v", err)
+	}
+	s.web = nil
+	if _, err := s.setAlwaysHTTPS(ctx, id, alwaysHTTPSInput(r, false), "test operator"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("web operation off: %v", err)
+	}
+}
+
+func TestAlwaysHTTPSRejectedConfigChangesNothing(t *testing.T) {
+	s, f := webStore(t)
+	secured := securedFixture(t, s, liveFixture(t, s))
+	f.failure = "sites-reject"
+	if _, err := s.setAlwaysHTTPS(context.Background(), secured.Account.ID, alwaysHTTPSInput(secured, false), "test operator"); !errors.Is(err, ErrWebRejected) {
+		t.Fatalf("rejected config: %v", err)
+	}
+	r := recordFor(t, s, secured.Account.ID)
+	if r.Pending != nil || r.Account != secured.Account {
+		t.Fatalf("a rejected change left %+v", r)
+	}
+	if h := historyActions(t, s, secured.Account.ID); h[len(h)-1] != "https:rejected" {
+		t.Fatalf("journal %v", h)
+	}
+}
+
+func TestAlwaysHTTPSInterruptedApplyIsFinishedByRefresh(t *testing.T) {
+	s, f := webStore(t)
+	secured := securedFixture(t, s, liveFixture(t, s))
+	id := secured.Account.ID
+	ctx := context.Background()
+	f.failure = "sites"
+	if _, err := s.setAlwaysHTTPS(ctx, id, alwaysHTTPSInput(secured, false), "test operator"); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("failed apply: %v", err)
+	}
+	r := recordFor(t, s, id)
+	if r.Pending == nil || r.Pending.Action != "https" || r.Pending.Target != "off" || r.Account.PlainHTTP {
+		t.Fatalf("pending switch not durable: %+v", r)
+	}
+	f.failure = ""
+	s.mu.Lock()
+	err := s.refresh(ctx, true)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = recordFor(t, s, id)
+	if r.Pending != nil || !r.Account.PlainHTTP || r.Account.Revision != secured.Account.Revision+1 || siteOf(t, f.sites, id).AlwaysHTTPS {
+		t.Fatalf("refresh did not finish the switch: %+v", r)
+	}
+	if h := historyActions(t, s, id); h[len(h)-1] != "https:reconciled" {
+		t.Fatalf("journal %v", h)
+	}
+
+	// One that now fails its test ends rejected, unchanged.
+	f.failure = "sites"
+	if _, err := s.setAlwaysHTTPS(ctx, id, alwaysHTTPSInput(r, true), "test operator"); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("failed apply: %v", err)
+	}
+	f.failure = "sites-reject"
+	s.mu.Lock()
+	err = s.refresh(ctx, true)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after := recordFor(t, s, id); after.Pending != nil || after.Account != r.Account {
+		t.Fatalf("a recovery that failed its test must end rejected and unchanged: %+v", after)
+	}
+}
+
+func TestAlwaysHTTPSStoredFormIsChecked(t *testing.T) {
+	s, f := webStore(t)
+	secured := securedFixture(t, s, liveFixture(t, s))
+	f.failure = "sites"
+	if _, err := s.setAlwaysHTTPS(context.Background(), secured.Account.ID, alwaysHTTPSInput(secured, false), "test operator"); !errors.Is(err, ErrRecovery) {
+		t.Fatalf("failed apply: %v", err)
+	}
+	good := recordFor(t, s, secured.Account.ID)
+	for _, target := range []string{"", "OFF", "false", "on;off"} {
+		r := good
+		p := *r.Pending
+		p.Target = target
+		r.Pending = &p
+		if err := s.save(r); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.records(); !errors.Is(err, ErrRecovery) {
+			t.Errorf("target %q: %v", target, err)
+		}
+	}
+	if err := s.save(good); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.records(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAlwaysHTTPSHTTP(t *testing.T) {
+	s, _ := webStore(t)
+	secured := securedFixture(t, s, liveFixture(t, s))
+	post := func(body string) (int, string) {
+		req := httptest.NewRequest("POST", "http://unix/v1/accounts/"+secured.Account.ID+"/always-https", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler(s).ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+	rev := secured.Account.Revision
+	wrap := func(input string) string { return `{"input":` + input + `,"actor":"test operator"}` }
+	for name, body := range map[string]string{
+		"switch left out":  wrap(fmt.Sprintf(`{"expected_revision":%d,"reason":"x"}`, rev)),
+		"switch null":      wrap(fmt.Sprintf(`{"always_https":null,"expected_revision":%d,"reason":"x"}`, rev)),
+		"switch as text":   wrap(fmt.Sprintf(`{"always_https":"false","expected_revision":%d,"reason":"x"}`, rev)),
+		"switch as number": wrap(fmt.Sprintf(`{"always_https":0,"expected_revision":%d,"reason":"x"}`, rev)),
+		"switch in case":   wrap(fmt.Sprintf(`{"Always_https":false,"expected_revision":%d,"reason":"x"}`, rev)),
+		"an unknown key":   wrap(fmt.Sprintf(`{"always_https":false,"rules":"x","expected_revision":%d,"reason":"x"}`, rev)),
+		"no actor":         fmt.Sprintf(`{"input":{"always_https":false,"expected_revision":%d,"reason":"x"}}`, rev),
+	} {
+		if code, out := post(body); code != 400 || !strings.Contains(out, `"invalid"`) {
+			t.Errorf("%s: %d %s", name, code, out)
+		}
+	}
+	if code, out := post(wrap(fmt.Sprintf(`{"always_https":false,"expected_revision":%d,"reason":"x"}`, rev))); code != 200 || !strings.Contains(out, `"plain_http":true`) || !strings.Contains(out, fmt.Sprintf(`"revision":%d`, rev+1)) {
+		t.Fatalf("good: %d %s", code, out)
+	}
+	if code, out := post(wrap(fmt.Sprintf(`{"always_https":true,"expected_revision":%d,"reason":"x"}`, rev))); code != 409 || !strings.Contains(out, `"conflict"`) {
+		t.Fatalf("stale: %d %s", code, out)
+	}
+}
+
+func TestAlwaysHTTPSClientChecksBeforeSending(t *testing.T) {
+	c := NewClient("").(AlwaysHTTPSService)
+	on := true
+	id := strings.Repeat("a", 32)
+	good := AlwaysHTTPSInput{AlwaysHTTPS: &on, ExpectedRevision: 2, Reason: "x"}
+	if _, err := c.SetAlwaysHTTPS(context.Background(), id, good, "test operator"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unconfigured client: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		id string
+		in AlwaysHTTPSInput
+	}{
+		"bad id":      {"x", good},
+		"no setting":  {id, AlwaysHTTPSInput{ExpectedRevision: 2, Reason: "x"}},
+		"no revision": {id, AlwaysHTTPSInput{AlwaysHTTPS: &on, Reason: "x"}},
+		"no reason":   {id, AlwaysHTTPSInput{AlwaysHTTPS: &on, ExpectedRevision: 2}},
+	} {
+		if _, err := c.SetAlwaysHTTPS(context.Background(), tc.id, tc.in, "test operator"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

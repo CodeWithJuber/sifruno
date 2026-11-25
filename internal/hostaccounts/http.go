@@ -280,6 +280,32 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(result)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/always-https"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/always-https")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input AlwaysHTTPSInput `json:"input"`
+				Actor string           `json:"actor"`
+			}
+			// The setting is required: left out, it would read as off.
+			if decodeBody(w, r, &in, []string{"always_https", "expected_revision", "reason"}) != nil || in.Input.AlwaysHTTPS == nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			// The change runs the web apply, on its own limit.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
+			result, err := s.setAlwaysHTTPS(ctx, id, in.Input, in.Actor)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(result)
 		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/wordpress"):
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/wordpress")
 			if !idPattern.MatchString(id) {

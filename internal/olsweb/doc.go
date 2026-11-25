@@ -210,16 +210,49 @@
 //   - src/http/httpvhost.cpp, src/lsiapi/modulemanager.cpp: vhconf.conf's
 //     module blocks are parsed at vhost level over the server's; ls_enabled
 //     0 turns the module's hooks off for that vhost.
-//   - src/modules/cache/cache.cpp: the keys and their ranges; storagePath is
-//     created as root with mode 2770 and chowned to the server user, and
-//     purges act on the config's own store; a POST is never cached; the
-//     lookup runs when the request headers arrive (checkAssignHandler at
+//   - src/modules/cache/cache.cpp: the keys and their ranges; purges act on
+//     the config's own store; a POST is never cached; the lookup runs when
+//     the request headers arrive (checkAssignHandler at
 //     LSI_HKPT_RCVD_REQ_HEADER), before rewrite rules.
 //   - src/http/httpcgitool.cpp: every LSAPI request gets X-LSCACHE
 //     "on,crawler", which the WordPress plugin reads as LSCache being there.
 //   - openlitespeed-1.9.4-3.el9.x86_64.rpm (rpms.litespeedtech.com, unpacked,
 //     not installed): httpd_config.conf has the stock "module cache" block
 //     with ls_enabled 1 and enableCache 0, and cachedata is root-owned 0755.
+//
+// Read 2026-11-25, same tag, for where the stores live (CacheRoot):
+//
+//   - src/modules/cache/cache.cpp parseStoragePath (273-362): a vhost's
+//     storagePath is used as written when it starts with "/" (310), else
+//     under the server root. createCachePath (248-256) makes a missing store
+//     with GPath::createMissingPath(path, 0770), which makes each missing
+//     directory of the path in turn and chowns none of them
+//     (src/util/gpath.cpp 613-635). Then matchDirectoryPermissions
+//     (240-245, called at 342) chowns the store alone to the server user and
+//     group and sets it to 2770, at every config load. The store's own
+//     shared-memory files and hash directories go inside it
+//     (shmcachemanager.cpp 984-997, dirhashcachestore.cpp 394-407).
+//   - src/main/lshttpdmain.cpp: main sets umask 022 (1323), config() (1232)
+//     runs before changeUserChroot (1301), and a graceful restart execs a
+//     new instance (gracefulRestart, 1802-1846), so the stores are made as
+//     root. A missing CacheRoot would be made root's 0750, which the server
+//     user cannot cross, so the installer makes it 0711 first.
+//   - src/main/httpserver.cpp configServerBasics: testAndFixDirs("cachedata",
+//     server uid, gid, 0755) (4280; 3503-3537) chowns the server root's
+//     cachedata to the server user at every start. That is why cachedata is
+//     nobody:nobody 755 on a running server, and why the stores are not in
+//     it: the root broker would remove them in a directory the server user
+//     can write.
+//   - src/modules/cache/cache.cpp verifyStoreReady (539-558): a config with
+//     no storagePath uses the server root's cachedata/; the stock server
+//     block has none, so the server-level store stays there.
+//   - SELinux (selinux-policy-targeted-38.1.86-1.el9, file_contexts and
+//     policy.33 read with sesearch and seinfo): lshttpd under
+//     /usr/local/lsws/bin is bin_t, "type_transition init_t bin_t:process
+//     unconfined_service_t" runs it as unconfined_service_t, which is in
+//     files_unconfined_type and may write any file type. So CacheRoot keeps
+//     /var/lib's var_lib_t (cachedata's own label is usr_t, from "/usr/.*")
+//     and needs no file-context rule.
 //
 // Read 2026-11-24, same tag and docs, for protected folders (internal/htaccess
 // doc.go, "Converting access rules", has the Apache side):

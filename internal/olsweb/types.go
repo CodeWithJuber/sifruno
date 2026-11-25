@@ -35,12 +35,15 @@ const (
 	// root-owned and outside every home so a tenant cannot plant a symlink
 	// where the server opens its log files.
 	LogRoot = ServerRoot + "/logs/sifruno"
-	// CacheRoot is the openlitespeed package's own cache directory
-	// (root-owned 0755). Each active site caches pages in
-	// CacheRoot/NamePrefix+NAME, outside every home: OpenLiteSpeed creates
-	// that directory as root when it loads the config and chowns it to the
-	// server user, so a tenant must not be able to put a link there.
-	CacheRoot = ServerRoot + "/cachedata"
+	// CacheRoot holds each active site's LSCache store,
+	// CacheRoot/NamePrefix+NAME, outside every home. The installer makes it,
+	// root's own and 0711, so the server user can reach a store by name but
+	// not list them. OpenLiteSpeed creates a store as root when it loads the
+	// config and gives only that directory to the server user (2770); it
+	// never changes CacheRoot, as it does its own cachedata at every start.
+	// So only root can put a link in place of a store's name, and the root
+	// broker removes a deleted site's store under it.
+	CacheRoot = "/var/lib/sifruno-lscache"
 )
 
 // Bounds. OpenLiteSpeed aborts a whole file at a line of 8192 bytes or more,

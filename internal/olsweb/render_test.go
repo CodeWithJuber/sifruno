@@ -250,7 +250,7 @@ func TestCacheModulePerSite(t *testing.T) {
 		b := block(name)
 		want := "module cache {\n" +
 			"  ls_enabled              1\n" +
-			"  storagePath             /usr/local/lsws/cachedata/sifruno-" + name + "\n" +
+			"  storagePath             /var/lib/sifruno-lscache/sifruno-" + name + "\n" +
 			"  checkPublicCache        1\n" +
 			"  checkPrivateCache       1\n" +
 			"  enableCache             0\n" +

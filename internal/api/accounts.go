@@ -275,6 +275,34 @@ func isAbandonCreatePath(p string) bool {
 	return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "abandon-create"
 }
 
+// isPlanPath is an admin's change of an account's plan and limits.
+func isPlanPath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/accounts/")
+	parts := strings.Split(rest, "/")
+	return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "plan"
+}
+
+// strictLimits admits a plan change's limits only as an object of exactly
+// the three keys, spelled as the schema spells them, each once, each a
+// whole number (wholeNumber: no sign, fraction, exponent, quotes or null).
+// Their bounds are the broker's (validLimits).
+func strictLimits(raw json.RawMessage) bool {
+	if operator.DecodeObject(raw, &hostaccounts.AccountLimits{}) != nil {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 3 {
+		return false
+	}
+	for _, key := range []string{"processes", "memory_mib", "cpu_percent"} {
+		value, ok := fields[key]
+		if !ok || !wholeNumber.Match(bytes.TrimSpace(value)) {
+			return false
+		}
+	}
+	return true
+}
+
 // isFinishDeletePath is an admin's finish of an unfinished delete.
 func isFinishDeletePath(p string) bool {
 	rest, ok := strings.CutPrefix(p, "/api/v1/accounts/")
@@ -312,6 +340,8 @@ func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
 		target = &hostaccounts.AbandonCreateInput{}
 	case isFinishDeletePath(r.URL.Path):
 		target = &hostaccounts.FinishDeleteInput{}
+	case isPlanPath(r.URL.Path):
+		target = &hostaccounts.PlanInput{}
 	default:
 		target = &hostaccounts.StateInput{}
 	}
@@ -332,6 +362,8 @@ func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
 		case r.URL.Path == "/api/v1/accounts":
 			valid = valid || key == "username" || key == "domain"
 		case isAbandonCreatePath(r.URL.Path), isFinishDeletePath(r.URL.Path):
+		case isPlanPath(r.URL.Path):
+			valid = valid || key == "plan" || key == "expected_revision" || key == "limits" && strictLimits(fields[key])
 		default:
 			valid = valid || key == "state" || key == "expected_revision"
 		}

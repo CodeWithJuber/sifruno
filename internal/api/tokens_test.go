@@ -104,6 +104,8 @@ func TestAPITokenThroughThePanelAPI(t *testing.T) {
 			{"POST", "/api/v1/accounts/" + strings.Repeat("a", 32) + "/abandon-create"},
 			// An admin's finish of an unfinished delete.
 			{"POST", "/api/v1/accounts/" + strings.Repeat("a", 32) + "/finish-delete"},
+			// An admin's change of an account's plan and limits.
+			{"POST", "/api/v1/accounts/" + strings.Repeat("a", 32) + "/plan"},
 			// A site's restore, which overwrites it, and its drill.
 			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/restore"},
 			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/drill"},

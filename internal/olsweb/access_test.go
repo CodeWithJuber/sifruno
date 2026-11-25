@@ -3,6 +3,7 @@ package olsweb
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -171,6 +172,7 @@ func FuzzFolder(f *testing.F) {
 		if err != nil {
 			t.Fatalf("reference failed: %v", err)
 		}
+		checkAnchoring(t, folder)
 		path0 := VhostConfigPath("blog")
 		gotShape, err := confShape(got[path0])
 		if err != nil {
@@ -184,4 +186,48 @@ func FuzzFolder(f *testing.F) {
 			t.Fatalf("structure differs from the reference\n%s", got[path0])
 		}
 	})
+}
+
+// checkAnchoring checks what the rendered regex covers, with Go's regexp on
+// its prefix (Go has no lookahead): it matches the folder and everything
+// below it, and neither a sibling whose name only starts the same
+// (/privateX/), the folder without its slash, nor the same name deeper
+// (/pub/private/). The lookahead, when there is one, holds exactly the
+// open names.
+func checkAnchoring(t *testing.T, f Folder) {
+	t.Helper()
+	pattern := folderPattern(f)
+	prefix, look, hasLook := strings.Cut(pattern, "(?!")
+	prefix = strings.TrimSuffix(prefix, ".*")
+	re, err := regexp.Compile(prefix)
+	if err != nil {
+		t.Fatalf("%s: %v", pattern, err)
+	}
+	trimmed := strings.TrimSuffix(f.Path, "/")
+	for _, uri := range []string{f.Path, f.Path + "x", f.Path + "a/b.php", f.Path + "x\n"} {
+		if !re.MatchString(uri) {
+			t.Fatalf("%s does not cover %q", pattern, uri)
+		}
+	}
+	for _, uri := range []string{trimmed + "X/", trimmed + "-x/y", trimmed, "/pub" + f.Path, "/pub" + f.Path + "x", strings.ToUpper(f.Path[:2]) + f.Path[2:] + "\x00"} {
+		if uri == f.Path || strings.HasPrefix(uri, f.Path) {
+			continue
+		}
+		if re.MatchString(uri) {
+			t.Fatalf("%s covers %q, outside %s", pattern, uri, f.Path)
+		}
+	}
+	if hasLook != (len(f.Allow) > 0) {
+		t.Fatalf("%s: lookahead and allow list disagree", pattern)
+	}
+	if hasLook {
+		names := make([]string, len(f.Allow))
+		for i, n := range f.Allow {
+			names[i] = regexQuote(n)
+		}
+		want := "(?:[^/.]+/)*(?:" + strings.Join(names, "|") + ")(?!.)).*"
+		if look != want {
+			t.Fatalf("lookahead %q, want %q", look, want)
+		}
+	}
 }

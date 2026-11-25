@@ -384,6 +384,12 @@ test("a move's job is read with its migration record, and a running one without 
   assert.equal(parsed.kind, "migration");
   assert.equal(parsed.migration.gate, "open");
   assert.equal(parsed.migration.verify.pages_compared, 5);
+  // A record from before verify's plain messages reads with none.
+  assert.deepEqual(parsed.migration.verify.problems, []);
+  const problem = "/lobby/ is closed to some addresses. Check /lobby/ from an address it allows, then accept.";
+  const withProblem = api.parseJob(migrationJob({ migration: migrationRecord({ verify: { ...migrationRecord().verify, cutover_allowed: false, probes_fail: 1, problems: [problem] } }) }));
+  assert.deepEqual(withProblem.migration.verify.problems, [problem]);
+  assert.equal(api.parseJob(migrationJob({ migration: migrationRecord({ verify: { ...migrationRecord().verify, problems: [42] } }) })), undefined);
   const running = api.parseJob(migrationJob({ domain: "", state: "running", result: null, steps: migrationSteps(["running"]) }));
   assert.equal(running.domain, "");
   // A wizard job still needs its domain and has no migration record.

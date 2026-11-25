@@ -267,6 +267,46 @@ func TestConvertedSiteMigratesWithItsProbes(t *testing.T) {
 	}
 }
 
+// TestAddressListFoldersGoToVerifyWithBothAddresses: a folder open to some
+// addresses only reaches verify with its rule, the address the old server
+// saw this server come from, and the copy's own (the loopback address verify
+// connects from), on the first run and on a later one, after the key is gone.
+func TestAddressListFoldersGoToVerifyWithBothAddresses(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.plan.ClientAddress = "198.51.100.9"
+	lobby := hostaccounts.MigrationProbe{Path: "/lobby/", Kind: "hosts", Hosts: "except", Networks: []string{"127.0.0.2/32"}}
+	f.broker.filesResult = hostaccounts.MigrateFilesResult{
+		Folders: []hostaccounts.MigrationFolder{{File: "lobby/.htaccess", Path: "/lobby/", Rule: "closed to 127.0.0.2/32"}},
+		Probes:  []hostaccounts.MigrationProbe{lobby},
+	}
+	// A failed check's plain message goes to the person, critical ones
+	// first; the technical lines stay apart.
+	f.verdict = migrateverify.Report{Verdict: "CUTOVER LOCKED: 3 failed check(s)", Counts: migrateverify.Counts{PagesCompared: 5, PagesPass: 5, ProbesFail: 3}, Probes: []migrateverify.ProbeResult{
+		{Path: "/lobby/", Kind: migrateverify.ProbeHosts, Result: migrateverify.Fail, Code: migrateverify.CodeClientUnknown, Reason: "technical", Message: "/lobby/ is closed to some addresses. Check /lobby/ from an address it allows, then accept."},
+		{Path: "/office/", Kind: migrateverify.ProbeHosts, Result: migrateverify.Fail, Code: migrateverify.CodeNewOpen, Critical: true, Reason: "technical", Message: "/office/ is open only to some addresses. Accept only if it is closed."},
+		{Path: "/private/", Kind: migrateverify.ProbeAuth, Result: migrateverify.Fail, Code: migrateverify.CodeNewDiffers, Reason: "status 401 → 403"},
+	}}
+	job := f.migrate(t)
+	if job.State != StateSucceeded {
+		t.Fatalf("job: %+v %+v", job.State, job.Error)
+	}
+	v := job.Migration.Verify
+	if job.Migration.Gate != GateClosed || !slices.Equal(v.Problems, []string{f.verdict.Probes[1].Message, f.verdict.Probes[0].Message}) || len(v.Lines) != 3 {
+		t.Fatalf("gate %s verify %+v", job.Migration.Gate, v)
+	}
+	want := []migrateverify.Probe{{Path: "/lobby/", Kind: migrateverify.ProbeHosts, Hosts: migrateverify.HostsExcept, Networks: []string{"127.0.0.2/32"}}}
+	if len(f.verify) != 1 || !reflect.DeepEqual(f.verify[0].Probes, want) || f.verify[0].OldClient != "198.51.100.9" || f.verify[0].NewClient != "127.0.0.1" {
+		t.Fatalf("verify %+v", f.verify)
+	}
+	if _, err := f.runner.VerifyMigration(context.Background(), job.ID, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	f.runner.Wait()
+	if len(f.verify) != 2 || f.verify[1].OldClient != "198.51.100.9" || f.verify[1].NewClient != "127.0.0.1" {
+		t.Fatalf("verify again %+v", f.verify)
+	}
+}
+
 func TestCompatSiteIsRefusedBeforeAnythingIsMade(t *testing.T) {
 	f := newMigrationFixture(t)
 	f.broker.plan.Tier, f.broker.plan.TierCauses = "compat", []string{"access_control"}

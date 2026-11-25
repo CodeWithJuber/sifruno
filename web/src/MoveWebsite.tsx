@@ -286,7 +286,8 @@ function Comparison({ job, onChanged }: { job: WebsiteJob; onChanged: (job: Webs
     {v?.running && <p role="status" className="text-sm" data-testid="move-verify-running">Comparing the copy with the old site…</p>}
     {v && !v.running && <div className="flex flex-col gap-2" data-testid="move-verify">
       <div className="text-sm font-medium" data-testid="move-verdict">{v.verdict}</div>
-      {v.ran && <div className="text-sm text-muted-foreground">Pages: {v.pages_compared} compared, {v.pages_pass} the same, {v.pages_warn} to check, {v.pages_fail} different. Closed URLs (passwords, deny rules): {v.probes_pass} still closed, {v.probes_fail} not.</div>}
+      {v.ran && <div className="text-sm text-muted-foreground">Pages: {v.pages_compared} compared, {v.pages_pass} the same, {v.pages_warn} to check, {v.pages_fail} different. Closed URLs (passwords, deny rules, address lists): {v.probes_pass} as the old site, {v.probes_fail} not.</div>}
+      {v.problems.length > 0 && <ul className="list-disc ps-5 text-sm" data-testid="move-verify-problems">{v.problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>}
       {v.lines.length > 0 && <TechnicalDetails>{v.lines.join("\n")}</TechnicalDetails>}
     </div>}
     {m.notes.length > 0 && <div className="flex flex-col gap-1" data-testid="move-notes">

@@ -196,6 +196,11 @@ func renderVhost(v site) []byte {
 	if !v.Suspended {
 		renderPHP(&b, v)
 		rules = append(append([]string(nil), denyRules...), redirectRules(v.Redirects)...)
+		// After the site's own redirects, so a redirected domain or path
+		// takes one hop to its target, not two.
+		if v.AlwaysHTTPS {
+			rules = append(rules, httpsRules(securedDomains(v))...)
+		}
 		autoLoad = "1"
 	}
 	renderCache(&b, v)

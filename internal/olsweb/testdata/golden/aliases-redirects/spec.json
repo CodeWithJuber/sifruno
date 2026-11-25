@@ -26,7 +26,8 @@
         {"path": "/blog/", "target": "https://blog.example.org/?from=shop&lang=en", "status": 302},
         {"domain": "example.net", "target": "http://example.com:8080", "status": 302},
         {"path": "/", "target": "https://example.com/start", "status": 302}
-      ]
+      ],
+      "always_https": true
     },
     {
       "name": "paused",
@@ -46,7 +47,8 @@
       "redirects": [
         {"domain": "www.paused.example.org", "target": "https://paused.example.org", "status": 301},
         {"path": "/old-page", "target": "https://paused.example.org/new-page", "status": 301}
-      ]
+      ],
+      "always_https": true
     }
   ]
 }

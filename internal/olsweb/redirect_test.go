@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -258,4 +259,173 @@ func FuzzRedirect(f *testing.F) {
 			t.Fatalf("rendered vhost does not parse: %v", err)
 		}
 	})
+}
+
+// rewriteAnswer runs a request through a vhost's rules block the way Apache's
+// mod_rewrite documents it, with Go's regexp: every RewriteCond before a
+// RewriteRule must match (a leading ! negates it, [NC] ignores case), then
+// the rule's pattern must match the path, and the first rule that matches
+// answers. It returns the redirect's Location, with the query string kept
+// when the substitution has none of its own, "-" for a rule that refuses,
+// or "" when no rule matches. Only the variables the renderer uses are known.
+func rewriteAnswer(t *testing.T, vhost string, https bool, host, uri string) string {
+	t.Helper()
+	start := strings.Index(vhost, "<<<END_rules\n")
+	end := strings.Index(vhost, "\n  END_rules\n")
+	if start < 0 || end < start {
+		t.Fatalf("no rules block:\n%s", vhost)
+	}
+	path, query, _ := strings.Cut(uri, "?")
+	vars := map[string]string{"%{HTTP_HOST}": host, "%{REQUEST_URI}": path, "%{HTTPS}": "off"}
+	if https {
+		vars["%{HTTPS}"] = "on"
+	}
+	compile := func(pattern, flags string) *regexp.Regexp {
+		if strings.Contains(flags, "NC") {
+			pattern = "(?i)" + pattern
+		}
+		return regexp.MustCompile(pattern)
+	}
+	conditions := true
+	for _, line := range strings.Split(vhost[start+len("<<<END_rules\n"):end], "\n") {
+		f := strings.Fields(line)
+		flags := ""
+		if n := len(f); n > 0 && strings.HasPrefix(f[n-1], "[") {
+			flags = f[n-1]
+		}
+		switch f[0] {
+		case "RewriteCond":
+			value, known := vars[f[1]]
+			if !known {
+				t.Fatalf("unknown variable in %q", line)
+			}
+			pattern, negate := strings.CutPrefix(f[2], "!")
+			conditions = conditions && compile(pattern, flags).MatchString(value) != negate
+		case "RewriteRule":
+			m := compile(f[1], flags).FindStringSubmatch(path)
+			if conditions && m != nil {
+				target := f[2]
+				for i := len(m) - 1; i > 0; i-- {
+					target = strings.ReplaceAll(target, "$"+strconv.Itoa(i), m[i])
+				}
+				if target != "-" && query != "" && !strings.Contains(target, "?") {
+					target += "?" + query
+				}
+				return target
+			}
+			conditions = true
+		default:
+			t.Fatalf("unexpected line %q", line)
+		}
+	}
+	return ""
+}
+
+func alwaysHTTPSServer() Server {
+	s := redirectServer(Redirect{Domain: "www.example.com", Target: "https://example.com", Status: 301}, Redirect{Path: "/old-page", Target: "http://example.com/new-page", Status: 301})
+	// example.net does not point here yet: the certificate leaves it out.
+	s.Sites[0].TLS.Domains = []string{"example.com", "www.example.com"}
+	s.Sites[0].AlwaysHTTPS = true
+	return s
+}
+
+// TestAlwaysHTTPS: plain http for a domain the certificate covers answers a
+// 301 to the same address on https; https, the ACME challenge path and a
+// domain the certificate does not cover are served as they are.
+func TestAlwaysHTTPS(t *testing.T) {
+	files, err := Render(alwaysHTTPSServer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vh := string(files[VhostConfigPath("blog")])
+	want := "RewriteCond %{HTTPS} !on\nRewriteCond %{HTTP_HOST} ^example\\.com(:[0-9]+)?$ [NC]\nRewriteCond %{REQUEST_URI} !^/\\.well-known/acme-challenge/\nRewriteRule ^/?(.*)$ https://example.com/$1 [R=301,L]\n"
+	if !strings.Contains(vh, want) || strings.Count(vh, "RewriteCond %{HTTPS} !on\n") != 2 {
+		t.Fatalf("vhconf.conf lacks one rule per covered domain:\n%s", vh)
+	}
+	// The site's own redirects come first, so a redirected domain or path
+	// takes one hop, not two.
+	if strings.Index(vh, "RewriteCond %{HTTPS}") < strings.Index(vh, "RewriteRule ^/?old-page/?$") {
+		t.Fatalf("the https rules come before the site's redirects:\n%s", vh)
+	}
+	for _, c := range []struct {
+		https     bool
+		host, uri string
+		want      string
+	}{
+		{false, "example.com", "/some/path?x=1", "https://example.com/some/path?x=1"},
+		{false, "example.com", "/", "https://example.com/"},
+		{false, "Example.COM:80", "/a/b.html", "https://example.com/a/b.html"},
+		{false, "example.com", "/wp-admin/?page=x&y=1", "https://example.com/wp-admin/?page=x&y=1"},
+		// The deny rules still answer first.
+		{false, "example.com", "/.env", "-"},
+		// Renewal uses HTTP-01 over plain http.
+		{false, "example.com", "/.well-known/acme-challenge/test", ""},
+		{false, "www.example.com", "/.well-known/acme-challenge/abc", ""},
+		{false, "example.com", "/.well-known/security.txt", "https://example.com/.well-known/security.txt"},
+		// Already on https.
+		{true, "example.com", "/some/path?x=1", ""},
+		{true, "example.com", "/", ""},
+		// The site's own redirects answer in one hop.
+		{false, "www.example.com", "/x?y=1", "https://example.com/x?y=1"},
+		{false, "example.com", "/old-page", "http://example.com/new-page"},
+		// Not covered by the certificate, or not one of the site's names.
+		{false, "example.net", "/x", ""},
+		{false, "example.com.evil.test", "/x", ""},
+		{false, "evil.test", "/x", ""},
+		{false, "", "/x", ""},
+	} {
+		if got := rewriteAnswer(t, vh, c.https, c.host, c.uri); got != c.want {
+			t.Errorf("https=%v %s%s: %q, want %q", c.https, c.host, c.uri, got, c.want)
+		}
+	}
+}
+
+// TestAlwaysHTTPSCoversEveryDomainByDefault: a certificate with no list of
+// domains covers all of the site's.
+func TestAlwaysHTTPSCoversEveryDomainByDefault(t *testing.T) {
+	s := redirectServer()
+	s.Sites[0].AlwaysHTTPS = true
+	files, err := Render(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vh := string(files[VhostConfigPath("blog")])
+	for _, host := range []string{"example.com", "www.example.com", "example.net"} {
+		if got := rewriteAnswer(t, vh, false, host, "/p"); got != "https://"+host+"/p" {
+			t.Errorf("%s: %q", host, got)
+		}
+	}
+}
+
+// TestAlwaysHTTPSOff: with the switch off plain http serves the site, a
+// suspended site refuses it as everything else, and without a certificate
+// the switch is refused.
+func TestAlwaysHTTPSOff(t *testing.T) {
+	off := alwaysHTTPSServer()
+	off.Sites[0].AlwaysHTTPS = false
+	suspended := alwaysHTTPSServer()
+	suspended.Sites[0].Suspended = true
+	for name, c := range map[string]struct {
+		s    Server
+		want string
+	}{"off": {off, ""}, "suspended": {suspended, "-"}} {
+		files, err := Render(c.s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vh := string(files[VhostConfigPath("blog")])
+		if strings.Contains(vh, "%{HTTPS}") {
+			t.Errorf("%s: https rules rendered:\n%s", name, vh)
+		}
+		if got := rewriteAnswer(t, vh, false, "example.com", "/some/path?x=1"); got != c.want {
+			t.Errorf("%s: plain http answers %q, want %q", name, got, c.want)
+		}
+	}
+	noCertificate := alwaysHTTPSServer()
+	noCertificate.Sites[0].TLS = TLS{}
+	err := Validate(noCertificate)
+	var fe *FieldError
+	if !errors.As(err, &fe) || fe.Field != "sites[0].always_https" {
+		t.Fatalf("always_https without a certificate: %v", err)
+	}
 }

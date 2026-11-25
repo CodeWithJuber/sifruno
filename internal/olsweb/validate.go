@@ -247,6 +247,9 @@ func validateSite(field string, in Site, workers int) (site, error) {
 	if err := checkCovered(field, in); err != nil {
 		return site{}, err
 	}
+	if in.AlwaysHTTPS && in.TLS.CertFile == "" {
+		return site{}, fieldErr(field+".always_https", "only a site with a certificate redirects http to https")
+	}
 	if err := checkRedirects(field, in.Domains, in.Redirects); err != nil {
 		return site{}, err
 	}

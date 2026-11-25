@@ -28,8 +28,12 @@
 //     block with .htaccess autoload plus vhost-level deny rules, then the
 //     site's redirects (redirect.go: a domain redirect is two RewriteCond
 //     lines, on the Host header and leaving the challenge path alone, and a
-//     RewriteRule; a path redirect is one RewriteRule; each [R=301|302,L]).
-//     The cache
+//     RewriteRule; a path redirect is one RewriteRule; each [R=301|302,L]),
+//     then, for a site with AlwaysHTTPS and its own certificate, one rule
+//     per domain the certificate covers that sends plain http to the same
+//     address on https (redirect.go httpsRules: RewriteCond lines on
+//     %{HTTPS}, the Host header and leaving the challenge path alone, then
+//     [R=301,L]). The cache
 //     block turns LSCache on with the site's own store in
 //     CacheRoot/sifruno-NAME and the stock values written out, enableCache
 //     0 among them: a page is cached only when the site's response asks.
@@ -256,6 +260,21 @@
 //     files_unconfined_type and may write any file type. So CacheRoot keeps
 //     /var/lib's var_lib_t (cachedata's own label is usr_t, from "/usr/.*")
 //     and needs no file-context rule.
+//
+// Read 2026-11-25, same tag and docs, for the https redirect:
+//
+//   - /config/rewriterules/ [2024-07-29]: its "Redirect to HTTPS" example
+//     tests %{SERVER_PORT} 80; the page lists no server variables.
+//   - src/http/requestvars.cpp: "HTTPS" is a built-in variable (ServerVarNames,
+//     REF_HTTPS 152 in requestvars.h, below REF_END, so SubstItem::
+//     parseServerVar2 accepts it in a rewrite condition at 246), and its
+//     value is "on" when HttpSession::isHttps, else "off" (840-842).
+//   - src/http/httpreq.h isHttps (735-736): the request came over TLS
+//     (httpsession.cpp 246-249 and 567-570 set the crypto and the flag for a
+//     TLS connection), or it carries X-Forwarded-Proto: https or
+//     X-Forwarded-Scheme: https (httpreq.cpp 1609-1624). So a proxy that ends
+//     TLS in front of the site and says so gets no redirect loop, and a
+//     client that sends the header itself only keeps itself on http.
 //
 // Read 2026-11-24, same tag and docs, for protected folders (internal/htaccess
 // doc.go, "Converting access rules", has the Apache side):

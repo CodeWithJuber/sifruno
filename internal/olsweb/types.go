@@ -116,6 +116,13 @@ type Site struct {
 	// deny rules, for an active site only: a suspended site refuses every
 	// request and redirects none.
 	Redirects []Redirect `json:"redirects,omitempty"`
+	// AlwaysHTTPS sends plain http requests for each domain the certificate
+	// covers (TLS.Domains) to the same address on https with a 301, after
+	// the site's own redirects. ACME challenges are still served over http,
+	// so the certificate can renew, and a domain the certificate does not
+	// cover is served over http as before. It needs the site's own
+	// certificate; a suspended site redirects nothing.
+	AlwaysHTTPS bool `json:"always_https,omitempty"`
 	// Folders are the site's protected folders (access.go), sorted by path,
 	// rendered for an active site only: a suspended site refuses every
 	// request anyway.

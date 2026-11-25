@@ -190,3 +190,15 @@ What these runs do not show:
 - **WHMCS itself.** The module's functions ran from the PHP command line with the repo's stubs in place of WHMCS.
 - **A separate storage server.** For backups, an SFTP user on the same server stands in for one.
 - **The panel over the internet.** The browser proofs reached the panel through SSH port forwards from the machine that ran them, not through a firewall opened to the public.
+
+## Phase 1: Home, Server and Security on the design system
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary and UI of `acdc45a` with throwaway state on loopback, driven by Chrome 158 through agent-browser. The browser replaced only the service list's answer, with 31 standard Ubuntu services taken from the real one, so the host's own service names are not published; every other reading came from the running panel.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Home, Server (Services, Storage, Network) and Security rebuilt on shadcn/ui: no horizontal scroll at 1440 and 390 px in light and dark, keyboard focus, radio-group filters, progress bars, right-to-left layout | [phase1-ui-astryx-1.txt](phase1-ui-astryx-1.txt) | 36 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-1/](phase1-ui-astryx-1/): each screen at 1440 and 390 px in light and dark, the public-preview Home, the revoke confirmation, and the service list's unavailable state.
+
+What this run does not show: the dev VM (the readings are the runner host's, minus its service names), Security's own access-key form (the shell's sign-in comes first, so the page opens signed in), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left and covers the content there).

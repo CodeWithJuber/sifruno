@@ -216,3 +216,15 @@ Backups ran on real data: two static sites, two ZIP backups made with the rebuil
 Screenshots are in [phase1-ui-astryx-2/](phase1-ui-astryx-2/): both pages at 1440 and 390 px in light and dark, Backups with no websites, the restore, remove and schedule confirmations, Hosting accounts with no broker, its web configuration preview, the create and suspend dialogs, an error on each page, and both pages right to left.
 
 What this run does not show: the dev VM, a real Linux account broker (no account was created or suspended; the create and suspend dialogs were opened, not confirmed), a confirmed restore, removal, download or ZIP upload, the pages' own access-key forms (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left).
+
+## Phase 1: Static sites (old) and the Panel tour on the design system
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary and UI of `13de92f` with throwaway state on loopback, driven by Chrome 158 through agent-browser. Nothing was replaced in the browser: the pages show only sample static sites on `example.test` that the run made through the panel's own API. The tour ran as the public preview, with the meta tag `cmd/panelpreview` adds.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Static sites (old) and the public Panel tour rebuilt on shadcn/ui: no horizontal scroll at 1440 and 390 px in light and dark, keyboard focus, the Files / ZIP backups radio group, dialog focus, save, backup, rename, suspend, create, import, remove, the File Manager and restore handoffs, no private calls from the tour, right-to-left layout | [phase1-ui-astryx-3.txt](phase1-ui-astryx-3.txt) | 42 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-3/](phase1-ui-astryx-3/): both pages at 1440 and 390 px in light and dark, the ZIP backups pane, a binary file's details, the remove, import and refused-create dialogs, a search with no match, the tour's Backups, and right-to-left views.
+
+What this run does not show: the dev VM, the old File Manager's own screen (it stays on Astryx until Phase 2, as Jev chose, and was only opened by the handoff), a site that needs recovery (the run cannot cause one), the pages' own access-key form (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left and covers the content there).

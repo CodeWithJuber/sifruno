@@ -1,0 +1,59 @@
+# Phase 1 new UI shell: Static sites (old) and the public Panel tour on shadcn/ui (Astryx slice 3)
+# 2026-11-25T07:20Z  local run without root: ./cmd/sifruno at 13de92f with throwaway state on 127.0.0.1,
+# web/dist built from the same commit, Chrome 158 (agent-browser 0.44.0) driven over CDP
+#
+# Every request reached the running panel; nothing was replaced. The pages show only the throwaway
+# state's sample static sites on example.test, made through the panel's own API after first-run setup
+# created an admin. The tour ran as the public preview: the browser added the sifruno-public-preview
+# meta tag that cmd/panelpreview adds.
+# Right-to-left: dir="rtl" set on the page by the browser; the panel has no right-to-left language yet.
+# The old File Manager (/websites/static/files) stays on Astryx until Phase 2, as Jev chose; it was
+# only opened by the handoff check below.
+# The two "note" lines are the browser's own log of answers the page expects: 422 when it reads a
+# binary file as text (it then shows the file's details), and 409 for the refused duplicate domain.
+
+PASS  light 1440 /websites/static: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 1440 /tour (public preview): no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 390 /websites/static: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  light 390 /tour (public preview): no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 1440 /websites/static: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 1440 /tour (public preview): no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 390 /websites/static: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 390 /tour (public preview): no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  no Astryx component is left in the page
+PASS  the menu still lists Static sites (old) and marks it current
+PASS  Remove website: the dialog opens with focus in its domain field
+PASS  Escape closes it and focus returns to Remove website
+PASS  a refused create shows the server's reason in the dialog (The website changed on the server. Your editor draft is kept; compare the latest version before saving.)
+PASS  Tab reaches the inventory, list, site actions, section choice, files and editor (37 stops)
+PASS  the Files / ZIP backups choice is one tab stop (radio group)
+PASS  every focused control shows a focus ring
+PASS  an arrow key picks ZIP backups and shows only its pane
+PASS  Edit website name opens with focus in the name field
+PASS  Escape closes it and focus returns to Edit website name
+PASS  Save file writes the draft (read back through the API)
+PASS  Create ZIP backup adds a backup (1 → 2)
+PASS  Edit website name saves the new name
+PASS  Suspend website and Resume website change its state
+PASS  Create website makes a new static site and selects it
+PASS  Import native ZIP makes a new site from a downloaded backup
+PASS  Remove website removes it after the typed domain
+PASS  Open File Manager goes to /websites/static/files with the same site
+PASS  Back returns to /websites/static with the site still open
+PASS  Review restore hands the backup to Backups
+PASS  tour: no Astryx component is left
+PASS  tour: Tab moves from one module button to the next
+PASS  tour: Space opens Backups with its two sample snapshots
+PASS  tour: selecting a sample website shows its details
+PASS  tour: Enter opens a sample folder
+PASS  tour: an empty search says so
+PASS  tour: every focused control shows a focus ring
+PASS  tour: makes no private API calls
+PASS  rtl 1440 /websites/static: mirrored, selected site marked on the start (right) side, no horizontal scroll (scrollWidth 1440, viewport 1440, border 2px/0px)
+PASS  rtl 1440 /tour: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 390 /websites/static: mirrored, selected site marked on the start (right) side, no horizontal scroll (scrollWidth 390, viewport 390, border 2px/0px)
+PASS  rtl 390 /tour: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  no page errors or console errors
+note  expected console line: Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)
+note  expected console line: Failed to load resource: the server responded with a status of 409 (Conflict)
+42 passed, 0 failed

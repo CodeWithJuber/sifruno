@@ -73,7 +73,11 @@ This writes `artifacts/release/sifruno-linux-amd64.tar.gz` and `sifruno-linux-am
    scp artifacts/release/sifruno-linux-amd64.tar.gz artifacts/release/sifruno-linux-amd64.tar.gz.sha256 root@SERVER:/root/
    ```
 
-2. On the server, as root, check the tarball and unpack it:
+2. On the server, as root, check the tarball and unpack it. Minimal images, such as Linode's AlmaLinux 9, come without `tar`, so the first command installs it when it is missing:
+
+   ```bash
+   command -v tar >/dev/null || dnf -y install tar
+   ```
 
    ```bash
    cd /root && sha256sum -c sifruno-linux-amd64.tar.gz.sha256 && tar -xzf sifruno-linux-amd64.tar.gz && cd sifruno-linux-amd64

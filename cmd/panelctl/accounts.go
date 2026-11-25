@@ -45,7 +45,13 @@ func runAccounts(args []string, state, base string, out, errs io.Writer) error {
 			return errors.New("create requires bounded --username, --domain and --reason")
 		}
 		method = http.MethodPost
-		body = hostaccounts.CreateInput{Username: *username, Domain: *domain, Plan: *plan, Reason: *reason}
+		// The panel admits exactly these keys on a create; CreateInput would
+		// also send "plan", which it refuses.
+		body = struct {
+			Username string `json:"username"`
+			Domain   string `json:"domain"`
+			Reason   string `json:"reason"`
+		}{*username, *domain, *reason}
 	case "state":
 		allowed = map[string]bool{"id": true, "state": true, "revision": true, "reason": true}
 		if len(*id) < 1 || len(*id) > 64 || strings.ContainsAny(*id, "/\\?#%") || (*wanted != "active" && *wanted != "suspended") || *revision == 0 || strings.TrimSpace(*reason) == "" || len(*reason) > 500 {

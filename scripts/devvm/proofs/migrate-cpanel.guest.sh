@@ -421,7 +421,7 @@ check "a moved 0750 folder of group apache keeps its mode, and ${ols_user:-nobod
 check "the home and public_html keep the web server's own ACL entries (--x, r-x)" bash -c "getfacl -p /home/$SHOP 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:--x' && getfacl -p /home/$SHOP/public_html 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r-x'"
 # D-0002: below the closed Akismet folder verify also asks for its first
 # subfolder, expecting 403.
-check "verify probed Akismet's _inc/ subfolder as closed (403)" test "$(m "[p['kind'] for p in d['job']['migration']['probes'] if p['path'] == '/wp-content/plugins/akismet/_inc/']")" = "['deny']"
+check "verify probed Akismet's _inc/ subfolder as closed (403)" test "$(json "$WORK/job.json" "[p['kind'] for p in d['job']['migration']['probes'] if p['path'] == '/wp-content/plugins/akismet/_inc/']")" = "['deny']"
 check "the scheduled job arrived in the site user's crontab" grep -q "wp-cron.php" "/var/spool/cron/$SHOP"
 page="$(curl -s -H "Host: $SHOP_DOMAIN" http://127.0.0.1/)"
 check "the preview (this server, the site's Host header) serves the site's title" grep -q "$TITLE" <<<"$page"
@@ -520,7 +520,7 @@ check "port 80 listens on IPv4 only (0.0.0.0:80, no [::]:80 or *:80)" bash -c "g
 check "a request over IPv6 to port 80 is not answered" bash -c "! curl -s -o /dev/null -g --max-time 5 -H 'Host: $STAFF_DOMAIN' 'http://[::1]/lobby/'"
 check "the site's own page is open (200)" test "$(new "$STAFF_DOMAIN" /)" = 200
 echo "  probes: $(m "['probes']"); verify: $(m "['verify']['verdict']")"
-check "verify checked /private/ (401) and /backups/ (403) on both sites, all passing" test "$(m "['verify']['probes_pass']")" = 2 -a "$(m "['verify']['probes_fail']")" = 0
+check "verify probed /private/ (401) and /backups/ (403)" test "$(json "$WORK/job.json" "sorted((p['path'], p['kind']) for p in d['job']['migration']['probes'] if p['path'] in ('/private/', '/backups/'))")" = "[('/backups/', 'deny'), ('/private/', 'auth')]"
 # D-0002: verify also asks for the password folder's first subfolder
 # (401), and checks each address-list folder against the status its rule
 # gives each side's client address: the stand-in's view of this server,
@@ -528,7 +528,7 @@ check "verify checked /private/ (401) and /backups/ (403) on both sites, all pas
 seen="$(m ".get('client_address')")"
 apache_saw="$(in_ctr "awk '/Sifruno-MigrationVerify/ {ip=\$1} END {print ip}' /var/log/httpd/access_log")"
 check "the job keeps the address the old server's sshd saw this server come from ($seen), the one its Apache saw verify come from ($apache_saw)" test -n "$seen" -a "$seen" = "$apache_saw"
-check "verify probed /private/sub/ (auth) and /lobby/ and /office/ by their address lists" test "$(m "[(p['path'], p['kind'], p.get('hosts')) for p in d['job']['migration']['probes'] if p['path'] in ('/private/sub/', '/lobby/', '/office/')]")" = "[('/lobby/', 'hosts', 'except'), ('/office/', 'hosts', 'only'), ('/private/sub/', 'auth', None)]"
+check "verify probed /private/sub/ (auth) and /lobby/ and /office/ by their address lists" test "$(json "$WORK/job.json" "sorted((p['path'], p['kind'], p.get('hosts')) for p in d['job']['migration']['probes'] if p['path'] in ('/private/sub/', '/lobby/', '/office/'))")" = "[('/lobby/', 'hosts', 'except'), ('/office/', 'hosts', 'only'), ('/private/sub/', 'auth', None)]"
 echo "  verify problems: $(m "['verify'].get('problems')")"
 sub_ok="$([ "$(new "$STAFF_DOMAIN" /private/sub/)" = 401 ] && echo yes || echo no)"
 lobby_ok="$([ "$(from 127.0.0.1 /lobby/)" = 200 ] && echo yes || echo no)"

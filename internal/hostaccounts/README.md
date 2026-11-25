@@ -1479,6 +1479,12 @@ root step. The design, with the owner's choices recorded from Jev on
   restore's copy does, so files keep the old server's modes, and the web
   server's access is granted again. Root writes nothing
   into a path the tenant controls, and the tenant never holds the key.
+  For a live site the unchanged site list is then installed once more
+  (`ApplySites`, a graceful restart), while the account is still busy:
+  OpenLiteSpeed reads a site's `.htaccess` (its rewrite rules) only when it
+  restarts, and the protected folders' restart ran before the files were
+  in the home (D-0004). If it fails, the step is `reload`: the files are
+  in place, but the rewrites are not in force.
 - Group read (D-0001). The copy gives files the site's own group, so what
   the old web server read through the group alone (a 0640 file, a 0750
   folder, group `nobody` on cPanel or `apache` on a plain Apache) would
@@ -1520,8 +1526,8 @@ root step. The design, with the owner's choices recorded from Jev on
   under it, so a plan waiting for `backupMu` behind a long backup never
   holds up the admin's finish.
 - A failed step answers 422 `migration_failed` with the step (`connect`,
-  `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `database`,
-  `dump`, `import`, `compare`, `remove_key`) and the end of its error
+  `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `reload`,
+  `database`, `dump`, `import`, `compare`, `remove_key`) and the end of its error
   output only: what a source command printed on standard output can hold
   password hashes.
   Copies run one at a time with backups (they share the staging root and

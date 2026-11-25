@@ -31,6 +31,8 @@ type fakeMigrate struct {
 	failFiles error
 	// protection is what the copy converts to; Files hands it to protect.
 	protection SiteProtection
+	// copied runs when Files has put the files in the home.
+	copied func()
 }
 
 func newFakeMigrate() *fakeMigrate {
@@ -96,6 +98,9 @@ func (f *fakeMigrate) Files(_ context.Context, _ migrationRecord, home string, r
 		if err := protect(protection); err != nil {
 			return MigrateFilesResult{}, err
 		}
+	}
+	if f.copied != nil && f.failFiles == nil {
+		f.copied()
 	}
 	return MigrateFilesResult{WordPress: true}, f.failFiles
 }
@@ -276,6 +281,63 @@ func TestMigrateCopiesOnlyTheSameNamedAccount(t *testing.T) {
 	var failed *MigrationError
 	if _, err = s.migrateFiles(ctx, other.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: other.Revision, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "source" {
 		t.Fatalf("a differently named account: %v", err)
+	}
+}
+
+// TestMigrateFilesReloadsTheSiteAfterTheCopy: OpenLiteSpeed reads a site's
+// .htaccess (its rewrite rules) only when it restarts, and the protected
+// folders' restart runs before the files reach the home. So once the files
+// are there and the web server's access is set, the unchanged site list is
+// installed once more, a graceful restart, while the account is still busy
+// (D-0004). Before, the copy, its preview and verify ran without the
+// site's rewrites until some later restart.
+func TestMigrateFilesReloadsTheSiteAfterTheCopy(t *testing.T) {
+	s, f, _ := migrateStore(t)
+	native := s.native.(*fakeNative)
+	s.web = &WebOptions{ServerUser: "nobody"}
+	ctx := context.Background()
+	m := pinnedMigration(t, s)
+	live := liveFixture(t, s)
+	f.protection = fixtureProtection(live.Account.ID)
+	appliesAtCopy, grantsAtCopy := -1, -1
+	f.copied = func() { appliesAtCopy, grantsAtCopy = native.siteApplies, native.webGrants }
+	got, err := s.migrateFiles(ctx, live.Account.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: live.Account.Revision, Reason: "Move a website here"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appliesAtCopy < 0 || native.siteApplies != appliesAtCopy+1 || native.webGrants != grantsAtCopy+1 {
+		t.Fatalf("site list installs: %d when the files were copied, %d after", appliesAtCopy, native.siteApplies)
+	}
+	// The reload installs the site list as it is, folders included, and
+	// changes no record.
+	if site := siteOf(t, native.sites, live.Account.ID); len(site.Folders) != 2 {
+		t.Fatalf("site %+v", site)
+	}
+	if r := recordFor(t, s, live.Account.ID); r.Account.Revision != got.Revision || r.Pending != nil || len(s.installing) != 0 {
+		t.Fatalf("record %+v, answered revision %d", r, got.Revision)
+	}
+
+	// A reload that fails stops the move with a reason of its own.
+	s2, f2, _ := migrateStore(t)
+	native2 := s2.native.(*fakeNative)
+	s2.web = &WebOptions{ServerUser: "nobody"}
+	m2 := pinnedMigration(t, s2)
+	live2 := liveFixture(t, s2)
+	f2.copied = func() { native2.failure = "sites" }
+	_, err = s2.migrateFiles(ctx, live2.Account.ID, MigrateFilesInput{Migration: m2.ID, ExpectedRevision: live2.Account.Revision, Reason: "Move a website here"}, "test operator")
+	var failed *MigrationError
+	if !errors.As(err, &failed) || failed.Step != "reload" || !strings.Contains(failed.Detail, "The files are in place") || len(s2.installing) != 0 {
+		t.Fatalf("a failed reload: %v", err)
+	}
+
+	// A site that is not live has nothing to reload.
+	s3, _, _ := migrateStore(t)
+	native3 := s3.native.(*fakeNative)
+	m3 := pinnedMigration(t, s3)
+	a := createFixture(t, s3)
+	before := native3.siteApplies
+	if _, err = s3.migrateFiles(ctx, a.ID, MigrateFilesInput{Migration: m3.ID, ExpectedRevision: a.Revision, Reason: "Move a website here"}, "test operator"); err != nil || native3.siteApplies != before {
+		t.Fatalf("not live: %d installs, %v", native3.siteApplies-before, err)
 	}
 }
 

@@ -868,6 +868,20 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 		if err = s.native.GrantWebAccess(work, r); err != nil {
 			return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The files were copied, but the web server's access to the site's folders could not be set again, so the site may answer 403."}
 		}
+		// OpenLiteSpeed reads a site's .htaccess, its rewrite rules, only
+		// when it restarts, and a protected folders' restart ran before the
+		// files were here. One graceful restart with the unchanged site
+		// list, while the account is still busy for this copy, makes it
+		// read the copied ones before the preview and verify (D-0004).
+		s.mu.Lock()
+		items, err := s.mutationReady(work)
+		if err == nil {
+			err = s.applySites(work, items, id)
+		}
+		s.mu.Unlock()
+		if err != nil {
+			return MigrateFilesResult{}, &MigrationError{Step: "reload", Detail: "The files are in place, but the web server could not reload to read the site's .htaccess rules, so its rewrites are not in force."}
+		}
 	}
 	// Read while the account is still busy for this copy, so the revision
 	// is the one the copy left and no other change's.

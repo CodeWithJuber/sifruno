@@ -359,6 +359,17 @@ func TestFailedMigrationUndoesWhatItMade(t *testing.T) {
 	}
 }
 
+// A web server that could not reload after the copy is named as such, not
+// as a copy that failed.
+func TestFailedReloadSaysTheFilesAreInPlace(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.filesErr = &hostaccounts.MigrationError{Step: "reload", Detail: "The files are in place, but the web server could not reload to read the site's .htaccess rules, so its rewrites are not in force."}
+	job := f.migrate(t)
+	if job.State != StateFailed || job.Error.Step != StepFiles || strings.Contains(job.Error.Why, "could not be copied") || !strings.Contains(job.Error.Why, "could not reload") || !strings.Contains(job.Error.Next, "systemctl status lsws") {
+		t.Fatalf("job: %+v %+v", job.State, job.Error)
+	}
+}
+
 func TestRedLinesKeepTheGateClosedUntilAccepted(t *testing.T) {
 	f := newMigrationFixture(t)
 	f.broker.plan.PHPSource = "ea-php74"

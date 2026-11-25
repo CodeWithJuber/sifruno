@@ -54,7 +54,7 @@ func (e *MigrationError) Error() string        { return "migration " + e.Step + 
 func (e *MigrationError) Is(target error) bool { return target == ErrMigrationFailed }
 
 // The steps a MigrationError can name. The panel explains each one.
-var migrationSteps = []string{"connect", "host_key", "source", "tier", "space", "fetch", "copy", "database", "dump", "import", "compare", "remove_key"}
+var migrationSteps = []string{"connect", "host_key", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
 
 func migrationFailed(step string, out []byte) error {
 	return &MigrationError{Step: step, Detail: installDetail(out)}

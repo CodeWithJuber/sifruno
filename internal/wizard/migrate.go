@@ -399,6 +399,8 @@ func migrationStepText(step string) (why, next string) {
 		return "This server does not have room for the copy.", "Free space on this server, then move the website again."
 	case "fetch", "copy":
 		return "The website's files could not be copied.", "Open Technical details to see why, fix the cause, then move the website again."
+	case "reload":
+		return "The web server did not reload after the copy.", "Check that OpenLiteSpeed runs on this server (systemctl status lsws) and read its error log, then move the website again."
 	case "database", "dump", "import", "compare":
 		return "A database could not be copied.", "Open Technical details to see why, fix the cause, then move the website again."
 	}

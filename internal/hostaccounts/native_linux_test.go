@@ -812,3 +812,196 @@ func TestRootOnlyEndProcessesTakesOnlyTheAccount(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 }
+
+// useraddLeftHome accepts only what useradd leaves between its mkdir and
+// its chown; each refused case differs from it in one way.
+func TestUseraddLeftHomeIsExact(t *testing.T) {
+	parent := unix.Stat_t{Dev: 7, Mode: unix.S_IFDIR | 0755}
+	left := unix.Stat_t{Dev: 7, Ino: 99, Mode: unix.S_IFDIR}
+	if !useraddLeftHome(parent, left, true) {
+		t.Fatal("useradd's partial home refused")
+	}
+	for name, change := range map[string]func(*unix.Stat_t){
+		"owned by a user":       func(s *unix.Stat_t) { s.Uid = 20000 },
+		"group not root":        func(s *unix.Stat_t) { s.Gid = 20000 },
+		"mode 0700":             func(s *unix.Stat_t) { s.Mode |= 0700 },
+		"mode 0001":             func(s *unix.Stat_t) { s.Mode |= 0001 },
+		"setgid bit":            func(s *unix.Stat_t) { s.Mode |= unix.S_ISGID },
+		"sticky bit":            func(s *unix.Stat_t) { s.Mode |= unix.S_ISVTX },
+		"a link":                func(s *unix.Stat_t) { s.Mode = unix.S_IFLNK },
+		"a file":                func(s *unix.Stat_t) { s.Mode = unix.S_IFREG },
+		"on another filesystem": func(s *unix.Stat_t) { s.Dev = 8 },
+	} {
+		home := left
+		change(&home)
+		if useraddLeftHome(parent, home, true) {
+			t.Fatalf("%s: accepted", name)
+		}
+	}
+	if useraddLeftHome(parent, left, false) {
+		t.Fatal("a home with an entry in it was accepted")
+	}
+}
+
+// rootTestSystem is the native system over a scratch state and homes
+// directory under /etc, whose parents are root's as authority requires.
+func rootTestSystem(t *testing.T) *linuxSystem {
+	t.Helper()
+	base, err := os.MkdirTemp("/etc", "sifruno-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	opts := BrokerOptions{StateDir: filepath.Join(base, "state"), HomesDir: filepath.Join(base, "homes"), SocketPath: filepath.Join(base, "socket", "control.sock"), ControllerUID: 1}
+	if os.Chmod(base, 0755) != nil || os.Mkdir(opts.StateDir, 0700) != nil || os.Mkdir(opts.HomesDir, 0755) != nil || os.Chmod(opts.HomesDir, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	n, err := newLinuxSystem(opts, nil)
+	if err != nil {
+		t.Fatalf("the host's utilities and policy: %v", err)
+	}
+	return n
+}
+
+// rootTestAccount makes the passwd and group entries a create's useradd
+// writes, for a free ID, without a home (useradd -M), with the broker's tag
+// and a recorded ownership marker, and removes them afterwards.
+func rootTestAccount(t *testing.T, n *linuxSystem) record {
+	t.Helper()
+	users, err := systemUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := systemGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := map[int]bool{}
+	for _, u := range users {
+		used[u.UID] = true
+	}
+	for _, g := range groups {
+		used[g.GID] = true
+	}
+	id := 0
+	for candidate := lastAccountID - 1000; candidate > lastAccountID-2000; candidate-- {
+		if !used[candidate] {
+			id = candidate
+			break
+		}
+	}
+	if id == 0 {
+		t.Fatal("no free ID for the throwaway user")
+	}
+	accountID, err := randomID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "sfrec" + strconv.Itoa(id)
+	home := filepath.Join(n.opts.HomesDir, name)
+	r := record{Version: 1, Tag: "sifruno-managed-" + accountID, Account: Account{ID: accountID, Username: name, Domain: name + ".test", Home: home, PublicHTML: filepath.Join(home, "public_html"), State: "recovery_required", UID: id, GID: id, Revision: 1}, Pending: &pending{Action: "create", Target: "active"}}
+	shadow := func(path string, args ...string) {
+		t.Helper()
+		if out, err := exec.Command(path, args...).CombinedOutput(); err != nil {
+			t.Fatalf("%s %q: %v\n%s", path, args, err, out)
+		}
+	}
+	shadow("/usr/sbin/groupadd", "--gid", strconv.Itoa(id), "--", name)
+	t.Cleanup(func() { _ = exec.Command("/usr/sbin/groupdel", "--", name).Run() })
+	shadow("/usr/sbin/useradd", "--uid", strconv.Itoa(id), "--gid", strconv.Itoa(id), "--no-user-group", "--groups", "", "--no-create-home", "--home-dir", home, "--shell", nologin, "--comment", r.Tag, "--password", "!", "--expiredate", "", "--", name)
+	t.Cleanup(func() {
+		_ = exec.Command("/usr/sbin/userdel", "--", name).Run()
+		_ = os.Remove(filepath.Join(mailSpoolDir, name))
+		_ = os.RemoveAll(home)
+	})
+	owners := filepath.Join(n.opts.StateDir, "owners")
+	if err := os.Mkdir(owners, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		t.Fatal(err)
+	}
+	marker := n.markerPath(r)
+	if err := os.WriteFile(marker, []byte(r.Tag+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if r.Ownership.Marker, err = markerIdentity(marker, r.Tag); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// Root-only: a create whose useradd was stopped right after it made the
+// home (passwd and group written, the home root's, mode 0, empty) is
+// finished; a home that differs from that in one way is left as it is and
+// not recorded. Run on the dev VM with: go test -c ./internal/hostaccounts
+// && sudo ./hostaccounts.test -test.run RootOnly
+func TestRootOnlyRecoverCreateAdoptsUseraddHome(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes a user and root-owned homes")
+	}
+	n := rootTestSystem(t)
+	r := rootTestAccount(t, n)
+	elsewhere := filepath.Join(filepath.Dir(n.opts.HomesDir), "elsewhere")
+	if os.Mkdir(elsewhere, 0) != nil || os.Chmod(elsewhere, 0) != nil {
+		t.Fatal("fixture")
+	}
+	mode0 := func() error { return errors.Join(os.Mkdir(r.Account.Home, 0), os.Chmod(r.Account.Home, 0)) }
+	for name, build := range map[string]func() error{
+		"owned by root and another group": func() error { return errors.Join(mode0(), os.Chown(r.Account.Home, 0, r.Account.GID)) },
+		"owned by another user":           func() error { return errors.Join(mode0(), os.Chown(r.Account.Home, 1, 1)) },
+		"mode 0700":                       func() error { return errors.Join(os.Mkdir(r.Account.Home, 0700), os.Chmod(r.Account.Home, 0700)) },
+		"setgid bit":                      func() error { return errors.Join(mode0(), os.Chmod(r.Account.Home, os.ModeSetgid)) },
+		"not empty": func() error {
+			return errors.Join(os.Mkdir(r.Account.Home, 0700), os.WriteFile(filepath.Join(r.Account.Home, "planted"), nil, 0600), os.Chmod(r.Account.Home, 0))
+		},
+		"a link to such a home": func() error { return os.Symlink(elsewhere, r.Account.Home) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := build(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(r.Account.Home) })
+			before, err := os.Lstat(r.Account.Home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			persisted := false
+			if _, err := n.RecoverCreate(t.Context(), r, func(ownership) error { persisted = true; return nil }); !errors.Is(err, ErrRecovery) {
+				t.Fatalf("finished: %v", err)
+			}
+			after, err := os.Lstat(r.Account.Home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, a := before.Sys().(*syscall.Stat_t), after.Sys().(*syscall.Stat_t)
+			if persisted || b.Ino != a.Ino || b.Uid != a.Uid || b.Gid != a.Gid || b.Mode != a.Mode {
+				t.Fatalf("the refused home changed or was recorded: %v %+v -> %+v", persisted, b, a)
+			}
+		})
+	}
+
+	if err := mode0(); err != nil {
+		t.Fatal(err)
+	}
+	made, err := os.Lstat(r.Account.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded ownership
+	owned, err := n.RecoverCreate(t.Context(), r, func(o ownership) error { recorded = o; return nil })
+	if err != nil {
+		t.Fatalf("useradd's partial home was not finished: %v", err)
+	}
+	st := made.Sys().(*syscall.Stat_t)
+	if owned.Home != (fileIdentity{uint64(st.Dev), st.Ino}) || recorded.Home != owned.Home || owned.Public.Ino == 0 {
+		t.Fatalf("recorded %+v, answered %+v for home inode %d", recorded, owned, st.Ino)
+	}
+	for _, path := range []string{r.Account.Home, r.Account.PublicHTML} {
+		if _, err := dirIdentity(path, r.Account.UID, r.Account.GID, 0750); err != nil {
+			t.Fatalf("%s is not the account's with mode 0750: %v", path, err)
+		}
+	}
+	finished := r
+	finished.Ownership = owned
+	if err := n.Verify(t.Context(), targetRecord(finished, "active")); err != nil {
+		t.Fatalf("the finished account does not verify: %v", err)
+	}
+}

@@ -713,6 +713,48 @@ func markerIdentity(path, tag string) (fileIdentity, error) {
 	}
 	return fileIdentity{uint64(st.Dev), st.Ino}, nil
 }
+
+// createdHome answers the identity of the home useradd made for r. home was
+// opened without following a link, by the journaled username, directly in
+// the homes directory, which parent holds open. It is the account's, as
+// useradd leaves it, or (adopt true) exactly what useradd leaves when it is
+// stopped right after it made it: shadow-utils' create_home makes the
+// directory with mkdir(path, 0) as root and only then chowns and chmods it
+// and copies the skeleton, which is empty here. Anything else is
+// ErrRecovery.
+//
+// That partial state can only be useradd's. The caller checked first that
+// passwd and group show the journaled user and its private group with the
+// journaled IDs, and that the homes directory and every directory above it
+// are root's and writable by no group or other (authority; a POSIX ACL
+// that grants write shows in the group bits, which are its mask), so only
+// root makes an entry there. And until the create finishes, its user
+// cannot sign in: its password is locked, its shell is nologin, and it has
+// no SFTP key.
+func createdHome(parent, home *os.File, r record) (fileIdentity, bool, error) {
+	if id, e := heldIdentity(home, r.Account.UID, r.Account.GID, 0); e == nil {
+		return id, false, nil
+	}
+	var p, h unix.Stat_t
+	if unix.Fstat(int(parent.Fd()), &p) != nil || unix.Fstat(int(home.Fd()), &h) != nil {
+		return fileIdentity{}, false, ErrRecovery
+	}
+	names, e := home.Readdirnames(1)
+	empty := len(names) == 0 && errors.Is(e, io.EOF)
+	if !useraddLeftHome(p, h, empty) {
+		return fileIdentity{}, false, ErrRecovery
+	}
+	return fileIdentity{uint64(h.Dev), h.Ino}, true, nil
+}
+
+// useraddLeftHome reports whether home, an entry of the homes directory
+// parent, is what useradd leaves when it is stopped between its mkdir and
+// its chown: a directory of root:root, mode 0 (no permission, setuid,
+// setgid or sticky bit), empty, on the homes directory's filesystem.
+func useraddLeftHome(parent, home unix.Stat_t, empty bool) bool {
+	return home.Mode&unix.S_IFMT == unix.S_IFDIR && home.Mode&07777 == 0 && home.Uid == 0 && home.Gid == 0 && home.Dev == parent.Dev && empty
+}
+
 func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(ownership) error) (ownership, error) {
 	if _, e := n.identity(r); e != nil {
 		return ownership{}, e
@@ -738,7 +780,7 @@ func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(
 		return ownership{}, e
 	}
 	defer home.Close()
-	id, e := heldIdentity(home, r.Account.UID, r.Account.GID, 0)
+	id, adopt, e := createdHome(parent, home, r)
 	if e != nil {
 		return ownership{}, e
 	}
@@ -747,6 +789,12 @@ func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(
 	}
 	r.Ownership.Home = id
 	if persist(r.Ownership) != nil {
+		return ownership{}, ErrRecovery
+	}
+	// useradd stopped before its chown: the home becomes the account's
+	// through the handle whose identity was just recorded. The chmod below
+	// is the one every create makes.
+	if adopt && home.Chown(r.Account.UID, r.Account.GID) != nil {
 		return ownership{}, ErrRecovery
 	}
 	if home.Chmod(0750) != nil {

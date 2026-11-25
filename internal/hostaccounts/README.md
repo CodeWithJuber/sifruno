@@ -132,10 +132,19 @@ limits are a backstop for an account whose history could not be compacted.
 Interrupted operations retain their ID, UID/GID, username/domain and pending
 journal. List exposes recovery_required and all further mutations stop. Restart
 can complete only an exact journal-owned identity and captured filesystem object,
-or confirm a completed expiry transition. Group-only/no-user outcomes, uncaptured
-preexisting public_html, changed OS identity/ownership/inodes and other ambiguous
-results remain blocked. No automatic useradd retry, adoption, deletion or cleanup
-of OS accounts is attempted. Manual recovery tooling is outside this slice.
+or confirm a completed expiry transition. One partial home is completed too:
+the one useradd leaves when it is stopped between its mkdir and its chown. A
+directory directly in the homes directory, named as the journaled user, owned
+by root:root, mode 0, empty and on the homes filesystem, while passwd and group
+show the journaled user and its private group with the journaled IDs, can only
+be useradd's: the homes directory and those above it are root's and writable
+by no one else, and the create's user cannot sign in before it finishes. The
+broker records its identity, then gives it to the account through the open
+handle and finishes the create as usual. Group-only/no-user outcomes, uncaptured
+preexisting public_html, a home that differs from that state in any way,
+changed OS identity/ownership/inodes and other ambiguous results remain blocked.
+No automatic useradd retry, deletion or cleanup of OS accounts is attempted.
+Manual recovery tooling is outside this slice.
 
 Active means no account-expiry restriction, while passwords stay locked and shell
 stays nologin. Suspended sets account expiry to1970-01-02. It restricts PAM-aware

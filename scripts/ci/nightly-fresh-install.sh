@@ -14,7 +14,8 @@
 #
 #   nightly-fresh-install.sh           the whole test
 #   nightly-fresh-install.sh cleanup   delete this run's Linode and firewall if
-#                                      they are still there (for a killed run)
+#                                      they are still there (for a killed run,
+#                                      or a server kept for a manual test)
 #
 # Environment:
 #   SIFRUNO_NIGHTLY_LINODE_TOKEN  required: a Linode personal access token
@@ -31,9 +32,25 @@
 #                                 fresh-install-*.txt
 #   SIFRUNO_RELEASE               a release tarball with its .sha256 beside it,
 #                                 to test instead of building one
+#   SIFRUNO_NIGHTLY_KEEP          1: keep the server for a manual test. Once
+#                                 the test has started, the run keeps the
+#                                 Linode and its firewall instead of deleting
+#                                 them, and prints the command that does.
+#                                 They are named sifruno-owner-test-ID (ID at
+#                                 most 13 characters) and tagged sifruno-test
+#                                 and delete-after-use, so the sweep, which
+#                                 deletes only sifruno-nightly, leaves them.
+#                                 Such a run sweeps nothing itself: it
+#                                 deletes only what it made. cleanup needs
+#                                 this set too.
+#   SIFRUNO_NIGHTLY_KEEP_DIR      with SIFRUNO_NIGHTLY_KEEP=1, required: a new
+#                                 or empty folder, made mode 0700, that keeps
+#                                 the run's SSH key and ports file. Reach the
+#                                 server with
+#                                 SIFRUNO_DEVVM_DIR=FOLDER scripts/devvm/vm.sh ssh
 #
 # Exit status is zero only when every check passed and nothing of the run is
-# left on the Linode account. Needs curl, jq, ssh, scp, ssh-keygen and
+# left on the Linode account but a server kept with SIFRUNO_NIGHTLY_KEEP=1. Needs curl, jq, ssh, scp, ssh-keygen and
 # timeout, and what scripts/install/build-release.sh needs.
 set -euo pipefail
 # The token is in this shell's memory, and a trace would print it.
@@ -52,6 +69,7 @@ HOME_DISK_MB=10240
 # The sweep deletes only what has both tags and a label starting
 # sifruno-nightly-, once it is older than any healthy run lasts.
 TAGS='["sifruno-nightly","delete-after-use"]'
+PREFIX=sifruno-nightly
 SWEEP_AGE_SECONDS=10800
 TEST_LIMIT=60m
 
@@ -71,6 +89,17 @@ case "$MODE" in
   *) usage >&2; exit 2 ;;
 esac
 
+KEEP="${SIFRUNO_NIGHTLY_KEEP:-0}"
+case "$KEEP" in
+  0 | 1) ;;
+  *) die "SIFRUNO_NIGHTLY_KEEP must be 1, to keep the server for a manual test, or 0." ;;
+esac
+if [ "$KEEP" = 1 ]; then
+  # Its own name and tags keep a kept server out of the sweep.
+  PREFIX=sifruno-owner-test
+  TAGS='["sifruno-test","delete-after-use"]'
+fi
+
 TOKEN="${SIFRUNO_NIGHTLY_LINODE_TOKEN:-}"
 # Nothing this script starts (the build, ssh, the test) needs the token.
 unset SIFRUNO_NIGHTLY_LINODE_TOKEN
@@ -88,10 +117,26 @@ else
   die "cleanup needs SIFRUNO_NIGHTLY_ID, the ID the run printed when it started."
 fi
 # A firewall label has at most 32 characters and no doubled hyphen.
-if ! [[ "$ID" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]] || [ "${#ID}" -gt 16 ]; then
-  die "SIFRUNO_NIGHTLY_ID must be letters and digits, single hyphens between them, at most 16 characters."
+MAX_ID=$((31 - ${#PREFIX}))
+if ! [[ "$ID" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]] || [ "${#ID}" -gt "$MAX_ID" ]; then
+  die "SIFRUNO_NIGHTLY_ID must be letters and digits, single hyphens between them, at most $MAX_ID characters."
 fi
-LABEL="sifruno-nightly-$ID"
+LABEL="$PREFIX-$ID"
+CLEANUP="SIFRUNO_NIGHTLY_ID=$ID scripts/ci/nightly-fresh-install.sh cleanup"
+[ "$KEEP" = 0 ] || CLEANUP="SIFRUNO_NIGHTLY_KEEP=1 $CLEANUP"
+
+KEEP_DIR=""
+if [ "$KEEP" = 1 ] && [ "$MODE" = run ]; then
+  KEEP_DIR="${SIFRUNO_NIGHTLY_KEEP_DIR:-}"
+  [ -n "$KEEP_DIR" ] || die "SIFRUNO_NIGHTLY_KEEP=1 needs SIFRUNO_NIGHTLY_KEEP_DIR, a new or empty folder for the kept server's SSH key."
+  # Another kept server's key may be in a used folder; it is never replaced.
+  if [ -e "$KEEP_DIR" ] && [ -n "$(find "$KEEP_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || echo unreadable)" ]; then
+    die "SIFRUNO_NIGHTLY_KEEP_DIR $KEEP_DIR is not empty; it may hold the key of a server that is still kept. Name a new folder."
+  fi
+  install -d -m 0700 "$KEEP_DIR"
+  chmod 0700 "$KEEP_DIR"
+  KEEP_DIR="$(cd "$KEEP_DIR" && pwd)"
+fi
 
 for tool in curl jq ssh scp ssh-keygen timeout; do
   command -v "$tool" >/dev/null 2>&1 || die "missing program: $tool (Ubuntu packages: curl, jq, openssh-client, coreutils)"
@@ -112,7 +157,9 @@ exec > >(
 TEE_PID=$!
 
 ARMED=0
+KEPT=0
 LINODE_ID=""
+IP=""
 FIREWALL_ID=""
 CREATED_AT=""
 STEP="start"
@@ -362,7 +409,9 @@ finish() {
   # A second Ctrl-C, or a closed terminal, must not stop the deletion.
   trap '' INT TERM PIPE
   set +e
-  if [ "$ARMED" = 1 ]; then
+  if [ "$ARMED" = 1 ] && [ "$KEPT" = 1 ]; then
+    log "Keep this run's Linode and firewall ($LABEL), as SIFRUNO_NIGHTLY_KEEP=1 asks"
+  elif [ "$ARMED" = 1 ]; then
     log "Delete this run's Linode and firewall ($LABEL)"
     delete_run || left=1
   fi
@@ -389,11 +438,17 @@ finish() {
     fi
   fi
   if [ "$left" = 1 ]; then
-    echo "FAIL: this run left something on the Linode account (the LEFT ON THE ACCOUNT lines above), and it is billed until it is deleted. Delete it in Cloud Manager under Linodes and Firewalls (label $LABEL), or run: SIFRUNO_NIGHTLY_ID=$ID scripts/ci/nightly-fresh-install.sh cleanup"
+    echo "FAIL: this run left something on the Linode account (the LEFT ON THE ACCOUNT lines above), and it is billed until it is deleted. Delete it in Cloud Manager under Linodes and Firewalls (label $LABEL), or run: $CLEANUP"
+  elif [ "$KEPT" = 1 ]; then
+    echo "KEPT: Linode $LINODE_ID ($LABEL, $IP) and firewall $FIREWALL_ID stay on the account and are billed until they are deleted."
+    echo "Sign in: SIFRUNO_DEVVM_DIR=$KEEP_DIR scripts/devvm/vm.sh ssh"
+    echo "Delete both when done, with SIFRUNO_NIGHTLY_LINODE_TOKEN set: $CLEANUP && rm -rf -- $KEEP_DIR"
   elif [ "$ARMED" = 1 ] && [ "$MODE" = run ]; then
     echo "The Linode and its firewall are deleted: nothing named $LABEL is left on the account."
   fi
-  if [ -n "$CREATED_AT" ]; then
+  if [ -n "$CREATED_AT" ] && [ "$KEPT" = 1 ]; then
+    echo "Linode bills each started hour: ${PRICE:-an unknown price} USD an hour, about $(awk -v p="${PRICE:-0}" 'BEGIN { printf "%.2f", 24 * p }') USD a day while it is kept."
+  elif [ -n "$CREATED_AT" ]; then
     seconds=$((SECONDS - CREATED_AT))
     hours=$(((seconds + 3599) / 3600))
     echo "The Linode existed for $((seconds / 60)) min $((seconds % 60)) s. Linode bills each started hour; at ${PRICE:-an unknown price} USD an hour this run cost about $(awk -v h="$hours" -v p="${PRICE:-0}" 'BEGIN { printf "%.3f", h * p }') USD."
@@ -415,7 +470,7 @@ fi
 
 log "Nightly fresh-install test: a $TYPE Linode in $REGION from $IMAGE, named $LABEL"
 echo "# source $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-echo "# If this run is killed, delete what it made with: SIFRUNO_NIGHTLY_ID=$ID scripts/ci/nightly-fresh-install.sh cleanup"
+echo "# If this run is killed, delete what it made with: $CLEANUP"
 PRICE="$(api GET "/linode/types/$TYPE" | jq -r --arg r "$REGION" '[.region_prices[]? | select(.id == $r) | .hourly][0] // .price.hourly')" || PRICE=""
 [ -z "$PRICE" ] || echo "# price: $PRICE USD an hour"
 
@@ -430,16 +485,21 @@ if [ ! -f "$SIFRUNO_RELEASE" ] || [ ! -f "$SIFRUNO_RELEASE.sha256" ]; then
 fi
 export SIFRUNO_RELEASE
 
-STEP="delete what earlier runs left"
-log "Delete Linodes and firewalls tagged sifruno-nightly that earlier runs left (older than 3 hours)"
-sweep
+if [ "$KEEP" = 1 ]; then
+  log "Sweep nothing: a run that keeps its server deletes only what it made"
+else
+  STEP="delete what earlier runs left"
+  log "Delete Linodes and firewalls tagged sifruno-nightly that earlier runs left (older than 3 hours)"
+  sweep
+fi
 
 STEP="make the SSH key"
-install -d -m 0700 "$WORK/vm"
-ssh-keygen -q -t ed25519 -N '' -C "$LABEL" -f "$WORK/vm/id_ed25519"
+VM_DIR="${KEEP_DIR:-$WORK/vm}"
+install -d -m 0700 "$VM_DIR"
+ssh-keygen -q -t ed25519 -N '' -C "$LABEL" -f "$VM_DIR/id_ed25519"
 # scripts/devvm/vm.sh, and the test through it, reach the Linode with this
 # key; the ports file written below names the Linode's address.
-export SIFRUNO_DEVVM_DIR="$WORK/vm"
+export SIFRUNO_DEVVM_DIR="$VM_DIR"
 
 STEP="create the Linode"
 log "Create the Linode, switched off, with no disks and no firewall yet"
@@ -480,7 +540,7 @@ log "Create the root disk: $IMAGE, $ROOT_DISK_MB MB, root signs in with this run
 root_pass="$(head -c 30 /dev/urandom | base64 | tr -d '\n/+=')"
 [ "${#root_pass}" -ge 32 ] || die "could not make a random root password"
 body="$(printf '%s' "$root_pass" | jq -cR --arg image "$IMAGE" --argjson size "$ROOT_DISK_MB" \
-  --arg key "$(cat "$WORK/vm/id_ed25519.pub")" \
+  --arg key "$(cat "$VM_DIR/id_ed25519.pub")" \
   '{label: "root", image: $image, size: $size, authorized_keys: [$key], root_pass: .}')"
 unset root_pass
 answer="$(api_when_free POST "/linode/instances/$LINODE_ID/disks" "$body")"
@@ -515,7 +575,7 @@ api_when_free POST "/linode/instances/$LINODE_ID/boot" "$(jq -cn --argjson c "$c
 wait_for 600 "Linode $LINODE_ID to run" instance_is running
 
 STEP="reach the Linode over SSH"
-printf 'VM_HOST=%s\nSSH_PORT=22\n' "$IP" >"$WORK/vm/ports"
+printf 'VM_HOST=%s\nSSH_PORT=22\n' "$IP" >"$VM_DIR/ports"
 log "Wait for SSH; the firewall admits $RUNNER_IP_FROM"
 wait_for 600 "SSH on Linode $LINODE_ID to answer" ssh_answers
 
@@ -566,6 +626,8 @@ GUEST
 
 STEP="run the fresh-install test"
 touch "$WORK/test-started"
+# From here the server is worth keeping: it answers SSH and has /home.
+[ "$KEEP" = 0 ] || KEPT=1
 log "Run scripts/devvm/fresh-install-test.sh --existing-host (at most $TEST_LIMIT)"
 set +e
 SIFRUNO_PROOF_OUT="$OUT" timeout --kill-after=1m "$TEST_LIMIT" \

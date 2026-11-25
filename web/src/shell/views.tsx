@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Info, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { HostingWorkspace, Overview, ServiceInventory } from "@/Dashboard";
@@ -60,10 +61,13 @@ export function HomeView() {
   const navigate = useNavigate();
   // A customer's Home is its websites; the server's readings are the admin's.
   if (shell.viewer.restricted) return <WebsitesList />;
-  return <div className="content-stack dashboard-stack">
+  return <div className="flex min-w-0 flex-col gap-6">
     <HostingWorkspace publicPreview={shell.publicPreview} platform={shell.platform.data} onNavigate={shell.open} onPreview={() => navigate({ to: "/tour" })} />
-    <section className="monitoring-workspace" aria-labelledby="monitoring-heading">
-      <div className="workspace-section-heading"><div><h2 id="monitoring-heading">Server monitoring</h2><p>Measured resources and installed services.</p></div><span className="workspace-scope">Read-only</span></div>
+    <section className="flex min-w-0 flex-col gap-3.5" aria-labelledby="monitoring-heading">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0"><h2 id="monitoring-heading">Server monitoring</h2><div className="mt-1 text-sm text-muted-foreground">Measured resources and installed services.</div></div>
+        <Badge variant="outline" className="text-muted-foreground">Read-only</Badge>
+      </div>
       <DataState resource={shell.server} retry={shell.refresh}>{shell.server.data && <Overview report={shell.server.data} platform={shell.platform.data} range={shell.range} setRange={shell.setRange} />}</DataState>
       <DataState resource={shell.services} retry={shell.refresh}>{shell.services.data && <ServiceInventory report={shell.services.data} compact query={shell.serviceQuery} setQuery={shell.setServiceQuery} viewAll={() => navigate({ to: "/server" })} />}</DataState>
     </section>

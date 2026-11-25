@@ -599,6 +599,7 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	if plan.PHPSource, err = cpsource.ParseVhostPHP(out, account.User, account.Domain); err != nil {
 		return MigrationPlan{}, &MigrationError{Step: "source", Detail: "The old server's PHP version for the site could not be read (whmapi1 php_get_vhost_versions)."}
 	}
+	plan.ClientAddress = s.sourceClient(work, m)
 	if err = s.planDatabases(work, m, &plan); err != nil {
 		return MigrationPlan{}, err
 	}
@@ -609,6 +610,22 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 		return MigrationPlan{}, err
 	}
 	return plan, nil
+}
+
+// sourceClient reads the address the source sees this server come from,
+// from its own sshd (cpsource.ClientAddressCommand). It never stops the
+// plan: without it verify fails each folder open to some addresses only,
+// so the cutover gate stays closed until a person checks them (D-0002).
+func (s *store) sourceClient(ctx context.Context, m migrationRecord) string {
+	out, err := s.remote(ctx, m, cpsource.ClientAddressCommand(), nil)
+	if err != nil {
+		return ""
+	}
+	address, err := cpsource.ParseClientAddress(out)
+	if err != nil {
+		return ""
+	}
+	return address
 }
 
 func (s *store) planDatabases(ctx context.Context, m migrationRecord, plan *MigrationPlan) error {

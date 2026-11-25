@@ -104,11 +104,17 @@ type MigrationPlanInput struct {
 }
 
 // MigrationProbe is a URL from the converted .htaccess rules that verify
-// checks on both sites: 401 (auth), 403 (deny), or 200 for a file a closed
-// folder leaves open to everyone (allow).
+// checks on both sites: 401 (auth), 403 (deny), 200 for a file a closed
+// folder leaves open to everyone (allow), or a folder open to some
+// addresses only (hosts), whose rule it carries: Hosts (only or except),
+// Networks and Realm. Verify works out from that rule what each site must
+// answer the address it sees verify come from.
 type MigrationProbe struct {
-	Path string `json:"path"`
-	Kind string `json:"kind"`
+	Path     string   `json:"path"`
+	Kind     string   `json:"kind"`
+	Hosts    string   `json:"hosts,omitempty"`
+	Networks []string `json:"networks,omitempty"`
+	Realm    bool     `json:"realm,omitempty"`
 }
 
 // MigrationPlan is what the source holds for one account. Users' hashes are
@@ -136,6 +142,10 @@ type MigrationPlan struct {
 	TierRefusals []string          `json:"tier_refusals"`
 	Probes       []MigrationProbe  `json:"probes"`
 	Htaccess     int               `json:"htaccess_files"`
+	// ClientAddress is the address the source sees this server's
+	// connections come from (its SSH_CONNECTION), or empty when it did not
+	// say: verify needs it for folders open to some addresses only.
+	ClientAddress string `json:"client_address"`
 }
 
 // MigrateFilesInput copies the source account of the same name into the

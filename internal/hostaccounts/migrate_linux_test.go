@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -496,11 +497,75 @@ func TestMigrateFilesProtectsBeforeCopy(t *testing.T) {
 	wantProbes := []MigrationProbe{
 		{Path: "/members/", Kind: "auth"},
 		{Path: "/wp-content/plugins/akismet/", Kind: "deny"},
+		{Path: "/wp-content/plugins/akismet/_inc/", Kind: "deny"},
 		{Path: "/wp-content/plugins/akismet/_inc/akismet.css", Kind: "allow"},
 		{Path: "/wp-content/plugins/akismet/_inc/form.js", Kind: "allow"},
 	}
-	if !slices.Equal(res.Probes, wantProbes) || len(res.Folders) != 2 || res.Folders[1].File != "wp-content/plugins/akismet/.htaccess" {
+	if !reflect.DeepEqual(res.Probes, wantProbes) || len(res.Folders) != 2 || res.Folders[1].File != "wp-content/plugins/akismet/.htaccess" {
 		t.Fatalf("result %+v", res)
+	}
+}
+
+// TestMigrateFilesProbesSubfoldersAndAddressLists: verify checks one real
+// subfolder below a closed and a password folder, with the parent's
+// status, and every folder open to some addresses only. Before, a
+// subfolder that answered otherwise on the copy (/private/sub/) and an
+// address-list folder (/lobby/) went unchecked and the gate opened.
+func TestMigrateFilesProbesSubfoldersAndAddressLists(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	rec := openedRecord(t, m)
+	f.home = map[string]string{
+		"public_html/index.php":                 "x",
+		"public_html/private/.htaccess":         "AuthType Basic\nAuthName \"Staff area\"\nAuthUserFile /home/fixtureacct/.htpasswds/public_html/private/passwd\nRequire valid-user\n",
+		"public_html/private/index.html":        "staff",
+		"public_html/private/sub/index.html":    "payroll",
+		"public_html/private/zz/index.html":     "later",
+		".htpasswds/public_html/private/passwd": "alice:$apr1$x1Y2z3$abcdefghijklmnopqrstuv\n",
+		"public_html/backups/.htaccess":         "Deny from all\n",
+		"public_html/backups/a b/x.sql":         "x",
+		"public_html/backups/old.d/x.sql":       "x",
+		"public_html/backups/old/x.sql":         "x",
+		"public_html/lobby/.htaccess":           "Order Allow,Deny\nAllow from all\nDeny from 127.0.0.2\n",
+		"public_html/lobby/index.html":          "lobby",
+		"public_html/office/.htaccess":          "Order Deny,Allow\nDeny from all\nAllow from 127.0.0.2\n",
+		"public_html/office/index.html":         "office",
+	}
+	res, err := m.Files(context.Background(), rec, "/home/fixtureacct", engineRecord(filepath.Dir(m.e.dir)), 1, backupLeftover{Op: strings.Repeat("e", 32)}, func(SiteProtection) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(path, kind string) bool {
+		return slices.ContainsFunc(res.Probes, func(p MigrationProbe) bool { return p.Path == path && p.Kind == kind })
+	}
+	for _, want := range [][2]string{{"/private/", "auth"}, {"/private/sub/", "auth"}, {"/backups/", "deny"}, {"/backups/old/", "deny"}} {
+		if !has(want[0], want[1]) {
+			t.Errorf("no %s probe for %s: %+v", want[1], want[0], res.Probes)
+		}
+	}
+	for _, path := range []string{"/lobby/", "/office/"} {
+		if !slices.ContainsFunc(res.Probes, func(p MigrationProbe) bool { return p.Path == path }) {
+			t.Errorf("the address-list folder %s is not probed: %+v", path, res.Probes)
+		}
+	}
+	// An address-list folder carries its rule, which verify's expected
+	// statuses come from; its subfolders are not probed.
+	for _, want := range []MigrationProbe{
+		{Path: "/lobby/", Kind: "hosts", Hosts: "except", Networks: []string{"127.0.0.2/32"}},
+		{Path: "/office/", Kind: "hosts", Hosts: "only", Networks: []string{"127.0.0.2/32"}},
+	} {
+		if !slices.ContainsFunc(res.Probes, func(p MigrationProbe) bool { return reflect.DeepEqual(p, want) }) {
+			t.Errorf("no probe %+v: %+v", want, res.Probes)
+		}
+	}
+	if len(res.Probes) != 6 {
+		t.Errorf("%d probes: %+v", len(res.Probes), res.Probes)
+	}
+	// One subfolder per folder, the first by name whose name verify can put
+	// in a URL as it is.
+	for _, path := range []string{"/private/zz/", "/backups/a b/", "/backups/old.d/"} {
+		if slices.ContainsFunc(res.Probes, func(p MigrationProbe) bool { return p.Path == path }) {
+			t.Errorf("%s probed: %+v", path, res.Probes)
+		}
 	}
 }
 
@@ -513,7 +578,7 @@ func TestPreflightScansOnlyHtaccess(t *testing.T) {
 		t.Fatalf("preflight: %+v %v %v", site, home, err)
 	}
 	conv := htaccess.ConvertSite(site)
-	if probes := foldersProbes(conv.Rules); !conv.Native || !slices.Contains(probes, MigrationProbe{Path: "/staff/", Kind: "auth"}) {
+	if probes := foldersProbes(conv.Rules); !conv.Native || !reflect.DeepEqual(probes, []MigrationProbe{{Path: "/staff/", Kind: "auth"}}) {
 		t.Fatalf("conversion %+v probes %v", conv, probes)
 	}
 	f.home = map[string]string{"public_html/index.php": "x"}

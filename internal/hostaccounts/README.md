@@ -1394,7 +1394,9 @@ root step. The design, with the owner's choices recorded from Jev on
   `php_get_vhost_versions`; `uapi Mysql list_databases`, `list_users`);
   `crontab -l -u`; SQL to the source's MariaDB on standard input (`SHOW
   CREATE USER` for each user's `mysql_native_password` hash, the
-  `mysql.db` grant table); the dump tool. ssh runs as
+  `mysql.db` grant table); the dump tool; `printf '%s\n'
+  "$SSH_CONNECTION"` for the address the source sees this server come
+  from. ssh runs as
   `/usr/bin/ssh -F /dev/null -T` with `BatchMode`,
   `StrictHostKeyChecking=yes`, only the migration's key and known_hosts
   under the alias `sifruno-migration-source`, no agent, no password
@@ -1403,7 +1405,10 @@ root step. The design, with the owner's choices recorded from Jev on
   `POST /v1/migrations/{id}/plan` (`username`, `reason`) reads one: its
   domain, home and document root (which must be `<home>/public_html`), PHP
   package, databases and users (which must carry the `<user>_` prefix),
-  each user's hash and grants, its crontab, and the tier. For the tier
+  each user's hash and grants, its crontab, the address the source sees
+  this server come from (`client_address`, empty when its sshd does not
+  say: verify then fails every folder open to some addresses only), and
+  the tier. For the tier
   rsync fetches only the `.htaccess` files of the home and public_html into
   a root-only staging folder, and `internal/htaccess` scans and converts
   them there. The answer carries the hashes: the panel hands them to its
@@ -1440,8 +1445,12 @@ root step. The design, with the owner's choices recorded from Jev on
   files are removed and the copy stops (`tier`). olsweb renders one regex
   context per folder with rewriting off inside it. The answer lists the
   folders and the URLs verify checks: 403 for a closed folder, 401 for a
-  password folder, 200 for up to three real files a closed folder leaves
-  open. A delete removes the site's realm files. The folders are a
+  password folder, the same for the first real subfolder below each of
+  them (by name, a name a URL holds as it is, from the staged copy), 200
+  for up to three real files a closed folder leaves open, and each folder
+  open to some addresses only with its rule, from which verify works out
+  what each site must answer the address it sees verify come from (D-0002).
+  A delete removes the site's realm files. The folders are a
   snapshot: a later edit of the tenant's `.htaccess` or user file changes
   nothing.
 - `POST /v1/accounts/{id}/migrate-files` (`migration`,
@@ -1528,8 +1537,11 @@ Known gaps, found in review and not fixed in v1:
 - The plan fetches only `.htaccess` files, so a password folder whose user
   file is missing, outside the home or holds a hash shape this server does
   not keep plans as Native and is refused at the copy (`tier`).
-- A folder open to some addresses only is not probed by verify: its status
-  depends on the address verify runs from.
+- Verify expects a folder open to some addresses only to answer the old
+  site's client as the address the source's sshd saw this server come
+  from. If the site's HTTP reaches the old server another way (a proxy or
+  CDN in front of it, IPv6 where SSH used IPv4), the check can fail; it
+  fails closed, and a person checks the folder and accepts.
 
 ## Verification cost
 

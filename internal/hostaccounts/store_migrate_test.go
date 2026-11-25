@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -43,6 +44,7 @@ func newFakeMigrate() *fakeMigrate {
 			"/usr/local/cpanel/bin/uapi --output=json --user=fixtureacct Mysql list_users":     `{"result":{"data":[{"user":"fixtureacct_wpu","databases":["fixtureacct_wp"]}],"status":1}}`,
 			cpsource.SQLCommand():                "sifruno-user\tfixtureacct_wpu\nCREATE USER `fixtureacct_wpu`@`localhost` IDENTIFIED BY PASSWORD '" + hash + "'\nsifruno-grant\tfixtureacct_wpu\tfixtureacct\\_wp\t" + strings.TrimSuffix(strings.Repeat("Y\t", 18), "\t") + "\n",
 			"/usr/bin/crontab -l -u fixtureacct": "*/5 * * * * php /home/fixtureacct/public_html/wp-cron.php\n",
+			cpsource.ClientAddressCommand():      "203.0.113.5 51234 198.51.100.7 22\n",
 		}}
 }
 
@@ -184,7 +186,7 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Domain != "fixture.test" || plan.PHPSource != "ea-php82" || plan.Tier != "native" || plan.DiskUsedMiB != 20 || len(plan.Cron) != 1 {
+	if plan.Domain != "fixture.test" || plan.PHPSource != "ea-php82" || plan.Tier != "native" || plan.DiskUsedMiB != 20 || len(plan.Cron) != 1 || plan.ClientAddress != "203.0.113.5" {
 		t.Fatalf("plan: %+v", plan)
 	}
 	if len(plan.Users) != 1 || plan.Users[0].Hash == "" || !slices.Equal(plan.Users[0].Grants[0].Privileges, []string{"ALL PRIVILEGES"}) {
@@ -193,13 +195,30 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	if items, _ := s.leftovers(); len(items) != 0 || len(b.cleaned) != 1 {
 		t.Fatalf("the preflight's staging folder must be removed: %v %v", items, b.cleaned)
 	}
+	// A source whose sshd does not say where this server comes from still
+	// plans; verify then fails the folders that depend on it.
+	f.answers[cpsource.ClientAddressCommand()] = "\n"
+	if plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator"); err != nil || plan.ClientAddress != "" {
+		t.Fatalf("no client address: %q %v", plan.ClientAddress, err)
+	}
+	delete(f.answers, cpsource.ClientAddressCommand())
+	if plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator"); err != nil || plan.ClientAddress != "" {
+		t.Fatalf("a failed client address command: %q %v", plan.ClientAddress, err)
+	}
 	// An access rule the converter takes stays Native, with the conversion
 	// and its probe in the plan.
 	closed := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\n"))
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{closed}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "native" || len(plan.Converted) != 1 || plan.Converted[0].Path != "/private/" || !slices.Equal(plan.Probes, []MigrationProbe{{Path: "/private/", Kind: "deny"}}) {
+	if err != nil || plan.Tier != "native" || len(plan.Converted) != 1 || plan.Converted[0].Path != "/private/" || !reflect.DeepEqual(plan.Probes, []MigrationProbe{{Path: "/private/", Kind: "deny"}}) {
 		t.Fatalf("converted: %+v %v", plan, err)
+	}
+	// A folder open to some addresses only goes to verify with its rule.
+	lobby := htaccess.ClassifyFile("lobby/.htaccess", "/lobby/", []byte("Order Allow,Deny\nAllow from all\nDeny from 192.0.2.0/24\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{lobby}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || !reflect.DeepEqual(plan.Probes, []MigrationProbe{{Path: "/lobby/", Kind: "hosts", Hosts: "except", Networks: []string{"192.0.2.0/24"}}}) {
+		t.Fatalf("address list: %+v %v", plan.Probes, err)
 	}
 	// One it refuses sends the site to Compat, saying why.
 	refused := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\nSatisfy Any\n"))

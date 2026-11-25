@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -376,6 +377,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 		if err != nil {
 			return MigrateFilesResult{}, err
 		}
+		result.Probes = append(result.Probes, subfolderProbes(stagePath+"/files/public_html", conv.Rules)...)
 		result.Probes = append(result.Probes, openFileProbes(stagePath+"/files/public_html", conv.Rules)...)
 		// The folders are live before cp makes the files reachable.
 		if err := protect(p); err != nil {
@@ -522,6 +524,42 @@ func openFileProbes(public string, rules []htaccess.FolderRule) []MigrationProbe
 		}
 		if len(open) > 0 {
 			walk(strings.Trim(rule.Path, "/"), 0)
+		}
+	}
+	return out
+}
+
+// subfolderProbes finds, below each folder closed to every address or
+// asking every address for a password, its first real subfolder by name
+// in the staged public_html, with the name rules and bounds openFileProbes
+// uses, so verify checks that the copy's rule reaches below the folder
+// itself. It expects the folder's own status (D-0002). A subfolder named
+// like a file the folder leaves open is passed over.
+func subfolderProbes(public string, rules []htaccess.FolderRule) []MigrationProbe {
+	out := []MigrationProbe{}
+	root, err := os.OpenRoot(public)
+	if err != nil {
+		return out
+	}
+	defer root.Close()
+	for _, rule := range rules {
+		kind := closedKind(rule)
+		if kind == "" {
+			continue
+		}
+		rel := strings.Trim(rule.Path, "/")
+		d, err := root.Open(rel)
+		if err != nil {
+			continue
+		}
+		entries, _ := d.ReadDir(1000)
+		d.Close()
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+		for _, e := range entries {
+			if e.Type().IsDir() && probeFolderName.MatchString(e.Name()) && !slices.Contains(rule.Allow, e.Name()) {
+				out = append(out, MigrationProbe{Path: "/" + rel + "/" + e.Name() + "/", Kind: kind})
+				break
+			}
 		}
 	}
 	return out

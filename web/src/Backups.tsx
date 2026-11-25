@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@astryxdesign/core/Button";
-import { Card } from "@astryxdesign/core/Card";
-import { Archive, ArrowDownToLine, Globe, Info, LockKeyhole, LogOut, RefreshCw, Upload } from "lucide-react";
+import { Archive, ArrowDownToLine, CircleCheck, Globe, Info, LoaderCircle, LockKeyhole, LogOut, RefreshCw, TriangleAlert, Upload } from "lucide-react";
+import { Alert, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import { ProblemAlert } from "@/components/problem-alert";
+import type { Problem } from "@/components/problem-alert";
 import { bytes } from "@/Dashboard";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
@@ -13,8 +17,7 @@ import { canConfirmRestorePreview, getRestorePreview, restorePreviewError, resto
 import type { RestorePreview } from "@/lib/restorePreview";
 import { previewArchiveRestore, confirmArchiveRestore } from "@/lib/archiveRestore";
 import type { ArchiveRestorePreview } from "@/lib/archiveRestore";
-import "./backups.css";
-import BackupSchedule from "./BackupSchedule";
+import BackupSchedule, { siteProblem } from "./BackupSchedule";
 import { backupRemovalError, canRemoveBackup, removeSiteBackup } from "@/lib/backupRemoval";
 import { resolveRestoreHandoff } from "@/lib/restoreHandoff";
 import { backupCopySelection } from "@/lib/backupCopy";
@@ -27,6 +30,33 @@ type Restore = { site: Site; backup: SiteBackup };
 const backupError = (error: unknown) => error instanceof SiteApiError && error.status === 409
   ? "The website changed on the server. Refresh backup records and review the current revision before confirming again. Your Websites editor draft is kept."
   : error instanceof SiteApiError ? error.message : "The backup operation could not be confirmed. Refresh backup records before trying again.";
+// What failed, for an error's title, by the label of the action that ran.
+const failedAction: Record<string, string> = {
+  "Checking backup records": "The backup records could not be loaded.",
+  "Loading website backups": "The website's backups could not be loaded.",
+  "Signing in": "You were not signed in.",
+  "Signing out": "You were not signed out.",
+  "Creating ZIP backup": "The ZIP backup was not created.",
+  "Downloading ZIP backup": "The ZIP backup was not downloaded.",
+  "Verifying restore preview": "The restore preview could not be verified.",
+  "Verifying selected file": "The file's restore preview could not be verified.",
+  "Restoring ZIP backup": "The website was not restored.",
+  "Restoring selected file": "The file was not restored.",
+  "Removing ZIP backup": "The ZIP backup was not removed.",
+  "Previewing uploaded ZIP": "The uploaded ZIP could not be previewed.",
+  "Restoring uploaded ZIP": "The uploaded ZIP was not restored.",
+  "Saving backup schedule": "The backup schedule was not saved.",
+};
+
+const panel = "rounded-lg border border-border bg-card";
+const control = "h-10! text-sm! pointer-coarse:h-12!";
+const rowControl = "h-9 pointer-coarse:h-11";
+const dialogClass = "fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[min(40rem,calc(100vw-1.75rem))] overflow-auto overscroll-contain rounded-xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:overflow-hidden backdrop:overscroll-contain backdrop:bg-[rgb(8_14_22/58%)]";
+const dialogTitle = "text-lg! tracking-tight! wrap-anywhere";
+const checkLabel = "flex items-start gap-2.5 text-sm text-foreground wrap-anywhere [&>input]:mt-0.5 [&>input]:size-4 [&>input]:shrink-0 [&>input]:accent-primary";
+const Busy = ({ when }: { when: boolean }) => when ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : null;
+const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
+const Fact = ({ term, children }: { term: string; children: React.ReactNode }) => <div className="flex min-w-0 flex-col gap-1"><dt className="text-xs text-muted-foreground">{term}</dt><dd className="text-sm wrap-anywhere text-foreground">{children}</dd></div>;
 
 export default function Backups({ revision, active, onStatus, siteHandoff, onHandoffConsumed, onImportZIP }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void; siteHandoff?: SiteHandoff; onHandoffConsumed: (requestId: number) => void; onImportZIP: (snapshot?: BackupCopySelection) => void }) {
   const [session, setSession] = useState<OperatorSession>();
@@ -55,6 +85,11 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   const [fileConfirmed, setFileConfirmed] = useState(false);
   const fileEpoch = useRef(0);
   const clearFileRestore = useCallback(() => { ++fileEpoch.current; setFilePath(""); setFilePreview(undefined); setFileConfirmed(false); }, []);
+  // Each error message the page shows, with what failed and the codes behind
+  // it; say() files one and hands the message back for its setter.
+  const problems = useRef(new Map<string, Problem>());
+  const say = useCallback((message: string, what: string, failure?: unknown, next?: string) => { problems.current.set(message, siteProblem(message, what, failure, next)); return message; }, []);
+  const problemFor = (message: string): Problem => problems.current.get(message) ?? { what: "The backup action did not finish.", why: message, next: "Use Refresh backup records and try again.", technical: "", status: 0 };
   const [previewError, setPreviewError] = useState<string>();
   const [uploadFile, setUploadFile] = useState<File>();
   const [uploadTarget, setUploadTarget] = useState<Site>();
@@ -103,16 +138,17 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
       const value = await getRestorePreview(target.site.id, target.site.revision, target.backup, token);
       if (isLive()) setPreview(value);
     } catch (failure) {
-      if (isLive()) { setPreview(undefined); setConfirmed(false); setPreviewError(restorePreviewError(failure)); throw failure; }
+      if (isLive()) { setPreview(undefined); setConfirmed(false); setPreviewError(say(restorePreviewError(failure), "The restore preview could not be verified.", failure)); throw failure; }
     }
-  }, []);
+  }, [say]);
   const clearPrivateRecords = useCallback(() => { setSites([]); setSelected(undefined); setBackups([]); setFresh(false); scheduleDraft.current = false; setScheduleDirty(false); clearRestore(); clearUpload(); clearRemoval(); }, [clearRestore, clearUpload, clearRemoval]);
-  const fail = useCallback((failure: unknown) => {
-    setError(backupError(failure)); setFresh(false); setConfirmed(false); setPreview(undefined); setFilePreview(undefined); setFileConfirmed(false); ++fileEpoch.current;
+  const fail = useCallback((failure: unknown, what: string) => {
+    setError(say(backupError(failure), what, failure)); setFresh(false); setConfirmed(false); setPreview(undefined); setFilePreview(undefined); setFileConfirmed(false); ++fileEpoch.current;
     setUploadPreview(undefined); setUploadConfirmed(false);
     setRemovalConfirmed(false);
     if (failure instanceof SiteApiError && failure.status === 401) { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); clearPrivateRecords(); setNotice(undefined); }
-  }, [clearPrivateRecords]);
+  }, [clearPrivateRecords, say]);
+  const failSchedule = useCallback((failure: unknown) => fail(failure, "The backup schedule could not be loaded."), [fail]);
 
   const loadInventory = useCallback(async (preferredId?: string, isLive: () => boolean = () => true) => {
     if (!isLive()) return;
@@ -141,7 +177,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
     if (actionPending.current) return;
     if (request) {
       handledHandoff.current = request.requestId;
-      if (scheduleDraft.current) { setBusy(undefined); setError(`Cannot open ${request.siteName}: your backup schedule draft is kept. Save or discard it, then request the website or restore review again from Websites.`); onHandoffConsumed(request.requestId); return; }
+      if (scheduleDraft.current) { setBusy(undefined); setError(say(`Cannot open ${request.siteName}: your backup schedule draft is kept. Save or discard it, then request the website or restore review again from Websites.`, "The website was not opened.", undefined, "Save or discard the schedule draft below, then open the website again.")); onHandoffConsumed(request.requestId); return; }
       selectedId.current = request.siteId; setNotice(undefined); clearPrivateRecords();
     }
     const authGeneration = authEpoch.current;
@@ -164,11 +200,11 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
         }
         else clearPrivateRecords();
         if (isLive()) setLoadedAt(new Date());
-      } catch (failure) { if (isLive()) { fail(failure); if (request?.restore && failure instanceof SiteApiError && ["invalid_handoff", "stale_handoff", "archive_handoff_changed"].includes(failure.code)) setError(failure.message); } }
+      } catch (failure) { if (isLive()) { fail(failure, request?.restore ? "The restore review could not be opened." : "The backup records could not be loaded."); if (request?.restore && failure instanceof SiteApiError && ["invalid_handoff", "stale_handoff", "archive_handoff_changed"].includes(failure.code)) setError(say(failure.message, "The restore review could not be opened.", failure)); } }
       finally { if (activeRef.current && generation === epoch.current) setBusy(undefined); if (request) onHandoffConsumed(request.requestId); }
     })();
     return () => { if (generation === epoch.current) ++epoch.current; };
-  }, [active, revision, attempt, handoffRequestId, onHandoffConsumed, loadInventory, fail, clearPrivateRecords, clearRestore, reviewRestore]);
+  }, [active, revision, attempt, handoffRequestId, onHandoffConsumed, loadInventory, fail, clearPrivateRecords, clearRestore, reviewRestore, say]);
   useEffect(() => {
     if (restore && (!session?.authenticated || session.csrf_token !== restoreSessionToken.current || selected?.id !== restore.site.id || selected.revision !== restore.site.revision)) clearRestore();
   }, [restore, session, selected, clearRestore]);
@@ -185,9 +221,9 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   }, [uploadTarget, active, authenticated]);
   useEffect(() => {
     if (!session?.authenticated) return;
-    const timer = setTimeout(() => { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); clearPrivateRecords(); setError("Your local operator session expired. Sign in again to access backups. Your Websites editor draft is kept."); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
+    const timer = setTimeout(() => { ++authEpoch.current; sessionRef.current = { authenticated: false }; setSession(sessionRef.current); clearPrivateRecords(); setError(say("Your local operator session expired. Sign in again to access backups. Your Websites editor draft is kept.", "Your sign-in ended.", undefined, "Sign in again with the operator access key.")); }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
     return () => clearTimeout(timer);
-  }, [session, clearPrivateRecords]);
+  }, [session, clearPrivateRecords, say]);
   useEffect(() => {
     if (restore && active && authenticated && dialog.current && !dialog.current.open) { dialog.current.showModal(); dialog.current.querySelector<HTMLButtonElement>("button")?.focus(); }
     else if ((!restore || !active || !authenticated) && dialog.current?.open) dialog.current.close();
@@ -206,7 +242,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
     const isLive = () => activeRef.current && generation === epoch.current;
     setBusy(label); setError(undefined); setNotice(undefined);
     try { await action(isLive); if (isLive()) setLoadedAt(new Date()); }
-    catch (failure) { if (isLive()) fail(failure); }
+    catch (failure) { if (isLive()) fail(failure, failedAction[label] ?? "The backup action did not finish."); }
     finally {
       actionPending.current = false;
       if (isLive()) setBusy(undefined);
@@ -234,7 +270,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
         if (!isLive()) return;
         clearRemoval(); setFresh(false); setNotice(`Removed one saved native ZIP from ${site.name}. Current files, routing, other ZIPs and schedule are preserved. If the schedule paused at capacity, review and re-enable it separately.`);
         await loadInventory(site.id, sessionLive);
-      } catch (failure) { if (isLive()) { setRemovalConfirmed(false); setRemovalError(backupRemovalError(failure)); throw failure; } }
+      } catch (failure) { if (isLive()) { setRemovalConfirmed(false); setRemovalError(say(backupRemovalError(failure), "The ZIP backup was not removed.", failure)); throw failure; } }
     });
   }
   function closeRestore() {
@@ -257,7 +293,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
       try {
         const value = await previewFileRestore(target.site, target.backup, path, token);
         if (isLive()) setFilePreview(value);
-      } catch (failure) { if (isLive()) { setPreviewError(restorePreviewError(failure)); throw failure; } }
+      } catch (failure) { if (isLive()) { setPreviewError(say(restorePreviewError(failure), "The file's restore preview could not be verified.", failure)); throw failure; } }
     });
   }
   async function restoreSelectedFile() {
@@ -341,7 +377,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
         setSelected(latest); setUploadTarget(latest);
         const result = await previewArchiveRestore({ site: latest, archive: file, csrf: token, isLive });
         if (isLive()) { setUploadPreview(result); setFresh(true); }
-      } catch (failure) { if (isLive()) { setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(backupError(failure)); throw failure; } }
+      } catch (failure) { if (isLive()) { setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(say(backupError(failure), "The uploaded ZIP could not be previewed.", failure)); throw failure; } }
     });
   }
   async function restoreUploadedZIP() {
@@ -355,101 +391,133 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
         if (!isLive()) return;
         clearUpload(); setFresh(false); setNotice(`Restored uploaded ZIP files for ${site.name}. Website routing, backup history and schedule are preserved. Current revision ${site.revision}. Your Websites editor draft is kept.`);
         await loadInventory(site.id, sessionLive);
-      } catch (failure) { if (isLive()) { setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(backupError(failure)); throw failure; } }
+      } catch (failure) { if (isLive()) { setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(say(backupError(failure), "The uploaded ZIP was not restored.", failure)); throw failure; } }
     });
   }
 
-  return <section className="backups-page websites-view" data-testid="backups-page">
-    <div className="hosting-notice"><Info aria-hidden="true" /><span>Native Sifruno ZIP snapshots of app-owned static site files only. These archives do not contain server, database, mail or cPanel backups.</span></div>
-    {error && <div className="website-message website-error" role="alert" data-testid="backup-handoff-error"><Info /><span>{error}</span></div>}
-    {notice && <div className="website-message" role="status"><Info /><span>{notice}</span></div>}
-    {!session ? <Card className="dashboard-card website-auth" padding={0}><p role="status">{busy || "Operator session could not be checked."}</p>{error && <Button label="Retry operator session" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={refreshRecords} />}</Card> : !authenticated ? <Card className="dashboard-card website-auth" padding={0}>
-      <div className="auth-heading"><LockKeyhole /><div><h2>Local operator sign-in</h2><p>Use the access key created by this server in its private state directory.</p></div></div>
-      <form onSubmit={login} data-testid="operator-login" autoComplete="off"><label htmlFor="backup-access-key">Operator access key</label><input id="backup-access-key" type="password" autoComplete="off" spellCheck={false} value={accessKey} onChange={(event) => setAccessKey(event.target.value)} disabled={Boolean(busy)} required /><Button label="Sign in locally" type="submit" variant="primary" isLoading={busy === "Signing in"} isDisabled={Boolean(busy) || !accessKey.trim()} /></form>
-      <p className="website-help">Uses the same local operator session as Websites. The key is cleared after submission; no credentials are stored in this page.</p>
-    </Card> : <>
-      <div className="website-session"><span><LockKeyhole />Signed in locally · expires {dateLabel(session?.authenticated ? session.expires_at : "")}</span><Button label="Sign out locally" icon={<LogOut />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => void run("Signing out", async (isLive) => {
+  return <div className="@container flex w-full max-w-[90rem] min-w-0 flex-col gap-4" data-testid="backups-page">
+    <div className="flex items-start gap-2 text-sm text-muted-foreground"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>Native Sifruno ZIP snapshots of app-owned static site files only. These archives do not contain server, database, mail or cPanel backups.</span></div>
+    {error && <ProblemAlert problem={problemFor(error)} testId="backup-handoff-error" />}
+    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="wrap-anywhere">{notice}</AlertTitle></Alert>}
+    {!session ? <section className={`${panel} max-w-xl p-5`} aria-label="Operator session"><div role="status" className="text-sm text-foreground">{busy || "Operator session could not be checked."}</div>{error && <Button variant="outline" className={`mt-3 ${rowControl}`} disabled={Boolean(busy)} onClick={refreshRecords}><RefreshCw aria-hidden="true" />Retry operator session</Button>}</section> : !authenticated ? <section className={`${panel} max-w-xl p-5`} aria-labelledby="backups-sign-in-heading">
+      <div className="flex items-start gap-3.5">
+        <LockKeyhole className="size-6 shrink-0 text-primary" aria-hidden="true" />
+        <div className="min-w-0"><h2 id="backups-sign-in-heading">Local operator sign-in</h2><div className="mt-1.5 text-sm text-muted-foreground wrap-anywhere">Use the access key created by this server in its private state directory.</div></div>
+      </div>
+      <form onSubmit={login} data-testid="operator-login" autoComplete="off" className="mt-6 flex flex-col items-start gap-2.5"><label htmlFor="backup-access-key" className="text-sm font-medium text-foreground">Operator access key</label><Input id="backup-access-key" type="password" autoComplete="off" spellCheck={false} value={accessKey} onChange={(event) => setAccessKey(event.target.value)} disabled={Boolean(busy)} required className={`${control} max-w-sm`} /><Button type="submit" className={rowControl} disabled={Boolean(busy) || !accessKey.trim()}><Busy when={busy === "Signing in"} />Sign in locally</Button></form>
+      <div className="mt-5 text-xs text-muted-foreground">Uses the same local operator session as Websites. The key is cleared after submission; no credentials are stored in this page.</div>
+    </section> : <>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-muted-foreground"><span className="flex min-w-0 items-center gap-2 wrap-anywhere"><LockKeyhole className="size-4 shrink-0" aria-hidden="true" />Signed in locally · expires {dateLabel(session?.authenticated ? session.expires_at : "")}</span><Button variant="ghost" size="sm" className="pointer-coarse:h-11" disabled={Boolean(busy)} onClick={() => void run("Signing out", async (isLive) => {
         if (!session?.authenticated) return;
         const next = await siteRequest("/api/v1/session/logout", validSession, { method: "POST", csrf: session.csrf_token, body: {} });
         if (!isLive()) return;
         if (next.authenticated) throw new SiteApiError(0, "invalid_response", "Sign-out was not confirmed.");
         setSession(next); clearPrivateRecords();
-      })} /></div>
-      <div className="website-actions"><Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={!active || !fresh || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()} onClick={() => { if (!activeRef.current || actionPending.current || busy || restore || uploadTarget || removal || !fresh || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; clearRestore(); onImportZIP(); }} /></div>
-      <p className="website-help">Import creates a new website. Restore from an uploaded native ZIP below replaces static files in the selected existing website. Your schedule draft stays here while you navigate.</p>
-      <Card className="dashboard-card backup-picker" padding={0}><div><label htmlFor="backups-site-picker">Website</label><NativeSelect id="backups-site-picker" data-testid="backups-site-picker" aria-label="Website for backups" value={selected?.id ?? ""} disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || !sites.length} onChange={(event) => { if (actionPending.current || busy || restore || uploadTarget || removal || scheduleDraft.current) return; const id = event.target.value; if (!id) return; clearRestore(); setFresh(false); void run("Loading website backups", async (isLive) => { await loadInventory(id, isLive); }); }}>
-        {!selected && <NativeSelectOption value="">{sites.length ? "Choose a website" : "No websites available"}</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}
-      </NativeSelect></div><Button label="Refresh backup records" variant="secondary" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={refreshRecords} /></Card>
+      })}><LogOut aria-hidden="true" />Sign out locally</Button></div>
+      <section className={`${panel} flex min-w-0 flex-wrap items-end gap-3 p-4`} aria-label="Website and ZIP import">
+        <div className="flex min-w-0 flex-1 basis-64 flex-col gap-1.5 @3xl:max-w-xl"><label htmlFor="backups-site-picker" className="text-sm font-medium text-foreground">Website</label><NativeSelect id="backups-site-picker" data-testid="backups-site-picker" aria-label="Website for backups" className="w-full" value={selected?.id ?? ""} disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || !sites.length} onChange={(event) => { if (actionPending.current || busy || restore || uploadTarget || removal || scheduleDraft.current) return; const id = event.target.value; if (!id) return; clearRestore(); setFresh(false); void run("Loading website backups", async (isLive) => { await loadInventory(id, isLive); }); }}>
+          {!selected && <NativeSelectOption value="">{sites.length ? "Choose a website" : "No websites available"}</NativeSelectOption>}{sites.map((site) => <NativeSelectOption key={site.id} value={site.id}>{site.name} · {site.domain}</NativeSelectOption>)}
+        </NativeSelect></div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" className={rowControl} disabled={Boolean(busy)} onClick={refreshRecords}><RefreshCw aria-hidden="true" />Refresh backup records</Button>
+          <Button variant="outline" className={rowControl} disabled={!active || !fresh || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !session?.authenticated || Date.parse(session.expires_at) <= Date.now()} onClick={() => { if (!activeRef.current || actionPending.current || busy || restore || uploadTarget || removal || !fresh || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; clearRestore(); onImportZIP(); }}><Upload aria-hidden="true" />Import native ZIP</Button>
+        </div>
+        <div className="basis-full text-xs text-muted-foreground">Import creates a new website. Restore from an uploaded native ZIP below replaces static files in the selected existing website. Your schedule draft stays here while you navigate.</div>
+      </section>
       {selected ? <>
-        <div className="backup-site-context"><span><Globe aria-hidden="true" />{selected.domain}</span><span>Current revision {selected.revision} · {selected.state.replaceAll("_", " ")}</span></div>
-        <Card className="dashboard-card uploaded-restore-card" padding={0}>
-          <h2>Restore from a downloaded ZIP</h2><p>Replace the static files of <strong>{selected.name}</strong> · {selected.domain}. Website identity, routing, backup history and schedule are preserved. Native Sifruno ZIP files only.</p>
-          <label htmlFor="uploaded-restore-file">Choose native ZIP</label><input ref={uploadInput} id="uploaded-restore-file" data-testid="uploaded-restore-file" type="file" accept=".zip,application/zip" disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || selected.state === "recovery_required"} onChange={event => { ++uploadEpoch.current; setUploadFile(event.target.files?.[0]); setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(undefined); }} />
-          {uploadFile && <p>{uploadFile.name} · {bytes(uploadFile.size)}</p>}
-          <Button label="Preview uploaded ZIP" icon={<Upload />} variant="secondary" isDisabled={!active || !uploadFile || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || selected.state === "recovery_required"} onClick={() => void reviewUploadedRestore()} />
-          {scheduleDirty && <p className="website-help">Save or discard your schedule draft before reviewing an uploaded ZIP.</p>}
-        </Card>
-        {!fresh && !busy && <p className="backup-status" role="status">Records need to be refreshed before another backup or restore.</p>}
-        {selected.state === "recovery_required" && <p className="backup-status" role="alert">This website requires recovery. Backup creation and restore are disabled until its recovery is resolved.</p>}
-        <div className="backup-summary"><Card className="dashboard-card" padding={0}><span>Recorded snapshots</span><strong>{backups.length}</strong></Card><Card className="dashboard-card" padding={0}><span>Archive storage</span><strong>{bytes(backups.reduce((sum, backup) => sum + backup.bytes, 0))}</strong></Card><Card className="dashboard-card" padding={0}><span>Latest snapshot</span><strong className="backup-latest">{backups.length ? dateLabel([...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0].created_at) : "No backups yet"}</strong></Card></div>
-        <BackupSchedule key={selected.id} site={selected} session={session} active={active} fresh={fresh} busy={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal)} archives={backups.length} onRefresh={refreshRecords} onAction={run} onUnauthorized={fail} onDirtyChange={onScheduleDirty} />
-        <Card className="dashboard-card" padding={0} data-testid="backups-inventory" data-site-id={selected.id} data-revision={selected.revision} data-fresh={fresh}>
-          <div className="card-heading backup-inventory-heading"><div><h2>ZIP backups · {selected.name}</h2><p>Saved site files only. Unsaved Websites editor drafts stay in the editor.</p></div><Button label="Create ZIP backup" icon={<Archive />} variant="secondary" size="sm" isDisabled={!canChange || Boolean(restore) || backups.length >= 8} isLoading={busy === "Creating ZIP backup"} onClick={() => void createBackup()} /></div>
-          {backups.length ? <div className="backup-records">{[...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map((backup) => <article key={backup.id} data-testid="backup-row" data-backup-id={backup.id}>
-            <Archive aria-hidden="true" /><div className="backup-record-info"><h3><time dateTime={backup.created_at}>{dateLabel(backup.created_at)}</time></h3><p>{backup.files} files · {bytes(backup.bytes)} · snapshot revision {backup.revision}</p><details><summary>Backup ID and SHA-256</summary><dl><div><dt>Backup ID</dt><dd>{backup.id}</dd></div><div><dt>SHA-256</dt><dd><code>{backup.sha256}</code></dd></div></dl></details></div>
-            <div className="backup-record-actions"><Button label={`Download ZIP backup ${backup.id}`} icon={<ArrowDownToLine />} size="sm" variant="ghost" isDisabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !fresh} onClick={() => void downloadBackup(backup)}>Download ZIP</Button><Button label={`Recover as new website backup ${backup.id}`} data-testid="backup-recover-new" data-backup-id={backup.id} variant="secondary" size="sm" isDisabled={!active || !fresh || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !authenticated} onClick={() => { if (!selected || !activeRef.current || actionPending.current || busy || restore || uploadTarget || removal || !fresh || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; try { onImportZIP(backupCopySelection(selected, backup)); } catch (failure) { fail(failure); } }}>Recover as new website</Button><Button label={`Restore backup ${backup.id}`} variant="secondary" size="sm" isDisabled={!canChange || Boolean(restore) || scheduleDirty} onClick={event => void openRestore(backup, event.currentTarget)}>Restore</Button><Button label={`Remove ZIP backup ${backup.id}`} data-testid="backup-remove-open" variant="ghost" size="sm" isDisabled={!canChange || Boolean(restore) || scheduleDirty || !canRemoveBackup(selected, backup)} onClick={event => openRemoval(backup, event.currentTarget)}>Remove ZIP</Button></div>
-          </article>)}</div> : <div className="inventory-empty"><Archive /><h3>No ZIP backups recorded</h3><p>Create a snapshot of this website’s saved static files.</p></div>}
-          <div className="table-footer"><span>{backups.length} / 8 snapshots for this site</span><span>{loadedAt ? `Checked ${loadedAt.toLocaleTimeString()}` : "Waiting for backup records"}</span></div>
-        </Card>
-      </> : <Card className="dashboard-card" padding={0}><div className="inventory-empty"><Globe /><h2>{busy ? "Loading website backups" : error ? "Website records unavailable" : "No websites available"}</h2><p>{busy ? "Reading the actual website and backup inventory." : error ? "Refresh backup records to check the current inventory." : "Create an app-owned static website in Websites before creating a ZIP backup."}</p></div></Card>}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm text-muted-foreground"><span className="flex min-w-0 items-center gap-2 wrap-anywhere"><Globe className="size-4 shrink-0" aria-hidden="true" />{selected.domain}</span><span>Current revision {selected.revision} · {selected.state.replaceAll("_", " ")}</span></div>
+        {!fresh && !busy && <div className="text-sm text-foreground" role="status">Records need to be refreshed before another backup or restore.</div>}
+        {selected.state === "recovery_required" && <Alert variant="destructive" className="text-start"><TriangleAlert aria-hidden="true" /><AlertTitle className="wrap-anywhere">This website requires recovery. Backup creation and restore are disabled until its recovery is resolved.</AlertTitle></Alert>}
+        <dl className="grid grid-cols-2 gap-3 @3xl:grid-cols-3">
+          <div className={`${panel} flex min-w-0 flex-col gap-1.5 p-4`}><dt className="text-xs text-muted-foreground">Recorded snapshots</dt><dd className="text-2xl font-semibold tabular-nums text-foreground">{backups.length}</dd></div>
+          <div className={`${panel} flex min-w-0 flex-col gap-1.5 p-4`}><dt className="text-xs text-muted-foreground">Archive storage</dt><dd className="text-2xl font-semibold tabular-nums wrap-anywhere text-foreground">{bytes(backups.reduce((sum, backup) => sum + backup.bytes, 0))}</dd></div>
+          <div className={`${panel} col-span-2 flex min-w-0 flex-col gap-1.5 p-4 @3xl:col-span-1`}><dt className="text-xs text-muted-foreground">Latest snapshot</dt><dd className="text-base font-semibold wrap-anywhere text-foreground">{backups.length ? dateLabel([...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0].created_at) : "No backups yet"}</dd></div>
+        </dl>
+        <section className={`${panel} min-w-0`} aria-labelledby="backups-inventory-heading" data-testid="backups-inventory" data-site-id={selected.id} data-revision={selected.revision} data-fresh={fresh}>
+          <div className="flex flex-wrap items-start justify-between gap-3 p-4">
+            <div className="min-w-0 flex-1 basis-64"><h2 id="backups-inventory-heading" className="text-base! wrap-anywhere">ZIP backups · {selected.name}</h2><div className="mt-1 text-sm text-muted-foreground">Saved site files only. Unsaved Websites editor drafts stay in the editor.</div></div>
+            <Button className={rowControl} disabled={!canChange || Boolean(restore) || backups.length >= 8} onClick={() => void createBackup()}>{busy === "Creating ZIP backup" ? <Busy when /> : <Archive aria-hidden="true" />}Create ZIP backup</Button>
+          </div>
+          {backups.length ? <ul className="m-0 list-none p-0" aria-label={`ZIP backups of ${selected.name}`}>{[...backups].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).map((backup) => <li key={backup.id} className="flex flex-wrap items-start gap-x-4 gap-y-3 border-t border-border p-4" data-testid="backup-row" data-backup-id={backup.id}>
+            <Archive className="mt-0.5 hidden size-4 shrink-0 text-muted-foreground @xl:block" aria-hidden="true" />
+            <div className="min-w-0 flex-1 basis-64">
+              <h3 className="text-sm! font-medium"><time dateTime={backup.created_at}>{dateLabel(backup.created_at)}</time></h3>
+              <div className="mt-1 text-sm text-muted-foreground">{fileCount(backup.files)} · {bytes(backup.bytes)} · snapshot revision {backup.revision}</div>
+              <details className="mt-2 text-xs"><summary className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">Backup ID and SHA-256</summary><dl className="mt-2 flex flex-col gap-2"><Fact term="Backup ID">{backup.id}</Fact><Fact term="SHA-256"><code className="font-mono text-xs break-all">{backup.sha256}</code></Fact></dl></details>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="ghost" size="sm" className="pointer-coarse:h-11" disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !fresh} onClick={() => void downloadBackup(backup)}><ArrowDownToLine aria-hidden="true" />Download ZIP<span className="sr-only"> backup {backup.id}</span></Button>
+              <Button variant="outline" size="sm" className="pointer-coarse:h-11" data-testid="backup-recover-new" data-backup-id={backup.id} disabled={!active || !fresh || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || !authenticated} onClick={() => { if (!selected || !activeRef.current || actionPending.current || busy || restore || uploadTarget || removal || !fresh || !sessionRef.current?.authenticated || Date.parse(sessionRef.current.expires_at) <= Date.now()) return; try { onImportZIP(backupCopySelection(selected, backup)); } catch (failure) { fail(failure, "The ZIP could not be opened as a new website."); } }}>Recover as new website<span className="sr-only"> backup {backup.id}</span></Button>
+              <Button variant="outline" size="sm" className="pointer-coarse:h-11" disabled={!canChange || Boolean(restore) || scheduleDirty} onClick={event => void openRestore(backup, event.currentTarget)}>Restore<span className="sr-only"> backup {backup.id}</span></Button>
+              <Button variant="destructive" size="sm" className="pointer-coarse:h-11" data-testid="backup-remove-open" disabled={!canChange || Boolean(restore) || scheduleDirty || !canRemoveBackup(selected, backup)} onClick={event => openRemoval(backup, event.currentTarget)}>Remove ZIP<span className="sr-only"> backup {backup.id}</span></Button>
+            </div>
+          </li>)}</ul> : <Empty className="border-t border-border px-4 py-8"><EmptyHeader><EmptyMedia variant="icon"><Archive aria-hidden="true" /></EmptyMedia><EmptyTitle>No ZIP backups recorded</EmptyTitle><EmptyDescription>Create a snapshot of this website’s saved static files.</EmptyDescription></EmptyHeader></Empty>}
+          <div className="flex flex-wrap justify-between gap-x-4 gap-y-1 border-t border-border px-4 py-2.5 text-xs text-muted-foreground"><span>{backups.length} / 8 snapshots for this site</span><span>{loadedAt ? `Checked ${loadedAt.toLocaleTimeString()}` : "Waiting for backup records"}</span></div>
+        </section>
+        <BackupSchedule key={selected.id} site={selected} session={session} active={active} fresh={fresh} busy={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal)} archives={backups.length} onRefresh={refreshRecords} onAction={run} onUnauthorized={failSchedule} onDirtyChange={onScheduleDirty} />
+        <section className={`${panel} flex min-w-0 flex-col items-start gap-3 p-4`} aria-labelledby="uploaded-restore-heading">
+          <h2 id="uploaded-restore-heading" className="text-base!">Restore from a downloaded ZIP</h2>
+          <div className="text-sm text-muted-foreground wrap-anywhere">Replace the static files of <strong className="font-semibold text-foreground">{selected.name}</strong> · {selected.domain}. Website identity, routing, backup history and schedule are preserved. Native Sifruno ZIP files only.</div>
+          <label htmlFor="uploaded-restore-file" className="text-sm font-medium text-foreground">Choose native ZIP</label>
+          <input ref={uploadInput} id="uploaded-restore-file" data-testid="uploaded-restore-file" type="file" accept=".zip,application/zip" className="block w-full max-w-md min-w-0 text-sm text-foreground file:me-3 file:h-9 file:cursor-pointer file:rounded-lg file:border file:border-solid file:border-border file:bg-background file:px-3 file:text-sm file:font-medium file:text-foreground hover:file:bg-muted disabled:opacity-50 pointer-coarse:file:h-11" disabled={Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || selected.state === "recovery_required"} onChange={event => { ++uploadEpoch.current; setUploadFile(event.target.files?.[0]); setUploadPreview(undefined); setUploadConfirmed(false); setUploadError(undefined); }} />
+          {uploadFile && <div className="text-sm text-foreground wrap-anywhere">{uploadFile.name} · {bytes(uploadFile.size)}</div>}
+          <Button variant="outline" className={rowControl} disabled={!active || !uploadFile || Boolean(busy) || Boolean(restore) || Boolean(uploadTarget) || Boolean(removal) || scheduleDirty || selected.state === "recovery_required"} onClick={() => void reviewUploadedRestore()}><Upload aria-hidden="true" />Preview uploaded ZIP</Button>
+          {scheduleDirty && <div className="text-xs text-muted-foreground">Save or discard your schedule draft before reviewing an uploaded ZIP.</div>}
+        </section>
+      </> : <Empty className={`${panel} border-solid py-10`}><EmptyHeader><EmptyMedia variant="icon"><Globe aria-hidden="true" /></EmptyMedia><EmptyTitle>{busy ? "Loading website backups" : error ? "Website records unavailable" : "No websites available"}</EmptyTitle><EmptyDescription>{busy ? "Reading the actual website and backup inventory." : error ? "Refresh backup records to check the current inventory." : "Create a static website under Static sites (old) before creating a ZIP backup."}</EmptyDescription></EmptyHeader></Empty>}
     </>}
-    {busy && <p className="website-busy" role="status">{busy}…</p>}
-    {removal && active && authenticated && <dialog ref={removalDialog} className="website-restore-dialog backup-restore-dialog" data-testid="backup-remove-confirm" aria-labelledby="backup-remove-title" onCancel={event => { event.preventDefault(); closeRemoval(); }}>
-      <h2 id="backup-remove-title">Remove saved native ZIP</h2>
-      <p>Permanently remove this one ZIP snapshot from <strong>{removal.site.name}</strong> · {removal.site.domain}. The current saved website files, routing, other ZIPs and schedule are preserved.</p>
-      <dl><div><dt>Backup ID</dt><dd data-testid="backup-remove-id"><code>{removal.backup.id}</code></dd></div><div><dt>SHA-256</dt><dd><code>{removal.backup.sha256}</code></dd></div><div><dt>Expected website revision</dt><dd>{removal.site.revision}</dd></div><div><dt>Snapshot</dt><dd>{dateLabel(removal.backup.created_at)} · {bytes(removal.backup.bytes)} · {removal.backup.files} files</dd></div></dl>
-      <p>Download the ZIP first if you need to keep it. Removal frees its saved archive storage and slot. Your unsaved Websites editor draft is kept. A schedule paused at capacity stays paused; review and re-enable it separately.</p>
-      {removalError && <p role="alert" className="website-error" data-testid="backup-remove-error">{removalError}</p>}
-      <label><input type="checkbox" data-testid="backup-remove-checkbox" checked={removalConfirmed} disabled={!canConfirmRemoval} onChange={event => setRemovalConfirmed(event.target.checked)} />I understand this selected saved ZIP will be permanently removed.</label>
-      <div><Button label="Cancel ZIP removal" variant="ghost" isDisabled={busy === "Removing ZIP backup"} onClick={closeRemoval} /><Button label="Confirm ZIP removal" data-testid="backup-remove-submit" variant="primary" isDisabled={!removalConfirmed || !canConfirmRemoval} isLoading={busy === "Removing ZIP backup"} onClick={() => void confirmRemoval()} /></div>
-    </dialog>}
-    {uploadTarget && active && authenticated && <dialog ref={uploadDialog} className="website-restore-dialog backup-restore-dialog" data-testid="uploaded-restore-confirm" aria-labelledby="uploaded-restore-title" onCancel={event => { event.preventDefault(); closeUploadedRestore(); }}>
-      <h2 id="uploaded-restore-title">Review uploaded ZIP restore</h2><p>Replace saved static files in <strong>{uploadTarget.name}</strong> · {uploadTarget.domain} with <strong>{uploadFile?.name}</strong>. Routing, backup history and schedule stay with this website.</p>
-      {busy === "Previewing uploaded ZIP" && <p role="status">Verifying current files and uploaded ZIP. No restore has been sent…</p>}
-      {uploadPreview && <section className="restore-preview" data-testid="uploaded-restore-preview" aria-label="Verified uploaded ZIP preview">
-        <p>Current website revision {uploadPreview.current_revision} · archive source revision {uploadPreview.backup_revision}</p>
-        <dl className="restore-preview-counts">{restoreKinds.map(kind => <div key={kind}><dt>{kind}</dt><dd data-testid={`uploaded-restore-count-${kind}`}>{uploadPreview.counts[kind]}</dd></div>)}</dl>
-        <ul className="restore-preview-files" aria-label="Uploaded ZIP file changes">{uploadPreview.files.map(file => <li key={file.path} data-kind={file.kind}><div><code>{file.path}</code><span>{file.kind}</span></div><small>Current: {file.before ? bytes(file.before.bytes) : "absent"} · ZIP: {file.after ? bytes(file.after.bytes) : "absent"}</small></li>)}</ul>
-        <details><summary>Verified archive SHA-256</summary><code>{uploadPreview.archive_sha256}</code></details>
+    {busy && <div className="text-xs text-muted-foreground" role="status">{busy}…</div>}
+    {removal && active && authenticated && <dialog ref={removalDialog} className={dialogClass} data-testid="backup-remove-confirm" aria-labelledby="backup-remove-title" onCancel={event => { event.preventDefault(); closeRemoval(); }}><div className="flex flex-col gap-3">
+      <h1 id="backup-remove-title" className={dialogTitle}>Remove saved native ZIP</h1>
+      <div className="text-sm text-foreground wrap-anywhere">Permanently remove this one ZIP snapshot from <strong className="font-semibold">{removal.site.name}</strong> · {removal.site.domain}. The current saved website files, routing, other ZIPs and schedule are preserved.</div>
+      <dl className="grid gap-3 sm:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-1 sm:col-span-2"><dt className="text-xs text-muted-foreground">Backup ID</dt><dd className="text-sm wrap-anywhere text-foreground" data-testid="backup-remove-id"><code className="font-mono text-xs break-all">{removal.backup.id}</code></dd></div>
+        <div className="flex min-w-0 flex-col gap-1 sm:col-span-2"><dt className="text-xs text-muted-foreground">SHA-256</dt><dd className="text-sm text-foreground"><code className="font-mono text-xs break-all">{removal.backup.sha256}</code></dd></div>
+        <Fact term="Expected website revision">{removal.site.revision}</Fact>
+        <Fact term="Snapshot">{dateLabel(removal.backup.created_at)} · {bytes(removal.backup.bytes)} · {fileCount(removal.backup.files)}</Fact>
+      </dl>
+      <div className="text-sm text-muted-foreground wrap-anywhere">Download the ZIP first if you need to keep it. Removal frees its saved archive storage and slot. Your unsaved Websites editor draft is kept. A schedule paused at capacity stays paused; review and re-enable it separately.</div>
+      {removalError && <ProblemAlert problem={problemFor(removalError)} testId="backup-remove-error" />}
+      <label className={checkLabel}><input type="checkbox" data-testid="backup-remove-checkbox" checked={removalConfirmed} disabled={!canConfirmRemoval} onChange={event => setRemovalConfirmed(event.target.checked)} />I understand this selected saved ZIP will be permanently removed.</label>
+      <div className="mt-2 flex flex-wrap justify-end gap-2"><Button variant="ghost" className={rowControl} disabled={busy === "Removing ZIP backup"} onClick={closeRemoval}>Cancel ZIP removal</Button><Button variant="destructive" className={rowControl} data-testid="backup-remove-submit" disabled={!removalConfirmed || !canConfirmRemoval} onClick={() => void confirmRemoval()}><Busy when={busy === "Removing ZIP backup"} />Confirm ZIP removal</Button></div>
+    </div></dialog>}
+    {uploadTarget && active && authenticated && <dialog ref={uploadDialog} className={dialogClass} data-testid="uploaded-restore-confirm" aria-labelledby="uploaded-restore-title" onCancel={event => { event.preventDefault(); closeUploadedRestore(); }}><div className="flex flex-col gap-3">
+      <h1 id="uploaded-restore-title" className={dialogTitle}>Review uploaded ZIP restore</h1><div className="text-sm text-foreground wrap-anywhere">Replace saved static files in <strong className="font-semibold">{uploadTarget.name}</strong> · {uploadTarget.domain} with <strong className="font-semibold">{uploadFile?.name}</strong>. Routing, backup history and schedule stay with this website.</div>
+      {busy === "Previewing uploaded ZIP" && <div className="text-sm text-foreground" role="status">Verifying current files and uploaded ZIP. No restore has been sent…</div>}
+      {uploadPreview && <section className="flex min-w-0 flex-col gap-3" data-testid="uploaded-restore-preview" aria-label="Verified uploaded ZIP preview">
+        <div className="text-sm text-foreground">Current website revision {uploadPreview.current_revision} · archive source revision {uploadPreview.backup_revision}</div>
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">{restoreKinds.map(kind => <div key={kind} className="min-w-0 rounded-md border border-border p-2"><dt className="text-xs capitalize text-muted-foreground">{kind}</dt><dd className="mt-1 text-lg font-semibold tabular-nums text-foreground" data-testid={`uploaded-restore-count-${kind}`}>{uploadPreview.counts[kind]}</dd></div>)}</dl>
+        <ul className="m-0 max-h-60 list-none overflow-y-auto overscroll-contain border-y border-border p-0" aria-label="Uploaded ZIP file changes">{uploadPreview.files.map(file => <li key={file.path} data-kind={file.kind} className="border-b border-border py-2.5 last:border-b-0"><div className="flex items-baseline justify-between gap-3"><code className="min-w-0 font-mono text-xs wrap-anywhere text-foreground">{file.path}</code><span className="shrink-0 text-xs capitalize text-muted-foreground">{file.kind}</span></div><small className="mt-1 block text-xs text-muted-foreground">Current: {file.before ? bytes(file.before.bytes) : "absent"} · ZIP: {file.after ? bytes(file.after.bytes) : "absent"}</small></li>)}</ul>
+        <details className="text-xs"><summary className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">Verified archive SHA-256</summary><code className="mt-2 block font-mono text-xs break-all text-foreground">{uploadPreview.archive_sha256}</code></details>
       </section>}
-      {uploadError && <p role="alert" className="website-error" data-testid="uploaded-restore-error">{uploadError} Close this dialog and use Preview uploaded ZIP to review a fresh comparison.</p>}
-      <p>Your unsaved Websites editor draft is kept. Compare it with the restored files before saving.</p>
-      <label><input data-testid="uploaded-restore-checkbox" type="checkbox" checked={uploadConfirmed} disabled={!uploadPreview || Boolean(busy) || !fresh || uploadTarget.revision >= Number.MAX_SAFE_INTEGER} onChange={event => setUploadConfirmed(event.target.checked)} />I reviewed the uploaded ZIP preview and understand that this website’s current saved files will be replaced.</label>
-      <div><Button label="Cancel uploaded ZIP restore" variant="ghost" isDisabled={busy === "Restoring uploaded ZIP"} onClick={closeUploadedRestore} /><Button label="Confirm uploaded ZIP restore" data-testid="uploaded-restore-submit" variant="primary" isDisabled={!uploadPreview || !uploadConfirmed || Boolean(busy) || !fresh || uploadTarget.revision >= Number.MAX_SAFE_INTEGER} isLoading={busy === "Restoring uploaded ZIP"} onClick={() => void restoreUploadedZIP()} /></div>
-    </dialog>}
-    {restore && active && authenticated && session.csrf_token === restoreSessionToken.current && <dialog ref={dialog} className="website-restore-dialog backup-restore-dialog" data-testid="backup-restore-confirm" data-site-id={restore.site.id} data-backup-id={restore.backup.id} data-backup-sha={restore.backup.sha256} aria-labelledby="backup-restore-title" aria-describedby="backup-restore-description" onCancel={event => { event.preventDefault(); closeRestore(); }}>
-      <h2 id="backup-restore-title">{filePath ? "Review single-file restore" : "Review ZIP restore"}</h2>
-      <p id="backup-restore-description">{filePath ? <>Restore only <strong>{filePath}</strong> in <strong>{restore.site.name}</strong>. Every other currently saved file stays unchanged.</> : <>Replace the saved app-owned static files of <strong>{restore.site.name}</strong> with the snapshot from {dateLabel(restore.backup.created_at)}, or choose one file below. This does not restore a server, database or mail system.</>}</p>
-      <dl><div><dt>Snapshot</dt><dd>{restore.backup.files} files · {bytes(restore.backup.bytes)} · revision {restore.backup.revision}</dd></div><div><dt>Expected current revision</dt><dd>{restore.site.revision}</dd></div></dl>
-      {busy === "Verifying restore preview" && <p className="restore-preview-status" role="status" data-testid="restore-preview-loading">Verifying current saved files and the selected archive. No restore has been sent…</p>}
-      {previewVerified && preview && <div className="file-restore-picker"><label htmlFor="backup-restore-file-picker">Restore scope</label><NativeSelect id="backup-restore-file-picker" data-testid="backup-restore-file-picker" value={filePath} disabled={Boolean(busy)} onChange={event => void chooseRestoreFile(event.target.value)}><NativeSelectOption value="">All files from this ZIP</NativeSelectOption>{preview.files.filter(file => file.after).map(file => <NativeSelectOption key={file.path} value={file.path}>Only {file.path}</NativeSelectOption>)}</NativeSelect><p>Select one archived file to preserve all other current saved files.</p></div>}
-      {busy === "Verifying selected file" && <p role="status">Verifying the selected file and merged website limits...</p>}
-      {filePath && filePreview && previewVerified && <section className="restore-preview" data-testid="backup-file-restore-preview" aria-label="Verified single-file restore preview"><p>Only <code>{filePreview.file.path}</code> will be {filePreview.file.kind === "added" ? "added" : filePreview.file.kind === "unchanged" ? "restored with identical bytes" : "replaced"}.</p><p>Current: {filePreview.file.before ? bytes(filePreview.file.before.bytes) : "absent"} / snapshot: {bytes(filePreview.file.after!.bytes)}</p><p>{filePreview.preserved_files} other saved files preserved. Website routing, state, saved ZIPs and schedule stay unchanged.</p></section>}
-      {!filePath && previewVerified && preview && <section className="restore-preview" data-testid="restore-preview-verified" aria-label="Verified restore preview">
-        <p className="restore-preview-status" role="status">Verified preview · current revision {preview.current_revision} and selected snapshot revision {preview.backup_revision}</p>
-        <dl className="restore-preview-counts">{restoreKinds.map(kind => <div key={kind}><dt>{kind}</dt><dd data-testid={`restore-count-${kind}`}>{preview.counts[kind]}</dd></div>)}</dl>
-        {preview.counts.added + preview.counts.modified + preview.counts.removed === 0 && <p className="restore-preview-status" data-testid="restore-preview-no-changes">No file content changes were found. Confirmation still sends a restore request.</p>}
-        <ul className="restore-preview-files" aria-label="File changes">{preview.files.map(file => <li key={file.path} data-kind={file.kind}><div><code>{file.path}</code><span>{file.kind}</span></div><small>Current: {file.before ? bytes(file.before.bytes) : "absent"} · snapshot: {file.after ? bytes(file.after.bytes) : "absent"}</small></li>)}</ul>
-        <p className="restore-preview-help">Hashes were checked by the server. Only file paths and metadata are shown; a new server change can still reject confirmation.</p>
+      {uploadError && <ProblemAlert problem={{ ...problemFor(uploadError), next: "Close this dialog and use Preview uploaded ZIP to review a fresh comparison." }} testId="uploaded-restore-error" />}
+      <div className="text-sm text-muted-foreground">Your unsaved Websites editor draft is kept. Compare it with the restored files before saving.</div>
+      <label className={checkLabel}><input data-testid="uploaded-restore-checkbox" type="checkbox" checked={uploadConfirmed} disabled={!uploadPreview || Boolean(busy) || !fresh || uploadTarget.revision >= Number.MAX_SAFE_INTEGER} onChange={event => setUploadConfirmed(event.target.checked)} />I reviewed the uploaded ZIP preview and understand that this website’s current saved files will be replaced.</label>
+      <div className="mt-2 flex flex-wrap justify-end gap-2"><Button variant="ghost" className={rowControl} disabled={busy === "Restoring uploaded ZIP"} onClick={closeUploadedRestore}>Cancel uploaded ZIP restore</Button><Button className={rowControl} data-testid="uploaded-restore-submit" disabled={!uploadPreview || !uploadConfirmed || Boolean(busy) || !fresh || uploadTarget.revision >= Number.MAX_SAFE_INTEGER} onClick={() => void restoreUploadedZIP()}><Busy when={busy === "Restoring uploaded ZIP"} />Confirm uploaded ZIP restore</Button></div>
+    </div></dialog>}
+    {restore && active && authenticated && session.csrf_token === restoreSessionToken.current && <dialog ref={dialog} className={dialogClass} data-testid="backup-restore-confirm" data-site-id={restore.site.id} data-backup-id={restore.backup.id} data-backup-sha={restore.backup.sha256} aria-labelledby="backup-restore-title" aria-describedby="backup-restore-description" onCancel={event => { event.preventDefault(); closeRestore(); }}><div className="flex flex-col gap-3">
+      <h1 id="backup-restore-title" className={dialogTitle}>{filePath ? "Review single-file restore" : "Review ZIP restore"}</h1>
+      <div id="backup-restore-description" className="text-sm text-foreground wrap-anywhere">{filePath ? <>Restore only <strong className="font-semibold">{filePath}</strong> in <strong className="font-semibold">{restore.site.name}</strong>. Every other currently saved file stays unchanged.</> : <>Replace the saved app-owned static files of <strong className="font-semibold">{restore.site.name}</strong> with the snapshot from {dateLabel(restore.backup.created_at)}, or choose one file below. This does not restore a server, database or mail system.</>}</div>
+      <dl className="grid gap-3 sm:grid-cols-2"><Fact term="Snapshot">{fileCount(restore.backup.files)} · {bytes(restore.backup.bytes)} · revision {restore.backup.revision}</Fact><Fact term="Expected current revision">{restore.site.revision}</Fact></dl>
+      {busy === "Verifying restore preview" && <div className="text-sm text-foreground" role="status" data-testid="restore-preview-loading">Verifying current saved files and the selected archive. No restore has been sent…</div>}
+      {previewVerified && preview && <div className="flex min-w-0 flex-col gap-1.5"><label htmlFor="backup-restore-file-picker" className="text-sm font-medium text-foreground">Restore scope</label><NativeSelect id="backup-restore-file-picker" data-testid="backup-restore-file-picker" className="w-full" value={filePath} disabled={Boolean(busy)} onChange={event => void chooseRestoreFile(event.target.value)}><NativeSelectOption value="">All files from this ZIP</NativeSelectOption>{preview.files.filter(file => file.after).map(file => <NativeSelectOption key={file.path} value={file.path}>Only {file.path}</NativeSelectOption>)}</NativeSelect><div className="text-xs text-muted-foreground">Select one archived file to preserve all other current saved files.</div></div>}
+      {busy === "Verifying selected file" && <div className="text-sm text-foreground" role="status">Verifying the selected file and merged website limits…</div>}
+      {filePath && filePreview && previewVerified && <section className="flex min-w-0 flex-col gap-1.5 rounded-md border border-border p-3 text-sm text-foreground" data-testid="backup-file-restore-preview" aria-label="Verified single-file restore preview"><div className="wrap-anywhere">Only <code className="font-mono text-xs">{filePreview.file.path}</code> will be {filePreview.file.kind === "added" ? "added" : filePreview.file.kind === "unchanged" ? "restored with identical bytes" : "replaced"}.</div><div>Current: {filePreview.file.before ? bytes(filePreview.file.before.bytes) : "absent"} / snapshot: {bytes(filePreview.file.after!.bytes)}</div><div className="text-muted-foreground">{filePreview.preserved_files} other saved files preserved. Website routing, state, saved ZIPs and schedule stay unchanged.</div></section>}
+      {!filePath && previewVerified && preview && <section className="flex min-w-0 flex-col gap-3" data-testid="restore-preview-verified" aria-label="Verified restore preview">
+        <div className="text-sm text-foreground" role="status">Verified preview · current revision {preview.current_revision} and selected snapshot revision {preview.backup_revision}</div>
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">{restoreKinds.map(kind => <div key={kind} className="min-w-0 rounded-md border border-border p-2"><dt className="text-xs capitalize text-muted-foreground">{kind}</dt><dd className="mt-1 text-lg font-semibold tabular-nums text-foreground" data-testid={`restore-count-${kind}`}>{preview.counts[kind]}</dd></div>)}</dl>
+        {preview.counts.added + preview.counts.modified + preview.counts.removed === 0 && <div className="text-sm text-foreground" data-testid="restore-preview-no-changes">No file content changes were found. Confirmation still sends a restore request.</div>}
+        <ul className="m-0 max-h-60 list-none overflow-y-auto overscroll-contain border-y border-border p-0" aria-label="File changes">{preview.files.map(file => <li key={file.path} data-kind={file.kind} className="border-b border-border py-2.5 last:border-b-0"><div className="flex items-baseline justify-between gap-3"><code className="min-w-0 font-mono text-xs wrap-anywhere text-foreground">{file.path}</code><span className="shrink-0 text-xs capitalize text-muted-foreground">{file.kind}</span></div><small className="mt-1 block text-xs text-muted-foreground">Current: {file.before ? bytes(file.before.bytes) : "absent"} · snapshot: {file.after ? bytes(file.after.bytes) : "absent"}</small></li>)}</ul>
+        <div className="text-xs text-muted-foreground">Hashes were checked by the server. Only file paths and metadata are shown; a new server change can still reject confirmation.</div>
       </section>}
-      {previewError && <p role="alert" className="website-error" data-testid="restore-preview-error">{previewError}</p>}
-      {previewVerified && restore.site.revision === Number.MAX_SAFE_INTEGER && <p className="restore-preview-status" role="status">The website revision limit was reached. This preview is readable, but a further restore cannot be confirmed.</p>}
-      {!previewVerified && !busy && !previewError && <p className="restore-preview-status">A matching verified preview is required. Refresh records and review the restore again.</p>}
-      <p>Your unsaved Websites editor draft will be kept. Compare it with the restored files before saving it.</p>
-      {!filePath && <label><input type="checkbox" data-testid="restore-confirm-checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!canRestore} />I reviewed the verified preview and understand that the current saved files will be replaced.</label>}
-      {filePath && <label><input type="checkbox" data-testid="backup-file-restore-checkbox" checked={fileConfirmed} disabled={!canRestoreFile} onChange={event => setFileConfirmed(event.target.checked)} />I reviewed this preview and confirm restoring only {filePath}. All other saved files will be preserved.</label>}
-      <div><Button label="Cancel restore" variant="ghost" isDisabled={busy === "Restoring ZIP backup" || busy === "Restoring selected file"} onClick={closeRestore} />{(!fresh || previewError) && <Button label="Refresh backup records" variant="secondary" isDisabled={Boolean(busy)} onClick={refreshRecords} />}{filePath ? <Button label="Restore only selected file" data-testid="backup-file-restore-submit" variant="primary" isDisabled={!fileConfirmed || !canRestoreFile} isLoading={busy === "Restoring selected file"} onClick={() => void restoreSelectedFile()} /> : <Button label="Confirm restore" variant="primary" isDisabled={!confirmed || !canRestore} isLoading={busy === "Restoring ZIP backup"} onClick={() => void confirmRestore()} data-testid="restore-confirm" />}</div>
-      {error && !previewError && <p role="alert" className="website-error">{error}</p>}
-    </dialog>}
-  </section>;
+      {previewError && <ProblemAlert problem={problemFor(previewError)} testId="restore-preview-error" />}
+      {previewVerified && restore.site.revision === Number.MAX_SAFE_INTEGER && <div className="text-sm text-foreground" role="status">The website revision limit was reached. This preview is readable, but a further restore cannot be confirmed.</div>}
+      {!previewVerified && !busy && !previewError && <div className="text-sm text-foreground">A matching verified preview is required. Refresh records and review the restore again.</div>}
+      <div className="text-sm text-muted-foreground">Your unsaved Websites editor draft will be kept. Compare it with the restored files before saving it.</div>
+      {!filePath && <label className={checkLabel}><input type="checkbox" data-testid="restore-confirm-checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!canRestore} />I reviewed the verified preview and understand that the current saved files will be replaced.</label>}
+      {filePath && <label className={checkLabel}><input type="checkbox" data-testid="backup-file-restore-checkbox" checked={fileConfirmed} disabled={!canRestoreFile} onChange={event => setFileConfirmed(event.target.checked)} />I reviewed this preview and confirm restoring only {filePath}. All other saved files will be preserved.</label>}
+      <div className="mt-2 flex flex-wrap justify-end gap-2"><Button variant="ghost" className={rowControl} disabled={busy === "Restoring ZIP backup" || busy === "Restoring selected file"} onClick={closeRestore}>Cancel restore</Button>{(!fresh || previewError) && <Button variant="outline" className={rowControl} disabled={Boolean(busy)} onClick={refreshRecords}>Refresh backup records</Button>}{filePath ? <Button className={rowControl} data-testid="backup-file-restore-submit" disabled={!fileConfirmed || !canRestoreFile} onClick={() => void restoreSelectedFile()}><Busy when={busy === "Restoring selected file"} />Restore only selected file</Button> : <Button className={rowControl} disabled={!confirmed || !canRestore} onClick={() => void confirmRestore()} data-testid="restore-confirm"><Busy when={busy === "Restoring ZIP backup"} />Confirm restore</Button>}</div>
+      {error && !previewError && <ProblemAlert problem={problemFor(error)} testId="backup-restore-problem" />}
+    </div></dialog>}
+  </div>;
 }

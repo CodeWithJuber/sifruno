@@ -354,6 +354,10 @@ func (f *fakeNative) Delete(_ context.Context, r record, moved func() error) err
 	if actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.Home != r.Account.Home {
 		return ErrRecovery
 	}
+	// A home that is not the recorded one: refused, nothing removed.
+	if f.failure == "delete-refused" {
+		return atStep("home", deleteRefused(DeleteHome))
+	}
 	if f.failure == "busy" {
 		return errAccountBusy
 	}

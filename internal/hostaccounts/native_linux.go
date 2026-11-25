@@ -1005,13 +1005,14 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 // UID must be the only one, with the recorded UID, GID, tag, home and the
 // nologin shell; a group with its name or GID must be its private group
 // alone; the home, when there, must be the recorded directory of the
-// account's, and the trash the broker's own. Then it removes the user (its
-// processes ended first), the private group if userdel left it, moves the
-// home into the trash (moved records that), removes the account's files,
-// and the marker last, so a crash mid-delete stays visible and running it
-// again finishes the rest: what is already gone counts as removed, a home
-// in the trash too. The store takes a live site out of the config before
-// it calls Delete.
+// account's, and the trash the broker's own; otherwise it answers a
+// *DeleteRefusedError naming which, having removed nothing. Then it
+// removes the user (its processes ended first), the private group if
+// userdel left it, moves the home into the trash (moved records that),
+// removes the account's files, and the marker last, so a crash mid-delete
+// stays visible and running it again finishes the rest: what is already
+// gone counts as removed, a home in the trash too. The store takes a live
+// site out of the config before it calls Delete.
 func (n *linuxSystem) Delete(ctx context.Context, r record, moved func() error) error {
 	if !validUsername(r.Account.Username) || !idPattern.MatchString(r.Account.ID) || r.Account.UID < firstAccountID || r.Account.UID > lastAccountID || r.Account.GID != r.Account.UID || r.Account.UID == int(n.opts.ControllerUID) || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
 		return atStep("record", ErrRecovery)
@@ -1022,7 +1023,7 @@ func (n *linuxSystem) Delete(ctx context.Context, r record, moved func() error) 
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
 	missing := errors.Is(e, errMarkerMissing)
 	if e != nil && !missing || e == nil && marker != r.Ownership.Marker {
-		return atStep("marker", ErrRecovery)
+		return atStep("marker", deleteRefused(DeleteMarker))
 	}
 	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return atStep("host policy", ErrUnavailable)
@@ -1035,16 +1036,16 @@ func (n *linuxSystem) Delete(ctx context.Context, r record, moved func() error) 
 	// journal's name, IDs, tag, home and shell, and a private group alone.
 	userThere, e := createdUser(db, r)
 	if e != nil {
-		return atStep("passwd", ErrRecovery)
+		return atStep("passwd", deleteRefused(DeleteUser))
 	}
 	groupThere, e := createdGroup(db, r)
 	if e != nil {
-		return atStep("group", ErrRecovery)
+		return atStep("group", deleteRefused(DeleteGroup))
 	}
 	// The marker goes last: missing while a user or group of the account is
 	// there, it was not this delete that removed it.
 	if missing && (userThere || groupThere) {
-		return atStep("marker", ErrRecovery)
+		return atStep("marker", deleteRefused(DeleteMarker))
 	}
 	if authority(n.opts.HomesDir) != nil {
 		return atStep("homes folder", ErrRecovery)
@@ -1064,7 +1065,7 @@ func (n *linuxSystem) Delete(ctx context.Context, r record, moved func() error) 
 	case e != nil:
 		return atStep("home", ErrUnavailable)
 	case !homeIs(home, r):
-		return atStep("home", ErrRecovery)
+		return atStep("home", deleteRefused(DeleteHome))
 	default:
 		homeThere = true
 	}
@@ -1072,7 +1073,10 @@ func (n *linuxSystem) Delete(ctx context.Context, r record, moved func() error) 
 	// never stops between userdel and the home for want of it.
 	var trash *os.File
 	if homeThere {
-		if trash, e = trashIn(homes, true, rootOwner); e != nil {
+		switch trash, e = trashIn(homes, true, rootOwner); {
+		case errors.Is(e, ErrRecovery):
+			return atStep("trash", deleteRefused(DeleteTrash))
+		case e != nil:
 			return atStep("trash", e)
 		}
 		defer trash.Close()

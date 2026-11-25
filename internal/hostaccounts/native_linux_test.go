@@ -1363,7 +1363,8 @@ func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = unix.Unmount(trash, unix.MNT_DETACH) })
-		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.Is(err, ErrRecovery) {
+		var why *DeleteRefusedError
+		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.As(err, &why) || why.Reason != DeleteTrash {
 			t.Fatalf("a trash on another filesystem was used: %v", err)
 		}
 		for _, path := range []string{r.Account.PublicHTML, n.markerPath(r)} {
@@ -1381,7 +1382,8 @@ func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
 		runShadow(t, "/usr/sbin/userdel", "--", r.Account.Username)
 		_ = exec.Command("/usr/sbin/groupdel", "--", r.Account.Username).Run()
 		runShadow(t, "/usr/sbin/groupadd", "--gid", strconv.Itoa(freeTestID(t, r.Account.GID)), "--", r.Account.Username)
-		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.Is(err, ErrRecovery) {
+		var why *DeleteRefusedError
+		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.As(err, &why) || why.Reason != DeleteGroup {
 			t.Fatalf("a group of another GID was taken for the account's: %v", err)
 		}
 		for _, path := range []string{r.Account.PublicHTML, n.markerPath(r)} {
@@ -1393,4 +1395,79 @@ func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
 			t.Fatal("a refused delete removed the other group")
 		}
 	})
+}
+
+// Root-only: the store over the native system, end to end. A delete the
+// broker cannot finish (a trash that is not its own: mode 0755) holds up
+// every account; the operator's finish is refused, nothing removed, until
+// the trash is fixed, and then removes the user, moves the home into the
+// trash, ends the delete with one row and unblocks a create. Slice drop-ins
+// go to a scratch folder; no web operation. Run on the dev VM with: go test
+// -c ./internal/hostaccounts && sudo ./hostaccounts.test -test.run RootOnly
+func TestRootOnlyFinishDelete(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes users, groups and root-owned homes")
+	}
+	n := rootTestSystem(t)
+	n.unitDir = filepath.Join(filepath.Dir(n.opts.StateDir), "units")
+	if os.Mkdir(n.unitDir, 0755) != nil || os.Chmod(n.unitDir, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	ctx := t.Context()
+	s, err := openStore(ctx, n.opts, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	name, other := "sffin"+strconv.Itoa(os.Getpid()), "sfoth"+strconv.Itoa(os.Getpid())
+	for _, user := range []string{name, other} {
+		t.Cleanup(func() {
+			_ = exec.Command("/usr/sbin/userdel", "--", user).Run()
+			_ = exec.Command("/usr/sbin/groupdel", "--", user).Run()
+			_ = os.Remove(filepath.Join(mailSpoolDir, user))
+		})
+	}
+	a, err := s.create(ctx, CreateInput{Username: name, Domain: name + ".test", Reason: "Finish delete proof"}, "root test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trash := filepath.Join(n.opts.HomesDir, trashName)
+	if os.Mkdir(trash, 0755) != nil || os.Chmod(trash, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: a.Revision, Reason: "Remove"}, "root test"); err != ErrRecovery {
+		t.Fatalf("a delete with a trash that is not the broker's: %v", err)
+	}
+	if _, err := s.create(ctx, CreateInput{Username: other, Domain: other + ".test", Reason: "Held up"}, "root test"); err != ErrRecovery {
+		t.Fatalf("a create while the delete is unfinished: %v", err)
+	}
+	var why *DeleteRefusedError
+	if _, err := s.finishDelete(ctx, a.ID, FinishDeleteInput{"Try"}, "root operator"); !errors.As(err, &why) || why.Reason != DeleteTrash {
+		t.Fatalf("finished with the trash as it was: %v", err)
+	}
+	if _, err := n.identity(recordFor(t, s, a.ID)); err != nil {
+		t.Fatalf("a refused finish changed the user: %v", err)
+	}
+	if _, err := os.Lstat(a.PublicHTML); err != nil {
+		t.Fatalf("a refused finish moved the home: %v", err)
+	}
+	if os.Chmod(trash, 0700) != nil {
+		t.Fatal("fixture")
+	}
+	if _, err := s.finishDelete(ctx, a.ID, FinishDeleteInput{"Trash fixed"}, "root operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("/usr/bin/getent", "passwd", name).Output(); err == nil {
+		t.Fatal("the user is left")
+	}
+	if _, err := os.Lstat(filepath.Join(trash, a.ID)); err != nil {
+		t.Fatalf("the home is not in the trash: %v", err)
+	}
+	rows := historyOf(t, s, a.ID)
+	if last := rows[len(rows)-1]; last.Status != "finished" || last.Actor != "root operator" {
+		t.Fatalf("journal %+v", rows)
+	}
+	if _, err := s.create(ctx, CreateInput{Username: other, Domain: other + ".test", Reason: "Unblocked"}, "root test"); err != nil {
+		t.Fatalf("a create after the finish: %v", err)
+	}
 }

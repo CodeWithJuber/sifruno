@@ -189,8 +189,12 @@ func (s *store) resultEvent(r record, p pending, status string) (record, error) 
 	return s.appendEvent(r, event)
 }
 
-// abandonedStatus ends a create the operator abandoned (endAbandonedCreate).
-const abandonedStatus = "abandoned"
+// abandonedStatus ends a create the operator abandoned (endAbandonedCreate);
+// finishedStatus a delete the operator finished (finishDelete).
+const (
+	abandonedStatus = "abandoned"
+	finishedStatus  = "finished"
+)
 
 // endAbandonedCreate ends the unfinished create p of r, whose leftovers
 // AbandonCreate removed: its last row is status abandoned, with the
@@ -203,8 +207,9 @@ func (s *store) endAbandonedCreate(r record, p pending, actor, reason string) er
 }
 
 // endDelete ends the delete p of r, whose user, group, home, files and
-// marker are gone: its last row is status (succeeded, reconciled at start)
-// with the actor and reason given (endWithRecord).
+// marker are gone: its last row is status (succeeded, reconciled at start,
+// finished by the operator) with the actor and reason given
+// (endWithRecord).
 func (s *store) endDelete(r record, p pending, status, actor, reason string) error {
 	if p.Action != "delete" {
 		return recovery("delete", r, "find the delete's intent", ErrRecovery)

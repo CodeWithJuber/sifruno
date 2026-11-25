@@ -172,6 +172,24 @@ transaction that reads the stored record again: a crash leaves the delete
 unfinished or ended, never one without the other. The account list refuses
 a record that carries `user_removal` without a pending delete.
 
+A delete that cannot be finished automatically is the operator's to finish
+(`POST /v1/accounts/{id}/finish-delete`, reason only; the panel serves it
+to signed-in admins, never to an API token), once what stopped it is
+fixed. Only an account whose pending operation is a delete can be
+finished. If the delete had not yet taken the site out of the config,
+that comes first. Then the native delete runs as at a start, without
+checking the account first, and checks everything before it removes
+anything: a refusal answers 409 `delete_refused` with its reason
+(`no_unfinished_delete`, `marker`, `user`, `group`, `home`, `trash`,
+`processes`), removes nothing and journals nothing, and the recovery log
+names it. Otherwise it removes as a delete does, the slice drop-in goes,
+and one bbolt transaction journals the delete's last row (status
+`finished`, with the operator's actor and reason) and removes the record,
+so every other account can change again. A run stopped half way leaves
+the delete unfinished, and running it again treats what is already gone
+as removed. The same refusals hold a delete pending when it runs as
+usual or at a start.
+
 A create that cannot be finished is the operator's to abandon
 (`POST /v1/accounts/{id}/abandon-create`, reason only; the panel serves it to
 signed-in admins, never to an API token). Only an account whose pending

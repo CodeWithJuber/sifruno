@@ -2,6 +2,8 @@ package hostaccounts
 
 import (
 	"context"
+	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -175,6 +177,115 @@ func TestDeleteStoppedAfterTheMoveFinishesAtStart(t *testing.T) {
 	if _, err := reopened.delete(ctx, b.ID, DeleteInput{ExpectedRevision: b.Revision, Reason: "Remove"}, "test operator"); err != nil || woken != 1 {
 		t.Fatalf("a delete that ends: %v, woken %d", err, woken)
 	}
+}
+
+// A delete no start can finish holds up every account until the operator
+// finishes it: refused with its reason, nothing removed or journaled, while
+// something is not provably the account's; then its user and drop-in go,
+// one row ends it, and every account changes again.
+func TestFinishDeleteUnblocksEveryAccount(t *testing.T) {
+	logged := captureRecoveryLog(t)
+	s, f, opts := setupStore(t)
+	ctx := context.Background()
+	woken := 0
+	s.trashWake = func() { woken++ }
+	other := createFixture(t, s)
+	a, err := s.create(ctx, CreateInput{Username: "delacct", Domain: "del.test", Reason: "fixture"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.failure = "delete-refused"
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: a.Revision, Reason: "Remove"}, "test operator"); err != ErrRecovery {
+		t.Fatalf("a refused delete: %v", err)
+	}
+	if !strings.Contains(logged.String(), `operation=delete account=`+a.ID+` user=delacct step="remove / home" error="refused: home"`) {
+		t.Fatalf("the refusal was not logged: %q", logged.String())
+	}
+	if _, err := s.setState(ctx, other.ID, StateInput{State: "suspended", ExpectedRevision: other.Revision, Reason: "Held up"}, "test operator"); err != ErrRecovery {
+		t.Fatalf("another account changed while the delete was unfinished: %v", err)
+	}
+	sequence := func() uint64 { return recordFor(t, s, a.ID).HistorySequence }
+	before := sequence()
+
+	var refused *DeleteRefusedError
+	if _, err := s.finishDelete(ctx, other.ID, FinishDeleteInput{"Not a delete"}, "root operator"); !errors.As(err, &refused) || refused.Reason != DeleteNoUnfinished {
+		t.Fatalf("an active account was finished: %v", err)
+	}
+	if !strings.Contains(logged.String(), `operation=finish_delete account=`+other.ID+` user=fixtureacct step="check" error="refused: no_unfinished_delete"`) {
+		t.Fatalf("the refusal was not logged: %q", logged.String())
+	}
+	if _, err := s.finishDelete(ctx, strings.Repeat("0", 32), FinishDeleteInput{"No such account"}, "root operator"); err != ErrNotFound {
+		t.Fatal(err)
+	}
+	if _, err := s.finishDelete(ctx, a.ID, FinishDeleteInput{" "}, "root operator"); err != ErrInvalid {
+		t.Fatal(err)
+	}
+	for failure, reason := range map[string]string{"delete-refused": DeleteHome, "busy": DeleteProcesses} {
+		f.failure = failure
+		if _, err := s.finishDelete(ctx, a.ID, FinishDeleteInput{"Try"}, "root operator"); !errors.As(err, &refused) || refused.Reason != reason {
+			t.Fatalf("%s: %v", failure, err)
+		}
+		if _, ok := f.users["delacct"]; !ok || sequence() != before {
+			t.Fatalf("%s: a refused finish removed or journaled something", failure)
+		}
+	}
+
+	f.failure = ""
+	done, err := s.finishDelete(ctx, a.ID, FinishDeleteInput{"Leftover of a delete"}, "root operator")
+	if err != nil || done.ID != a.ID {
+		t.Fatal(done, err)
+	}
+	if _, ok := f.users["delacct"]; ok {
+		t.Fatal("the user is left")
+	}
+	if _, ok := f.dropIns[a.UID]; ok {
+		t.Fatal("the slice drop-in is left")
+	}
+	if woken != 1 {
+		t.Fatalf("the trash remover was woken %d times", woken)
+	}
+	rows := historyOf(t, s, a.ID)
+	last := rows[len(rows)-1]
+	if last.Status != "finished" || last.Action != "delete" || last.Actor != "root operator" || last.Reason != "Leftover of a delete" || last.OperationID != rows[len(rows)-3].OperationID || last.Sequence != before+1 {
+		t.Fatalf("journal %+v", rows)
+	}
+	if _, err := s.setState(ctx, other.ID, StateInput{State: "suspended", ExpectedRevision: other.Revision, Reason: "Free again"}, "test operator"); err != nil {
+		t.Fatalf("the other account is still held up: %v", err)
+	}
+	s.close()
+	reopened, err := openStore(ctx, opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.close()
+	if items, err := reopened.list(ctx); err != nil || len(items) != 1 || items[0].ID != other.ID {
+		t.Fatal(items, err)
+	}
+}
+
+// The broker answers a refused finish with its reason, which the client
+// reads back as a *DeleteRefusedError.
+func TestFinishDeleteRefusalIsAnswered(t *testing.T) {
+	captureRecoveryLog(t)
+	s, _, _ := setupStore(t)
+	a := createFixture(t, s)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://unix/v1/accounts/"+a.ID+"/finish-delete", strings.NewReader(`{"input":{"reason":"Leftover"},"actor":"operator"}`))
+	r.Header.Set("Content-Type", "application/json")
+	handler(s).ServeHTTP(w, r)
+	if w.Code != 409 || strings.TrimSpace(w.Body.String()) != `{"error":"delete_refused","reason":"no_unfinished_delete"}` {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	for _, body := range []string{`{"input":{"reason":"x","expected_revision":1},"actor":"operator"}`, `{"input":{},"actor":"operator"}`} {
+		w = httptest.NewRecorder()
+		r = httptest.NewRequest("POST", "http://unix/v1/accounts/"+a.ID+"/finish-delete", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		handler(s).ServeHTTP(w, r)
+		if w.Code != 400 && w.Code != 422 {
+			t.Fatalf("%s: %d %s", body, w.Code, w.Body.String())
+		}
+	}
+	var _ DeleteRecoveryService = NewClient("").(*client)
 }
 
 // Only a pending delete may carry the flag that lets a start skip the

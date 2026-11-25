@@ -96,6 +96,7 @@ func (s *store) refreshed(ctx context.Context) error {
 func errorClass(err error) string {
 	var command *commandError
 	var refused *AbandonRefusedError
+	var deleteRefusal *DeleteRefusedError
 	var errno syscall.Errno
 	switch {
 	case err == nil:
@@ -104,6 +105,8 @@ func errorClass(err error) string {
 		return command.class()
 	case errors.As(err, &refused) && abandonReasonPattern.MatchString(refused.Reason):
 		return "refused: " + refused.Reason
+	case errors.As(err, &deleteRefusal) && abandonReasonPattern.MatchString(deleteRefusal.Reason):
+		return "refused: " + deleteRefusal.Reason
 	case errors.Is(err, errHoldsEveryChange):
 		return errHoldsEveryChange.Error()
 	case errors.Is(err, errAccountBusy):

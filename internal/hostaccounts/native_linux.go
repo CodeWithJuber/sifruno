@@ -236,12 +236,34 @@ func (b *commandBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-// commandTimeout bounds one fixed command; a slower one gets its own limit
-// through commandWithin.
+// commandTimeout bounds one fixed command that changes no account file
+// (passwd --status, chage --list, systemctl list-units, an xfs_quota
+// report or limit); a slower one gets its own limit through commandWithin.
 const commandTimeout = 15 * time.Second
 
+// accountFileWriters are the fixed utilities that write /etc/passwd, group,
+// shadow or gshadow. One killed mid-way leaves half an account: on a loaded
+// host useradd was killed after it had written passwd and group and made
+// the home, which it makes root's with mode 0 before it chowns it. So these
+// are never cut short at commandTimeout: each runs until the context of the
+// operation that started it ends (every caller gives it one after the
+// intent is journaled, webContext), and at most accountWriteTimeout.
+var accountFileWriters = map[string]bool{"/usr/sbin/groupadd": true, "/usr/sbin/useradd": true, "/usr/sbin/usermod": true, "/usr/sbin/userdel": true}
+
+// accountWriteTimeout only caps an account file writer whose context has no
+// earlier end; the operation's own context is what bounds it.
+const accountWriteTimeout = webApplyTimeout
+
+// commandLimit is the time limit of one run of a fixed utility.
+func commandLimit(path string) time.Duration {
+	if accountFileWriters[path] {
+		return accountWriteTimeout
+	}
+	return commandTimeout
+}
+
 func (n *linuxSystem) command(ctx context.Context, path string, args ...string) ([]byte, error) {
-	return n.commandWithin(ctx, commandTimeout, path, args...)
+	return n.commandWithin(ctx, commandLimit(path), path, args...)
 }
 
 // commandWithin is command with its own time limit, for a program that is
@@ -951,7 +973,7 @@ func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
 		},
 		end: func(ctx context.Context) error { return n.EndProcesses(ctx, r) },
 		userdel: func(ctx context.Context) (int, error) {
-			_, code, e := n.commandStatus(ctx, commandTimeout, "/usr/sbin/userdel", "--", r.Account.Username)
+			_, code, e := n.commandStatus(ctx, commandLimit("/usr/sbin/userdel"), "/usr/sbin/userdel", "--", r.Account.Username)
 			return code, e
 		},
 		putBack: func(ctx context.Context) error {

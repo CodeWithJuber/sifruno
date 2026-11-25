@@ -651,7 +651,13 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 						continue
 					}
 				}
-				if e := s.native.Delete(ctx, r); e != nil {
+				// The removal runs on its own limit, as in delete: userdel
+				// killed by the start's shorter one would leave the user
+				// half removed.
+				removeCtx, cancel := webContext(ctx)
+				e := s.native.Delete(removeCtx, r)
+				cancel()
+				if e != nil {
 					// A delete that stopped before userdel changed anything (a
 					// busy user, a failed /proc read, time run out) ends
 					// rejected, as in delete: the site goes back and nothing
@@ -1420,14 +1426,19 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	if err != nil {
 		return Account{}, ErrRecovery
 	}
-	if s.native.SetState(ctx, r, in.State) != nil {
+	// After the intent is journaled usermod runs on the operation's own
+	// limit, not the caller's: one killed mid-write leaves the account in a
+	// state the next start cannot finish.
+	stateCtx, cancel := webContext(ctx)
+	defer cancel()
+	if s.native.SetState(stateCtx, r, in.State) != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
 	}
 	// Only what root controls: the tenant's own folders cannot make a
 	// suspend of its account, or any state change, stay pending.
 	next := targetRecord(r, in.State)
-	if s.native.VerifyAccount(ctx, next) != nil {
+	if s.native.VerifyAccount(stateCtx, next) != nil {
 		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
 		return Account{}, ErrRecovery
 	}

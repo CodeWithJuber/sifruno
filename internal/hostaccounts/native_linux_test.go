@@ -52,6 +52,30 @@ func TestUseraddGeneratedCommentContract(t *testing.T) {
 	}
 }
 
+// Every fixed utility that writes passwd, group, shadow or gshadow runs to
+// its operation's limit; the others keep the short one. A writer added to
+// the fixed utilities fails here until it is classed.
+func TestAccountFileWritersRunToTheOperationsLimit(t *testing.T) {
+	writers := map[string]bool{"/usr/sbin/groupadd": true, "/usr/sbin/useradd": true, "/usr/sbin/usermod": true, "/usr/sbin/userdel": true, "/usr/sbin/groupdel": true}
+	for _, path := range fixedUtilities {
+		limit := commandLimit(path)
+		switch {
+		case writers[path] && (!accountFileWriters[path] || limit != accountWriteTimeout):
+			t.Fatalf("%s writes account files but has the limit %v", path, limit)
+		case !writers[path] && limit != commandTimeout:
+			t.Fatalf("%s writes no account file but has the limit %v", path, limit)
+		}
+	}
+	for path := range accountFileWriters {
+		if !writers[path] {
+			t.Fatalf("%s is classed as an account file writer", path)
+		}
+	}
+	if accountWriteTimeout < webApplyTimeout || accountWriteTimeout <= commandTimeout {
+		t.Fatalf("an account file writer may be cut short at %v", accountWriteTimeout)
+	}
+}
+
 func TestPrivateGroupOnlyContract(t *testing.T) {
 	if !privateGroupOnly([]nativeGroup{{"fixtureacct", 20000, ""}, {"wheel", 10, "root"}}, "fixtureacct", 20000) {
 		t.Fatal("private primary group refused")

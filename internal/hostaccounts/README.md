@@ -25,9 +25,16 @@ limits, and `kill` of a site run's own scope), systemd-run, setpriv and env
 (a site run's transient scope, its drop to the account's user and its
 environment, see WordPress).
 Arguments are fixed typed options and validated account identity. Subprocesses
-have fixed credential-free locale/PATH, no shell and bounded output. Commands
-have15second deadlines within the broker request's45second overall deadline;
-the controller client also has45seconds. No /etc/shadow hashes are read or logged;
+have fixed credential-free locale/PATH, no shell and bounded output. A command
+that changes no account file (passwd, chage, a systemctl listing, xfs_quota)
+has a 15-second deadline. groupadd, useradd, usermod and userdel write
+/etc/passwd, group, shadow and gshadow; killed mid-way they leave half an
+account (on a loaded host useradd was killed after it had written passwd and
+group and made the home, which shadow-utils makes root's with mode 0 before it
+chowns it), so they are never cut short at 15 seconds. Each runs until its
+operation's own limit ends: a create, a delete and a suspend or resume run
+their root steps on a four-minute limit of their own, not on the request's 45
+seconds, and the controller client waits for them longer than that. No /etc/shadow hashes are read or logged;
 locked-password and account-expiry observations use passwd status and chage list.
 Only exact locked status tokens L and LK are supported. The root-owned regular
 nonwritable /etc/default/useradd must contain exactly one literal

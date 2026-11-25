@@ -29,6 +29,8 @@ type fakeNative struct {
 	changed       bool
 	// refuseState names a state SetState fails to set, changing nothing.
 	refuseState string
+	// stateTimeLeft is how long the context of the last SetState had left.
+	stateTimeLeft time.Duration
 	// siteApplies counts ApplySites calls, failed ones included.
 	siteApplies int
 	// missingPath is a tenant path that is gone. ApplySites and ApplyWeb
@@ -426,8 +428,11 @@ func (f *fakeNative) SetSSHKeys(_ context.Context, r record, canonical []string)
 	}
 	return nil
 }
-func (f *fakeNative) SetState(_ context.Context, r record, state string) error {
+func (f *fakeNative) SetState(ctx context.Context, r record, state string) error {
 	f.calls++
+	if deadline, ok := ctx.Deadline(); ok {
+		f.stateTimeLeft = time.Until(deadline)
+	}
 	if state == f.refuseState {
 		return ErrUnavailable
 	}
@@ -615,6 +620,22 @@ func TestInterruptedStateAndExternalConflict(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+// A suspend's usermod runs on the operation's own limit once the intent is
+// journaled: a caller with little time left must not cut it short.
+func TestStateChangeRunsOnTheOperationsLimit(t *testing.T) {
+	s, f, _ := setupStore(t)
+	a := createFixture(t, s)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, e := s.setState(ctx, a.ID, StateInput{"suspended", a.Revision, "Short caller"}, "test operator"); e != nil {
+		t.Fatal(e)
+	}
+	if f.stateTimeLeft < webApplyTimeout-time.Minute {
+		t.Fatalf("the state change had %v, the caller's limit, not the operation's %v", f.stateTimeLeft, webApplyTimeout)
+	}
+}
+
 func TestImmutableJournalReplayRejectsTamper(t *testing.T) {
 	s, f, opts := setupStore(t)
 	a := createFixture(t, s)

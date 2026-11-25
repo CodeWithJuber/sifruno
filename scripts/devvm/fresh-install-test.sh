@@ -77,6 +77,23 @@ check "SELinux is still enforcing" test "$(getenforce)" = Enforcing
 echo "  SELinux labels of the two processes and their programs, for the record:"
 ps -o label=,user=,comm= -p "$(main_pid sifruno-broker.service)" -p "$(main_pid sifruno.service)" 2>&1 | sed 's/^/    /'
 ls -Z /usr/local/lib/sifruno/bin 2>&1 | sed 's/^/    /'
+check "the programs have the SELinux type bin_t" test "$(stat -c %C /usr/local/lib/sifruno/bin/hostbroker | cut -d: -f3)" = bin_t
+check "the broker runs as unconfined_service_t, not systemd's init_t" test "$(ps -o label= -p "$(main_pid sifruno-broker.service)" | cut -d: -f3)" = unconfined_service_t
+echo "## An account made through the installed panel and broker"
+# Every earlier proof ran its own broker; this one asks the installed
+# units, the way the wizard does, and removes what it made.
+pctl() { /usr/local/lib/sifruno/bin/panelctl --state /var/lib/sifpanel/state "$@"; }
+made="$(pctl accounts create --username smokeacct --domain smoke-install.test --reason 'fresh-install smoke test' 2>&1)"
+printf '%s\n' "$made" | sed 's/^/  | /'
+acct_id="$(sed -n 's/.*"id": *"\([0-9a-f]\{32\}\)".*/\1/p' <<<"$made" | head -n 1)"
+acct_rev="$(sed -n 's/.*"revision": *\([0-9]*\).*/\1/p' <<<"$made" | head -n 1)"
+check "the installed broker creates an account" test -n "$acct_id"
+check "its Linux user exists" id smokeacct
+if [ -n "$acct_id" ] && [ -n "$acct_rev" ]; then
+  gone="$(pctl accounts delete --id "$acct_id" --revision "$acct_rev" --reason 'fresh-install smoke test' 2>&1)"
+  printf '%s\n' "$gone" | sed 's/^/  | /'
+fi
+check "the installed broker deletes it again" bash -c '! id smokeacct'
 
 echo "## A second run of the installer changes nothing"
 second="$(bash /root/sifruno-release/sifruno-linux-amd64/install.sh 2>&1)"

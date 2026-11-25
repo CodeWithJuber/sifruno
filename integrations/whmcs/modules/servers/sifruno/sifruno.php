@@ -418,17 +418,10 @@ final class SifrunoSite
                 throw $panel->fail($what, $res);
             }
         }
-        if ($byDomain) {
-            $res = $panel->call($what, 'GET', '/api/v1/websites/sites', null, SifrunoPanel::READ_TIMEOUT);
-            if ($res['status'] !== 200 || !is_array($res['data']['sites'] ?? null)) {
-                throw $panel->fail($what, $res);
-            }
-            foreach ($res['data']['sites'] as $site) {
-                if (self::isSite($site) && $site['domain'] === $domain) {
-                    return ['site' => $site, 'job' => null];
-                }
-            }
-        }
+        // The job this service started is what ties a website to it: once the
+        // job has finished, its account is this service's and is saved, before
+        // any lookup by domain (which finds the website too, as soon as the
+        // panel lists it, but never saves it).
         $job = null;
         $jobId = self::stored($params, SifrunoPanel::JOB_FIELD);
         if (self::validId($jobId)) {
@@ -439,7 +432,6 @@ final class SifrunoSite
                 throw $panel->fail($what, $res);
             }
         }
-        // The job may have finished after the list was read.
         $account = $job['result']['account_id'] ?? null;
         if (($job['state'] ?? '') === 'succeeded' && self::validId($account) && $account !== $id) {
             $res = $panel->call($what, 'GET', '/api/v1/websites/sites/' . $account, null, SifrunoPanel::READ_TIMEOUT);
@@ -449,6 +441,17 @@ final class SifrunoSite
             }
             if ($res['status'] !== 404) {
                 throw $panel->fail($what, $res);
+            }
+        }
+        if ($byDomain) {
+            $res = $panel->call($what, 'GET', '/api/v1/websites/sites', null, SifrunoPanel::READ_TIMEOUT);
+            if ($res['status'] !== 200 || !is_array($res['data']['sites'] ?? null)) {
+                throw $panel->fail($what, $res);
+            }
+            foreach ($res['data']['sites'] as $site) {
+                if (self::isSite($site) && $site['domain'] === $domain) {
+                    return ['site' => $site, 'job' => null];
+                }
             }
         }
         return ['site' => null, 'job' => $job];

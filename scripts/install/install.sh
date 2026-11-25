@@ -1451,7 +1451,26 @@ step_programs() {
     changed "panel UI installed in $UI_DIR"
     RESTART_NEEDED=yes
   fi
+  label_programs
   relabel -R "$PREFIX"
+}
+
+# label_programs gives the programs' folder the SELinux type bin_t. Under
+# /usr/local/lib they would be lib_t, which has no domain transition, so
+# systemd would run both units as init_t, its own domain. init_t may not
+# set a process group (an AVC for setpgid), which the broker does before
+# every command it runs, so groupadd and useradd never started and every
+# account create answered 503. As bin_t the units run as
+# unconfined_service_t, like OpenLiteSpeed and MariaDB.
+label_programs() {
+  local spec="$BIN_DIR(/.*)?"
+  command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled || return 0
+  if ! semanage fcontext -l -C 2>/dev/null | awk '{print $1}' | grep -qxF -- "$spec"; then
+    semanage fcontext -a -t bin_t "$spec"
+    changed "SELinux file type bin_t recorded for $BIN_DIR"
+    # Running units keep the domain they started in until they restart.
+    RESTART_NEEDED=yes
+  fi
 }
 
 step_check_host() {

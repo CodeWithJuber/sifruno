@@ -28,6 +28,8 @@ readonly PANEL_HOME=/var/lib/sifpanel
 readonly PANEL_STATE="$PANEL_HOME/state"
 readonly DB_ADMIN_CNF="$PANEL_HOME/db-admin.cnf"
 readonly ACME_DIR=/var/lib/sifruno-acme
+# Each live site's LSCache store, CACHE_DIR/sifruno-u<id> (olsweb.CacheRoot).
+readonly CACHE_DIR=/var/lib/sifruno-lscache
 readonly PANEL_LISTEN=127.0.0.1:8080
 readonly PANEL_HTTPS_LISTEN=0.0.0.0:8443
 # phpMyAdmin's own origin: the panel's host names and certificate on the
@@ -1349,6 +1351,77 @@ step_acme() {
   stat -c 'ACME challenge folder: %U %a %n' "$ACME_DIR"
 }
 
+step_lscache() {
+  # OpenLiteSpeed makes each site's store here as root when it loads the
+  # config and gives that folder alone to its user (2770). It never changes
+  # this folder, unlike its own cachedata, which it gives to its user at
+  # every start. So the folder stays root's and the broker can remove a
+  # deleted site's store in it without following a link. 0711 lets
+  # OpenLiteSpeed's user reach a store by name but not list them; a folder
+  # OpenLiteSpeed made itself would be 0750, which its user cannot cross.
+  # It keeps /var/lib's SELinux label: OpenLiteSpeed runs as
+  # unconfined_service_t, which may write it.
+  ensure_dir root root 0711 "$CACHE_DIR"
+  relabel "$CACHE_DIR"
+  stat -c 'LSCache stores folder: %U %a %n' "$CACHE_DIR"
+  remove_old_cache_stores
+}
+
+# Earlier releases kept each site's store in OpenLiteSpeed's own cachedata,
+# which belongs to OpenLiteSpeed's user. A store there that no config names
+# any more is removed as that user, never as root, so a link put in its
+# place reaches nothing that user could not delete anyway. A store a vhost
+# still names is in use until the next website change rewrites every vhost
+# with its store in CACHE_DIR; a later run removes it. The stores are listed
+# before the config is read, so a store made meanwhile is left alone.
+remove_old_cache_stores() {
+  local old="$LSWS/cachedata" web_user named store
+  local stores=() kept=0 removed=0 failed=0
+  [ -d "$old" ] && [ ! -L "$old" ] || return 0
+  for store in "$old"/sifruno-u*; do
+    if [[ "${store##*/}" =~ ^sifruno-u[0-9a-f]{31}$ ]]; then
+      stores+=("$store")
+    fi
+  done
+  [ "${#stores[@]}" -gt 0 ] || return 0
+  web_user="$(ols_user)"
+  if ! id "$web_user" >/dev/null 2>&1; then
+    log "Note: ${#stores[@]} cache store(s) of earlier releases are left in $old, because OpenLiteSpeed's user '$web_user' (from $OLS_CONF) is not a user on this server and they are removed only as that user. Fix the 'user' line in $OLS_CONF, then run this again."
+    return 0
+  fi
+  # Every storagePath in OpenLiteSpeed's config, as an absolute path. A
+  # config that cannot be read removes nothing: a store it names may be in
+  # use.
+  if ! named="$(find "$LSWS/conf" -type f -name '*.conf' -exec awk -v root="$LSWS" '
+    $1 == "storagePath" {
+      p = $2; sub(/^\$SERVER_ROOT/, root, p)
+      if (p !~ /^\//) p = root "/" p
+      sub(/\/+$/, "", p); print p
+    }' {} +)"; then
+    log "Note: ${#stores[@]} cache store(s) of earlier releases are left in $old, because OpenLiteSpeed's config in $LSWS/conf could not be read to see which are still in use (the error is above). Fix that, then run this again."
+    return 0
+  fi
+  for store in "${stores[@]}"; do
+    if printf '%s\n' "$named" | grep -qxF -- "$store"; then
+      kept=$((kept + 1))
+    elif (cd / && setpriv --reuid="$web_user" --regid="$(id -g "$web_user")" --clear-groups \
+      --no-new-privs --inh-caps=-all --bounding-set=-all -- /usr/bin/rm -rf --one-file-system -- "$store"); then
+      removed=$((removed + 1))
+    else
+      failed=$((failed + 1))
+    fi
+  done
+  if [ "$removed" -gt 0 ]; then
+    changed "$removed cache store(s) of deleted or moved sites removed from $old (as $web_user)"
+  fi
+  if [ "$kept" -gt 0 ]; then
+    log "Note: $kept site(s) still use their cache store in $old. Their stores move to $CACHE_DIR at the next website change (any site's settings, a new site or a delete). Run this again after it to remove the old ones."
+  fi
+  if [ "$failed" -gt 0 ]; then
+    log "Note: $failed cache store(s) in $old could not be removed as $web_user (the errors are above). They hold only cached pages of sites no config names. Check that $old and the stores belong to $web_user, then run this again."
+  fi
+}
+
 step_programs() {
   local name
   ensure_dir root root 0755 "$PREFIX"
@@ -1736,6 +1809,7 @@ main() {
   step "Enable and start MariaDB, OpenLiteSpeed and crond" step_services
   step "Create the panel's MariaDB admin user and its 0600 option file $DB_ADMIN_CNF" step_db_admin
   step "Create the ACME challenge folder $ACME_DIR" step_acme
+  step "Create the LSCache stores folder $CACHE_DIR and remove unused stores earlier releases left in $LSWS/cachedata (as OpenLiteSpeed's user)" step_lscache
   step "Install the programs in $BIN_DIR and the panel UI in $UI_DIR" step_programs
   step "Check the host policy with hostbroker --check-host" step_check_host
   step "Prepare the broker's and the panel's folders with hostsetup --apply" step_layout

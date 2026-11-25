@@ -126,7 +126,7 @@ The installer ends by printing the first-run steps and the rollback steps for th
 | OpenLiteSpeed | Adds one `include` line and turns on namespace isolation in `/usr/local/lsws/conf/httpd_config.conf`. A backup is kept beside the file. |
 | MariaDB | Creates the admin user `sifpanel_dbadmin`; its password is only in `/var/lib/sifpanel/db-admin.cnf` (0600, `sifpanel`). |
 | Files | Programs in `/usr/local/lib/sifruno/bin`, the panel UI in `/usr/local/lib/sifruno/ui`, WP-CLI (pinned checksum) in `/usr/local/lib/sifruno/wp-cli.phar`, restic 0.20.0 for backups (pinned checksum) in `/usr/local/lib/sifruno/restic`. |
-| Folders | `/var/lib/sifpanel` and the panel's state in it, `/var/lib/sifruno-broker`, `/var/lib/sifruno-acme`, `/etc/sifruno`, `/run/sifruno-broker`. |
+| Folders | `/var/lib/sifpanel` and the panel's state in it, `/var/lib/sifruno-broker`, `/var/lib/sifruno-acme`, `/var/lib/sifruno-lscache` (root's, 0711: each website's page cache), `/etc/sifruno`, `/run/sifruno-broker`. On an upgrade, page caches that earlier releases kept in `/usr/local/lsws/cachedata` are removed, as OpenLiteSpeed's user, once no website uses them. |
 | Services | `sifruno-broker.service` (root; the only part that changes the host) and `sifruno.service` (the panel, as `sifpanel`), enabled and started. |
 
 It never changes the SELinux mode or the firewall. Backups are named `<file>.bak-YYYYMMDD-HHMM`. If sshd rejects the new policy, or the system cannot look up root after the nsswitch change, the installer puts the previous file back by itself and stops.

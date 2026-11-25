@@ -191,6 +191,16 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	remover := newTrashRemover(opts.HomesDir)
 	s.trashWake = remover.wake
 	go remover.run(ctx)
+	// OpenLiteSpeed reads a .htaccess only when it restarts, so with the
+	// web operation on, a .htaccess change on the homes filesystem restarts
+	// it gracefully, at most once per window, through the store lock as a
+	// web change does (htaccess_watch.go). The watcher closes its fanotify
+	// group when the broker returns.
+	if web != nil {
+		watching, stopWatching := context.WithCancel(ctx)
+		defer stopWatching()
+		startHtaccessWatch(watching, opts.HomesDir, s.reloadWebServer)
+	}
 	// Backups need no option: each operation checks restic's pin and its
 	// tools when it runs, and answers unavailable without them.
 	engine := newResticEngine(s.opts.StateDir)

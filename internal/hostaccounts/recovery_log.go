@@ -117,6 +117,8 @@ func errorClass(err error) string {
 		return "the web server's config test failed"
 	case errors.Is(err, errLimitsRejected):
 		return "the limits could not be applied"
+	case errors.Is(err, errFanotifyEvent):
+		return errFanotifyEvent.Error()
 	case errors.Is(err, ErrRecovery):
 		return "differs from what the broker recorded"
 	case errors.Is(err, ErrConflict):

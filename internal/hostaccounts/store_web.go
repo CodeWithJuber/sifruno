@@ -138,6 +138,40 @@ func (s *store) applySites(ctx context.Context, items []record, subject string) 
 	return s.native.ApplySites(applyCtx, webSites(items, ""), s.tenantBroken(items, subject))
 }
 
+// reloadWebServer restarts the web server gracefully for .htaccess changes
+// (htaccess_watch.go), the way every web change installs the config: under
+// the store lock, so it never runs inside another web operation, only while
+// no operation is unfinished (mutationReady: an unfinished one may have
+// half-written the config), and through ApplySites under the web
+// operation's limit. The site list comes from the records, so the config is
+// normally unchanged and nothing is written; it is tested as for any
+// change, and a config that fails its test is put back and not loaded. No
+// account changes and nothing is journaled; the caller logs a failure and
+// tries again later. An unfinished operation is answered before
+// mutationReady, which would log the account it names: the caller tries
+// again every window, and its line names no account (errHoldsEveryChange).
+func (s *store) reloadWebServer(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.web == nil || s.healthy() != nil {
+		return ErrUnavailable
+	}
+	items, err := s.records()
+	if err != nil {
+		return err
+	}
+	for _, r := range items {
+		if r.Pending != nil {
+			return errHoldsEveryChange
+		}
+	}
+	items, err = s.mutationReady(ctx)
+	if err != nil {
+		return err
+	}
+	return s.applySites(ctx, items, "")
+}
+
 // tenantBroken names the vhosts (by their directory name, as the config
 // test reports them) of live, served sites whose tenant changed what the
 // broker recorded in its home, other than the site of the account the

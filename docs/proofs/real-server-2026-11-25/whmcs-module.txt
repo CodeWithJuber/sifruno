@@ -1,0 +1,37 @@
+# guest: AlmaLinux release 9.8 (Olive Jaguar), kernel 5.14.0-687.60.1.el9_8.x86_64, SELinux Enforcing
+# openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+# module PHP: 8.3.37 curl 7.76.1 OpenSSL/3.5.8
+PASS  lsphp's PHP CLI has the curl and openssl extensions the module needs
+PASS  the broker runs
+PASS  the panel answers on 127.0.0.1:47895 as sifpanel
+  panel certificate: subject=O=Sifruno self-signed, CN=Sifruno panel X509v3 Subject Alternative Name:      IP Address:127.0.0.1
+PASS  over HTTPS on 127.0.0.1:50799 the panel's certificate verifies and an unsigned request gets 401
+PASS  an API token was made through the panel's session API
+## The module, with lsphp's PHP CLI, against the panel over HTTPS
+## TestConnection over HTTPS
+PASS  TestConnection passes with the API token, verifying the panel's self-signed certificate
+PASS  a wrong token gets the panel's 401 invalid_token, explained
+PASS  without the certificate file the panel's self-signed certificate is refused
+## CreateAccount
+PASS  CreateAccount starts the New website wizard for whmcs82334.proof.test
+  admin tab: Being created (now: Install WordPress)
+  admin tab: Live: whmcs82334.proof.test
+PASS  the job finished and the admin tab shows the website live
+PASS  the account ID is saved on the service
+PASS  the service holds the WordPress username and a 32-character password
+PASS  the site serves WordPress
+PASS  the service's username and password sign in to WordPress
+## SuspendAccount and UnsuspendAccount
+PASS  SuspendAccount succeeds
+PASS  the suspended site answers 403
+PASS  UnsuspendAccount succeeds
+PASS  the site serves WordPress again
+## TerminateAccount
+PASS  TerminateAccount deletes the website
+PASS  the domain no longer serves WordPress
+PASS  the admin tab says the panel has no website for it
+## Secrets
+PASS  no token or password is in what logModuleCall received (26 entries) or in any message
+  hosting account the wizard made: whmcs82334
+PASS  after TerminateAccount its Linux user is gone
+PASS  the panel's log does not hold the API token

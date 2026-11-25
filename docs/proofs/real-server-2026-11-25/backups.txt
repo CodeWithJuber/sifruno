@@ -1,0 +1,109 @@
+# Website backups with restic over SFTP, restore of files and database, restore drill
+# 2026-11-25T03:35:28Z  openlitespeed-1.9.4-3.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 openssh-server-9.9p1-17.el9_9.alma.1.x86_64
+# site user bk77728, domain bk77728.proof.test, storage sifbackup@127.0.0.1:/srv/sifruno-backup-target/restic-77728
+
+## 1. restic 0.20.0 is installed and pinned, and the tools the broker runs are in place
+PASS  restic is root 0755 and its sha256 is the broker's pin
+  restic 0.20.0 compiled with go1.27.4 on linux/amd64
+  /usr/bin/ssh: regular file, root, 755
+PASS  /usr/bin/ssh is a regular root-owned file (the broker refuses a link)
+  /usr/bin/mariadb: regular file, root, 755
+PASS  /usr/bin/mariadb is a regular root-owned file (the broker refuses a link)
+  /usr/bin/mariadb-dump: regular file, root, 755
+PASS  /usr/bin/mariadb-dump is a regular root-owned file (the broker refuses a link)
+  /usr/bin/cp: regular file, root, 755
+PASS  /usr/bin/cp is a regular root-owned file (the broker refuses a link)
+
+## 2. The broker runs with the web operation on
+PASS  the broker started with --web-user nobody
+  broker backup key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIgZ...
+PASS  restic is ready as the broker sees it
+PASS  the broker made its own ed25519 key, root-only
+PASS  the repository password file is root-only
+
+## 3. An SFTP storage user on this VM stands in for the storage server
+PASS  sifbackup is not in wheel, so sshd holds it to SFTP
+PASS  the storage server's host key was read with ssh-keyscan
+  broker answered: broker refused: backup connect step failed: et rid of this message. subprocess /usr/bin/ssh: Offending ED25519 key in /var/lib/sifruno-broker/backup/known_hosts.next:1 subprocess /usr/bin/ssh: Host key for sifruno-backup-target has changed and you have requested strict checking. subprocess /usr/bin/ssh: Host key verification failed. Fatal: unable to open repository at sftp::/srv/sifruno-backup-target/restic-77728: unable to start the sftp session, error: error receiving version packet from server: server unexpectedly closed connection: unexpected EOF
+PASS  a target with the wrong host key is refused (no trust on first use)
+PASS  the refused target made nothing on the storage server
+PASS  the repository was made on the storage server
+PASS  the repository belongs to the storage user
+PASS  the repository password was shown (to a 0600 file), not printed
+PASS  saving the same target again opens the repository and, not yet confirmed, answers the same password
+PASS  a lost answer does not lose it: the broker shows the same password again
+PASS  the status says it is not confirmed yet and carries no password
+PASS  the confirmation is recorded
+  broker answered: broker refused: native account identity or revision conflict
+PASS  after the confirmation the broker no longer shows the password
+PASS  a target change after the confirmation shows no password
+PASS  the repository password file stayed root-only throughout
+
+## 4. A WordPress site through the broker and dbhost
+  database bk77728_wp with user bk77728_wp@localhost
+PASS  the site serves its title before the backup
+  sparse.bin: 1073741824 bytes long, 4 KiB on disk
+PASS  the site holds a 1 GiB sparse file using under 64 MiB of disk
+
+## 5. Back it up
+  took 3 s
+PASS  the broker backed up the site and its database
+  snapshot bb453f12c4d1, 1186221615 bytes
+PASS  the snapshot names the database
+PASS  the snapshot is stored on the storage server, as the storage user
+PASS  the database dump did not stay on this server
+PASS  the site's backup list shows the snapshot
+
+## 6. Break it: delete public_html's files and drop a table
+PASS  public_html is empty
+PASS  wp_options is gone
+PASS  the site no longer serves its title
+
+## 7. Restore the files and the database
+  staging disk: 35G free of 40G
+  took 6 s
+PASS  the broker restored the files and the database
+  {
+    "snapshot": "bb453f12c4d1ea6dc21ae367a8fbba69b8b99d50ddef40c6a25a31a53c71196c",
+    "files": true,
+    "databases": [
+      "bk77728_wp"
+    ]
+  }
+
+## 8. The site is back
+PASS  the site serves its title again
+PASS  wp_options is back
+PASS  the restored files belong to the site user
+PASS  wp-config.php is the site user's and mode 0600 again
+  restored sparse.bin: 1073741824 bytes long, 4 KiB on disk
+PASS  the sparse file came back sparse (restic restore --sparse, then cp): 1 GiB long, under 64 MiB on disk, its data in place
+PASS  the home kept mode 0750 and public_html is the same folder
+PASS  no temporary restore user is left in MariaDB
+PASS  the staging folder is gone and its parent is root 0711
+PASS  the account still verifies and is active after the restore
+
+## 9. The restore drill
+  {
+    "account_id": "a0e0227a6d933a5480620edba6613815",
+    "snapshot": "bb453f12c4d1ea6dc21ae367a8fbba69b8b99d50ddef40c6a25a31a53c71196c",
+    "snapshot_time": "2026-11-25T03:35:59.369028506Z",
+    "checked_at": "2026-11-25T03:36:12.692406952Z",
+    "passed": true,
+    "files": 4628,
+    "subset": "1/8"
+  }
+PASS  the drill passed
+PASS  the drill compared the restored files with the snapshot's list (4628 entries)
+PASS  the drill left no staging folder
+
+## 10. No password in any process argument
+  process-argument samples taken during the backup and the restore: 20
+PASS  no process argument held the repository, database or admin password
+PASS  restic and ssh ran during the samples
+PASS  the broker's answers hold no password
+
+## 11. Clean up the proof site
+PASS  the Linux user is gone
+
+RESULT: all checks passed

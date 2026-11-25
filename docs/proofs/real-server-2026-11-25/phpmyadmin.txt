@@ -1,0 +1,114 @@
+# guest: AlmaLinux release 9.8 (Olive Jaguar), kernel 5.14.0-687.60.1.el9_8.x86_64, SELinux Enforcing
+# openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+## The installer's phpMyAdmin step, as an upgrade runs it
+  changed: 
+PASS  the step changes nothing the second time
+  sifpma: uid=993(sifpma) gid=993(sifpma) groups=993(sifpma)
+PASS  sifpma is a system user outside the accounts' 20000 to 60000, in its own group only
+PASS  phpMyAdmin 5.2.3 is in /usr/local/lib/sifruno/phpmyadmin
+PASS  every file of it is root's and no one else can write it
+PASS  there is no setup/ or examples/ folder
+PASS  config.inc.php is root:sifpma 0640, the sign-in script root's 0644
+PASS  the blowfish secret is root:sifpma 0640 and 32 bytes
+PASS  the session and temp folders are sifpma's, 0700
+PASS  httpd_config.conf includes the phpMyAdmin fragment once
+  openlitespeed -t errors naming phpMyAdmin: none
+PASS  OpenLiteSpeed's config test has no error for phpMyAdmin's vhost
+  listening on 8090: 127.0.0.1:8090 127.0.0.1:8090
+PASS  OpenLiteSpeed listens for phpMyAdmin on 127.0.0.1:8090 only
+  GET / on the listener: 302 http://127.0.0.1:8090/sifruno-signon.php
+PASS  phpMyAdmin (at the root) with no sign-in sends the browser to the sign-in script
+PASS  the sign-in script without a code asks for a new sign-in (401)
+PASS  the listener refuses /api/v1/session (403)
+PASS  the listener refuses /API/x (403)
+PASS  the listener refuses /libraries/classes/Version.php (403)
+PASS  the listener refuses /vendor/autoload.php (403)
+PASS  the listener refuses /templates/login/form.twig (403)
+PASS  the listener refuses /config.inc.php (403)
+PASS  the listener refuses /composer.json (403)
+PASS  the listener refuses /.rtlcssrc.json (403)
+PASS  the broker runs
+PASS  the audit log records every program started from now on
+PASS  the panel answers on 127.0.0.1:48735 as sifpanel
+PASS  the panel says phpMyAdmin has its own origin, with 2-minute proof sign-ins
+PASS  its sign-in socket is in /run/sifruno-panel
+PASS  phpMyAdmin's origin serves the panel's certificate
+PASS  phpMyAdmin's origin answers 404 for the panel's API
+PASS  it answers 401 to a browser with no code and no admission
+PASS  it answers only for the panel's host name (421)
+## Browser: phpMyAdmin's origin without a code or an admission
+PASS  phpMyAdmin's origin answers 401 with a page that says to open phpMyAdmin from the panel
+## Browser: first-run setup on the server's loopback address, then the admin over HTTPS
+PASS  the admin account is made on the server
+PASS  the admin signs in over HTTPS
+## Two PHP sites, each with its own database
+PASS  the wizard starts a-pma83523.proof.test
+  a-pma83523.proof.test: succeeded after 5 s, account apma83523
+PASS  a-pma83523.proof.test is made, with the database apma83523_wp
+PASS  the wizard starts b-pma83523.proof.test
+  b-pma83523.proof.test: succeeded after 10 s, account bpma83523
+PASS  b-pma83523.proof.test is made, with the database bpma83523_wp
+PASS  the admin signs in again
+## The panel's origin no longer serves phpMyAdmin
+PASS  the panel answers 404 for /api/v1/phpmyadmin/ to a signed-in admin
+## Browser: Open phpMyAdmin on a-pma83523.proof.test's Databases tab
+PASS  the Databases tab has an Open phpMyAdmin button
+PASS  it says phpMyAdmin opens on its own address, for this website's databases only
+PASS  it says triggers, views and stored routines need the website's own database user
+PASS  one click lands in phpMyAdmin on its own origin, signed in (its database tree, no login form)
+PASS  the new tab has no opener
+PASS  the sign-in link was on phpMyAdmin's origin, opened once, with a code
+  phpMyAdmin's database tree: Recent Favorites apma83523_wp information_schema
+PASS  it lists apma83523_wp
+PASS  it does not list bpma83523_wp, the other website's
+PASS  phpMyAdmin's pages may connect and post only to their own origin
+PASS  no script or style was blocked on phpMyAdmin's page
+PASS  the admission cookie is __Host-, HttpOnly, Secure, SameSite=Strict, Path=/, ending within the hour
+PASS  the panel's session cookie stays on /api/v1
+## phpMyAdmin's origin cannot use the panel's API
+PASS  a fetch from a phpMyAdmin page to the panel's API gets nothing
+PASS  the panel refuses its API to a request from phpMyAdmin's origin, cookie and all (403)
+PASS  and refuses a change from there too
+PASS  there are no CORS headers on the panel's answer
+PASS  phpMyAdmin's origin answers 404 for the panel's API path
+## Browser: the same link again, and the admission cookie alone
+PASS  a used code is refused (403, and says to open phpMyAdmin again)
+PASS  the admission cookie alone, with no code, lets the browser back in
+## VM: the temporary user and its password
+  temporary users: SifrunoPMA_0c899bcf2cbbec4a9e70
+PASS  there is exactly one temporary user
+  its grants: GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, SHOW VIEW ON `apma83523\_wp`.* TO `SifrunoPMA_0c899bcf2cbbec4a9e70`@`localhost`
+PASS  it has one grant, on exactly apma83523_wp
+PASS  it may read and change tables (SELECT to ALTER)
+PASS  it has no privilege that records a definer (no ALL, TRIGGER, CREATE VIEW, routines or EVENT)
+PASS  nothing of bpma83523's is in its grants
+PASS  the panel's record holds it, with apma83523 as the owner
+PASS  the record is the panel's, 0600
+PASS  phpMyAdmin's signon session holds the login, sifpma's 0600
+PASS  the session's password is 43 characters
+PASS  with it the temporary user signs in to MariaDB and sees apma83523's database only
+  process-argument samples taken while phpMyAdmin opened: 269; programs started, from the audit log: 1874
+PASS  no process argument held the temporary user's password
+PASS  the panel ran the mysql client meanwhile (audit log)
+PASS  with it the temporary user makes a table but no view or trigger
+PASS  phpMyAdmin's PHP error log folder is sifpma's, 0700
+PASS  neither the panel's log nor OpenLiteSpeed's logs hold the password
+PASS  no OpenLiteSpeed log holds a sign-in link's code
+PASS  sifpma cannot open apma83523's or bpma83523's home
+  phpMyAdmin's PHP: sifpma   lsphp
+PASS  phpMyAdmin's PHP runs as sifpma
+PASS  the VM's checks of the temporary user pass
+## At most 3 open sign-ins per website and person
+  three more clicks answered 201, 201, 429
+PASS  the second and third sign-in open, the fourth is refused with 429 and says why
+PASS  another website still opens
+## VM: the temporary users expire (proof build: 2 minutes)
+  waiting for the sweeper (2-minute sign-ins, a sweep every minute)
+PASS  the sweeper dropped the temporary user within 5 minutes
+PASS  no connection of a temporary user is left
+PASS  the VM sees the sweeper drop it
+PASS  then the admission cookie no longer lets the browser in (401)
+PASS  the open phpMyAdmin tab asks for a new sign-in too
+PASS  the Databases tab fits a phone screen
+PASS  no browser errors on the panel's pages
+RESULT (browser): 36 passed, 0 failed

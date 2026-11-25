@@ -1,0 +1,54 @@
+# Scheduled jobs, logs and usage at the broker
+# 2026-11-25T03:41:01Z  openlitespeed-1.9.4-3.el9.x86_64 cronie-1.5.7-16.el9.x86_64  SELinux Enforcing
+# site user cron78061, domain cron78061.proof.test
+
+## 1. crond and the broker with the web operation
+PASS  crond is running (the installer installs cronie and starts it)
+  /var/spool/cron: root:root 700, SELinux system_u:object_r:user_cron_spool_t:s0
+  /etc/pam.d/crond: auth       include    system-auth;account    required   pam_access.so;account    include    system-auth;session    required   pam_loginuid.so;session    include    system-auth
+  authselect: Profile ID: sssd
+PASS  the broker started with --web-user nobody
+
+## 2. A live site
+PASS  the site serves
+
+## 3. A scheduled job runs as the site's user, in its slice
+  /var/spool/cron/cron78061: root:root 600 links 1, SELinux system_u:object_r:user_cron_spool_t:s0
+    # Managed by Sifruno. The panel rewrites this file from its list of scheduled jobs.
+    MAILTO=""
+    * * * * * id -u > ~/cron-ran.txt; cat /proc/self/cgroup >> ~/cron-ran.txt; ulimit -u >> ~/cron-ran.txt
+PASS  the crontab is root's, 0600, one link
+PASS  the job list shows the job with its next run
+PASS  the job ran within two minutes
+  the job wrote: 20000 0::/user.slice/user-20000.slice/session-72.scope 4096
+PASS  it ran as the site's user (UID 20000)
+PASS  its file belongs to the site's user
+PASS  it ran in user-20000.slice
+PASS  its process limit is the limits.d nproc (4096)
+  user-20000.slice TasksMax: TasksMax=100
+  crond's log: Nov 25 03:42:01 localhost CROND[184324]: (cron78061) CMDEND (id -u > ~/cron-ran.txt; cat /proc/self/cgroup >> ~/cron-ran.txt; ulimit -u >> ~/cron-ran.txt)
+PASS  a job with % is refused
+PASS  the refusal changed nothing
+
+## 4. The access log tail shows a request just made
+  GET /proof-tail-78061 answered 404
+PASS  the tail holds the request
+PASS  the error log tail reads
+
+## 5. Disk use grows after the user writes a file
+  disk used: 108 KiB, then 20588 KiB; limit 204800 KiB
+PASS  it grew by at least 20 MiB
+PASS  the limit is the 200 MiB quota
+
+## 6. Traffic grows after requests
+PASS  five 100 KiB responses were counted
+  traffic this month: 1265, then 513265 bytes (2026-11)
+  counter: /var/lib/sifruno-broker/usage/3dd95c0d0221a8033703da9327882481.json root:root 600
+PASS  the counter file is root's and 0600
+
+## 7. Delete takes the crontab and the counter
+PASS  the crontab is gone
+PASS  the counter is gone
+PASS  the Linux user is gone
+
+RESULT: all checks passed

@@ -1,0 +1,94 @@
+# A site's other domains and redirects, served by OpenLiteSpeed, with a certificate from Pebble
+# 2026-11-25T04:46:26Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64  SELinux Enforcing
+# site user dom81986, domain dom81986.proof.test, aliases www.dom81986.proof.test shop.dom81986.proof.test alias81986.proof.test nodns.dom81986.proof.test
+
+## 1. The broker runs with the web operation on, and Pebble is fresh
+PASS  the broker started with --web-user nobody
+PASS  Pebble serves its ACME directory
+PASS  the ACME challenge folder is sifpanel's, mode 0755
+PASS  Pebble's root for this run is saved
+PASS  the names that point here resolve to this VM, nodns.dom81986.proof.test does not
+
+## 2. A live site
+PASS  the site serves on dom81986.proof.test
+
+## 3. Other domains and redirects
+  listener map: map                     sifruno-u75654e607ebe1f63091b341cdf1a8fa dom81986.proof.test, alias81986.proof.test, nodns.dom81986.proof.test, shop.dom81986.proof.test, www.dom81986.proof.test
+  vhost rules:
+    RewriteCond %{HTTP_HOST} ^www\.dom81986\.proof\.test(:[0-9]+)?$ [NC]
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+    RewriteRule ^/?(.*)$ https://dom81986.proof.test/$1 [R=301,L]
+    RewriteRule ^/?old-page/?$ https://dom81986.proof.test/new-page [R=301,L]
+PASS  the alias shop.dom81986.proof.test serves the site
+PASS  another registered domain, alias81986.proof.test, serves the site
+  dom81986.proof.test/old-page: 301 https://dom81986.proof.test/new-page
+PASS  a path redirect answers 301 with Location https://dom81986.proof.test/new-page
+PASS  it matches with a trailing slash too
+  www.dom81986.proof.test/some/path?q=1: 301 https://dom81986.proof.test/some/path?q=1
+PASS  www redirects to the bare domain with its path and query
+PASS  the ACME challenge path on www is not redirected
+PASS  the tenant's .htaccess holds none of it
+PASS  the account list shows 4 aliases and 2 redirects
+
+## 4. A domain belongs to one account only
+  adding shop.dom81986.proof.test to two81986.proof.test: broker refused: native account identity or revision conflict: domain belongs to another account
+PASS  shop.dom81986.proof.test is refused for the second account
+  adding dom81986.proof.test to two81986.proof.test: broker refused: native account identity or revision conflict: domain belongs to another account
+PASS  dom81986.proof.test is refused for the second account
+  adding www.shop.dom81986.proof.test to two81986.proof.test: broker refused: native account identity or revision conflict: domain belongs to another account
+PASS  www.shop.dom81986.proof.test is refused for the second account
+PASS  a new account cannot take the alias alias81986.proof.test
+PASS  shop.dom81986.proof.test still serves the first site
+
+## 5. Config injection is refused, and nothing changes
+PASS  refused: {"path":"/a","target":"https://dom81986.proof.test/x [R=302,L]\nRewriteRule .* /etc/passwd","status":301}
+PASS  refused: {"path":"/a","target":"https://dom81986.proof.test/\n  END_rules\n}\nvirtualhost evil {","status":301}
+PASS  refused: {"path":"/a","target":"https://dom81986.proof.test/$1","status":301}
+PASS  refused: {"path":"/a","target":"https://dom81986.proof.test/%{HTTP_COOKIE}","status":301}
+PASS  refused: {"path":"/a.*","target":"https://dom81986.proof.test/","status":301}
+PASS  refused: {"path":"/.well-known/acme-challenge/x","target":"https://dom81986.proof.test/","status":301}
+PASS  refused: {"domain":"www.dom81986.proof.test","target":"https://dom81986.proof.test/$1","status":301}
+PASS  refused: {"path":"/a","target":"https://dom81986.proof.test/","status":301,"flags":"L"}
+PASS  the vhost and the server fragment are unchanged
+PASS  the account's revision did not move
+
+## 6. One certificate from Pebble for every domain that points here
+  acme: dom81986.proof.test, alias81986.proof.test, shop.dom81986.proof.test, www.dom81986.proof.test (account 75654e607ebe1f63091b341cdf1a8faf): certificate installed, valid until 2027-02-23
+  waiting for DNS: nodns.dom81986.proof.test; the broker lists the certificate's names: alias81986.proof.test,dom81986.proof.test,shop.dom81986.proof.test,www.dom81986.proof.test
+PASS  nodns.dom81986.proof.test was left out, waiting for its DNS
+PASS  the broker records the names
+PASS  the installed certificate names exactly the domains that point here
+  served for dom81986.proof.test: alias81986.proof.test dom81986.proof.test shop.dom81986.proof.test www.dom81986.proof.test
+PASS  OpenLiteSpeed serves it for dom81986.proof.test
+  served for www.dom81986.proof.test: alias81986.proof.test dom81986.proof.test shop.dom81986.proof.test www.dom81986.proof.test
+PASS  OpenLiteSpeed serves it for www.dom81986.proof.test
+  served for shop.dom81986.proof.test: alias81986.proof.test dom81986.proof.test shop.dom81986.proof.test www.dom81986.proof.test
+PASS  OpenLiteSpeed serves it for shop.dom81986.proof.test
+  served for alias81986.proof.test: alias81986.proof.test dom81986.proof.test shop.dom81986.proof.test www.dom81986.proof.test
+PASS  OpenLiteSpeed serves it for alias81986.proof.test
+PASS  https on shop.dom81986.proof.test serves the site, trusting only Pebble's root
+PASS  https on alias81986.proof.test serves the site
+  served for nodns.dom81986.proof.test: the listener certificate, which names no site
+PASS  no certificate naming nodns.dom81986.proof.test is served (it is http only)
+PASS  https for nodns.dom81986.proof.test does not verify against Pebble's root
+PASS  nodns.dom81986.proof.test still serves the site over http
+
+## 7. A suspended site serves nothing and redirects nothing
+PASS  the alias shop.dom81986.proof.test answers 403
+PASS  the path redirect answers 403, not 301
+PASS  www answers 403, not a redirect
+PASS  the suspended vhost has no redirect rule
+PASS  after the resume, shop.dom81986.proof.test serves the site again
+PASS  and the redirect answers again
+
+## 8. Removing an alias takes it out; the certificate keeps the name until its renewal
+PASS  shop.dom81986.proof.test no longer serves the site
+PASS  the HTTPS listener no longer maps shop.dom81986.proof.test
+PASS  no certificate is asked for: the account's revision did not move
+PASS  the installed certificate still names shop.dom81986.proof.test until its renewal
+
+## 9. Delete
+PASS  no alias of the deleted site is mapped
+PASS  OpenLiteSpeed is still running
+
+RESULT: all checks passed

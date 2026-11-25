@@ -153,3 +153,36 @@ Run on 2026-11-25 with `scripts/devvm/proof.sh create-recovery` on a throwaway A
 Two things the code assumed and this run shows: with `/etc/.pwd.lock` held, userdel waited about 15 s and exited with status 1 by itself, changing nothing; and a home holding a tmpfs mount was renamed into the trash with the mount inside it, and the remover left that folder and logged it by the account's ID.
 
 What this run does not show: the panel's screens for an account that needs recovery. The proof drives the broker directly.
+
+## Phase 1 on a real server (2026-11-25)
+
+Run on 2026-11-25 on a throwaway AlmaLinux 9.8 cloud server (hardware virtualization, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3.37, MariaDB 10.11.18). `fresh-install-test.sh` installed Sifruno on it from a release built from `6a8e579`, and that installed release stayed on the server for every run below. Each proof builds its own broker and panel from the checkout and copies them in, so the table gives the checkout each run was built from, read from the checkout's reflog at the run's start time. `b7107cf` has the same product code and the same scripts for these proofs as `6a8e579`.
+
+| Proof | Transcript | Checkout | Result |
+| --- | --- | --- | --- |
+| One command installs on the server; a second run changes nothing | [fresh-install.txt](real-server-2026-11-25/fresh-install.txt) | release and script from `6a8e579` | 12 passed, 0 failed |
+| The broker's WordPress install | [broker-wordpress.txt](real-server-2026-11-25/broker-wordpress.txt) | `6a8e579` | 24 passed, 0 failed |
+| Per-account process, memory and CPU limits | [account-limits.txt](real-server-2026-11-25/account-limits.txt) | `6a8e579` | 58 passed, 0 failed |
+| Backups with restic over SFTP, restore of files and database, restore drill | [backups.txt](real-server-2026-11-25/backups.txt) | `6a8e579` | 50 passed, 0 failed |
+| File manager at the broker, as the site's user | [files.txt](real-server-2026-11-25/files.txt) | `6a8e579` | 37 passed, 0 failed |
+| Scheduled jobs, logs and usage at the broker | [site-tools.txt](real-server-2026-11-25/site-tools.txt) | `6a8e579` | 21 passed, 0 failed |
+| The New website wizard, with SSL | [wordpress-wizard.txt](real-server-2026-11-25/wordpress-wizard.txt) | `b7107cf` | 97 passed, 0 failed |
+| A tenant's own folder change stays with its own account | [broker-isolation.txt](real-server-2026-11-25/broker-isolation.txt) | `b7107cf` | 46 passed, 0 failed |
+| Site actions: PHP version, suspend, resume, delete | [broker-site-actions.txt](real-server-2026-11-25/broker-site-actions.txt) | `b7107cf` | 22 passed, 0 failed |
+| Admin and customer login | [customer-login.txt](real-server-2026-11-25/customer-login.txt) | `993dc83` | 70 passed, 0 failed |
+| A site's other domains and redirects, with a certificate | [site-domains.txt](real-server-2026-11-25/site-domains.txt) | `993dc83` | 53 passed, 0 failed |
+| The WHMCS module: create, suspend, unsuspend, terminate | [whmcs-module.txt](real-server-2026-11-25/whmcs-module.txt) | `82de04a` | 24 passed, 0 failed |
+| One-click phpMyAdmin | [phpmyadmin.txt](real-server-2026-11-25/phpmyadmin.txt) | `3478a75` | 86 passed, 0 failed |
+
+Earlier runs on this server found and fixed: site-domains parsed the certificate manager's log line along with the JSON answer (`2e041f1`); customer-login's website picker had read the list before the proof made the sites (`993dc83`); the phpMyAdmin proof counted OpenLiteSpeed's listener once per worker and its request client ignored the browser's host mapping (`e99c721`), then read escaped grants, sampled too slowly to see the panel's mysql client, and counted the proof's own refusals as browser errors (`3478a75`); and the WHMCS module lost a slow create's account ID, a product fix (`25402f9`).
+
+What these runs do not show:
+
+- **Migration from cPanel.** The migrate-cpanel run is not saved because it does not pass end to end: 129 passed, 3 failed. OpenLiteSpeed loads a site's root `.htaccess` only when it restarts, and a move's files land after its last restart, so the copy's root rewrite rules are not in force until the next restart. The fix is in progress.
+- **Create and delete recovery.** Its run on this server is in its own section above.
+- **The other proofs.** broker-sftp, wordpress-ols, broker-web, migrate-verify, installer-sshd, panel-shell and the upgrade install were not run on this server.
+- **A server the test made.** The fresh-install test used a server made beforehand, named in the dev VM's ports file; making and deleting the server is QEMU-only.
+- **A public CA and real DNS.** Pebble stands in for Let's Encrypt in site-domains and wordpress-wizard, and its DNS answers this server for every name.
+- **WHMCS itself.** The module's functions ran from the PHP command line with the repo's stubs in place of WHMCS.
+- **A separate storage server.** For backups, an SFTP user on the same server stands in for one.
+- **The panel over the internet.** The browser proofs reached the panel through SSH port forwards from the machine that ran them, not through a firewall opened to the public.

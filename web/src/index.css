@@ -1,11 +1,7 @@
-/* The neutral theme and core arrive precompiled. App CSS stays unlayered so
-   local brand overrides take precedence without a custom StyleX transform. */
-@layer theme, reset, base, astryx-base, astryx-theme, components, utilities;
-@import "@astryxdesign/core/reset.css";
+/* App CSS stays unlayered so local brand overrides take precedence over
+   Tailwind's layers. */
 @import "../../assets/design-tokens.css";
 @import "tailwindcss";
-@import "@astryxdesign/core/astryx.css";
-@import "@astryxdesign/theme-neutral/theme.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "./tools.css";
@@ -79,20 +75,14 @@
   --chart-memory: var(--sifruno-dark-muted);
   --sidebar: color-mix(in srgb, var(--sifruno-ink) 70%, black);
 }
-[data-astryx-theme="neutral"] {
-  --font-family-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-family-heading: var(--font-family-body);
-  --color-accent: var(--primary); --color-text-accent: var(--primary);
-  --color-icon-accent: var(--primary); --color-accent-muted: var(--secondary);
-  --color-on-accent: var(--primary-foreground);
-  --color-background-body: var(--background); --color-background-card: var(--card);
-  --color-background-surface: var(--card); --color-background-muted: var(--muted);
-  --color-background-popover: var(--card);
-  --color-text-primary: var(--foreground); --color-text-secondary: var(--muted-foreground);
-  --color-icon-primary: var(--foreground); --color-icon-secondary: var(--muted-foreground);
-  --color-border: var(--border); --color-border-emphasized: var(--input);
-  --radius-container: 8px; --radius-element: 6px;
-  --color-shadow: transparent;
+/* Base styles the screens were built and checked with. The old component
+   library's reset and theme set them; they stay below Tailwind's utilities. */
+@layer base {
+  :root { color-scheme: light; }
+  :root.dark { color-scheme: dark; }
+  body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  p, code, pre { line-height: 1.4286; }
+  :where(:disabled, [aria-disabled="true"]) { cursor: default; }
 }
 * { box-sizing: border-box; }
 html { min-width: 320px; font-family: var(--font-sans); }
@@ -116,8 +106,6 @@ svg { flex-shrink: 0; }
 .status-dot { display: inline-block; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--primary); }
 .connection-notice { display: flex; gap: 8px; align-items: center; color: var(--muted-foreground); font-size: 12px; }
 .connection-notice > svg { width: 16px; height: 16px; }
-.astryx-segmented-control-item { font-family: var(--font-sans); font-size: 11px; }
-.astryx-segmented-control-item[aria-checked="true"] { color: var(--primary); background: var(--secondary); }
 
 /* Existing real compatibility/recovery/budget views remain secondary tools. */
 .content-stack { gap: 20px; }

@@ -42,7 +42,7 @@ export function uptime(value: number | null): string {
 const time = (timestamp: string) => new Date(timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 
 // A one-of-a-few choice drawn as joined segments. It stays a radio group, as
-// the Astryx control was: one tab stop, arrow keys move the choice.
+// the old segmented control was: one tab stop, arrow keys move the choice.
 // data-value keeps the hook the older browser checks select segments by.
 export interface Segment { value: string; label: string; short?: string }
 export function Segments({ label, value, onChange, options, testId }: { label: string; value: string; onChange: (value: string) => void; options: readonly Segment[]; testId?: string }) {

@@ -1,7 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Theme } from "@astryxdesign/core/theme";
-import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { ArrowLeft, Eye, Info, LogOut, Menu, Moon, RefreshCw, Search, ShieldAlert, Sun, UserRound } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
@@ -251,7 +249,6 @@ export function AppShell() {
           <main id="panel-main" tabIndex={-1} className="mx-auto w-full max-w-[1600px] min-w-0 flex-1 px-4 py-5 outline-none md:px-7 md:py-6">
             {heading && <div className="mb-5"><h1>{heading}</h1>{subtitle && <p className="mt-1.5 text-sm">{subtitle}</p>}</div>}
             {publicPreview && page && page.id !== "home" && <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground" role="status"><Info className="size-4" aria-hidden="true" /><span>{page.id === "tour" ? "Public panel tour with sample content. Changes stay in the local panel." : "Public preview of real server monitoring. Websites, files and backups stay in the local panel."}</span></div>}
-            <Theme theme={neutralTheme} mode={theme}>
               <Suspense fallback={<LoadingState label="Loading page" />}>
                 {gated && (auth.checked
                   ? <>{auth.error && <p className="mb-4 text-sm text-destructive" role="alert">{auth.error}</p>}<AuthGate adminRequired={auth.adminRequired} keySession={auth.session} onSession={onSession} /></>
@@ -265,7 +262,6 @@ export function AppShell() {
                 {!publicPreview && visited.has("static-files") && <div hidden={pageId !== "static-files"}><FileManager revision={revision} active={pageId === "static-files"} onStatus={reporters["static-files"]} siteHandoff={filesHandoff} onHandoffConsumed={consumeFilesHandoff} /></div>}
                 </div>
               </Suspense>
-            </Theme>
             <footer className="flex justify-between gap-4 pt-5 text-xs text-muted-foreground">
               <span>{page?.id === "tour" ? "Sample content, read-only" : active?.loadedAt ? `Last checked ${active.loadedAt.toLocaleTimeString()}` : "Waiting for server data"}</span>
               <span>Sifruno</span>

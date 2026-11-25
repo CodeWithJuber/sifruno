@@ -14,8 +14,6 @@
     "sync:brand": "node scripts/sync-brand.mjs"
   },
   "dependencies": {
-    "@astryxdesign/core": "0.6.5",
-    "@astryxdesign/theme-neutral": "0.6.5",
     "@base-ui/react": "1.8.0",
     "@stylexjs/stylex": "0.19.1",
     "@tanstack/react-router": "1.170.46",

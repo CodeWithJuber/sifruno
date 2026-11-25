@@ -55,7 +55,7 @@ test('pinned upstream notices retain exact canonical bytes in fresh checkouts', 
   const fs = await import('node:fs/promises');
   const {createHash} = await import('node:crypto');
   const attrs = await fs.readFile(new URL('../.gitattributes', import.meta.url), 'utf8');
-  for (const name of ['astryx', 'stylex']) {
+  for (const name of ['stylex']) {
     assert.equal(attrs.split(/\r?\n/).filter(line => line === 'web/licenses/' + name + '/LICENSE -text').length, 1);
     const bytes = await fs.readFile(new URL('../web/licenses/' + name + '/LICENSE', import.meta.url));
     const provenance = JSON.parse(await fs.readFile(new URL('../web/licenses/' + name + '/provenance.json', import.meta.url), 'utf8'));

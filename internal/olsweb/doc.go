@@ -125,7 +125,10 @@
 //   - /config/php/detached/ [2024-07-12]: detached lsphp survives server
 //     restarts until it idles out or .lsphp_restart.txt is touched.
 //   - /config/rewriterules/ [2024-07-29]: rewrite { enable 1,
-//     autoLoadHtaccess 1 }; restart after changing rules.
+//     autoLoadHtaccess 1 }; restart after changing rules. Nothing here
+//     restarts: the root broker restarts gracefully after each web change,
+//     and after a tenant's .htaccess changes (internal/hostaccounts
+//     htaccess_watch.go).
 //   - /security/access/ [2026-04-28]: "OpenLiteSpeed only supports .htaccess
 //     for rewrite rules, and not for directives"; deny with RewriteRule [F,L].
 //   - /config/lscache/ [2024-07-29]: "module cache" is registered at server

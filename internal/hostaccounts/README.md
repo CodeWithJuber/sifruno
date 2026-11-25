@@ -705,6 +705,67 @@ Limits for now:
   made; kill as the account cannot end those, so such a delete ends
   rejected.
 
+### .htaccess changes
+
+OpenLiteSpeed reads a site's `.htaccess` only when it starts or restarts
+gracefully (`internal/htaccess` doc.go has the sources). A `.htaccess` that
+WordPress, WP-CLI, the file manager, a restore or the tenant over SFTP
+writes later is not used until the next restart, and one that was missing at
+the last restart stays unread. With the web operation on, the broker
+restarts OpenLiteSpeed itself when that happens (`htaccess_watch.go`,
+`htaccess_watch_linux.go`):
+
+- One fanotify group marks the homes filesystem (`FAN_MARK_FILESYSTEM`,
+  notification class, `FAN_REPORT_DFID_NAME`) for names created, closed
+  after writing, moved or deleted. Only a name that is exactly `.htaccess`
+  counts. The broker opens, reads and follows nothing a tenant names: it
+  skips the directory handle in each event, so it does not know which site
+  changed, and restarts for all of them, as any graceful restart does.
+- Changes are coalesced. A restart starts 5 seconds after the last change,
+  or 30 seconds after the first when changes keep coming, and at least 30
+  seconds after the previous restart ended. A tenant who writes `.htaccess`
+  in a loop, or floods the filesystem with other events until the kernel's
+  event queue overflows, costs every account one restart per window and no
+  memory: the kernel's queue is limited, and the broker reads into one
+  buffer and adds to two counters.
+- A restart is a web change that changes nothing: under the store lock, so
+  it never runs inside a web operation; refused while any operation is
+  unfinished (logged as `an unfinished operation holds up every change`,
+  naming no account); the site list installed again from the records (normally the
+  same bytes, so nothing is written), the config test, then `systemctl
+  reload lsws`, under the web operation's four-minute limit. It changes no
+  account and is not journaled. Each restart logs `sifruno broker:
+  htaccess: OpenLiteSpeed restarted gracefully for N .htaccess changes`,
+  with counts only, never a name or a path. A failed one logs a
+  `sifruno broker: recovery: operation=htaccess` line with the error's class
+  and is tried again 30 seconds after it ended; it holds up another account
+  only while it holds the lock.
+- The broker also restarts once, 5 seconds after it starts, for changes
+  made while no watcher ran.
+- If fanotify cannot be set up (no `CAP_SYS_ADMIN`, a kernel without
+  fanotify, a homes filesystem that refuses the mark, a group or mark
+  limit), the broker logs `the .htaccess watcher could not start` once and
+  runs without it: a `.htaccess` change then takes effect at the next web
+  change or OpenLiteSpeed restart. It does not poll instead, because it
+  cannot tell whether a `.htaccess` changed without reading tenants'
+  folders.
+
+Limits for now:
+
+- The mark covers the whole filesystem the homes folder is on, so a
+  `.htaccess` change elsewhere on it (the trash remover emptying a deleted
+  home, for example) restarts OpenLiteSpeed too.
+- A folder moved into place with a `.htaccess` already inside it, and
+  `truncate(2)` on a path, are not seen; the next change, web change or
+  restart picks them up.
+- While a tenant changes `.htaccess` without pause, other accounts' panel
+  operations wait for the lock during one restart per window (a restart
+  took about 20 seconds on a busy dev VM).
+- Read from the man pages and the Linux 5.14 source, and the event parsing
+  run against Linux 6.8 with a non-root directory mark. The filesystem mark
+  on AlmaLinux 9 (`TestRootOnlyHtaccessWatchRestartsOnceForAWrite` and
+  `scripts/devvm/proofs/htaccess-reload.guest.sh`) has not been run yet.
+
 ## Domains and redirects
 
 `SetSiteDomains` (`POST /v1/accounts/{id}/domains`) replaces a live site's

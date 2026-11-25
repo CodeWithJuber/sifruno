@@ -262,8 +262,12 @@ func (s *store) setSiteFolders(ctx context.Context, id string, p SiteProtection,
 	}
 	applyCtx, cancel := webContext(ctx)
 	defer cancel()
-	if err := s.native.WriteSiteRealms(applyCtx, siteName(id), p.Users); err != nil {
-		return err
+	// A site whose folders have no realm (closed folders, address lists)
+	// needs no user file.
+	if len(p.Users) > 0 {
+		if err := s.native.WriteSiteRealms(applyCtx, siteName(id), p.Users); err != nil {
+			return err
+		}
 	}
 	r.Pending = &pending{Action: "folders", Target: foldersDigest(encoded), Actor: actor, Reason: reason}
 	r.FoldersNext = encoded

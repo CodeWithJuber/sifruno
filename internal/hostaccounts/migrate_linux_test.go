@@ -441,6 +441,7 @@ func TestMigrateFilesProtectsBeforeCopy(t *testing.T) {
 		"public_html/wp-content/plugins/akismet/akismet.php":      "<?php",
 		"public_html/wp-content/plugins/akismet/_inc/akismet.css": "a{}",
 		"public_html/wp-content/plugins/akismet/_inc/form.js":     "1",
+		"public_html/wp-content/plugins/akismet/a b/akismet.js":   "1",
 		"public_html/members/.htaccess":                           "AuthType Basic\nAuthName \"Members only\"\nAuthUserFile /home/fixtureacct/.htpasswds/public_html/members/passwd\nRequire valid-user\n",
 		"public_html/members/index.html":                          "members",
 		".htpasswds/public_html/members/passwd":                   "# users\nalice:" + hash + "\n",

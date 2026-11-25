@@ -90,6 +90,31 @@ func TestSiteFoldersGoLiveBeforeAndJournal(t *testing.T) {
 	}
 }
 
+// TestSiteFoldersWithoutRealm: closed folders and address lists need no
+// user file, so none is written and the folders still go live.
+func TestSiteFoldersWithoutRealm(t *testing.T) {
+	s, f := webStore(t)
+	live := liveFixture(t, s)
+	ctx := context.Background()
+	defer busy(s, live.Account.ID)()
+	p := SiteProtection{Folders: []olsweb.Folder{
+		{Path: "/internal/", Hosts: olsweb.HostsOnly, Networks: []string{"192.0.2.0/24"}},
+		{Path: "/wp-content/plugins/akismet/", Hosts: olsweb.HostsNone, Allow: []string{"akismet.css", "form.js"}},
+	}, Users: map[string][]byte{}}
+	if err := s.setSiteFolders(ctx, live.Account.ID, p, "test operator", "Move a website here"); err != nil {
+		t.Fatal(err)
+	}
+	if r := recordFor(t, s, live.Account.ID); r.Folders == "" || r.Pending != nil {
+		t.Fatalf("record %+v", r)
+	}
+	if _, ok := f.realms[siteName(live.Account.ID)]; ok {
+		t.Fatal("user files written for folders without a realm")
+	}
+	if site := siteOf(t, f.sites, live.Account.ID); len(site.Folders) != 2 {
+		t.Fatalf("site %+v", site)
+	}
+}
+
 func TestSiteFoldersRefusals(t *testing.T) {
 	s, f := webStore(t)
 	live := liveFixture(t, s)

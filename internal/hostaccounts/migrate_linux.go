@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -472,6 +473,11 @@ func readStagedFile(files *os.File, sourceHome, source string) ([]byte, bool) {
 	return data, true
 }
 
+// probeFolderName is a folder name below which open files are looked for:
+// no dot (OpenLiteSpeed opens only those, access.go) and nothing a URL
+// would need to escape.
+var probeFolderName = regexp.MustCompile(`^[A-Za-z0-9_@~-]+$`)
+
 // openFileProbes finds, below each closed folder of the staged public_html,
 // up to three real files whose names the folder leaves open, in folders
 // whose names have no dot, so verify can ask for them on both sites.
@@ -507,7 +513,9 @@ func openFileProbes(public string, rules []htaccess.FolderRule) []MigrationProbe
 				case t.IsRegular() && open[e.Name()] && found < 3:
 					out = append(out, MigrationProbe{Path: "/" + child, Kind: "allow"})
 					found++
-				case t.IsDir() && !strings.Contains(e.Name(), "."):
+				// A folder name verify could not put in a URL as it is
+				// (a space, ?, %, #) would make it refuse every probe.
+				case t.IsDir() && probeFolderName.MatchString(e.Name()):
 					walk(child, depth+1)
 				}
 			}

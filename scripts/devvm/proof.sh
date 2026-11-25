@@ -403,7 +403,7 @@ case "${1:-}" in
     for file in hostbroker brokerdrive; do
       "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
     done
-    # The guest runs this release's two installer steps from install.sh.
+    # The guest runs this release's three installer steps from install.sh.
     "$HERE/vm.sh" put "$REPO/scripts/install/install.sh" /opt/sifruno-proof/install.sh
     "$HERE/vm.sh" put "$HERE/proofs/account-limits.guest.sh" /opt/sifruno-proof/account-limits.guest.sh
     "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/install.sh /opt/sifruno-proof/account-limits.guest.sh; restorecon -R /opt/sifruno-proof'
@@ -496,8 +496,10 @@ case "${1:-}" in
     for file in sifruno dist.tgz state.tgz; do
       "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
     done
+    # The guest runs this release's LSCache stores step from install.sh.
+    "$HERE/vm.sh" put "$REPO/scripts/install/install.sh" /opt/sifruno-proof/install.sh
     "$HERE/vm.sh" put "$HERE/proofs/wordpress-wizard.guest.sh" /opt/sifruno-proof/wordpress-wizard.guest.sh
-    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/wordpress-wizard.guest.sh; restorecon -R /opt/sifruno-proof'
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/install.sh /opt/sifruno-proof/wordpress-wizard.guest.sh; restorecon -R /opt/sifruno-proof'
     mkdir -p "$OUT"
     run="$OUT/wordpress-wizard-$stamp"
     transcript="$run.txt"

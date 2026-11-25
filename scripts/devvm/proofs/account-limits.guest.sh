@@ -16,6 +16,8 @@ BIN=/opt/sifruno-proof
 SOCKET=/run/sifruno-broker/control.sock
 STATE=/var/lib/sifruno-broker
 LSWS=/usr/local/lsws
+# Each site's LSCache store is in this root-owned folder (olsweb.CacheRoot).
+LSCACHE=/var/lib/sifruno-lscache
 UNITS=/etc/systemd/system
 LIMITS_FILE=/etc/security/limits.d/90-sifruno-accounts.conf
 RUNID="$(date +%s)"
@@ -133,19 +135,20 @@ echo "# $(date -u +%FT%TZ)  $(rpm -q openlitespeed lsphp83 systemd pam | paste -
 echo "# account A $A_USER ($A_DOMAIN), account B $B_USER ($B_DOMAIN)"
 
 echo
-echo "## 1. The installer's two steps"
-# The VM was provisioned by an older installer: run the two new steps from
+echo "## 1. The installer's three steps"
+# The VM was provisioned by an older installer: run the three new steps from
 # this release's install.sh, as an upgrade would. In a subshell, because
 # install.sh turns on errexit, which this script does not use.
 # shellcheck disable=SC1091
-(SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$BIN/install.sh" && step_limits && step_ols_cgroups && printf '  changed: %s\n' "${CHANGES[@]}") || fail "the installer's limits and cgroups steps run"
+(SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$BIN/install.sh" && step_limits && step_ols_cgroups && step_lscache && printf '  changed: %s\n' "${CHANGES[@]}") || fail "the installer's limits, cgroups and LSCache stores steps run"
 check "the limits file is root's, 0644" test "$(stat -c '%U:%G %a' "$LIMITS_FILE")" = "root:root 644"
 check "it sets the backstop nproc 4096, soft and hard, for UIDs 20000:60000" grep -qxE '20000:60000 +hard +nproc +4096' "$LIMITS_FILE"
 check "and the soft limit too" grep -qxE '20000:60000 +soft +nproc +4096' "$LIMITS_FILE"
 echo "  CGIRLimit cgroups: $(ols_cgroups)"
 check "OpenLiteSpeed's CGIRLimit has cgroups 1" test "$(ols_cgroups)" = 1
+check "the LSCache stores folder is root's, mode 0711" test "$(stat -c '%U:%G %a' "$LSCACHE" 2>/dev/null)" = "root:root 711"
 # shellcheck disable=SC2016 # expands in the inner shell
-check "the installer's steps change nothing the second time" bash -c 'SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$0" && step_limits && step_ols_cgroups && [ "${#CHANGES[@]}" -eq 0 ]' "$BIN/install.sh"
+check "the installer's steps change nothing the second time" bash -c 'SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$0" && step_limits && step_ols_cgroups && step_lscache && [ "${#CHANGES[@]}" -eq 0 ]' "$BIN/install.sh"
 check "OpenLiteSpeed is running" systemctl is-active --quiet lsws
 
 echo
@@ -344,9 +347,12 @@ check "no sifruno-site unit is left" bash -c "[ -z \"\$(systemctl list-units --a
 # The download step may have put WordPress's files in place, which redirect
 # to its setup page while there is no wp-config.php.
 check "B's site answers again" bash -c "for _ in \$(seq 1 30); do case \$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: $B_DOMAIN' http://127.0.0.1/) in 200|302) exit 0;; esac; sleep 2; done; exit 1"
+b_store="$LSCACHE/sifruno-u${b_id:0:31}"
+echo "  B's cache store before the delete: $(stat -c '%U %a %n' "$b_store" 2>&1)"
+check "B's cache store is in $LSCACHE" test -d "$b_store"
 drive delete --id "$b_id" --revision "$b_rev" --reason 'Remove B' >/dev/null || fail "the operator deletes B"
 check "B's Linux user is gone" bash -c "! getent passwd $B_USER"
-check "B's cache store is gone" test ! -e "$LSWS/cachedata/sifruno-u${b_id:0:31}"
+check "B's cache store is gone" test ! -e "$b_store"
 check "OpenLiteSpeed is still running" systemctl is-active --quiet lsws
 rm -rf "$WORK" "$PANEL"
 

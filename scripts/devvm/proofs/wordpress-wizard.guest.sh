@@ -22,6 +22,8 @@ ACME_DIRECTORY=https://127.0.0.1:14000/dir
 # and is saved per run as DIR/pebble-root.pem.
 PEBBLE_API_CA=/etc/pebble/api-ca.pem
 ACME_CHALLENGES=/var/lib/sifruno-acme
+# Each site's LSCache store is in this root-owned folder (olsweb.CacheRoot).
+LSCACHE=/var/lib/sifruno-lscache
 WPCLI=/usr/local/lib/sifruno/wp-cli.phar
 fails=0
 
@@ -60,7 +62,7 @@ cache_header() {
 
 # site_store ACCOUNT: the site's own LSCache store, named as olsweb names its
 # vhost ("u" and the first 31 characters of the account ID).
-site_store() { printf '%s/cachedata/sifruno-u%s' "$LSWS" "${1:0:31}"; }
+site_store() { printf '%s/sifruno-u%s' "$LSCACHE" "${1:0:31}"; }
 
 case "${1:-}" in
   start)
@@ -69,6 +71,13 @@ case "${1:-}" in
     echo "# guest: $(cat /etc/almalinux-release), kernel $(uname -r), SELinux $(getenforce)"
     echo "# $(rpm -q openlitespeed lsphp83 mariadb-server | paste -sd ' ')"
     ols_user="$(awk '$1=="user"{print $2; exit}' "$LSWS/conf/httpd_config.conf")"
+    # The VM may come from an older installer: make the LSCache stores
+    # folder with this release's install.sh step, as an upgrade would. In a
+    # subshell, because install.sh turns on errexit, which this script does
+    # not use.
+    # shellcheck disable=SC1091
+    (SIFRUNO_INSTALL_FUNCTIONS_ONLY=1 . "$BIN/install.sh" && step_lscache) || fail "the installer's LSCache stores step runs"
+    check "the LSCache stores folder is root's, mode 0711" test "$(stat -c '%U:%G %a' "$LSCACHE" 2>/dev/null)" = "root:root 711"
     systemctl stop sifruno-broker-proof 2>/dev/null
     systemctl reset-failed sifruno-broker-proof 2>/dev/null
     systemd-run --quiet --unit sifruno-broker-proof --collect \

@@ -81,6 +81,7 @@ The installer's part is the same on a real server, and [the installation guide](
 - **sshd policy.** Deny by default: every login is SFTP-only and reads its keys from the broker's directory, with forwarding and TTYs off, unless it is root or in `wheel`. The file is validated with `sshd -t` before a reload and taken out again if sshd rejects it.
 - **Programs and units.** `sifruno`, `hostbroker`, `hostsetup` and `panelctl` in `/usr/local/lib/sifruno/bin`, the panel UI in `/usr/local/lib/sifruno/ui`, WP-CLI (pinned checksum) beside them, the panel's MariaDB option file `/var/lib/sifpanel/db-admin.cnf`, and `sifruno-broker.service` and `sifruno.service`.
 - **Certificates.** `/var/lib/sifruno-acme` (sifpanel, 0755) holds the panel's HTTP-01 challenge files, which every vhost serves at `/.well-known/acme-challenge/`.
+- **Page cache.** `/var/lib/sifruno-lscache` (root, 0711) holds each live site's LSCache store, which OpenLiteSpeed makes and gives to its user. Stores that earlier releases left in `/usr/local/lsws/cachedata` are removed as OpenLiteSpeed's user once no vhost names them.
 
 For the proofs only, `provision.sh` then:
 

@@ -346,6 +346,11 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 		return errNothingRemoved
 	}
 	delete(f.users, r.Account.Username)
+	// userdel ran, then the delete stopped: what is left is the journal's
+	// to finish.
+	if f.failure == "after-userdel" {
+		return atStep("home", ErrUnavailable)
+	}
 	// The native delete removes the site's TLS directory with the account.
 	if _, has := f.live[r.Account.Username]; has {
 		for _, s := range f.sites {

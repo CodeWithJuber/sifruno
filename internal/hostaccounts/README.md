@@ -154,6 +154,23 @@ mode 0700, under parents only root can write, read through a handle that is
 still that folder); a missing or odd folder, a link or another file there
 is a recovery answer, never a missing marker.
 
+Once its site has left the config, and before its native removal begins,
+a delete saves `user_removal` on its pending record. A start that finds a
+delete unfinished without it checks the account first, as before; with it
+the user may already be gone, so the start finishes the delete from the
+journal alone, without that check: it removes a user only when it is the
+only one with the account's name and UID and has the journaled UID, GID,
+tag, home and nologin shell; a group only when it is the account's private
+group alone, also one userdel left; the home only when it is the recorded
+directory; then the account's files, the marker last, and the slice
+drop-in. What is already gone counts as removed; anything else stays
+pending, its reason logged. A delete that stopped before userdel changed
+anything still ends rejected. The delete's last row (`succeeded`, or
+`reconciled` at a start) and the removal of the record are one bbolt
+transaction that reads the stored record again: a crash leaves the delete
+unfinished or ended, never one without the other. The account list refuses
+a record that carries `user_removal` without a pending delete.
+
 A create that cannot be finished is the operator's to abandon
 (`POST /v1/accounts/{id}/abandon-create`, reason only; the panel serves it to
 signed-in admins, never to an API token). Only an account whose pending

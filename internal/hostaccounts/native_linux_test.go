@@ -1215,3 +1215,122 @@ func TestRootOnlyAbandonCreate(t *testing.T) {
 		}
 	})
 }
+
+// runShadow runs a shadow-utils program as a root-only test's fixture.
+func runShadow(t *testing.T, path string, args ...string) {
+	t.Helper()
+	if out, err := exec.Command(path, args...).CombinedOutput(); err != nil {
+		t.Fatalf("%s %q: %v\n%s", path, args, err, out)
+	}
+}
+
+// freeTestID is an ID in the account range no user or group has, other
+// than skip.
+func freeTestID(t *testing.T, skip int) int {
+	t.Helper()
+	users, err := systemUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := systemGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := map[int]bool{skip: true}
+	for _, u := range users {
+		used[u.UID] = true
+	}
+	for _, g := range groups {
+		used[g.GID] = true
+	}
+	for id := lastAccountID - 2000; id > lastAccountID-3000; id-- {
+		if !used[id] {
+			return id
+		}
+	}
+	t.Fatal("no free ID")
+	return 0
+}
+
+// rootTestDeletable is a finished account as a create leaves it (its user,
+// private group, home with public_html and marker) and as a delete reads
+// it, pending.
+func rootTestDeletable(t *testing.T, n *linuxSystem) record {
+	t.Helper()
+	r := rootTestAccount(t, n, true)
+	if os.Mkdir(r.Account.Home, 0) != nil || os.Chmod(r.Account.Home, 0) != nil {
+		t.Fatal("fixture")
+	}
+	owned, err := n.RecoverCreate(t.Context(), r, func(ownership) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Ownership = owned
+	r.Account.State = "active"
+	r.Pending = &pending{Action: "delete"}
+	r.UserRemoval = true
+	return r
+}
+
+// Root-only: a delete stopped right after userdel (the user gone; its
+// private group left, as a userdel stopped half way or a host without
+// USERGROUPS_ENAB leaves it; the home and marker there) is finished by
+// Delete from the journal alone. Run again, it finds the marker missing
+// from the real markers folder and nothing else of the account, and counts
+// the delete as done. A group of the account's name with another GID is not
+// the account's: the delete refuses it and removes nothing. Run on the dev
+// VM with: go test -c ./internal/hostaccounts && sudo ./hostaccounts.test
+// -test.run RootOnly
+func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes users, groups and root-owned homes")
+	}
+	stopAfterUserdel := func(t *testing.T, r record) {
+		t.Helper()
+		runShadow(t, "/usr/sbin/userdel", "--", r.Account.Username)
+		if _, err := exec.Command("/usr/bin/getent", "group", r.Account.Username).Output(); err != nil {
+			runShadow(t, "/usr/sbin/groupadd", "--gid", strconv.Itoa(r.Account.GID), "--", r.Account.Username)
+		}
+	}
+	t.Run("the user gone, its group left", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		stopAfterUserdel(t, r)
+		if err := n.Delete(t.Context(), r); err != nil {
+			t.Fatalf("the delete was not finished: %v", err)
+		}
+		db, err := n.database()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(db.usersByName[r.Account.Username]) != 0 || len(db.groupsByName[r.Account.Username]) != 0 || len(db.usersByUID[r.Account.UID]) != 0 || len(db.groupsByGID[r.Account.GID]) != 0 {
+			t.Fatal("a user or group of the account is left")
+		}
+		for _, path := range []string{r.Account.Home, n.markerPath(r)} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s is left: %v", path, err)
+			}
+		}
+		if err := n.Delete(t.Context(), r); err != nil {
+			t.Fatalf("a delete run again after it finished: %v", err)
+		}
+	})
+	t.Run("a group that is not the account's", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		runShadow(t, "/usr/sbin/userdel", "--", r.Account.Username)
+		_ = exec.Command("/usr/sbin/groupdel", "--", r.Account.Username).Run()
+		runShadow(t, "/usr/sbin/groupadd", "--gid", strconv.Itoa(freeTestID(t, r.Account.GID)), "--", r.Account.Username)
+		if err := n.Delete(t.Context(), r); !errors.Is(err, ErrRecovery) {
+			t.Fatalf("a group of another GID was taken for the account's: %v", err)
+		}
+		for _, path := range []string{r.Account.PublicHTML, n.markerPath(r)} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("a refused delete removed %s: %v", path, err)
+			}
+		}
+		if _, err := exec.Command("/usr/bin/getent", "group", r.Account.Username).Output(); err != nil {
+			t.Fatal("a refused delete removed the other group")
+		}
+	})
+}

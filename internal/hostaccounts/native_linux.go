@@ -955,65 +955,89 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 	return atStep("password lock and expiry", n.admission(ctx, r))
 }
 
-// Delete removes the managed identity. Every destructive step is gated on
-// the recorded ownership evidence: the marker must match first (proof we
-// manage this account), the system user must match the recorded UID/GID/home
-// exactly (a foreign or recycled UID is refused), and the home directory is
-// removed only when it is the exact recorded path with the recorded
-// identity. The marker is removed last so a crash mid-delete stays visible
-// and the operation can be safely retried by the store's reconciliation.
-// The account's processes end before userdel (removeUser); the store takes
-// a live site out of the config before it calls Delete.
+// Delete removes the managed identity, judging what is there by the journal
+// alone, so it also finishes a delete whose user is already gone. Before it
+// removes anything it checks: the marker must be the recorded one (proof we
+// manage this account), or missing from the real markers folder once no
+// user or group of the account is left; a user with the account's name or
+// UID must be the only one, with the recorded UID, GID, tag, home and the
+// nologin shell; a group with its name or GID must be its private group
+// alone; the home, when there, must be the recorded directory of the
+// account's. Then it removes the user (its processes ended first), the
+// private group if userdel left it, the home, the account's files, and the
+// marker last, so a crash mid-delete stays visible and running it again
+// finishes the rest: what is already gone counts as removed. The store
+// takes a live site out of the config before it calls Delete.
 func (n *linuxSystem) Delete(ctx context.Context, r record) error {
+	if !validUsername(r.Account.Username) || !idPattern.MatchString(r.Account.ID) || r.Account.UID < firstAccountID || r.Account.UID > lastAccountID || r.Account.GID != r.Account.UID || r.Account.UID == int(n.opts.ControllerUID) || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
+		return atStep("record", ErrRecovery)
+	}
 	// Only a marker missing from the real markers folder (errMarkerMissing)
 	// lets a delete go on without it; an odd or missing folder, or another
 	// marker, stops it.
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
-	if e != nil && !errors.Is(e, errMarkerMissing) || e == nil && marker != r.Ownership.Marker {
+	missing := errors.Is(e, errMarkerMissing)
+	if e != nil && !missing || e == nil && marker != r.Ownership.Marker {
 		return atStep("marker", ErrRecovery)
 	}
-	// A missing marker with a still-present user is not owned deletable
-	// state; a missing marker with everything already gone is a completed
-	// delete (safe retry).
-	users, e := systemUsers()
+	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
+		return atStep("host policy", ErrUnavailable)
+	}
+	db, e := n.database()
 	if e != nil {
-		return atStep("passwd", e)
+		return atStep("passwd and group", e)
 	}
-	present := false
-	for _, u := range users {
-		if u.Username == r.Account.Username {
-			if u.UID != r.Account.UID || u.GID != r.Account.GID || u.Home != r.Account.Home {
-				return atStep("passwd", ErrRecovery)
-			}
-			present = true
-		} else if u.UID == r.Account.UID {
-			return atStep("passwd", ErrRecovery)
-		}
+	// The rules a create's leftovers are judged by (abandon_linux.go): the
+	// journal's name, IDs, tag, home and shell, and a private group alone.
+	userThere, e := createdUser(db, r)
+	if e != nil {
+		return atStep("passwd", ErrRecovery)
 	}
-	if present && marker != r.Ownership.Marker {
+	groupThere, e := createdGroup(db, r)
+	if e != nil {
+		return atStep("group", ErrRecovery)
+	}
+	// The marker goes last: missing while a user or group of the account is
+	// there, it was not this delete that removed it.
+	if missing && (userThere || groupThere) {
 		return atStep("marker", ErrRecovery)
 	}
-	if present {
-		if e = n.removeUser(ctx, r); e != nil {
-			return atStep("remove user", e)
-		}
-	}
+	homeThere := false
 	if info, e := os.Lstat(r.Account.Home); e == nil {
-		if !info.IsDir() || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
-			return atStep("home", ErrRecovery)
-		}
 		// The recorded object and its owner, which only root can change; not
 		// its mode, which the account may have changed. RemoveAll does not
 		// follow links inside it.
 		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
-		if e != nil || home != r.Ownership.Home {
+		if !info.IsDir() || e != nil || home != r.Ownership.Home {
 			return atStep("home", ErrRecovery)
 		}
+		homeThere = true
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return atStep("home", ErrUnavailable)
+	}
+	if userThere {
+		if e = n.removeUser(ctx, r); e != nil {
+			return atStep("remove user", e)
+		}
+	}
+	// userdel removes the user's private group itself (USERGROUPS_ENAB);
+	// one it left, stopped half way or by the host's policy, goes by name
+	// once it is still that group alone.
+	if db, e = n.database(); e != nil {
+		return atStep("groupdel", e)
+	}
+	if groupThere, e = createdGroup(db, r); e != nil {
+		return atStep("group", ErrRecovery)
+	}
+	if groupThere {
+		if _, e := n.command(ctx, groupdelPath, "--", r.Account.Username); e != nil {
+			return atStep("groupdel", e)
+		}
+	}
+	if homeThere {
 		if e = os.RemoveAll(r.Account.Home); e != nil {
 			return atStep("home", ErrUnavailable)
 		}
-	} else if !errors.Is(e, os.ErrNotExist) {
-		return atStep("home", ErrUnavailable)
 	}
 	if e = n.removeAccountFiles(r); e != nil {
 		return atStep("account files", e)

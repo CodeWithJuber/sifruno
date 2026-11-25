@@ -500,21 +500,27 @@ broker.
   the directory they are written in.
 - Page cache (LSCache): each live site's `vhconf.conf` has its own
   `module cache` block with `ls_enabled 1` and its own store,
-  `/usr/local/lsws/cachedata/sifruno-u<id>`, outside every home, so the
+  `/var/lib/sifruno-lscache/sifruno-u<id>`, outside every home, so the
   purge headers a site's PHP sends reach its own pages only. OpenLiteSpeed
-  makes that directory as root when it loads the config (mode 2770, owned
-  by the web user); the package's `cachedata` is root-owned 0755, so no
-  tenant can put a link there. `enableCache 0`: nothing is cached unless the
+  makes that directory as root when it loads the config and gives it alone
+  to the web user (mode 2770). The installer makes
+  `/var/lib/sifruno-lscache` root's 0711, which OpenLiteSpeed never changes,
+  so neither a tenant nor the web user can put a link there. (The package's
+  own `cachedata` is not used for this: OpenLiteSpeed gives it to the web
+  user at every start; `internal/olsweb/doc.go` has the source lines.)
+  `enableCache 0`: nothing is cached unless the
   site's response asks (the LiteSpeed Cache WordPress plugin does), and the
   module never caches a POST. A suspended site has `ls_enabled 0` and no
   store, because the module answers from its store when the request headers
   arrive, before the 403 rule. Delete removes the site's store once the
   site has left the config and its user is gone: the broker opens
-  `cachedata` (root's and writable by no one else along its whole path) and
-  removes each entry by name in its own directory handle, opened with
-  O_NOFOLLOW, so a link in the store is removed itself, never followed. If
-  that fails the delete still succeeds; what is left is cached pages under a
-  name no new account gets. The site's logs stay.
+  `/var/lib/sifruno-lscache` (root's and writable by no one else along its
+  whole path) and removes each entry by name in its own directory handle,
+  opened with O_NOFOLLOW, so a link in the store is removed itself, never
+  followed. If that fails the delete still succeeds; what is left is cached
+  pages under a name no new account gets, and the broker logs a
+  `sifruno broker: cleanup:` line with the store's path and the error's
+  class. The site's logs stay.
 - One invalid vhost at a restart: OpenLiteSpeed 1.9.4 configures each vhost
   on its own, at start and at a graceful restart, which starts a new
   instance (`configVHosts` in `src/main/httpserver.cpp`). A vhost whose

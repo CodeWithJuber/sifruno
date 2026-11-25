@@ -1209,14 +1209,21 @@ func (s *store) removeLimits(ctx context.Context, uid int) {
 // operation on, once the site has left OpenLiteSpeed's config and its user
 // is gone. Like removeLimits it cannot change the delete's answer: a store
 // left behind holds only cached pages of a site no config names, under a
-// name no new account gets, since account IDs are random.
+// name no new account gets, since account IDs are random. A failure is
+// logged with the store's path, so the operator can remove it.
 func (s *store) removeSiteCache(ctx context.Context, id string) {
 	if s.web == nil {
 		return
 	}
 	removeCtx, cancel := webContext(ctx)
 	defer cancel()
-	_ = s.native.RemoveSiteCache(removeCtx, id)
+	if e := s.native.RemoveSiteCache(removeCtx, id); e != nil {
+		step := "remove the site's page cache"
+		if idPattern.MatchString(id) {
+			step += " " + olsweb.CacheRoot + "/" + olsweb.NamePrefix + siteName(id)
+		}
+		logCleanup(id, step, e)
+	}
 }
 func (s *store) capability(ctx context.Context) (Capability, error) {
 	if snapshotReentry(ctx, s) {

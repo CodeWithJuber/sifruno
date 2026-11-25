@@ -51,6 +51,17 @@ func logRecovery(operation string, r record, step string, cause error) {
 	fmt.Fprintf(recoveryLog, "sifruno broker: recovery: operation=%s account=%s user=%s step=%q error=%q\n", operation, account, user, step, errorClass(cause))
 }
 
+// logCleanup says that a step after a finished operation failed: the
+// operation's answer stands, and what the step should have removed is left
+// for the operator. Like a recovery line it names the account's ID, a fixed
+// step (which may name a root-owned path built from the ID) and the class of
+// the error, nothing a tenant wrote.
+func logCleanup(account, step string, cause error) {
+	recoveryLogMu.Lock()
+	defer recoveryLogMu.Unlock()
+	fmt.Fprintf(recoveryLog, "sifruno broker: cleanup: account=%s step=%q error=%q\n", account, step, errorClass(cause))
+}
+
 // recovery logs why an operation answers ErrRecovery, and answers it.
 func recovery(operation string, r record, step string, cause error) error {
 	logRecovery(operation, r, step, cause)

@@ -152,7 +152,9 @@ const maxTreeDepth = 16
 // RemoveSiteCache removes a deleted site's LSCache store,
 // CacheRoot/sifruno-u<id>, which OpenLiteSpeed made as root and gave to the
 // web user. CacheRoot must be root's and writable by no one else along its
-// whole path, so no tenant can put a link in place of the store's name.
+// whole path, so neither a tenant nor the web user can put a link in place
+// of the store's name. The installer makes it root's 0711, and OpenLiteSpeed
+// never changes it (olsweb's doc.go has the source lines).
 func (n *linuxSystem) RemoveSiteCache(ctx context.Context, id string) error {
 	if ctx == nil || ctx.Err() != nil {
 		return ErrUnavailable

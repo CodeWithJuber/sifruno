@@ -396,9 +396,11 @@ func TestSlowLimitsDoNotFailCreateAtTheRequestLimit(t *testing.T) {
 }
 
 // A delete takes the site's LSCache store away with the web operation on,
-// after the user is gone; a removal that fails does not fail the delete.
-// Without the web operation there is no store to remove.
+// after the user is gone; a removal that fails does not fail the delete, and
+// the broker logs the store it left. Without the web operation there is no
+// store to remove.
 func TestDeleteRemovesTheSiteCache(t *testing.T) {
+	logged := captureRecoveryLog(t)
 	s, f := webStore(t)
 	ctx := context.Background()
 	a := liveFixture(t, s)
@@ -408,6 +410,9 @@ func TestDeleteRemovesTheSiteCache(t *testing.T) {
 	if !slices.Equal(f.cachesRemoved, []string{a.Account.ID}) {
 		t.Fatalf("stores removed: %q", f.cachesRemoved)
 	}
+	if strings.Contains(logged.String(), "cleanup:") {
+		t.Fatalf("a removed store was logged as left: %s", logged)
+	}
 	b := liveAccount(t, s, "secondacct", "second.test")
 	f.failure = "cache-remove"
 	if _, err := s.delete(ctx, b.Account.ID, DeleteInput{ExpectedRevision: b.Account.Revision, Reason: "Remove"}, "test operator"); err != nil {
@@ -415,6 +420,11 @@ func TestDeleteRemovesTheSiteCache(t *testing.T) {
 	}
 	if len(f.cachesRemoved) != 1 {
 		t.Fatalf("stores removed: %q", f.cachesRemoved)
+	}
+	want := "sifruno broker: cleanup: account=" + b.Account.ID + ` step="remove the site's page cache ` +
+		olsweb.CacheRoot + "/sifruno-u" + b.Account.ID[:31] + `" error="unavailable"` + "\n"
+	if logged.String() != want {
+		t.Fatalf("log:\n%s\nwant:\n%s", logged, want)
 	}
 
 	plain, g, _ := setupStore(t)

@@ -136,6 +136,8 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/accounts/{id}/plan":   adminOnly,
 	"POST /api/v1/accounts/{id}/delete": adminOnly,
 	"/api/v1/accounts/web-preview":      adminOnly,
+	// An unfinished create's leftovers, removed so other accounts unblock.
+	"POST /api/v1/accounts/{id}/abandon-create": adminOnly,
 
 	// The older static sites, which are the server's, not a customer's.
 	"GET /api/v1/sites":                                  adminOnly,

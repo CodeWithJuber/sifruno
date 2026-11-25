@@ -50,6 +50,7 @@
   "GET /openapi.json": "adminOnly",
   "GET /openapi.yaml": "adminOnly",
   "POST /api/v1/accounts": "adminOnly",
+  "POST /api/v1/accounts/{id}/abandon-create": "adminOnly",
   "POST /api/v1/accounts/{id}/delete": "adminOnly",
   "POST /api/v1/accounts/{id}/plan": "adminOnly",
   "POST /api/v1/accounts/{id}/state": "adminOnly",

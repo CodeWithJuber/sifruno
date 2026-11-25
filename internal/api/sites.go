@@ -355,7 +355,7 @@ func tokenArea(p string) bool {
 			return false
 		}
 	}
-	if tokenRefusedSiteBackup(p) || tokenRefusedOldSiteBackup(p) || tokenRefusedSiteFile(p) || tokenRefusedSiteDatabase(p) {
+	if tokenRefusedSiteBackup(p) || tokenRefusedOldSiteBackup(p) || tokenRefusedSiteFile(p) || tokenRefusedSiteDatabase(p) || isAbandonCreatePath(p) {
 		return false
 	}
 	for _, area := range tokenAreas {

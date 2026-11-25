@@ -34,6 +34,11 @@ type accountDeleteInput struct {
 	ID   string `path:"id"`
 	Body AccountDeleteBody
 }
+type AccountAbandonCreateBody hostaccounts.AbandonCreateInput
+type accountAbandonCreateInput struct {
+	ID   string `path:"id"`
+	Body AccountAbandonCreateBody
+}
 type accountOutput struct{ Body hostaccounts.Account }
 type accountListBody struct {
 	Items []hostaccounts.Account `json:"items"`
@@ -58,6 +63,19 @@ func accountError(err error) error {
 	default:
 		return huma.Error503ServiceUnavailable("Linux account broker unavailable; refresh accounts to reconcile any interrupted request")
 	}
+}
+
+// abandonRefusals say why the broker removed nothing, by the reason it
+// answers, and what the admin can do.
+var abandonRefusals = map[string]string{
+	hostaccounts.AbandonNoCreate:     "Nothing was removed: this hosting account has no unfinished create to abandon.",
+	hostaccounts.AbandonMarker:       "Nothing was removed: the broker's ownership marker for this account is missing or different, so it cannot prove the leftovers are this create's. Check the server by hand.",
+	hostaccounts.AbandonUser:         "Nothing was removed: a Linux user with this account's name or ID is not the one this create made. Check the server by hand.",
+	hostaccounts.AbandonGroup:        "Nothing was removed: a Linux group with this account's name or ID is not the one this create made. Check the server by hand.",
+	hostaccounts.AbandonHome:         "Nothing was removed: the home folder is not the one this create made. Check the server by hand.",
+	hostaccounts.AbandonHomeNotEmpty: "Nothing was removed: the home folder holds files this create did not make. Move them away, then try again.",
+	hostaccounts.AbandonMailSpool:    "Nothing was removed: the mail file with this account's name is not this account's. Check the server by hand.",
+	hostaccounts.AbandonProcesses:    "Nothing was removed: the account's processes kept running. Try again in a moment.",
 }
 
 func registerAccounts(a huma.API, o Options) {
@@ -126,6 +144,32 @@ func registerAccounts(a huma.API, o Options) {
 		forgetWebsite(o, in.ID)
 		return &accountOutput{Body: v}, nil
 	})
+	// An admin's way out of a create that no start can finish: the broker
+	// removes only what the create made and ends it, so the other accounts
+	// can change again. Admins only, never an API token (tokenArea).
+	huma.Register(a, op("abandon-account-create", "POST", "/api/v1/accounts/{id}/abandon-create"), func(ctx context.Context, in *accountAbandonCreateInput) (*accountOutput, error) {
+		if len(in.ID) > 64 || strings.ContainsAny(in.ID, "/\\?#%") {
+			return nil, accountError(hostaccounts.ErrInvalid)
+		}
+		recovery, ok := service.(hostaccounts.CreateRecoveryService)
+		if !ok {
+			return nil, accountError(hostaccounts.ErrUnavailable)
+		}
+		v, err := recovery.AbandonCreate(ctx, in.ID, hostaccounts.AbandonCreateInput(in.Body), siteActor(ctx))
+		var refused *hostaccounts.AbandonRefusedError
+		if errors.As(err, &refused) {
+			message, ok := abandonRefusals[refused.Reason]
+			if !ok {
+				message = "Nothing was removed: the broker could not prove the leftovers are this create's."
+			}
+			return nil, huma.Error409Conflict(message)
+		}
+		if err != nil {
+			return nil, accountError(err)
+		}
+		forgetWebsite(o, in.ID)
+		return &accountOutput{Body: v}, nil
+	})
 }
 
 // forgetWebsite takes a deleted hosting account off every customer's
@@ -177,7 +221,14 @@ func allowedAccountMutation(r *http.Request) bool {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/"), "/")
-	return len(parts) == 2 && parts[0] != "" && (parts[1] == "state" || parts[1] == "plan" || parts[1] == "delete")
+	return len(parts) == 2 && parts[0] != "" && (parts[1] == "state" || parts[1] == "plan" || parts[1] == "delete" || parts[1] == "abandon-create")
+}
+
+// isAbandonCreatePath is an admin's abandon of an unfinished create.
+func isAbandonCreatePath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/accounts/")
+	parts := strings.Split(rest, "/")
+	return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "abandon-create"
 }
 
 func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -203,9 +254,12 @@ func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	var target any
-	if r.URL.Path == "/api/v1/accounts" {
+	switch {
+	case r.URL.Path == "/api/v1/accounts":
 		target = &hostaccounts.CreateInput{}
-	} else {
+	case isAbandonCreatePath(r.URL.Path):
+		target = &hostaccounts.AbandonCreateInput{}
+	default:
 		target = &hostaccounts.StateInput{}
 	}
 	if operator.DecodeObject(raw, target) != nil {
@@ -221,9 +275,11 @@ func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
 	}
 	for key := range fields {
 		valid := key == "reason"
-		if r.URL.Path == "/api/v1/accounts" {
+		switch {
+		case r.URL.Path == "/api/v1/accounts":
 			valid = valid || key == "username" || key == "domain"
-		} else {
+		case isAbandonCreatePath(r.URL.Path):
+		default:
 			valid = valid || key == "state" || key == "expected_revision"
 		}
 		if !valid {

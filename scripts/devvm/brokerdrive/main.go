@@ -32,7 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	socket := global.String("socket", "", "Absolute path of the broker's Unix socket")
 	actor := global.String("actor", "devvm proof", "Actor recorded in the broker journal")
 	if global.Parse(args) != nil || *socket == "" || global.NArg() == 0 {
-		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|domains|show-domains|secure|wordpress|public-html|delete|cron|set-cron|log|usage|usage-all|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune|files-list|files-read|files-write|files-upload|files-download|files-mkdir|files-rename|files-delete|files-mode [flags]")
+		fmt.Fprintln(stderr, "usage: brokerdrive --socket PATH [--actor NAME] capability|list|create|state|plan|ssh-keys|show-keys|web|certificate|domains|show-domains|secure|wordpress|public-html|delete|abandon-create|cron|set-cron|log|usage|usage-all|backup-status|backup-target|backup-password|backup-password-saved|backup|backups|restore|drill|prune|files-list|files-read|files-write|files-upload|files-download|files-mkdir|files-rename|files-delete|files-mode [flags]")
 		return 2
 	}
 	service := hostaccounts.NewClient(*socket)
@@ -45,10 +45,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// A certificate is asked for, validated and installed: the issue
 		// alone may take three minutes, the install six.
 		timeout = 12 * time.Minute
-	case "create", "web", "certificate", "domains", "delete", "state", "plan", "backup-target", "backups":
+	case "create", "web", "certificate", "domains", "delete", "abandon-create", "state", "plan", "backup-target", "backups":
 		// A state change of a live site re-applies the site list too, and
 		// so does a plan change of its limits. A create writes the slice
-		// limits and may reload systemd first.
+		// limits and may reload systemd first. An abandon of a create runs
+		// userdel and groupdel on the broker's four-minute limit.
 		timeout = 6 * time.Minute
 	case "backup", "restore", "drill", "prune":
 		timeout = 125 * time.Minute
@@ -136,6 +137,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		result, err = service.SetPlan(ctx, *id, hostaccounts.PlanInput{Plan: *plan, Limits: limits, ExpectedRevision: *revision, Reason: *reason}, *actor)
 	case "delete":
 		result, err = service.Delete(ctx, *id, hostaccounts.DeleteInput{ExpectedRevision: *revision, Reason: *reason}, *actor)
+	case "abandon-create":
+		recovery, ok := service.(hostaccounts.CreateRecoveryService)
+		if !ok {
+			fmt.Fprintln(stderr, "this client has no create recovery surface")
+			return 1
+		}
+		result, err = recovery.AbandonCreate(ctx, *id, hostaccounts.AbandonCreateInput{Reason: *reason}, *actor)
 	case "cron", "set-cron", "log", "usage", "usage-all":
 		tools, ok := service.(hostaccounts.SiteToolsService)
 		if !ok {

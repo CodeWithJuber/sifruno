@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -156,6 +156,15 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 (PermitRootLogin no, a comment-only key file, loose modes, a
                 Match rule on the admin's address) is refused. Live sshd is
                 not changed.
+  create-recovery
+                A create whose groupadd waits on shadow-utils' lock is not
+                killed and the broker logs why it stopped; the state a
+                useradd stopped after making the home leaves (an empty
+                root:root mode-0 home) is finished when the broker starts
+                again; a create it cannot finish holds up every account until
+                the operator abandons it, which is refused for an active
+                account and for a home the create did not make; then the
+                root-only Go tests of the same code run.
 USAGE
 }
 
@@ -359,6 +368,27 @@ case "${1:-}" in
     transcript="$OUT/broker-isolation-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/broker-isolation.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  create-recovery)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    (cd "$REPO" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -trimpath -buildvcs=false -o "$stage/hostaccounts.test" ./internal/hostaccounts)
+    # A broker left running by an earlier proof holds its binary open, so
+    # stop it before the copy replaces the file. Its state stays on disk.
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in hostbroker brokerdrive hostaccounts.test; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/create-recovery.guest.sh" /opt/sifruno-proof/create-recovery.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/hostaccounts.test /opt/sifruno-proof/create-recovery.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/create-recovery-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    status=0
+    "$HERE/vm.sh" ssh /opt/sifruno-proof/create-recovery.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

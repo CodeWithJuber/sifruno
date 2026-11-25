@@ -16,8 +16,10 @@ concurrency:
 jobs:
   source:
     name: Go, UI and fixture source checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The owner's own runner for this private repository (the github-runners
+    # kit), not GitHub's hosted runners.
+    runs-on: [self-hosted, sifruno]
+    timeout-minutes: 45
     env:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
@@ -40,8 +42,10 @@ jobs:
         run: |
           # The process test rebuilds with -trimpath under a short startup deadline.
           # Prime this runner's local compiler cache from a cold checkout.
+          # One hostaccounts fixture needs the default umask (AGENTS.md).
+          umask 022
           go build -mod=readonly -trimpath -o "$RUNNER_TEMP/sifruno-ci" ./cmd/sifruno
-          go test ./... -count=1
+          go test ./... -count=1 -timeout 30m
       - name: Go vet
         run: go vet ./...
       - name: Install pinned development dependencies
@@ -72,5 +76,5 @@ jobs:
           node scripts/package-source.mjs
           git diff --check
 
-# These checks run on a disposable hosted runner. They do not activate hosting,
+# These checks run in the owner's runner container. They do not activate hosting,
 # call paid providers, deploy a preview, qualify native daemons or certify parity.

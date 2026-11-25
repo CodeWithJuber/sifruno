@@ -303,7 +303,7 @@ export function ServiceInventory({ report, compact = false, query, setQuery, vie
     </div>
     {!report.available ? <div className="px-4 pb-4"><Alert role="status" className="text-start">
       <Server aria-hidden="true" />
-      <AlertTitle>The service list is not available</AlertTitle>
+      <AlertTitle className="text-sm">The service list is not available</AlertTitle>
       <AlertDescription className="flex flex-col gap-2 text-start">
         <div className="text-foreground">The panel could not read the services from this server's {managerName(report.manager)}.</div>
         <div><span className="font-medium text-foreground">Next step:</span> Wait a moment. The panel asks again every 30 seconds, or use the refresh button at the top of the page.</div>

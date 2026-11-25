@@ -20,9 +20,11 @@
 #              records, with the closed folder and its open files checked
 #   staff<id>  a password-protected folder (.htaccess + a user file in
 #              .htpasswds, as cPanel's Directory Privacy keeps it) and a
-#              folder closed with Deny from all: both converted, so the site
-#              moves and answers 401 without the password, 200 with it, and
-#              403 for the closed folder
+#              folder closed with Deny from all, two address-list folders
+#              and root rewrite rules into the closed folders: all converted
+#              or kept, so the site moves and answers 401 without the
+#              password, 200 with it, 403 for the closed folder, the lists
+#              by client address, and every other spelling of the paths
 #   odd<id>    an .htaccess with a directive the converter does not know:
 #              refused before anything is created
 #   trig<id>   a PHP site whose database has a trigger: the copy fails at
@@ -198,8 +200,11 @@ chown -R $SHOP:apache /home/$SHOP/public_html; find /home/$SHOP/public_html -typ
 in_ctr "echo '*/15 * * * * php /home/$SHOP/public_html/wp-cron.php >/dev/null 2>&1' | crontab -u $SHOP -"
 # staff: a password folder (the password file outside public_html, as
 # cPanel's Directory Privacy keeps it, with a subfolder and a PHP page in
-# it) and a folder closed with Apache 2.2's Deny from all.
-in_ctr "set -e; install -d -o $STAFF -g apache -m 0750 /home/$STAFF/public_html/private /home/$STAFF/public_html/private/sub /home/$STAFF/public_html/backups /home/$STAFF/.htpasswds/public_html/private
+# it), a folder closed with Apache 2.2's Deny from all, a folder open to
+# 127.0.0.2 only and one closed to it only (this server's copy is asked
+# from 127.0.0.2 and 127.0.0.1; the old server sees neither), and root
+# rewrite rules into the closed folders, which must not open them.
+in_ctr "set -e; install -d -o $STAFF -g apache -m 0750 /home/$STAFF/public_html/private /home/$STAFF/public_html/private/sub /home/$STAFF/public_html/backups /home/$STAFF/public_html/office /home/$STAFF/public_html/lobby /home/$STAFF/.htpasswds/public_html/private
 echo '<?php echo \"Staff site\";' > /home/$STAFF/public_html/index.php
 echo 'Payroll' > /home/$STAFF/public_html/private/index.html
 echo 'Payroll archive' > /home/$STAFF/public_html/private/sub/index.html
@@ -208,6 +213,11 @@ printf '# Directory Privacy\nstaff:%s\n' \"\$(openssl passwd -apr1 '$HT_PW')\" >
 printf 'AuthType Basic\nAuthName \"Staff area\"\nAuthUserFile /home/$STAFF/.htpasswds/public_html/private/passwd\nRequire valid-user\n' > /home/$STAFF/public_html/private/.htaccess
 printf 'Order Deny,Allow\nDeny from all\n' > /home/$STAFF/public_html/backups/.htaccess
 echo 'dump' > /home/$STAFF/public_html/backups/backup.sql
+printf 'Order Deny,Allow\nDeny from all\nAllow from 127.0.0.2\n' > /home/$STAFF/public_html/office/.htaccess
+echo 'Office' > /home/$STAFF/public_html/office/index.html
+printf 'Order Allow,Deny\nAllow from all\nDeny from 127.0.0.2\n' > /home/$STAFF/public_html/lobby/.htaccess
+echo 'Lobby' > /home/$STAFF/public_html/lobby/index.html
+printf 'RewriteEngine On\nRewriteRule ^pub/(.*)\$ /private/\$1 [L]\nRewriteRule ^old-backups/(.*)\$ /backups/\$1 [L]\n' > /home/$STAFF/public_html/.htaccess
 chown -R $STAFF:apache /home/$STAFF; chmod 0711 /home/$STAFF"
 # odd: a directive the converter does not know.
 in_ctr "set -e; echo 'Odd site' > /home/$ODD/public_html/index.html; install -d -o $ODD -g apache -m 0750 /home/$ODD/public_html/tools
@@ -291,6 +301,9 @@ status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 check "the old staff site closes /private/ with 401" test "$(status "http://$STAFF_DOMAIN/private/")" = 401
 check "the old staff site opens /private/ with the password (200)" test "$(status -u "staff:$HT_PW" "http://$STAFF_DOMAIN/private/")" = 200
 check "the old staff site denies /backups/backup.sql with 403" test "$(status "http://$STAFF_DOMAIN/backups/backup.sql")" = 403
+check "the old staff site answers 401 for /pub/index.html, rewritten into /private/" test "$(status "http://$STAFF_DOMAIN/pub/index.html")" = 401
+check "the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/" test "$(status "http://$STAFF_DOMAIN/old-backups/backup.sql")" = 403
+check "the old staff site closes /office/ to this server (403) and opens /lobby/ (200)" test "$(status "http://$STAFF_DOMAIN/office/")" = 403 -a "$(status "http://$STAFF_DOMAIN/lobby/")" = 200
 check "the old WordPress denies Akismet's folder with 403" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/akismet.php")" = 403
 check "the old WordPress serves Akismet's allow-listed akismet.css with 200" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/_inc/akismet.css")" = 200
 
@@ -415,7 +428,7 @@ check "the job record holds no password or hash" bash -c "! grep -qF -e \"$(cat 
 check "the panel lists the moved site under Websites" bash -c "curl -s -b $JAR $API/api/v1/websites/sites | grep -q '\"domain\":\"$SHOP_DOMAIN\"'"
 
 echo
-echo "## 5. $STAFF_DOMAIN: a password folder and a closed folder move, converted"
+echo "## 5. $STAFF_DOMAIN: a password folder, a closed folder and two address lists move, converted"
 connect staff; pin staff >/dev/null 2>&1; install_key staff
 run_job "$STAFF"
 for _ in $(seq 1 120); do
@@ -423,7 +436,8 @@ for _ in $(seq 1 120); do
   sleep 2; call GET "/api/v1/websites/jobs/$JOB"; cp "$WORK/answer.json" "$WORK/job.json"
 done
 echo "  converted: $(m "['converted']")"
-check "the move succeeded (Native: both .htaccess files converted)" test "$state" = succeeded -a "$(m "['tier']")" = native
+check "the move succeeded (Native: four folders converted, the root rewrite rules kept)" test "$state" = succeeded -a "$(m "['tier']")" = native
+check "the job names the four converted .htaccess files" test "$(json "$WORK/job.json" "len(d['job']['migration']['converted'])")" = 4
 staff_account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
 staff_site="u${staff_account:0:31}"
 staff_vhconf="$LSWS/conf/vhosts/sifruno-$staff_site/vhconf.conf"
@@ -439,11 +453,46 @@ check "the copy answers 200 for /private/ with the password, and serves the page
 check "the copy answers 200 for /private/sub/ with the password" test "$(new "$STAFF_DOMAIN" /private/sub/ -u "staff:$HT_PW")" = 200
 check "the copy runs PHP in the password folder with the password" bash -c "curl -s -u 'staff:$HT_PW' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private/report.php | grep -qx 'Payroll from PHP'"
 check "the copy answers 403 for /backups/ and /backups/backup.sql" test "$(new "$STAFF_DOMAIN" /backups/)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403
-# Other spellings of the same paths must not reach the files.
-for path in //private/index.html /./private/index.html /x/../private/index.html /%70rivate/index.html /private%2Findex.html //backups/backup.sql /%62ackups/backup.sql /backups/./backup.sql; do
-  got="$(status --path-as-is -H "Host: $STAFF_DOMAIN" "http://127.0.0.1$path")"
-  check "the copy does not serve $path without the password ($got)" test "$got" != 200
+# Other spellings of the same paths answer exactly as the folder does. A
+# folder named without its slash gets OpenLiteSpeed's redirect to the
+# slash form first (which then answers 401 or 403); a name in another case
+# is another, missing, path on this filesystem, as on the old server.
+spelled() { # spelled PATH WANT
+  local got
+  got="$(status --path-as-is -H "Host: $STAFF_DOMAIN" "http://127.0.0.1$1")"
+  check "the copy answers $2 for $1 without the password (got $got)" test "$got" = "$2"
+}
+for path in //private/index.html /./private/index.html /x/../private/index.html /%70rivate/index.html /private%2Findex.html \
+  /%2e/private/index.html /private/%2e%2e/private/index.html /private/index.html/ /private/sub/ /private//index.html; do
+  spelled "$path" 401
 done
+for path in //backups/backup.sql /%62ackups/backup.sql /backups/./backup.sql /backups/%2e/backup.sql /backups/backup.sql/ /backups//backup.sql; do
+  spelled "$path" 403
+done
+spelled /private 301
+check "and that redirect names /private/" bash -c "curl -s -o /dev/null -w '%{redirect_url}' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private | grep -q '/private/\$'"
+spelled /backups 301
+spelled /PRIVATE/index.html 404
+spelled /Backups/backup.sql 404
+# A rewrite from the root .htaccess into a closed folder is checked again
+# in that folder's context.
+check "the copy answers 401 for /pub/index.html, rewritten into /private/" test "$(new "$STAFF_DOMAIN" /pub/index.html)" = 401
+check "the copy does not show /private/ content through /pub/" bash -c "! curl -s -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/pub/index.html | grep -q Payroll"
+check "the copy answers 200 for /pub/index.html with the password" test "$(new "$STAFF_DOMAIN" /pub/index.html -u "staff:$HT_PW")" = 200
+check "the copy answers 403 for /old-backups/backup.sql, rewritten into /backups/" test "$(new "$STAFF_DOMAIN" /old-backups/backup.sql)" = 403
+# Address lists, asked from two loopback addresses (curl --interface).
+from() { status --interface "$1" -H "Host: $STAFF_DOMAIN" "http://127.0.0.1$2"; }
+check "the copy opens /office/ to 127.0.0.2, its one allowed address (200)" test "$(from 127.0.0.2 /office/)" = 200
+check "the copy closes /office/ to 127.0.0.1 (403)" test "$(from 127.0.0.1 /office/)" = 403
+check "the copy closes /lobby/ to 127.0.0.2, its one denied address (403)" test "$(from 127.0.0.2 /lobby/)" = 403
+check "the copy opens /lobby/ to 127.0.0.1 (200)" test "$(from 127.0.0.1 /lobby/)" = 200
+check "the vhost lists the address without a prefix length (OpenLiteSpeed refuses /32)" grep -q '^ *allow  *127\.0\.0\.2$' "$staff_vhconf"
+# IPv4 clients reach OpenLiteSpeed as IPv4 addresses, never as ::ffff:
+# forms an IPv4 list would miss: port 80 has no IPv6 listener.
+ss -Hltn 'sport = :80' > "$WORK/listen80.txt" 2>/dev/null
+echo "  port 80 listeners: $(paste -sd ' ' "$WORK/listen80.txt" | tr -s ' ')"
+check "port 80 listens on IPv4 only (0.0.0.0:80, no [::]:80 or *:80)" bash -c "grep -q '0\.0\.0\.0:80 ' $WORK/listen80.txt && ! grep -Eq '\[::\]:80 |[[:space:]]\*:80 ' $WORK/listen80.txt"
+check "a request over IPv6 to port 80 is not answered" bash -c "! curl -s -o /dev/null -g --max-time 5 -H 'Host: $STAFF_DOMAIN' 'http://[::1]/lobby/'"
 check "the site's own page is open (200)" test "$(new "$STAFF_DOMAIN" /)" = 200
 echo "  probes: $(m "['probes']"); verify: $(m "['verify']['verdict']")"
 check "verify checked /private/ (401) and /backups/ (403) on both sites, all passing" test "$(m "['verify']['probes_pass']")" = 2 -a "$(m "['verify']['probes_fail']")" = 0

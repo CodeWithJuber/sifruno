@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -30,7 +34,11 @@ func (r CLIRunner) Run(ctx context.Context, sql string) ([]string, error) {
 	if r.DefaultsFile != "" {
 		args = append([]string{"--defaults-extra-file=" + r.DefaultsFile}, args...)
 	}
-	cmd := exec.CommandContext(ctx, bin, append(args, "-e", sql)...)
+	// SQL goes on stdin, never in an argument: statements carry passwords
+	// (CREATE USER ... IDENTIFIED BY), and every local user can read a
+	// process's arguments.
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = strings.NewReader(sql + ";\n")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -120,10 +128,36 @@ func (s *LocalService) DropDatabase(ctx context.Context, owner, name string) err
 	if _, err := s.Probe(ctx); err != nil {
 		return err
 	}
-	if _, err := s.Run.Run(ctx, sqlDropDatabase(name)); err != nil {
+	if err := s.dropDatabaseAndGrants(ctx, name); err != nil {
 		return err
 	}
 	return s.Registry.dropDatabase(name)
+}
+
+// revokeAll revokes every privilege user holds on db, under the escaped
+// spelling grants have now and under the plain one from before grantDB.
+// MariaDB answers 1141 for a spelling with no grant, which is no failure
+// here; held reports whether either spelling had one.
+func (s *LocalService) revokeAll(ctx context.Context, db, user string) (held bool, err error) {
+	for _, sql := range []string{sqlRevokeAll(db, user, s.host()), sqlRevokeAllPlain(db, user, s.host())} {
+		if _, err = s.Run.Run(ctx, sql); err == nil {
+			held = true
+		} else if !isNoSuchGrant(err) {
+			return held, err
+		}
+	}
+	return held, nil
+}
+
+// dropDatabaseAndGrants drops the database, then every grant on it, so no
+// user keeps access to a later database of the same name. Both steps are
+// safe to repeat after a failure.
+func (s *LocalService) dropDatabaseAndGrants(ctx context.Context, name string) error {
+	if _, err := s.Run.Run(ctx, sqlDropDatabase(name)); err != nil {
+		return err
+	}
+	_, err := s.Run.Run(ctx, sqlForgetGrants(name))
+	return err
 }
 
 func (s *LocalService) CreateUser(ctx context.Context, owner, name, password string) error {
@@ -140,6 +174,133 @@ func (s *LocalService) CreateUser(ctx context.Context, owner, name, password str
 		return err
 	}
 	return s.Registry.putUser(User{Name: name, Owner: owner, Hosts: []string{s.host()}})
+}
+
+// CreateDatabaseStrict creates a database that must not exist yet, for a
+// caller that removes what it made when a later step fails (the website
+// wizard). Unlike CreateDatabase it never adopts: a name already in the
+// registry or on the server is ErrExists and nothing changes. ErrNotRegistered
+// means the server made the database but the registry write failed.
+func (s *LocalService) CreateDatabaseStrict(ctx context.Context, owner, name string) error {
+	if err := ValidateIdentifier("database", name, MaxDatabaseLen); err != nil {
+		return err
+	}
+	if slices.ContainsFunc(s.Registry.databases(""), func(d Database) bool { return d.Name == name }) {
+		return fmt.Errorf("%w: the registry already lists the database %s", ErrExists, name)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return err
+	}
+	if _, err := s.Run.Run(ctx, sqlCreateDatabaseStrict(name)); err != nil {
+		if isServerError(err, 1007) {
+			return fmt.Errorf("%w: %v", ErrExists, err)
+		}
+		return err
+	}
+	if err := s.Registry.putDatabase(Database{Name: name, Owner: owner}); err != nil {
+		return fmt.Errorf("%w: database %s: %v", ErrNotRegistered, name, err)
+	}
+	return nil
+}
+
+// CreateUserStrict is CreateUser without adoption: a user already in the
+// registry or on the server for this host is ErrExists and nothing changes;
+// ErrNotRegistered means the server made the user but the registry write
+// failed.
+func (s *LocalService) CreateUserStrict(ctx context.Context, owner, name, password string) error {
+	if err := ValidateIdentifier("user", name, MaxUserLen); err != nil {
+		return err
+	}
+	if strings.ContainsAny(password, "\x00\n\r") {
+		return errors.New("password contains control characters")
+	}
+	if slices.ContainsFunc(s.Registry.users(""), func(u User) bool { return u.Name == name }) {
+		return fmt.Errorf("%w: the registry already lists the user %s", ErrExists, name)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return err
+	}
+	if _, err := s.Run.Run(ctx, sqlCreateUserStrict(name, s.host(), password)); err != nil {
+		if isServerError(err, 1396) {
+			return fmt.Errorf("%w: %v", ErrExists, err)
+		}
+		return err
+	}
+	if err := s.Registry.putUser(User{Name: name, Owner: owner, Hosts: []string{s.host()}}); err != nil {
+		return fmt.Errorf("%w: user %s: %v", ErrNotRegistered, name, err)
+	}
+	return nil
+}
+
+// NativePasswordHash is the form of a mysql_native_password hash: "*" and
+// 40 upper-case hex digits, as MariaDB and MySQL store it.
+var NativePasswordHash = regexp.MustCompile(`^\*[0-9A-F]{40}$`)
+
+// CreateUserWithHashStrict is CreateUserStrict for a user moved from
+// another server: it takes the user's mysql_native_password hash instead of
+// a password, so the site's configuration keeps working unchanged. The hash
+// is a credential: it travels inside the statement on the client's standard
+// input, as a password does, and is never registered or returned in an
+// error.
+func (s *LocalService) CreateUserWithHashStrict(ctx context.Context, owner, name, hash string) error {
+	if err := ValidateIdentifier("user", name, MaxUserLen); err != nil {
+		return err
+	}
+	if !NativePasswordHash.MatchString(hash) {
+		return errors.New("the password hash is not a mysql_native_password hash")
+	}
+	if slices.ContainsFunc(s.Registry.users(""), func(u User) bool { return u.Name == name }) {
+		return fmt.Errorf("%w: the registry already lists the user %s", ErrExists, name)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return err
+	}
+	if _, err := s.Run.Run(ctx, sqlCreateUserWithHashStrict(name, s.host(), hash)); err != nil {
+		if isServerError(err, 1396) {
+			return fmt.Errorf("%w: %v", ErrExists, strings.ReplaceAll(err.Error(), hash, "[hash]"))
+		}
+		return errors.New(strings.ReplaceAll(err.Error(), hash, "[hash]"))
+	}
+	if err := s.Registry.putUser(User{Name: name, Owner: owner, Hosts: []string{s.host()}}); err != nil {
+		return fmt.Errorf("%w: user %s: %v", ErrNotRegistered, name, err)
+	}
+	return nil
+}
+
+// ServerHas reports whether the server itself has a database (kind
+// "database") or a user on any host (kind "user") with this name, whether
+// the registry lists it or not. It only reads.
+func (s *LocalService) ServerHas(ctx context.Context, kind, name string) (bool, error) {
+	var sql string
+	switch kind {
+	case "database":
+		if err := ValidateIdentifier(kind, name, MaxDatabaseLen); err != nil {
+			return false, err
+		}
+		sql = sqlServerHasDatabase(name)
+	case "user":
+		if err := ValidateIdentifier(kind, name, MaxUserLen); err != nil {
+			return false, err
+		}
+		sql = sqlServerHasUser(name)
+	default:
+		return false, fmt.Errorf("unknown kind %q: use database or user", kind)
+	}
+	if _, err := s.Probe(ctx); err != nil {
+		return false, err
+	}
+	rows, err := s.Run.Run(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+	if len(rows) != 1 {
+		return false, fmt.Errorf("the %s check answered %d rows, not 1", kind, len(rows))
+	}
+	n, err := strconv.Atoi(rows[0])
+	if err != nil || n < 0 {
+		return false, fmt.Errorf("the %s check answered %q, not a count", kind, rows[0])
+	}
+	return n > 0, nil
 }
 
 func (s *LocalService) DropUser(ctx context.Context, owner, name string) error {
@@ -198,9 +359,8 @@ func (s *LocalService) SetPrivileges(ctx context.Context, owner, user, db string
 		return err
 	}
 	// set semantics: revoke then grant — matches the reference's replace.
-	// MariaDB errors 1141 when nothing was granted yet; that is the normal
-	// first-grant path, not a failure.
-	if _, err := s.Run.Run(ctx, sqlRevokeAll(db, user, s.host())); err != nil && !isNoSuchGrant(err) {
+	// Nothing granted yet is the normal first-grant path, not a failure.
+	if _, err := s.revokeAll(ctx, db, user); err != nil {
 		return err
 	}
 	if _, err := s.Run.Run(ctx, sqlGrant(db, user, s.host(), privs)); err != nil {
@@ -235,7 +395,10 @@ func (s *LocalService) RevokeAccess(ctx context.Context, owner, user, db string)
 	if _, err := s.Probe(ctx); err != nil {
 		return err
 	}
-	if _, err := s.Run.Run(ctx, sqlRevokeAll(db, user, s.host())); err != nil {
+	if held, err := s.revokeAll(ctx, db, user); err != nil || !held {
+		if err == nil {
+			err = errors.New("no such grant: " + user + " has no privileges on " + db)
+		}
 		return err
 	}
 	for _, x := range s.Registry.databases("") {
@@ -318,6 +481,12 @@ func (s *LocalService) AllUsers(ctx context.Context) ([]User, error) {
 // isNoSuchGrant reports MariaDB error 1141 (no grant defined yet).
 func isNoSuchGrant(err error) bool {
 	return strings.Contains(err.Error(), "1141") || strings.Contains(err.Error(), "no such grant")
+}
+
+// isServerError reports whether err is the mysql client's report of one
+// server error number: "ERROR 1007 (HY000) at line 1: ...".
+func isServerError(err error, code int) bool {
+	return strings.Contains(err.Error(), fmt.Sprintf("ERROR %d (", code))
 }
 
 // GrantsFor returns raw SHOW GRANTS lines for a user (diagnostics).

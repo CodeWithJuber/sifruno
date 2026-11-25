@@ -66,8 +66,25 @@ func TestSQLBuilders(t *testing.T) {
 	if got := sqlCreateUser("wlive01_u", "localhost", "p'w\\d"); !strings.Contains(got, `'p\'w\\d'`) {
 		t.Fatalf("password escaping: %s", got)
 	}
-	if got := sqlGrant("wlive01_wp", "wlive01_u", "localhost", []string{"SELECT", "INSERT"}); !strings.Contains(got, "GRANT SELECT, INSERT ON `wlive01_wp`.* TO 'wlive01_u'@'localhost'") {
+	// The database is named exactly: "_" escaped, or it would match any
+	// one character in another account's database name.
+	if got := sqlGrant("wlive01_wp", "wlive01_u", "localhost", []string{"SELECT", "INSERT"}); got != "GRANT SELECT, INSERT ON `wlive01\\_wp`.* TO 'wlive01_u'@'localhost'" {
 		t.Fatalf("grant: %s", got)
+	}
+	if got := sqlRevokeAll("wlive01_wp", "wlive01_u", "localhost"); got != "REVOKE ALL PRIVILEGES ON `wlive01\\_wp`.* FROM 'wlive01_u'@'localhost'" {
+		t.Fatalf("revoke: %s", got)
+	}
+	if got := grantDB(`a_b%c\d`); got != `a\_b\%c\\d` {
+		t.Fatalf("grantDB: %s", got)
+	}
+	got := sqlForgetGrants("bob_x_wp")
+	for _, table := range []string{"db", "tables_priv", "columns_priv", "procs_priv"} {
+		if want := "DELETE FROM mysql." + table + ` WHERE Db IN ('bob\\_x\\_wp', 'bob_x_wp');`; !strings.Contains(got, want) {
+			t.Fatalf("forget grants: missing %q in\n%s", want, got)
+		}
+	}
+	if !strings.HasSuffix(got, "\nFLUSH PRIVILEGES") {
+		t.Fatalf("forget grants does not flush:\n%s", got)
 	}
 	if got := sqlRenameUser("a_u", "localhost", "a_v"); !strings.Contains(got, "RENAME USER 'a_u'@'localhost' TO 'a_v'@'localhost'") {
 		t.Fatalf("rename: %s", got)
@@ -78,6 +95,7 @@ func TestSQLBuilders(t *testing.T) {
 type fakeRunner struct {
 	stmts []string
 	rows  map[string][]string
+	errs  map[string]error // statements the server refuses
 	fail  bool
 }
 
@@ -86,6 +104,9 @@ func (f *fakeRunner) Run(_ context.Context, sql string) ([]string, error) {
 		return nil, errors.New("cannot connect")
 	}
 	f.stmts = append(f.stmts, sql)
+	if err, ok := f.errs[sql]; ok {
+		return nil, err
+	}
 	if strings.HasPrefix(sql, sqlVersion[:15]) {
 		return []string{"10.11.19-MariaDB"}, nil
 	}

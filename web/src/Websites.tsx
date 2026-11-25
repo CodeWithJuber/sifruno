@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import { Archive, ArrowDownToLine, ArrowUpRight, File, Folder, Globe, Info, LockKeyhole, LogOut, Plus, RefreshCw, Save, Search, Upload } from "lucide-react";
 import { bytes } from "@/Dashboard";
+import { buttonVariants } from "@/components/ui/button";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import { downloadSiteBackup, importSiteArchive, previewURL, sitePreviewPort, SiteApiError, siteRequest, siteURL, validBackup, validBackupList, validFileContent, validFileList, validSession, validSite, validSiteList } from "@/lib/sites-api";
@@ -485,6 +487,8 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
           <Button label="Refresh websites" icon={<RefreshCw />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)} />
           <Button label="Import native ZIP" icon={<Upload />} variant="secondary" size="sm" isDisabled={Boolean(busy) || sites.length >= 100} onClick={() => { rememberDialogTrigger(); setDiscardDraftForImport(false); setError(undefined); setImportOpen(true); }} />
           <Button label="Create website" icon={<Plus />} variant="primary" size="sm" isDisabled={Boolean(busy) || dirty || sites.length >= 100} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }} />
+          {/* Base link styles inherit colour, so the primary text colour is marked important. */}
+          <Link to="/websites/new" className={buttonVariants({ size: "sm", className: "text-primary-foreground!" })} data-testid="new-website-link"><Plus aria-hidden="true" />New website</Link>
         </div>
       </Card>
       <div className="hosting-notice website-scope-notice"><Info aria-hidden="true" /><span>Static websites and native site ZIPs · local HTTP preview. DNS, TLS, PHP, mail and databases are unavailable.</span></div>

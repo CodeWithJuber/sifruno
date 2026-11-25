@@ -1,0 +1,429 @@
+# Fresh install test 2026-11-24T04:30:14Z
+# release sha256 3513fead17b432b067d4f568c3d18700bce4972971819204c1e4cc339fe881a6, source 10cd1ad
+Stopped
+Destroyed. The base image stays in /home/claude-runner/.cache/sifruno-devvm for the next create.
+Created. Next: vm.sh start
+No usable /dev/kvm: using software emulation. Expect the first boot to take a few minutes.
+Waiting for SSH on 127.0.0.1:35373
+Up: ssh 35373, http 57783, https 39237
+== 2026-11-24T04:47:17Z Sifruno installer
+== 2026-11-24T04:47:36Z Preflight: nothing is changed until every check passes
+ok: running as root
+ok: AlmaLinux 9.9 (Chartreuse Bobcat)
+ok: x86_64
+ok: /home is XFS with user quota enforced
+ok: /home is empty and root's
+ok: root can still sign in over SSH with a key once the policy is in place
+SELinux is Enforcing; the installer leaves the SELinux mode as it is
+== 2026-11-24T04:48:06Z Checking the release in /root/sifruno-release/sifruno-linux-amd64 against its SHA256SUMS
+ok: every file in the release matches SHA256SUMS
+== 2026-11-24T04:48:10Z Add the LiteSpeed, EPEL, CRB and Remi repositories
+
+Installed:
+  epel-release-9-9.el9.noarch                                                   
+
+
+Installed:
+  remi-release-9.8-1.el9.remi.noarch                                            
+
+== 2026-11-24T05:00:16Z Install OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman and Apache (for the Compat tier; left off)
+Importing GPG key 0x3228467C:
+ Userid     : "Fedora (epel9) <epel@fedoraproject.org>"
+ Fingerprint: FF8A D134 4597 106E CE81 3B91 8A38 72BF 3228 467C
+ From       : /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9
+Importing GPG key 0x83084D0E:
+ Userid     : "LiteSpeed Tech Inc. (LiteSpeed GnuPG Key) <info@litespeedtech.com>"
+ Fingerprint: 4225 9994 257E 19EB 6A91 CA85 3F6F 6270 8308 4D0E
+ From       : /etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed
+Importing GPG key 0x478F8947:
+ Userid     : "Remi's RPM repository (https://rpms.remirepo.net/) <remi@remirepo.net>"
+ Fingerprint: B1AB F71E 14C9 D748 97E1 98A8 B195 27F1 478F 8947
+ From       : /etc/pki/rpm-gpg/RPM-GPG-KEY-remi.el9
+
+Upgraded:
+  openssh-9.9p1-17.el9_9.alma.1.x86_64                                          
+  openssh-clients-9.9p1-17.el9_9.alma.1.x86_64                                  
+  openssh-server-9.9p1-17.el9_9.alma.1.x86_64                                   
+Installed:
+  aardvark-dns-3:1.17.1-1.el9.x86_64                                            
+  almalinux-logos-httpd-90.7-1.el9.noarch                                       
+  apr-1.7.0-12.el9_3.x86_64                                                     
+  apr-util-1.6.1-23.el9_8.1.x86_64                                              
+  apr-util-bdb-1.6.1-23.el9_8.1.x86_64                                          
+  apr-util-openssl-1.6.1-23.el9_8.1.x86_64                                      
+  conmon-3:2.2.1-2.el9_8.x86_64                                                 
+  container-selinux-4:2.250.0-1.el9.noarch                                      
+  containers-common-5:5.8-2.el9.x86_64                                          
+  criu-3.19-6.el9.x86_64                                                        
+  criu-libs-3.19-6.el9.x86_64                                                   
+  crun-1.29.1-1.el9.x86_64                                                      
+  fontconfig-2.14.0-2.el9_1.x86_64                                              
+  freetype-2.10.4-10.el9_5.x86_64                                               
+  fribidi-1.0.10-6.el9.2.x86_64                                                 
+  fuse-common-3.10.2-9.el9.x86_64                                               
+  fuse-overlayfs-1.17-1.el9.x86_64                                              
+  fuse3-3.10.2-9.el9.x86_64                                                     
+  fuse3-libs-3.10.2-9.el9.x86_64                                                
+  gd3php-2.3.3-11.el9.remi.x86_64                                               
+  gdk-pixbuf2-2.42.6-6.el9_8.1.x86_64                                           
+  graphite2-1.3.14-9.el9.x86_64                                                 
+  harfbuzz-2.7.4-10.el9.x86_64                                                  
+  highway-1.3.0-1.el9.x86_64                                                    
+  httpd-2.4.62-13.el9_8.9.x86_64                                                
+  httpd-core-2.4.62-13.el9_8.9.x86_64                                           
+  httpd-filesystem-2.4.62-13.el9_8.9.noarch                                     
+  httpd-tools-2.4.62-13.el9_8.9.x86_64                                          
+  icu-tzdata-2026f-1.el9.remi.noarch                                            
+  iptables-legacy-1.8.10-11.1.el9.x86_64                                        
+  iptables-legacy-libs-1.8.10-11.1.el9.x86_64                                   
+  jbigkit-libs-2.1-23.el9.x86_64                                                
+  jxl-pixbuf-loader-0.7.2-2.el9.x86_64                                          
+  libX11-1.8.12-1.el9_9.1.x86_64                                                
+  libX11-common-1.8.12-1.el9_9.1.noarch                                         
+  libXau-1.0.9-8.el9.x86_64                                                     
+  libXpm-3.5.13-10.el9.x86_64                                                   
+  libaio-0.3.112-1.el9.x86_64                                                   
+  libaom-3.15.3-1.el9.x86_64                                                    
+  libargon2-20171227-7.el9.x86_64                                               
+  libavif-1.1.1-3.el9.x86_64                                                    
+  libc-client-2007f-33.el9.remi.x86_64                                          
+  libdav1d-1.5.4-1.el9.x86_64                                                   
+  libicu78-78.3-2.el9.remi.x86_64                                               
+  libimagequant-2.17.0-1.el9.x86_64                                             
+  libjpeg-turbo-2.0.90-7.el9.x86_64                                             
+  libjxl-0.7.2-2.el9.x86_64                                                     
+  libnet-1.2-7.el9.x86_64                                                       
+  libnftnl-1.2.6-4.el9_4.x86_64                                                 
+  libnsl-2.34-290.el9_9.x86_64                                                  
+  libpng-2:1.6.37-17.el9.x86_64                                                 
+  libraqm-0.8.0-1.el9.x86_64                                                    
+  libslirp-4.4.0-8.el9.x86_64                                                   
+  libtiff-4.4.0-18.el9_8.1.x86_64                                               
+  libvmaf-2.3.0-2.el9.x86_64                                                    
+  libwebp-1.2.0-8.el9_3.x86_64                                                  
+  libxcb-1.13.1-9.el9.x86_64                                                    
+  libxcrypt-compat-4.4.18-3.el9.x86_64                                          
+  libxslt-1.1.34-16.el9.x86_64                                                  
+  libyuv-0-0.45.20201024git19d71f6.el9.x86_64                                   
+  libzip-1.7.3-8.el9.x86_64                                                     
+  lsphp83-8.3.37-1.el9.x86_64                                                   
+  lsphp83-bcmath-8.3.37-1.el9.x86_64                                            
+  lsphp83-common-8.3.37-1.el9.x86_64                                            
+  lsphp83-gd-8.3.37-1.el9.x86_64                                                
+  lsphp83-imap-8.3.37-1.el9.x86_64                                              
+  lsphp83-intl-8.3.37-1.el9.x86_64                                              
+  lsphp83-mbstring-8.3.37-1.el9.x86_64                                          
+  lsphp83-mysqlnd-8.3.37-1.el9.x86_64                                           
+  lsphp83-opcache-8.3.37-1.el9.x86_64                                           
+  lsphp83-pdo-8.3.37-1.el9.x86_64                                               
+  lsphp83-process-8.3.37-1.el9.x86_64                                           
+  lsphp83-xml-8.3.37-1.el9.x86_64                                               
+  lsphp83-zip-8.3.37-1.el9.x86_64                                               
+  mailcap-2.1.49-5.el9.noarch                                                   
+  mariadb-3:10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64                
+  mariadb-backup-3:10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64         
+  mariadb-common-3:10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64         
+  mariadb-connector-c-3.2.6-2.el9_8.x86_64                                      
+  mariadb-connector-c-config-3.2.6-2.el9_8.noarch                               
+  mariadb-errmsg-3:10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64         
+  mariadb-gssapi-server-3:10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64  
+  mariadb-server-3:10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64         
+  mariadb-server-utils-3:10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64   
+  mod_http2-2.0.26-7.el9_9.1.x86_64                                             
+  mod_lua-2.4.62-13.el9_8.9.x86_64                                              
+  mysql-selinux-1.0.18-1.el9.noarch                                             
+  netavark-3:1.17.2-3.el9.x86_64                                                
+  nftables-1:1.0.9-9.el9_8.x86_64                                               
+  oniguruma5php-6.9.10-1.el9.remi.x86_64                                        
+  openlitespeed-1.9.4-3.el9.x86_64                                              
+  passt-0^20260728.gf8df3f1-1.el9.x86_64                                        
+  passt-selinux-0^20260728.gf8df3f1-1.el9.noarch                                
+  perl-AutoLoader-5.74-484.el9_8.noarch                                         
+  perl-B-1.80-484.el9_8.x86_64                                                  
+  perl-Carp-1.50-460.el9.noarch                                                 
+  perl-Class-Struct-0.66-484.el9_8.noarch                                       
+  perl-DBD-MariaDB-1.21-17.el9.x86_64                                           
+  perl-DBI-1.643-12.el9_9.3.x86_64                                              
+  perl-Data-Dumper-2.174-462.el9.x86_64                                         
+  perl-Digest-1.19-4.el9.noarch                                                 
+  perl-Digest-MD5-2.58-4.el9.x86_64                                             
+  perl-DynaLoader-1.47-484.el9_8.x86_64                                         
+  perl-Encode-4:3.08-462.el9.x86_64                                             
+  perl-Errno-1.30-484.el9_8.x86_64                                              
+  perl-Exporter-5.74-461.el9.noarch                                             
+  perl-Fcntl-1.13-484.el9_8.x86_64                                              
+  perl-File-Basename-2.85-484.el9_8.noarch                                      
+  perl-File-Copy-2.34-484.el9_8.noarch                                          
+  perl-File-Path-2.18-4.el9.noarch                                              
+  perl-File-Temp-1:0.231.100-4.el9.noarch                                       
+  perl-File-stat-1.09-484.el9_8.noarch                                          
+  perl-FileHandle-2.03-484.el9_8.noarch                                         
+  perl-Getopt-Long-1:2.52-4.el9.noarch                                          
+  perl-Getopt-Std-1.12-484.el9_8.noarch                                         
+  perl-HTTP-Tiny-0.076-462.el9.noarch                                           
+  perl-IO-1.43-484.el9_8.x86_64                                                 
+  perl-IO-Socket-IP-0.41-5.el9.noarch                                           
+  perl-IO-Socket-SSL-2.073-2.el9.noarch                                         
+  perl-IPC-Open3-1.21-484.el9_8.noarch                                          
+  perl-MIME-Base64-3.16-4.el9.x86_64                                            
+  perl-Math-BigInt-1:1.9998.18-460.el9.noarch                                   
+  perl-Math-Complex-1.59-484.el9_8.noarch                                       
+  perl-Module-Load-1:0.36-4.el9.noarch                                          
+  perl-Mozilla-CA-20200520-6.el9.noarch                                         
+  perl-NDBM_File-1.15-484.el9_8.x86_64                                          
+  perl-Net-SSLeay-1.94-4.el9.x86_64                                             
+  perl-POSIX-1.94-484.el9_8.x86_64                                              
+  perl-PathTools-3.78-461.el9.x86_64                                            
+  perl-Pod-Escapes-1:1.07-460.el9.noarch                                        
+  perl-Pod-Perldoc-3.28.01-461.el9.noarch                                       
+  perl-Pod-Simple-1:3.42-4.el9.noarch                                           
+  perl-Pod-Usage-4:2.01-4.el9.noarch                                            
+  perl-Scalar-List-Utils-4:1.56-462.el9.x86_64                                  
+  perl-SelectSaver-1.02-484.el9_8.noarch                                        
+  perl-Socket-4:2.031-4.el9.x86_64                                              
+  perl-Storable-1:3.21-460.el9.x86_64                                           
+  perl-Symbol-1.08-484.el9_8.noarch                                             
+  perl-Sys-Hostname-1.23-484.el9_8.x86_64                                       
+  perl-Term-ANSIColor-5.01-461.el9.noarch                                       
+  perl-Term-Cap-1.17-460.el9.noarch                                             
+  perl-Text-ParseWords-3.30-460.el9.noarch                                      
+  perl-Text-Tabs+Wrap-2013.0523-460.el9.noarch                                  
+  perl-Time-Local-2:1.300-7.el9.noarch                                          
+  perl-URI-5.09-4.el9_9.noarch                                                  
+  perl-Unicode-Normalize-1.27-461.el9.x86_64                                    
+  perl-base-2.27-484.el9_8.noarch                                               
+  perl-constant-1.33-461.el9.noarch                                             
+  perl-if-0.60.800-484.el9_8.noarch                                             
+  perl-interpreter-4:5.32.1-484.el9_8.x86_64                                    
+  perl-libnet-3.13-4.el9.noarch                                                 
+  perl-libs-4:5.32.1-484.el9_8.x86_64                                           
+  perl-mro-1.23-484.el9_8.x86_64                                                
+  perl-overload-1.31-484.el9_8.noarch                                           
+  perl-overloading-0.02-484.el9_8.noarch                                        
+  perl-parent-1:0.238-460.el9.noarch                                            
+  perl-podlators-1:4.14-460.el9.noarch                                          
+  perl-subs-1.03-484.el9_8.noarch                                               
+  perl-vars-1.05-484.el9_8.noarch                                               
+  podman-6:5.8.5-3.el9_9.x86_64                                                 
+  policycoreutils-python-utils-3.6-9.el9.noarch                                 
+  protobuf-c-1.3.3-13.el9.x86_64                                                
+  rav1e-libs-0.8.1-2.el9.x86_64                                                 
+  shadow-utils-subid-2:4.9-17.el9.x86_64                                        
+  slirp4netns-1.3.4-1.el9.x86_64                                                
+  svt-av1-libs-2.3.0-3.el9.x86_64                                               
+  unzip-6.0-60.el9.x86_64                                                       
+  xml-common-0.6.3-58.el9.noarch                                                
+
+installed: openlitespeed-1.9.4-3.el9.x86_64
+installed: lsphp83-8.3.37-1.el9.x86_64
+installed: mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+installed: podman-5.8.5-3.el9_9.x86_64
+installed: httpd-2.4.62-13.el9_8.9.x86_64
+== 2026-11-24T05:44:11Z Label /home, create the system user sifpanel and Sifruno's folders in /etc and /var/lib
+== 2026-11-24T05:44:18Z Set passwd, group and shadow in /etc/nsswitch.conf to files (backup, check, automatic rollback)
+== 2026-11-24T05:44:24Z Write the sshd policy /etc/ssh/sshd_config.d/40-sifruno.conf (backup, sshd -t, automatic rollback, reload)
+ok: root can sign in over SSH with a key under the new policy
+== 2026-11-24T05:44:51Z Add Sifruno's include and namespace isolation to OpenLiteSpeed's config (backup)
+== 2026-11-24T05:44:53Z Install WP-CLI 2.12.0 in /usr/local/lib/sifruno, checked against its pinned sha512
+== 2026-11-24T05:45:03Z Enable and start MariaDB and OpenLiteSpeed
+Created symlink /etc/systemd/system/mysql.service → /usr/lib/systemd/system/mariadb.service.
+Created symlink /etc/systemd/system/mysqld.service → /usr/lib/systemd/system/mariadb.service.
+Created symlink /etc/systemd/system/multi-user.target.wants/mariadb.service → /usr/lib/systemd/system/mariadb.service.
+service: active
+service: active
+== 2026-11-24T05:46:43Z Create the panel's MariaDB admin user and its 0600 option file /var/lib/sifpanel/db-admin.cnf
+panel database option file: sifpanel 600 /var/lib/sifpanel/db-admin.cnf
+== 2026-11-24T05:46:46Z Create the ACME challenge folder /var/lib/sifruno-acme
+ACME challenge folder: sifpanel 755 /var/lib/sifruno-acme
+== 2026-11-24T05:46:48Z Install the programs in /usr/local/lib/sifruno/bin and the panel UI in /usr/local/lib/sifruno/ui
+== 2026-11-24T05:46:59Z Check the host policy with hostbroker --check-host
+host policy: supported
+== 2026-11-24T05:47:00Z Prepare the broker's and the panel's folders with hostsetup --apply
+hostsetup: layout ready
+== 2026-11-24T05:47:03Z Write sifruno-broker.service and sifruno.service in /etc/systemd/system
+== 2026-11-24T05:47:28Z Run the broker's startup check, enable and start both units, wait for the panel to answer
+broker startup check: supported
+Created symlink /etc/systemd/system/multi-user.target.wants/sifruno-broker.service → /etc/systemd/system/sifruno-broker.service.
+Created symlink /etc/systemd/system/multi-user.target.wants/sifruno.service → /etc/systemd/system/sifruno.service.
+the panel answers on http://127.0.0.1:8080/
+== 2026-11-24T05:48:29Z Sifruno is installed
+Changed in this run:
+  - LiteSpeed repository added
+  - EPEL repository added
+  - CRB repository enabled
+  - Remi repository added
+  - packages installed: openlitespeed lsphp83 lsphp83-common lsphp83-mysqlnd lsphp83-gd lsphp83-mbstring lsphp83-xml lsphp83-opcache lsphp83-intl lsphp83-zip lsphp83-process lsphp83-bcmath lsphp83-pdo mariadb-server podman unzip policycoreutils-python-utils httpd httpd-tools
+  - system user sifpanel created
+  - folder /var/lib/sifpanel set to root:root 0711
+  - folder /etc/sifruno set to root:root 0755
+  - folder /etc/sifruno/ssh set to root:root 0755
+  - folder /etc/sifruno/ssh/authorized_keys set to root:root 0711
+  - /etc/nsswitch.conf: passwd, group and shadow set to files (backup: /etc/nsswitch.conf.bak-20261124-0447)
+  - sshd policy /etc/ssh/sshd_config.d/40-sifruno.conf created and sshd reloaded
+  - OpenLiteSpeed: Sifruno's include and namespace isolation added (backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261124-0447)
+  - folder /usr/local/lib/sifruno set to root:root 0755
+  - WP-CLI 2.12.0 installed at /usr/local/lib/sifruno/wp-cli.phar
+  - mariadb enabled and started
+  - MariaDB admin user for the panel created, with its option file /var/lib/sifpanel/db-admin.cnf
+  - folder /var/lib/sifruno-acme set to sifpanel:sifpanel 0755
+  - folder /usr/local/lib/sifruno/bin set to root:root 0755
+  - program /usr/local/lib/sifruno/bin/sifruno installed
+  - program /usr/local/lib/sifruno/bin/hostbroker installed
+  - program /usr/local/lib/sifruno/bin/hostsetup installed
+  - program /usr/local/lib/sifruno/bin/panelctl installed
+  - panel UI installed in /usr/local/lib/sifruno/ui
+  - hostsetup created the broker's and the panel's folders
+  - /etc/systemd/system/sifruno-broker.service written
+  - /etc/systemd/system/sifruno.service written
+  - sifruno-broker.service enabled
+  - sifruno-broker.service started
+  - sifruno.service enabled
+  - sifruno.service started
+
+First run
+  1. The panel answers on this server only, at http://127.0.0.1:8080/
+     To reach it from your own computer, forward the port over SSH and open
+     that same address there:
+       ssh -L 8080:127.0.0.1:8080 root@THIS_SERVER
+  2. Open Websites. The panel asks for the operator access key, then for a
+     username, a password and an authenticator app. The key is in this file,
+     which only root and sifpanel can read. Open it on the server; do not
+     paste it into chat, tickets or screenshots:
+       /var/lib/sifpanel/state/operator/access.key
+  3. Websites need TCP 80 and 443 open in your firewall. The installer does
+     not change firewall rules. To sign in to the panel from other machines
+     without an SSH forward, run this again with --panel-host NAME.
+
+Rollback
+  Before you close this SSH session, open a second one and check that you
+  can still sign in.
+  1. Sifruno's units, first: the broker does not run without the nsswitch
+     change.
+       systemctl disable --now sifruno.service sifruno-broker.service
+       rm /etc/systemd/system/sifruno.service /etc/systemd/system/sifruno-broker.service
+       systemctl daemon-reload
+  2. sshd policy: /etc/ssh/sshd_config.d/40-sifruno.conf (created in this run)
+       rm /etc/ssh/sshd_config.d/40-sifruno.conf
+       sshd -t && systemctl reload sshd
+  3. nsswitch: /etc/nsswitch.conf
+       cp -a /etc/nsswitch.conf.bak-20261124-0447 /etc/nsswitch.conf
+  4. OpenLiteSpeed: /usr/local/lsws/conf/httpd_config.conf
+       cp -a /usr/local/lsws/conf/httpd_config.conf.bak-20261124-0447 /usr/local/lsws/conf/httpd_config.conf && systemctl restart lsws
+  Packages, the sifpanel user, websites and databases stay. Remove them by
+  hand if you want them gone.
+== 2026-11-24T05:48:31Z Apache on loopback for the Compat tier proof
+AH00558: httpd: Could not reliably determine the server's fully qualified domain name, using fe80::5054:ff:fe12:3456%eth0. Set the 'ServerName' directive globally to suppress this message
+Syntax OK
+== 2026-11-24T05:48:36Z proof folder
+== 2026-11-24T05:48:37Z Pebble test CA for the HTTPS proof (proof only, off at boot)
+
+Installed:
+  bind-libs-32:9.16.50-12.el9_9.1.x86_64                                        
+  bind-license-32:9.16.50-12.el9_9.1.noarch                                     
+  bind-utils-32:9.16.50-12.el9_9.1.x86_64                                       
+  fstrm-0.6.1-3.el9.x86_64                                                      
+  libuv-1:1.42.0-2.el9_4.x86_64                                                 
+
+-----
+-----
+/etc/pebble/api-cert.pem: OK
+installed: Pebble version: v2.10.1 (b1e1ca4f3c30abb64111adaca4544bc5374cc306)
+at boot: static
+at boot: static
+== 2026-11-24T05:51:31Z done
+
+# Smoke test: AlmaLinux release 9.9 (Chartreuse Bobcat), kernel 5.14.0-741.22.1.el9_9.x86_64, SELinux Enforcing
+## The two units
+PASS  sifruno-broker.service is active
+PASS  sifruno.service is active
+PASS  both units start at boot
+## The panel and the broker
+PASS  the panel answers on 127.0.0.1:8080
+PASS  the panel runs as sifpanel
+PASS  the broker socket exists
+PASS  the socket is sifpanel's, mode 0600
+PASS  hostbroker --check-host passes
+PASS  SELinux is still enforcing
+  SELinux labels of the two processes and their programs, for the record:
+    system_u:system_r:init_t:s0     root     hostbroker
+    system_u:system_r:init_t:s0     sifpanel sifruno
+    system_u:object_r:lib_t:s0 hostbroker
+    system_u:object_r:lib_t:s0 hostsetup
+    system_u:object_r:lib_t:s0 panelctl
+    system_u:object_r:lib_t:s0 sifruno
+## A second run of the installer changes nothing
+  | == 2026-11-24T05:51:59Z Preflight: nothing is changed until every check passes
+  | ok: running as root
+  | ok: AlmaLinux 9.9 (Chartreuse Bobcat)
+  | ok: x86_64
+  | ok: /home is XFS with user quota enforced
+  | SELinux is Enforcing; the installer leaves the SELinux mode as it is
+  | == 2026-11-24T05:52:01Z Checking the release in /root/sifruno-release/sifruno-linux-amd64 against its SHA256SUMS
+  | ok: every file in the release matches SHA256SUMS
+  | == 2026-11-24T05:52:06Z Add the LiteSpeed, EPEL, CRB and Remi repositories
+  | == 2026-11-24T05:52:23Z Install OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman and Apache (for the Compat tier; left off)
+  | installed: openlitespeed-1.9.4-3.el9.x86_64
+  | installed: lsphp83-8.3.37-1.el9.x86_64
+  | installed: mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+  | installed: podman-5.8.5-3.el9_9.x86_64
+  | installed: httpd-2.4.62-13.el9_8.9.x86_64
+  | == 2026-11-24T05:52:47Z Label /home, create the system user sifpanel and Sifruno's folders in /etc and /var/lib
+  | == 2026-11-24T05:52:49Z Set passwd, group and shadow in /etc/nsswitch.conf to files (backup, check, automatic rollback)
+  | == 2026-11-24T05:52:50Z Write the sshd policy /etc/ssh/sshd_config.d/40-sifruno.conf (backup, sshd -t, automatic rollback, reload)
+  | == 2026-11-24T05:52:50Z Add Sifruno's include and namespace isolation to OpenLiteSpeed's config (backup)
+  | == 2026-11-24T05:52:51Z Install WP-CLI 2.12.0 in /usr/local/lib/sifruno, checked against its pinned sha512
+  | == 2026-11-24T05:52:52Z Enable and start MariaDB and OpenLiteSpeed
+  | service: active
+  | service: active
+  | == 2026-11-24T05:52:54Z Create the panel's MariaDB admin user and its 0600 option file /var/lib/sifpanel/db-admin.cnf
+  | panel database option file: sifpanel 600 /var/lib/sifpanel/db-admin.cnf
+  | == 2026-11-24T05:52:55Z Create the ACME challenge folder /var/lib/sifruno-acme
+  | ACME challenge folder: sifpanel 755 /var/lib/sifruno-acme
+  | == 2026-11-24T05:52:56Z Install the programs in /usr/local/lib/sifruno/bin and the panel UI in /usr/local/lib/sifruno/ui
+  | == 2026-11-24T05:53:04Z Check the host policy with hostbroker --check-host
+  | host policy: supported
+  | == 2026-11-24T05:53:05Z Prepare the broker's and the panel's folders with hostsetup --apply
+  | The broker or the panel already has state; hostsetup prepares a fresh layout only, so the folders are left as they are.
+  | == 2026-11-24T05:53:06Z Write sifruno-broker.service and sifruno.service in /etc/systemd/system
+  | == 2026-11-24T05:53:09Z Run the broker's startup check, enable and start both units, wait for the panel to answer
+  | broker startup check: not run (it admits a fresh setup only; this broker is running or has state)
+  | the panel answers on http://127.0.0.1:8080/
+  | == 2026-11-24T05:53:24Z Sifruno is installed
+  | Changed in this run: nothing
+  | 
+  | First run
+  |   1. The panel answers on this server only, at http://127.0.0.1:8080/
+  |      To reach it from your own computer, forward the port over SSH and open
+  |      that same address there:
+  |        ssh -L 8080:127.0.0.1:8080 root@THIS_SERVER
+  |   2. Open Websites. The panel asks for the operator access key, then for a
+  |      username, a password and an authenticator app. The key is in this file,
+  |      which only root and sifpanel can read. Open it on the server; do not
+  |      paste it into chat, tickets or screenshots:
+  |        /var/lib/sifpanel/state/operator/access.key
+  |   3. Websites need TCP 80 and 443 open in your firewall. The installer does
+  |      not change firewall rules. To sign in to the panel from other machines
+  |      without an SSH forward, run this again with --panel-host NAME.
+  | 
+  | Rollback
+  |   Before you close this SSH session, open a second one and check that you
+  |   can still sign in.
+  |   1. Sifruno's units, first: the broker does not run without the nsswitch
+  |      change.
+  |        systemctl disable --now sifruno.service sifruno-broker.service
+  |        rm /etc/systemd/system/sifruno.service /etc/systemd/system/sifruno-broker.service
+  |        systemctl daemon-reload
+  |   2. sshd policy: /etc/ssh/sshd_config.d/40-sifruno.conf (unchanged in this run)
+  |        rm /etc/ssh/sshd_config.d/40-sifruno.conf
+  |        sshd -t && systemctl reload sshd
+  |   3. nsswitch: /etc/nsswitch.conf
+  |        cp -a /etc/nsswitch.conf.bak-20261124-0447 /etc/nsswitch.conf
+  |   4. OpenLiteSpeed: /usr/local/lsws/conf/httpd_config.conf
+  |        cp -a /usr/local/lsws/conf/httpd_config.conf.bak-20261124-0447 /usr/local/lsws/conf/httpd_config.conf && systemctl restart lsws
+  |   Packages, the sifpanel user, websites and databases stay. Remove them by
+  |   hand if you want them gone.
+PASS  the second run succeeds
+PASS  it reports that nothing changed
+PASS  both units are still active
+
+# 0 check(s) failed

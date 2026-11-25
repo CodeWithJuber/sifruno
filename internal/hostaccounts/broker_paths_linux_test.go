@@ -292,6 +292,23 @@ func TestBrokerPathAdmissionReopenAndInterruptedBootstrap(t *testing.T) {
 	}
 }
 
+// The controller's UID may not be one the broker gives to accounts.
+func TestValidBrokerPathsKeepsTheControllerOutOfTheAccountRange(t *testing.T) {
+	opts := BrokerOptions{StateDir: "/var/lib/sifruno-broker", HomesDir: "/home", SocketPath: "/run/sifruno-broker/control.sock"}
+	for _, uid := range []uint32{1, 989, firstAccountID - 1, lastAccountID + 1, 65534} {
+		opts.ControllerUID = uid
+		if !validBrokerPaths(opts) {
+			t.Errorf("controller UID %d refused", uid)
+		}
+	}
+	for _, uid := range []uint32{0, firstAccountID, 30000, lastAccountID} {
+		opts.ControllerUID = uid
+		if validBrokerPaths(opts) {
+			t.Errorf("controller UID %d admitted", uid)
+		}
+	}
+}
+
 func TestBrokerPathAdmissionInvalidAndCancelledReadOnly(t *testing.T) {
 	root, opts := brokerPathsFixture(t)
 	for _, bad := range []BrokerOptions{
@@ -299,6 +316,9 @@ func TestBrokerPathAdmissionInvalidAndCancelledReadOnly(t *testing.T) {
 		{StateDir: opts.StateDir, HomesDir: opts.HomesDir, SocketPath: "/broker.sock", ControllerUID: 2000},
 		{StateDir: opts.StateDir, HomesDir: opts.StateDir, SocketPath: opts.SocketPath, ControllerUID: 2000},
 		{StateDir: opts.StateDir, HomesDir: opts.HomesDir, SocketPath: opts.SocketPath},
+		// A controller inside the account range is refused at either end.
+		{StateDir: opts.StateDir, HomesDir: opts.HomesDir, SocketPath: opts.SocketPath, ControllerUID: firstAccountID},
+		{StateDir: opts.StateDir, HomesDir: opts.HomesDir, SocketPath: opts.SocketPath, ControllerUID: lastAccountID},
 	} {
 		assertBrokerAdmissionReadOnly(t, root, bad, ErrInvalid)
 	}

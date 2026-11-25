@@ -29,6 +29,10 @@ var denyRules = []string{
 // suspendedRules refuse every request, static files included.
 var suspendedRules = []string{`RewriteRule .* - [F,L]`}
 
+// acmeChallengeURI is the HTTP-01 path (RFC 8555 section 8.3). Every vhost
+// maps it to ACMEChallengeDir.
+const acmeChallengeURI = "/.well-known/acme-challenge/"
+
 // Render validates s and returns the managed files keyed by their path
 // relative to ServerRoot: ServerConfigPath and one VhostConfigPath per site.
 // Equal input in any order gives byte-identical output.
@@ -60,18 +64,26 @@ func VhostConfigPath(name string) string {
 }
 
 // renderServer writes the server-level fragment: one virtualhost block per
-// site, then the listeners with their map lines.
+// site, then the listeners with their map lines. A secure listener is left
+// out while no site has its own certificate, because it would map no site.
 func renderServer(listeners []Listener, sites []site) []byte {
+	anyCertificate := false
+	for _, v := range sites {
+		if v.TLS.CertFile != "" {
+			anyCertificate = true
+			break
+		}
+	}
 	var b bytes.Buffer
 	b.WriteString(header)
 	b.WriteString("# Included from httpd_config.conf by: include " + pathpkg.Join(ServerRoot, ServerConfigPath) + "\n")
 	for _, v := range sites {
-		enableScript := "1"
+		enableScript, vhRoot := "1", pathpkg.Join(HomeRoot, v.Username)+"/"
 		if v.Suspended {
-			enableScript = "0"
+			enableScript, vhRoot = "0", SuspendedDocRoot+"/"
 		}
 		b.WriteString("\nvirtualhost " + NamePrefix + v.Name + " {\n")
-		kv(&b, "vhRoot", pathpkg.Join(HomeRoot, v.Username)+"/")
+		kv(&b, "vhRoot", vhRoot)
 		kv(&b, "configFile", pathpkg.Join(ServerRoot, VhostConfigPath(v.Name)))
 		// restrained keeps static files and symlinks inside vhRoot (the home).
 		kv(&b, "allowSymbolLink", "1")
@@ -85,6 +97,9 @@ func renderServer(listeners []Listener, sites []site) []byte {
 		b.WriteString("}\n")
 	}
 	for _, l := range listeners {
+		if l.Secure && !anyCertificate {
+			continue
+		}
 		addr, _ := listenerAddress(l) // validated by normalize
 		b.WriteString("\nlistener " + NamePrefix + l.Name + " {\n")
 		kv(&b, "address", addr)
@@ -100,7 +115,11 @@ func renderServer(listeners []Listener, sites []site) []byte {
 			if l.Secure && v.TLS.CertFile == "" {
 				continue
 			}
-			kv(&b, "map", NamePrefix+v.Name+" "+strings.Join(v.Domains, ", "))
+			domains := v.Domains
+			if l.Secure {
+				domains = securedDomains(v)
+			}
+			kv(&b, "map", NamePrefix+v.Name+" "+strings.Join(domains, ", "))
 		}
 		b.WriteString("}\n")
 	}
@@ -108,20 +127,32 @@ func renderServer(listeners []Listener, sites []site) []byte {
 }
 
 // renderVhost writes one site's vhconf.conf. A suspended site keeps its logs
-// and certificate but has no PHP handler and refuses every request.
+// and certificate but has no PHP handler and refuses every request with 403,
+// except ACME challenges: OpenLiteSpeed 1.9.4 serves the challenge context
+// (the panel's own folder, never the site's) before the vhost's rewrite rule,
+// as the dev VM's broker-site-actions proof shows, so certificate renewal
+// keeps working while a site is suspended.
+// Its docRoot is SuspendedDocRoot, not the tenant's: every path a suspended
+// vhost names (docRoot, logs, certificate, challenge directory) is outside
+// every home, so nothing its tenant does can make its config test fail.
 func renderVhost(v site) []byte {
 	var b bytes.Buffer
 	logDir := pathpkg.Join(LogRoot, v.Name)
-	state := "active"
+	state, docRoot := "active", v.DocRoot+"/"
 	if v.Suspended {
-		state = "suspended"
+		state, docRoot = "suspended", SuspendedDocRoot+"/"
 	}
 	b.WriteString(header)
 	b.WriteString("# Site " + v.Name + " (" + state + "), user " + v.Username + ", PHP " + v.PHPVersion + "\n\n")
-	kv0(&b, "docRoot", v.DocRoot+"/")
+	kv0(&b, "docRoot", docRoot)
 	if !v.Suspended {
 		// 2 enables the feature for this vhost; it applies only when the
-		// server-level value is not 0 (httpvhost.cpp, httpserver.cpp).
+		// server-level value is not 0. Read from the OpenLiteSpeed 1.9.4
+		// source, not yet run: a vhost's cgroups is 1 off or 2 on, and counts
+		// only when CGIRLimit's is not 0 (src/http/httpvhost.cpp:3401-3405);
+		// CGIRLimit's is 0 disallowed, 1 off by default, 2 on by default
+		// (src/http/serverprocessconfig.h:48-50,
+		// src/extensions/cgi/cgidworker.cpp:409-416).
 		if v.Isolation.Namespace {
 			kv0(&b, "namespace", "2")
 		}
@@ -164,8 +195,13 @@ func renderVhost(v site) []byte {
 	autoLoad := "0"
 	if !v.Suspended {
 		renderPHP(&b, v)
-		rules = denyRules
+		rules = append(append([]string(nil), denyRules...), redirectRules(v.Redirects)...)
 		autoLoad = "1"
+	}
+	renderCache(&b, v)
+	renderACMEChallenge(&b)
+	if !v.Suspended {
+		renderFolders(&b, v)
 	}
 
 	b.WriteString("\nrewrite  {\n")
@@ -221,6 +257,75 @@ func renderPHP(b *bytes.Buffer, v site) {
 
 	b.WriteString("\nscripthandler  {\n")
 	kv(b, "add", "lsapi:"+name+" php")
+	b.WriteString("}\n")
+}
+
+// cacheSettings are the cache module's vhost-level values for an active site:
+// the stock server-level ones, written out so a changed httpd_config.conf
+// does not change them. enableCache and enablePrivateCache 0 cache nothing
+// by default: a page is cached only when the site's own response asks for it
+// (X-LiteSpeed-Cache-Control, which the LiteSpeed Cache WordPress plugin
+// sends) or a rewrite rule does. The module never caches a POST.
+var cacheSettings = [][2]string{
+	{"checkPublicCache", "1"},
+	{"checkPrivateCache", "1"},
+	{"enableCache", "0"},
+	{"enablePrivateCache", "0"},
+	{"qsCache", "1"},
+	{"reqCookieCache", "1"},
+	{"respCookieCache", "1"},
+	{"ignoreReqCacheCtrl", "1"},
+	{"ignoreRespCacheCtrl", "0"},
+	{"expireInSeconds", "3600"},
+	{"privateExpireInSeconds", "3600"},
+	{"maxStaleAge", "200"},
+	{"maxCacheObjSize", "10000000"},
+}
+
+// renderCache writes the vhost's "module cache" block. An active site gets
+// the module with its own store in CacheRoot, so the purge headers its PHP
+// sends act on its own pages only. A suspended site gets the module off and
+// nothing to look up: the module serves a cached page when the request
+// headers arrive, before the vhost's rewrite rules, so a store left on
+// would keep serving the site's pages past its 403 rule.
+func renderCache(b *bytes.Buffer, v site) {
+	b.WriteString("\nmodule cache {\n")
+	if v.Suspended {
+		kv(b, "ls_enabled", "0")
+		kv(b, "checkPublicCache", "0")
+		kv(b, "checkPrivateCache", "0")
+		kv(b, "enableCache", "0")
+		kv(b, "enablePrivateCache", "0")
+		b.WriteString("}\n")
+		return
+	}
+	kv(b, "ls_enabled", "1")
+	kv(b, "storagePath", pathpkg.Join(CacheRoot, NamePrefix+v.Name))
+	for _, s := range cacheSettings {
+		kv(b, s[0], s[1])
+	}
+	b.WriteString("}\n")
+}
+
+// renderACMEChallenge maps the HTTP-01 path to ACMEChallengeDir as static
+// files only. allowBrowse is OpenLiteSpeed's "Accessible" switch (0 answers
+// 403), not a directory listing, which autoIndex 0 turns off. forceType
+// serves every file as text/plain, so no suffix reaches the PHP handler.
+// The context's own rewrite block with enable 0 stops OpenLiteSpeed from
+// applying a parent context's rules, the tenant's .htaccess among them, and
+// from running rules of a .htaccess in the challenge directory. The
+// vhost-level rules still run first: none of an active site's deny rules
+// matches this path, and a suspended site's rule refuses it like every other
+// path.
+func renderACMEChallenge(b *bytes.Buffer) {
+	b.WriteString("\ncontext " + acmeChallengeURI + " {\n")
+	kv(b, "location", ACMEChallengeDir+"/")
+	kv(b, "allowBrowse", "1")
+	kv(b, "autoIndex", "0")
+	kv(b, "forceType", "text/plain")
+	b.WriteString("  rewrite  {\n")
+	fmt.Fprintf(b, "    %-21s %s\n", "enable", "0")
+	b.WriteString("  }\n")
 	b.WriteString("}\n")
 }
 

@@ -4,11 +4,13 @@ package hostaccounts
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -90,7 +92,7 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 		{"this change's missing docroot", stock + docrootGone(mine), 1, false},
 	}
 	for _, c := range cases {
-		if got := olsTestPasses([]byte(c.out), c.code, changed); got != c.ok {
+		if got := olsTestPasses([]byte(c.out), c.code, changed, nil); got != c.ok {
 			t.Errorf("%s: passes %v, want %v", c.name, got, c.ok)
 		}
 	}
@@ -103,6 +105,78 @@ func TestOLSTestScopesToChangedVhosts(t *testing.T) {
 		if got := olsContextVhost(in); got != want {
 			t.Errorf("olsContextVhost(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A render that rewrites every vhost (once after an upgrade changes the
+// rendered form) still does not let a tenant who moved its own folder away
+// reject another account's change: the store names that vhost, and the test
+// excuses OpenLiteSpeed's missing-document-root warning for exactly its
+// document root. Its errors and every other warning still fail the change.
+// The change's own vhost is always judged in full.
+func TestJudgedVhostsExcuseOnlyABrokenTenantsDocRoot(t *testing.T) {
+	mine, other, broken := olsweb.NamePrefix+"uaaaa", olsweb.NamePrefix+"ubbbb", olsweb.NamePrefix+"ucccc"
+	sites := []olsweb.Site{
+		{Name: "uaaaa", DocRoot: "/home/mineacct/public_html"},
+		{Name: "ubbbb", DocRoot: "/home/otheracct/public_html"},
+		{Name: "ucccc", DocRoot: "/home/brk55596/public_html"},
+	}
+	everything := map[string]bool{mine: true, other: true, broken: true}
+	strict, gone := judgedVhosts(everything, "", map[string]bool{broken: true}, sites)
+	if len(strict) != 2 || !strict[mine] || !strict[other] || strict[broken] || len(gone) != 1 || gone[broken] != "/home/brk55596/public_html/" {
+		t.Fatalf("strict %v, docroot gone %v", strict, gone)
+	}
+	if strict, gone := judgedVhosts(map[string]bool{mine: false, other: true}, mine, nil, sites); len(strict) != 2 || !strict[mine] || !strict[other] || len(gone) != 0 {
+		t.Fatalf("a touched certificate is judged, an unwritten vhost is not: %v %v", strict, gone)
+	}
+	if strict, gone := judgedVhosts(everything, broken, map[string]bool{broken: true}, sites); !strict[broken] || len(gone) != 0 {
+		t.Fatalf("the change's own site is judged in full: %v %v", strict, gone)
+	}
+	if strict, gone := judgedVhosts(everything, "", map[string]bool{broken: true}, sites[:2]); !strict[broken] || len(gone) != 0 {
+		t.Fatalf("a broken vhost with no site to name its document root is judged in full: %v %v", strict, gone)
+	}
+
+	// The messages OpenLiteSpeed 1.9.4 printed on the dev VM after a tenant
+	// moved public_html away (broker-web proof, section 6; time and process
+	// ID are placeholders).
+	line := func(level, context, text string) string {
+		if context != "" {
+			context = "[config:server:vhosts:vhost:" + context + "] "
+		}
+		return "2026-11-23 00:00:00.000000 [" + level + "] [1] " + context + text + "\n"
+	}
+	stock := line("WARN", "Example", "Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!")
+	failed := line("WARN", broken, "configuration failed!")
+	missing := line("WARN", "", "Path for document root is not accessible: /home/brk55596/public_html/")
+	cases := []struct {
+		name string
+		out  string
+		code int
+		ok   bool
+	}{
+		{"its document root is missing", stock + failed + missing, 1, true},
+		{"the same lines in the other order", missing + stock + failed, 1, true},
+		{"another account's document root is missing", failed + line("WARN", "", "Path for document root is not accessible: /home/otheracct/public_html/"), 1, false},
+		{"configuration failed for another reason", failed, 1, false},
+		{"another warning in its context", line("WARN", broken, "Path for vhost root is invalid: /home/brk55596/"), 1, false},
+		{"an error in its context", line("ERROR", broken, "Path is in the access denied list:/etc/") + failed + missing, 2, false},
+		{"its rendered certificate fails", line("ERROR", broken, "[SSL] Config SSL Context: failed to load certificate file") + failed + missing, 2, false},
+		{"the missing-document-root text as an error", failed + line("ERROR", "", "Path for document root is not accessible: /home/brk55596/public_html/"), 2, false},
+		{"a rewritten healthy vhost's warning", failed + missing + line("WARN", other, "path /home/otheracct/public_html/ does not exist"), 1, false},
+	}
+	for _, c := range cases {
+		if got := olsTestPasses([]byte(c.out), c.code, strict, gone); got != c.ok {
+			t.Errorf("%s: passes %v, want %v", c.name, got, c.ok)
+		}
+	}
+	// Judged as rewritten in full, or without the store naming it, the
+	// missing document root fails the change.
+	ok := stock + failed + missing
+	if olsTestPasses([]byte(ok), 1, everything, nil) {
+		t.Fatal("judged in full, the broken tenant's vhost passed")
+	}
+	if strict, gone := judgedVhosts(everything, "", nil, sites); olsTestPasses([]byte(ok), 1, strict, gone) {
+		t.Fatal("without the store naming it, the broken vhost passed")
 	}
 }
 
@@ -206,8 +280,157 @@ func TestOLSOutputOnThisHost(t *testing.T) {
 	if vhost := os.Getenv("SIFRUNO_OLS_TEST_CHANGED"); vhost != "" {
 		changed[vhost] = true
 	}
+	// _DOCROOT_GONE is VHOST=PATH: a rewritten vhost of another account
+	// whose tenant moved its folder, and the document root its config names.
+	docRootGone := map[string]string{}
+	if v := os.Getenv("SIFRUNO_OLS_TEST_DOCROOT_GONE"); v != "" {
+		vhost, path, ok := strings.Cut(v, "=")
+		if !ok {
+			t.Fatalf("SIFRUNO_OLS_TEST_DOCROOT_GONE=%q is not VHOST=PATH", v)
+		}
+		docRootGone[vhost] = path
+	}
 	want := os.Getenv("SIFRUNO_OLS_TEST_WANT") == "pass"
-	if got := olsTestPasses(out, code, changed); got != want {
-		t.Fatalf("exit %d, rewritten vhosts %v: passes %v, want %v", code, changed, got, want)
+	if got := olsTestPasses(out, code, changed, docRootGone); got != want {
+		t.Fatalf("exit %d, rewritten vhosts %v, document roots gone %v: passes %v, want %v", code, changed, docRootGone, got, want)
+	}
+}
+
+// The broker makes the ACME challenge directory for the panel's user when it
+// is missing, accepts it as it is when safe, and refuses one others can write.
+func TestRootOnlyChallengeDir(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes a directory owned by another user")
+	}
+	base, e := os.MkdirTemp("/etc", "sifruno-test-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	if os.Chmod(base, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	const controller = 54323
+	n := &linuxSystem{opts: BrokerOptions{ControllerUID: controller}}
+	users := []nativeUser{{Username: "panel", UID: controller, GID: controller}}
+	dir := filepath.Join(base, "acme")
+	if e := n.ensureChallengeDir(dir, users); e != nil {
+		t.Fatalf("make: %v", e)
+	}
+	info, e := os.Lstat(dir)
+	st, _ := info.Sys().(*syscall.Stat_t)
+	if e != nil || !info.IsDir() || info.Mode().Perm() != 0755 || st == nil || st.Uid != controller || st.Gid != controller {
+		t.Fatalf("made %v", info)
+	}
+	if e := n.ensureChallengeDir(dir, users); e != nil {
+		t.Fatalf("existing: %v", e)
+	}
+	if os.Chmod(dir, 0777) != nil {
+		t.Fatal("chmod")
+	}
+	if n.ensureChallengeDir(dir, users) == nil {
+		t.Fatal("a directory anyone can write was accepted")
+	}
+	if n.ensureChallengeDir(dir, nil) == nil {
+		t.Fatal("a missing controller user was accepted")
+	}
+}
+
+// A site's cache store goes with everything in it, and a link inside it,
+// or in the store's own place, is removed itself: what it points at stays.
+// A store that is not there is no error.
+func TestRemoveTreeAtFollowsNoLink(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	cache := filepath.Join(base, "cachedata")
+	for _, d := range []string{outside, filepath.Join(outside, "keep"), filepath.Join(cache, "sifruno-uone", "priv", "a", "b"), filepath.Join(cache, "sifruno-uone", "c")} {
+		if os.MkdirAll(d, 0755) != nil {
+			t.Fatal("fixture")
+		}
+	}
+	for _, f := range []string{filepath.Join(outside, "keep", "file"), filepath.Join(cache, "sifruno-uone", "priv", "a", "b", "page"), filepath.Join(cache, "sifruno-uone", "c", "page")} {
+		if os.WriteFile(f, []byte("x"), 0644) != nil {
+			t.Fatal("fixture")
+		}
+	}
+	for link, target := range map[string]string{
+		filepath.Join(cache, "sifruno-uone", "priv", "dir-link"):  filepath.Join(outside, "keep"),
+		filepath.Join(cache, "sifruno-uone", "c", "file-link"):    filepath.Join(outside, "keep", "file"),
+		filepath.Join(cache, "sifruno-utwo"):                      outside,
+		filepath.Join(cache, "sifruno-uone", "priv", "a", "loop"): ".",
+	} {
+		if os.Symlink(target, link) != nil {
+			t.Fatal("fixture")
+		}
+	}
+	root, e := openRootDir(cache)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer root.Close()
+	for _, name := range []string{"sifruno-uone", "sifruno-utwo", "sifruno-uthree"} {
+		if e := removeTreeAt(ctx, int(root.Fd()), name, 0); e != nil {
+			t.Fatalf("remove %s: %v", name, e)
+		}
+		if _, e := os.Lstat(filepath.Join(cache, name)); !os.IsNotExist(e) {
+			t.Fatalf("%s is still there: %v", name, e)
+		}
+	}
+	if b, e := os.ReadFile(filepath.Join(outside, "keep", "file")); e != nil || string(b) != "x" {
+		t.Fatalf("a file a link pointed at went too: %v", e)
+	}
+	for _, bad := range []string{"", ".", "..", "a/b"} {
+		if removeTreeAt(ctx, int(root.Fd()), bad, 0) == nil {
+			t.Fatalf("name %q accepted", bad)
+		}
+	}
+	deep := filepath.Join(cache, "deep")
+	if os.MkdirAll(filepath.Join(deep, strings.Repeat("d/", maxTreeDepth+1)), 0755) != nil {
+		t.Fatal("fixture")
+	}
+	if removeTreeAt(ctx, int(root.Fd()), "deep", 0) == nil {
+		t.Fatal("a tree deeper than the bound was removed")
+	}
+}
+
+// The broker makes the suspended sites' directory, root's and empty, when it
+// is missing, accepts it as it is, and refuses one that holds anything or
+// that others can write.
+func TestRootOnlySuspendedDir(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes a root-owned directory under a root-owned parent")
+	}
+	base, e := os.MkdirTemp("/etc", "sifruno-test-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	if os.Chmod(base, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	dir := filepath.Join(base, "suspended")
+	if e := ensureEmptyRootDir(dir); e != nil {
+		t.Fatalf("make: %v", e)
+	}
+	info, e := os.Lstat(dir)
+	st, _ := info.Sys().(*syscall.Stat_t)
+	if e != nil || !info.IsDir() || info.Mode().Perm() != 0755 || st == nil || st.Uid != 0 || st.Gid != 0 {
+		t.Fatalf("made %v", info)
+	}
+	if e := ensureEmptyRootDir(dir); e != nil {
+		t.Fatalf("existing: %v", e)
+	}
+	if os.WriteFile(filepath.Join(dir, "index.html"), []byte("planted"), 0644) != nil {
+		t.Fatal("plant")
+	}
+	if ensureEmptyRootDir(dir) == nil {
+		t.Fatal("a directory that holds a file was accepted")
+	}
+	if os.Remove(filepath.Join(dir, "index.html")) != nil || os.Chmod(dir, 0777) != nil {
+		t.Fatal("chmod")
+	}
+	if ensureEmptyRootDir(dir) == nil {
+		t.Fatal("a directory anyone can write was accepted")
 	}
 }

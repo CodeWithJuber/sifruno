@@ -12,7 +12,7 @@ import (
 func (s *LocalService) PurgeOwner(ctx context.Context, owner string) (purged []string, errs []string) {
 	dbs := s.Registry.databases(owner)
 	for _, d := range dbs {
-		if _, err := s.Run.Run(ctx, sqlDropDatabase(d.Name)); err != nil {
+		if err := s.dropDatabaseAndGrants(ctx, d.Name); err != nil {
 			errs = append(errs, fmt.Sprintf("database %s: %v", d.Name, err))
 			continue
 		}

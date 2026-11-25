@@ -1,0 +1,47 @@
+# Installer sshd pre-checks: who can still sign in once passwords are off
+# 2026-11-24T04:16:42Z  openssh-server-9.9p1-16.el9_9.alma.1.x86_64  SELinux Enforcing
+# nsswitch passwd: sss files systemd
+
+## 1. The candidate copy with the policy in place
+PASS  the copy is built in a private temporary folder
+PASS  it holds the policy as 40-sifruno.conf
+PASS  it includes its own drop-in folder instead of /etc's
+PASS  sshd accepts the whole copied configuration
+PASS  other users get ForceCommand internal-sftp
+PASS  and PasswordAuthentication no
+PASS  root with a valid key is found as the admin
+
+## 2. Root does not count when another file stands in the way
+PASS  PermitRootLogin no in another drop-in: root does not count
+PASS  AllowUsers without root: root does not count
+PASS  AllowGroups set: root does not count
+PASS  DenyUsers set: root does not count
+PASS  AuthenticationMethods needing a password too: root does not count
+PASS  a ForceCommand for root: root does not count
+PASS  AllowUsers naming root: root counts
+
+## 3. Match rules on addresses are judged for the admin's own connection
+PASS  connected from 192.0.2.5, where root may not sign in: root does not count
+PASS  connected from 198.51.100.7: root counts
+PASS  not over SSH, so the rule cannot be judged: root does not count
+PASS  not over SSH and no such rule: root counts
+PASS  an SSH_CONNECTION that would add its own sshd -C fields is not used
+
+## 4. A wheel member as the admin
+PASS  a key file with only a comment: does not count
+PASS  a valid key: counts
+PASS  a group-writable .ssh (StrictModes): does not count
+PASS  a group-writable home (StrictModes): does not count
+PASS  a nologin shell: does not count
+PASS  found in the local files with getent -s files
+
+## 5. Other local users who would lose their shell
+PASS  the wheel member is not listed
+PASS  a user with a shell outside wheel and outside /home is listed
+  listed: proofoth
+
+## 6. Nothing live changed
+PASS  the live sshd files are as they were
+PASS  the live configuration still validates
+
+RESULT: all checks passed

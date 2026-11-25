@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -18,11 +19,22 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"sifruno/internal/olsweb"
 )
 
 const nologin = "/usr/sbin/nologin"
 
-var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", nologin}
+// killPath ends an account's processes. It only ever runs as the account's
+// own user (see signalAs), never as root.
+const killPath = "/usr/bin/kill"
+
+// systemctl reloads systemd after an account's slice limits change
+// (limits_linux.go), with or without the web operation. systemd-run starts
+// what the broker runs as a site's user in a scope in that user's slice,
+// setpriv drops it to the user and env starts it in its folder
+// (wordpress_linux.go); AlmaLinux 9's systemd, util-linux and coreutils
+// packages ship them as regular root-owned 0755 files.
+var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", groupdelPath, "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin, systemctl, systemdRun, setprivPath, envPath}
 
 type nativeUser struct {
 	Username         string
@@ -52,6 +64,16 @@ type linuxSystem struct {
 	db      os.FileInfo
 	sshDir  string
 	mailDir string
+	// tlsDir is olsweb.TLSRoot, the only path the rendered config names; it
+	// is a field so a root-only test can use a scratch directory.
+	tlsDir string
+	// unitDir is systemdUnitDir, where the accounts' slice drop-ins go; a
+	// field so a root-only test can use a scratch directory.
+	unitDir string
+	// cronDir is cronSpoolDir and logRoot olsweb.LogRoot (sitetools_linux.go),
+	// fields for the same reason.
+	cronDir string
+	logRoot string
 	cacheMu sync.Mutex
 	cache   *accountDatabase
 }
@@ -79,7 +101,7 @@ func newLinuxSystem(opts BrokerOptions, web *WebOptions) (*linuxSystem, error) {
 	if e != nil || supportedNSS() != nil || supportedUseraddDefaults() != nil {
 		return nil, ErrUnavailable
 	}
-	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir}
+	n := &linuxSystem{opts: opts, tools: tools, sshDir: sshKeysDir, mailDir: mailSpoolDir, tlsDir: olsweb.TLSRoot, unitDir: systemdUnitDir, cronDir: cronSpoolDir, logRoot: olsweb.LogRoot}
 	if web != nil && n.enableWeb(web) != nil {
 		return nil, ErrUnavailable
 	}
@@ -214,21 +236,58 @@ func (b *commandBuffer) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
+
+// commandTimeout bounds one fixed command that changes no account file
+// (passwd --status, chage --list, systemctl list-units, an xfs_quota
+// report or limit); a slower one gets its own limit through commandWithin.
+const commandTimeout = 15 * time.Second
+
+// accountFileWriters are the fixed utilities that write /etc/passwd, group,
+// shadow or gshadow. One killed mid-way leaves half an account: on a loaded
+// host useradd was killed after it had written passwd and group and made
+// the home, which it makes root's with mode 0 before it chowns it. So these
+// are never cut short at commandTimeout: each runs until the context of the
+// operation that started it ends (every caller gives it one after the
+// intent is journaled, webContext), and at most accountWriteTimeout.
+var accountFileWriters = map[string]bool{"/usr/sbin/groupadd": true, "/usr/sbin/useradd": true, "/usr/sbin/usermod": true, "/usr/sbin/userdel": true, groupdelPath: true}
+
+// accountWriteTimeout only caps an account file writer whose context has no
+// earlier end; the operation's own context is what bounds it.
+const accountWriteTimeout = webApplyTimeout
+
+// commandLimit is the time limit of one run of a fixed utility.
+func commandLimit(path string) time.Duration {
+	if accountFileWriters[path] {
+		return accountWriteTimeout
+	}
+	return commandTimeout
+}
+
 func (n *linuxSystem) command(ctx context.Context, path string, args ...string) ([]byte, error) {
-	out, code, e := n.run(ctx, path, false, args...)
+	return n.commandWithin(ctx, commandLimit(path), path, args...)
+}
+
+// commandWithin is command with its own time limit, for a program that is
+// known to be slow on a busy host (OpenLiteSpeed's graceful restart).
+func (n *linuxSystem) commandWithin(ctx context.Context, limit time.Duration, path string, args ...string) ([]byte, error) {
+	out, code, e := n.run(ctx, limit, path, false, args...)
 	if e != nil || code != 0 {
-		return nil, ErrUnavailable
+		return nil, &commandError{program: filepath.Base(path), status: code, stopped: errors.Is(e, errCommandStopped)}
 	}
 	return out, nil
 }
 
+// errCommandStopped is a fixed utility that its time limit, or its
+// operation's context, ended before it did.
+var errCommandStopped = fmt.Errorf("%w: command stopped at its time limit", ErrUnavailable)
+
 // commandStatus is command for a program whose non-zero exit is an answer,
 // not a failure (openlitespeed -t); its output is stdout and stderr together.
-func (n *linuxSystem) commandStatus(ctx context.Context, path string, args ...string) ([]byte, int, error) {
-	return n.run(ctx, path, true, args...)
+func (n *linuxSystem) commandStatus(ctx context.Context, limit time.Duration, path string, args ...string) ([]byte, int, error) {
+	return n.run(ctx, limit, path, true, args...)
 }
 
-func (n *linuxSystem) run(ctx context.Context, path string, combined bool, args ...string) ([]byte, int, error) {
+func (n *linuxSystem) run(ctx context.Context, limit time.Duration, path string, combined bool, args ...string) ([]byte, int, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, -1, ErrUnavailable
 	}
@@ -240,7 +299,7 @@ func (n *linuxSystem) run(ctx context.Context, path string, combined bool, args 
 	if !ok || e != nil || !os.SameFile(before, actual) || before.Size() != actual.Size() || !before.ModTime().Equal(actual.ModTime()) {
 		return nil, -1, ErrUnavailable
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = n.opts.StateDir
@@ -261,7 +320,7 @@ func (n *linuxSystem) run(ctx context.Context, path string, combined bool, args 
 	}
 	runErr := cmd.Run()
 	if ctx.Err() != nil {
-		return nil, -1, ErrUnavailable
+		return nil, -1, errCommandStopped
 	}
 	var exit *exec.ExitError
 	if runErr != nil && !errors.As(runErr, &exit) {
@@ -379,7 +438,7 @@ func (n *linuxSystem) Plan(ctx context.Context, name string) (int, int, error) {
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return 0, 0, ErrUnavailable
 	}
-	for id := 20000; id <= 60000; id++ {
+	for id := firstAccountID; id <= lastAccountID; id++ {
 		if !used[id] {
 			return id, id, nil
 		}
@@ -546,22 +605,22 @@ func (n *linuxSystem) admission(ctx context.Context, r record) error {
 func (n *linuxSystem) Create(ctx context.Context, r record, persist func(ownership) error) (ownership, error) {
 	uid, gid, e := n.Plan(ctx, r.Account.Username)
 	if e != nil || uid != r.Account.UID || gid != r.Account.GID {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("plan", ErrRecovery)
 	}
 	owners := filepath.Join(n.opts.StateDir, "owners")
 	if e = os.Mkdir(owners, 0700); e != nil && !errors.Is(e, os.ErrExist) {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("owners folder", ErrUnavailable)
 	}
 	if authority(owners) != nil {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("owners folder", ErrUnavailable)
 	}
 	if info, err := os.Lstat(owners); err != nil || info.Mode().Perm() != 0700 {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("owners folder", ErrUnavailable)
 	}
 	marker := n.markerPath(r)
 	f, e := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 	if e != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	_, e = f.Write([]byte(r.Tag + "\n"))
 	if e == nil {
@@ -569,25 +628,25 @@ func (n *linuxSystem) Create(ctx context.Context, r record, persist func(ownersh
 	}
 	closed := f.Close()
 	if e != nil || closed != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	r.Ownership.Marker, e = markerIdentity(marker, r.Tag)
 	if e != nil || persist(r.Ownership) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	skel := filepath.Join(n.opts.StateDir, "empty-skel")
 	if e = os.Mkdir(skel, 0700); e != nil && !errors.Is(e, os.ErrExist) {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("skeleton", ErrUnavailable)
 	}
 	entries, e := os.ReadDir(skel)
 	if e != nil || len(entries) != 0 || authority(skel) != nil {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("skeleton", ErrUnavailable)
 	}
 	if _, e = n.command(ctx, "/usr/sbin/groupadd", "--gid", strconv.Itoa(r.Account.GID), "--", r.Account.Username); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("groupadd", e)
 	}
 	if _, e = n.command(ctx, "/usr/sbin/useradd", useraddArgs(r, skel)...); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("useradd", e)
 	}
 	return n.RecoverCreate(ctx, r, persist)
 }
@@ -659,118 +718,198 @@ func markerIdentity(path, tag string) (fileIdentity, error) {
 	}
 	return fileIdentity{uint64(st.Dev), st.Ino}, nil
 }
+
+// createdHome answers the identity of the home useradd made for r. home was
+// opened without following a link, by the journaled username, directly in
+// the homes directory, which parent holds open. It is the account's, as
+// useradd leaves it, or (adopt true) exactly what useradd leaves when it is
+// stopped right after it made it: shadow-utils' create_home makes the
+// directory with mkdir(path, 0) as root and only then chowns and chmods it
+// and copies the skeleton, which is empty here. Anything else is
+// ErrRecovery.
+//
+// That partial state can only be useradd's. The caller checked first that
+// passwd and group show the journaled user and its private group with the
+// journaled IDs, and that the homes directory and every directory above it
+// are root's and writable by no group or other (authority; a POSIX ACL
+// that grants write shows in the group bits, which are its mask), so only
+// root makes an entry there. And until the create finishes, its user
+// cannot sign in: its password is locked, its shell is nologin, and it has
+// no SFTP key.
+func createdHome(parent, home *os.File, r record) (fileIdentity, bool, error) {
+	if id, e := heldIdentity(home, r.Account.UID, r.Account.GID, 0); e == nil {
+		return id, false, nil
+	}
+	var p, h unix.Stat_t
+	if unix.Fstat(int(parent.Fd()), &p) != nil || unix.Fstat(int(home.Fd()), &h) != nil {
+		return fileIdentity{}, false, ErrRecovery
+	}
+	names, e := home.Readdirnames(1)
+	empty := len(names) == 0 && errors.Is(e, io.EOF)
+	if !useraddLeftHome(p, h, empty) {
+		return fileIdentity{}, false, ErrRecovery
+	}
+	return fileIdentity{uint64(h.Dev), h.Ino}, true, nil
+}
+
+// useraddLeftHome reports whether home, an entry of the homes directory
+// parent, is what useradd leaves when it is stopped between its mkdir and
+// its chown: a directory of root:root, mode 0 (no permission, setuid,
+// setgid or sticky bit), empty, on the homes directory's filesystem.
+func useraddLeftHome(parent, home unix.Stat_t, empty bool) bool {
+	return home.Mode&unix.S_IFMT == unix.S_IFDIR && home.Mode&07777 == 0 && home.Uid == 0 && home.Gid == 0 && home.Dev == parent.Dev && empty
+}
+
 func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(ownership) error) (ownership, error) {
 	if _, e := n.identity(r); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("passwd and group", e)
 	}
 	check := targetRecord(r, "active")
 	if e := n.admission(ctx, check); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("password lock and expiry", e)
 	}
 	mark, e := markerIdentity(n.markerPath(r), r.Tag)
 	if e != nil || mark != r.Ownership.Marker {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	if authority(n.opts.HomesDir) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("homes folder", ErrRecovery)
 	}
 	parent, e := openDirectoryAt(unix.AT_FDCWD, n.opts.HomesDir)
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("homes folder", e)
 	}
 	defer parent.Close()
 	home, e := openDirectoryAt(int(parent.Fd()), r.Account.Username)
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("home", e)
 	}
 	defer home.Close()
-	id, e := heldIdentity(home, r.Account.UID, r.Account.GID, 0)
+	id, adopt, e := createdHome(parent, home, r)
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("home", e)
 	}
 	if r.Ownership.Home.Ino != 0 && r.Ownership.Home != id {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("home", ErrRecovery)
 	}
 	r.Ownership.Home = id
 	if persist(r.Ownership) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("record", ErrRecovery)
+	}
+	// useradd stopped before its chown: the home becomes the account's
+	// through the handle whose identity was just recorded. The chmod below
+	// is the one every create makes.
+	if adopt && home.Chown(r.Account.UID, r.Account.GID) != nil {
+		return ownership{}, atStep("home", ErrRecovery)
 	}
 	if home.Chmod(0750) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("home", ErrRecovery)
 	}
 	if r.Ownership.Public.Ino == 0 {
 		if unix.Mkdirat(int(home.Fd()), "public_html", 0750) != nil {
-			return ownership{}, ErrRecovery
+			return ownership{}, atStep("public_html", ErrRecovery)
 		}
 	}
 	pub, e := openDirectoryAt(int(home.Fd()), "public_html")
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("public_html", e)
 	}
 	defer pub.Close()
 	info, e := pub.Stat()
 	if e != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.IsDir() || !((st.Uid == 0 && st.Gid == 0) || (int(st.Uid) == r.Account.UID && int(st.Gid) == r.Account.GID)) {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	publicID := fileIdentity{uint64(st.Dev), st.Ino}
 	if r.Ownership.Public.Ino != 0 && r.Ownership.Public != publicID {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	if r.Ownership.Public.Ino == 0 && (st.Uid != 0 || st.Gid != 0) {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	r.Ownership.Public = publicID
 	if persist(r.Ownership) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("record", ErrRecovery)
 	}
 	if pub.Chmod(0750) != nil || pub.Chown(r.Account.UID, r.Account.GID) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	final := targetRecord(r, "active")
 	if e = n.Verify(ctx, final); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("verify", e)
 	}
 	return r.Ownership, nil
 }
 
-// VerifyIdentity checks everything about a managed account that files alone
-// show: the passwd and group identity, the recorded home and public_html
-// objects, and the ownership marker. It starts no process, so the store can
-// run it for every account on every request.
-func (n *linuxSystem) VerifyIdentity(r record) error {
+// VerifyAccountIdentity checks what files alone show about a managed account
+// and only root can change: the passwd and group identity, the recorded home
+// directory object and its owner, and the ownership marker. The home sits in
+// the root-owned homes directory, so its account cannot replace it or give
+// it away; its mode is the account's own to change and is checked by
+// VerifySiteFiles. It starts no process, so the store can run it for every
+// account on every request.
+func (n *linuxSystem) VerifyAccountIdentity(r record) error {
 	if authority(n.opts.HomesDir) != nil {
-		return ErrRecovery
+		return atStep("homes folder", ErrRecovery)
 	}
 	if _, e := n.identity(r); e != nil {
-		return e
+		return atStep("passwd and group", e)
 	}
-	home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750)
+	home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
 	if e != nil || home != r.Ownership.Home {
-		return ErrRecovery
-	}
-	pub, e := dirIdentity(r.Account.PublicHTML, r.Account.UID, r.Account.GID, 0750)
-	if e != nil || pub != r.Ownership.Public {
-		return ErrRecovery
+		return atStep("home", ErrRecovery)
 	}
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
 	if e != nil || marker != r.Ownership.Marker {
-		return ErrRecovery
+		return atStep("marker", ErrRecovery)
 	}
 	return nil
 }
 
-// Verify adds the password-lock and expiry observation, which needs the
-// passwd and chage utilities. The store runs it for the account an operation
-// touches and for a rotating batch, not for every account on every request.
+// VerifySiteFiles checks what the account's own user can change in its home:
+// the home's mode 0750, and public_html as the directory recorded at create,
+// not a link, owned by the account, mode 0750. It only reads.
+func (n *linuxSystem) VerifySiteFiles(r record) error {
+	if _, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750); e != nil {
+		return atStep("home mode", ErrRecovery)
+	}
+	pub, e := dirIdentity(r.Account.PublicHTML, r.Account.UID, r.Account.GID, 0750)
+	if e != nil || pub != r.Ownership.Public {
+		return atStep("public_html", ErrRecovery)
+	}
+	return nil
+}
+
+// VerifyIdentity is everything files alone show: VerifyAccountIdentity and
+// VerifySiteFiles.
+func (n *linuxSystem) VerifyIdentity(r record) error {
+	if e := n.VerifyAccountIdentity(r); e != nil {
+		return e
+	}
+	return n.VerifySiteFiles(r)
+}
+
+// VerifyAccount adds the password-lock and expiry observation, which needs
+// the passwd and chage utilities, to VerifyAccountIdentity. The store runs it
+// for the account an operation touches and for a rotating batch, not for
+// every account on every request.
+func (n *linuxSystem) VerifyAccount(ctx context.Context, r record) error {
+	if e := n.VerifyAccountIdentity(r); e != nil {
+		return e
+	}
+	return atStep("password lock and expiry", n.admission(ctx, r))
+}
+
+// Verify is VerifyAccount with VerifySiteFiles, for an operation that writes
+// into the account's folders.
 func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 	if e := n.VerifyIdentity(r); e != nil {
 		return e
 	}
-	return n.admission(ctx, r)
+	return atStep("password lock and expiry", n.admission(ctx, r))
 }
 
 // Delete removes the managed identity. Every destructive step is gated on
@@ -780,71 +919,440 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 // removed only when it is the exact recorded path with the recorded
 // identity. The marker is removed last so a crash mid-delete stays visible
 // and the operation can be safely retried by the store's reconciliation.
-// Known delta vs the reference's removeacct pipeline: managed identities
-// are nologin system users with no processes, mail, databases or web vhosts,
-// so there is nothing further to tear down yet; as those services land,
-// their teardown joins this operation before user removal.
+// The account's processes end before userdel (removeUser); the store takes
+// a live site out of the config before it calls Delete.
 func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
 	if e == nil && marker != r.Ownership.Marker {
-		return ErrRecovery
+		return atStep("marker", ErrRecovery)
 	}
 	if e != nil && !errors.Is(e, os.ErrNotExist) {
-		return ErrUnavailable
+		return atStep("marker", ErrUnavailable)
 	}
 	// A missing marker with a still-present user is not owned deletable
 	// state; a missing marker with everything already gone is a completed
 	// delete (safe retry).
 	users, e := systemUsers()
 	if e != nil {
-		return e
+		return atStep("passwd", e)
 	}
 	present := false
 	for _, u := range users {
 		if u.Username == r.Account.Username {
 			if u.UID != r.Account.UID || u.GID != r.Account.GID || u.Home != r.Account.Home {
-				return ErrRecovery
+				return atStep("passwd", ErrRecovery)
 			}
 			present = true
 		} else if u.UID == r.Account.UID {
-			return ErrRecovery
+			return atStep("passwd", ErrRecovery)
 		}
 	}
 	if present && marker != r.Ownership.Marker {
-		return ErrRecovery
+		return atStep("marker", ErrRecovery)
 	}
 	if present {
-		if _, e = n.command(ctx, "/usr/sbin/userdel", "--", r.Account.Username); e != nil {
-			return e
+		if e = n.removeUser(ctx, r); e != nil {
+			return atStep("remove user", e)
 		}
 	}
 	if info, e := os.Lstat(r.Account.Home); e == nil {
 		if !info.IsDir() || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
-			return ErrRecovery
+			return atStep("home", ErrRecovery)
 		}
-		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750)
+		// The recorded object and its owner, which only root can change; not
+		// its mode, which the account may have changed. RemoveAll does not
+		// follow links inside it.
+		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
 		if e != nil || home != r.Ownership.Home {
-			return ErrRecovery
+			return atStep("home", ErrRecovery)
 		}
 		if e = os.RemoveAll(r.Account.Home); e != nil {
-			return ErrUnavailable
+			return atStep("home", ErrUnavailable)
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
-		return ErrUnavailable
+		return atStep("home", ErrUnavailable)
 	}
 	if e = n.removeAccountFiles(r); e != nil {
-		return e
+		return atStep("account files", e)
 	}
 	if e = os.Remove(n.markerPath(r)); e != nil && !errors.Is(e, os.ErrNotExist) {
+		return atStep("marker", ErrUnavailable)
+	}
+	return nil
+}
+
+// userdelBusy is userdel's exit status for a user with a running process
+// (shadow-utils E_USER_BUSY). userdel checks for one before it opens the
+// account files, so with this status it changed nothing.
+const userdelBusy = 8
+
+// Ending an account's processes takes at most processPasses passes. A pass
+// signals every process of the account, then waits up to processWait for
+// them to be gone, looking every processPoll. The next pass catches what
+// started meanwhile: a fork that raced the signal, or a process root
+// started for the account. userdelTries bounds the same race between the
+// last pass and userdel.
+//
+// processBudget bounds all the process ending of one delete, every pass of
+// every try, on its own clock and well inside the delete's own limit: a
+// tenant with very many processes makes each /proc scan slow, and when the
+// budget runs out the user counts as busy, so the delete is put back and
+// ends rejected instead of running into that limit. putBackTimeout bounds
+// the put-back (usermod, then passwd and chage to check the account), on a
+// context of its own.
+const (
+	processPasses  = 4
+	processWait    = 250 * time.Millisecond
+	processPoll    = 25 * time.Millisecond
+	killTimeout    = 5 * time.Second
+	userdelTries   = DeleteAttempts
+	processBudget  = 20 * time.Second
+	putBackTimeout = time.Minute
+)
+
+// removeUser removes the account's user once its processes have ended. An
+// active account is first expired and locked, as a suspend does, so no new
+// login or cron job starts for it while they end. userdel is tried a few
+// times, each after the processes were ended again (userRemoval.run).
+func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
+	active := r.Account.State == "active"
+	return userRemoval{
+		lock: func(ctx context.Context) error {
+			if !active {
+				return nil
+			}
+			_, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "1970-01-02", "--lock", "--", r.Account.Username)
+			return e
+		},
+		end:     func(ctx context.Context) error { return n.EndProcesses(ctx, r) },
+		userdel: func(ctx context.Context) (int, error) { return n.userdel(ctx, r) },
+		putBack: func(ctx context.Context) error {
+			// When the lock step itself failed (the shadow file busy, say),
+			// the account is often unchanged, and a usermod now could fail the
+			// same way and leave the delete pending for everyone. Check first,
+			// and undo only what the lock changed.
+			if n.VerifyAccount(ctx, r) == nil {
+				return nil
+			}
+			if active {
+				if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "", "--lock", "--", r.Account.Username); e != nil {
+					return e
+				}
+			}
+			return n.VerifyAccount(ctx, r)
+		},
+	}.run(ctx, processBudget)
+}
+
+// userdel runs userdel for the account's user and answers its exit status.
+func (n *linuxSystem) userdel(ctx context.Context, r record) (int, error) {
+	_, code, e := n.commandStatus(ctx, commandLimit("/usr/sbin/userdel"), "/usr/sbin/userdel", "--", r.Account.Username)
+	if e != nil {
+		return code, &commandError{program: "userdel", status: -1, stopped: errors.Is(e, errCommandStopped)}
+	}
+	return code, nil
+}
+
+// userRemoval is the steps of removeUser, kept apart so their order, the
+// budget and the put-back can be tested without root. lock expires and
+// locks an active account; end ends its processes; userdel answers
+// userdel's exit status; putBack undoes lock and checks the account is as
+// its record says.
+type userRemoval struct {
+	lock, end, putBack func(context.Context) error
+	userdel            func(context.Context) (int, error)
+}
+
+// run removes the user. Whatever stops it before userdel changed anything
+// takes one path: the user still busy after the last try, the budget for
+// ending processes spent, a /proc read or kill or the lock failing, the
+// caller's limit. putBack runs on a fresh, bounded context, since the
+// caller's may be what ran out, and the answer is errAccountBusy for a busy
+// user (the budget spent counts as busy) and errNothingRemoved otherwise:
+// the account is as it was. If the put-back fails, its error is the answer
+// and the delete stays pending. A userdel that exits other than 0 or 8, or
+// does not finish, leaves the user in a state nobody knows: its error is
+// the answer, and the delete stays pending too.
+func (u userRemoval) run(ctx context.Context, budget time.Duration) error {
+	stopped, e := u.remove(ctx, budget)
+	if stopped == nil {
+		return e
+	}
+	backCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), putBackTimeout)
+	defer cancel()
+	if e := u.putBack(backCtx); e != nil {
+		return e
+	}
+	if errors.Is(stopped, errAccountBusy) {
+		return errAccountBusy
+	}
+	return errNothingRemoved
+}
+
+// remove runs lock, then end and userdel up to userdelTries times. stopped
+// is why it stopped before userdel changed anything; otherwise err is
+// userdel's answer: nil when the user is gone.
+func (u userRemoval) remove(ctx context.Context, budget time.Duration) (stopped, err error) {
+	if e := u.lock(ctx); e != nil {
+		return e, nil
+	}
+	endCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	for try := 0; try < userdelTries; try++ {
+		// Processes still there after the passes go on to userdel, which
+		// judges for itself.
+		if e := u.end(endCtx); e != nil && !errors.Is(e, errAccountBusy) {
+			if endCtx.Err() != nil && ctx.Err() == nil {
+				return errAccountBusy, nil
+			}
+			return e, nil
+		}
+		if ctx.Err() != nil {
+			return ErrUnavailable, nil
+		}
+		code, e := u.userdel(ctx)
+		switch {
+		case e != nil:
+			return nil, e
+		case code == 0:
+			return nil, nil
+		case code != userdelBusy:
+			return nil, &commandError{program: "userdel", status: code}
+		}
+	}
+	return errAccountBusy, nil
+}
+
+// EndProcesses ends every process that runs as the account's user: an SFTP
+// session, a PHP worker, a cron job, anything the tenant started. Each pass
+// checks the credential again (processCredential), runs kill as that user
+// (signalAs) and waits for the processes to be gone (accountRunning).
+// errAccountBusy: some were still there after the last pass.
+func (n *linuxSystem) EndProcesses(ctx context.Context, r record) error {
+	if ctx == nil || ctx.Err() != nil {
+		return ErrUnavailable
+	}
+	for pass := 0; pass < processPasses; pass++ {
+		cred, e := n.processCredential(r)
+		if e != nil {
+			return e
+		}
+		if e = n.signalAs(ctx, cred); e != nil {
+			return e
+		}
+		gone, e := waitGone(ctx, cred.Uid)
+		if e != nil {
+			return e
+		}
+		if gone {
+			return nil
+		}
+	}
+	return errAccountBusy
+}
+
+// processCredential is the credential that ends an account's processes,
+// read from passwd and group now: see accountCredential.
+func (n *linuxSystem) processCredential(r record) (*syscall.Credential, error) {
+	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
+		return nil, ErrUnavailable
+	}
+	db, e := n.database()
+	if e != nil {
+		return nil, e
+	}
+	return accountCredential(db, r, n.opts.ControllerUID)
+}
+
+// accountCredential is the account's own UID and GID with no supplementary
+// groups, given only for an ID in the range the broker allocates (never 0,
+// a system user or the controller) that passwd and group show as exactly
+// this account: one user with this name and none other on its UID, the
+// recorded IDs, home, tag and nologin shell, and its private group.
+// Otherwise ErrRecovery: the kill must not run as anyone else.
+func accountCredential(db *accountDatabase, r record, controllerUID uint32) (*syscall.Credential, error) {
+	uid, gid := r.Account.UID, r.Account.GID
+	if uid < firstAccountID || uid > lastAccountID || gid != uid || uid == int(controllerUID) {
+		return nil, ErrRecovery
+	}
+	user, ok := db.managedIdentity(r)
+	if !ok || user.UID != uid || user.GID != gid {
+		return nil, ErrRecovery
+	}
+	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}}, nil
+}
+
+// killArgs is kill's whole argument list: SIGKILL to PID -1. "--" ends the
+// options, so -1 is a PID.
+func killArgs() []string { return []string{"-s", "KILL", "--", "-1"} }
+
+// killCommand is kill as cred: the fixed binary, in "/", with a clean
+// environment, no input (the null device) and no supplementary groups. Go's
+// exec sets the groups, GID and UID in the child before it runs the binary,
+// and runs nothing when that fails. Its context ends only this process.
+func killCommand(ctx context.Context, cred *syscall.Credential) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, killPath, killArgs()...)
+	cmd.Dir = "/"
+	cmd.Env = []string{"LANG=C", "LC_ALL=C"}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred, Pdeathsig: syscall.SIGKILL}
+	cmd.WaitDelay = time.Second
+	return cmd
+}
+
+// signalAs runs `kill -s KILL -- -1` as the account. kill(2) with PID -1
+// from a process that is not root signals every process that user may
+// signal, other than itself: those whose real or saved user ID is the
+// account's, and those in user namespaces the account made. That is only
+// the account's own; no other user's process can be hit. It refuses any
+// credential outside the broker's range, so it never runs as root. Its exit
+// status says only whether anything was signalled; the caller looks at
+// /proc.
+func (n *linuxSystem) signalAs(ctx context.Context, cred *syscall.Credential) error {
+	if cred == nil || cred.Uid < firstAccountID || cred.Uid > lastAccountID || cred.Gid != cred.Uid || len(cred.Groups) != 0 || cred.NoSetGroups {
+		return ErrRecovery
+	}
+	before, ok := n.tools[killPath]
+	actual, e := trustedFile(killPath, false)
+	if !ok || e != nil || !os.SameFile(before, actual) || before.Size() != actual.Size() || !before.ModTime().Equal(actual.ModTime()) {
+		return ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, killTimeout)
+	defer cancel()
+	cmd := killCommand(ctx, cred)
+	out := &commandBuffer{}
+	cmd.Stdout, cmd.Stderr = out, out
+	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		return ErrUnavailable
+	}
+	// An exit status means kill ran as the account; any other error means
+	// it did not run at all.
+	var exit *exec.ExitError
+	if runErr != nil && !errors.As(runErr, &exit) {
 		return ErrUnavailable
 	}
 	return nil
 }
 
-// removeAccountFiles removes the two per-account files that live outside the
-// home: the managed SFTP key file and the mail spool useradd may have made.
-// Each is removed only when it is the expected kind of object, so a name
-// reused later never inherits either one.
+// waitGone looks until no process of uid is left, for up to processWait.
+func waitGone(ctx context.Context, uid uint32) (bool, error) {
+	deadline := time.Now().Add(processWait)
+	for {
+		running, e := accountRunning(ctx, uid)
+		if e != nil {
+			return false, e
+		}
+		if !running {
+			return true, nil
+		}
+		if !time.Now().Before(deadline) {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ErrUnavailable
+		case <-time.After(processPoll):
+		}
+	}
+}
+
+// accountRunning reports whether a process has uid as its real, effective
+// or saved user ID, a zombie not yet reaped included. That is what userdel
+// looks for (shadow-utils user_busy), less the subordinate IDs and the
+// per-thread IDs it also reads; userdel stays the judge of those. A
+// process that ends while it is read is skipped. A scan of very many
+// processes is slow, so it stops with ErrUnavailable as soon as ctx is
+// done, between entries.
+func accountRunning(ctx context.Context, uid uint32) (bool, error) {
+	proc, e := os.Open("/proc")
+	if e != nil {
+		return false, ErrUnavailable
+	}
+	defer proc.Close()
+	for {
+		names, readErr := proc.Readdirnames(1024)
+		for _, name := range names {
+			if ctx.Err() != nil {
+				return false, ErrUnavailable
+			}
+			if !pidName(name) {
+				continue
+			}
+			status, e := readProcStatus("/proc/" + name + "/status")
+			if errors.Is(e, os.ErrNotExist) || errors.Is(e, syscall.ESRCH) {
+				continue
+			}
+			if e != nil {
+				return false, ErrUnavailable
+			}
+			ids, ok := statusUIDs(status)
+			if !ok {
+				return false, ErrUnavailable
+			}
+			if ids[0] == uid || ids[1] == uid || ids[2] == uid {
+				return true, nil
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return false, nil
+		}
+		if readErr != nil {
+			return false, ErrUnavailable
+		}
+	}
+}
+
+func pidName(name string) bool {
+	if name == "" || len(name) > 10 {
+		return false
+	}
+	for _, c := range name {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func readProcStatus(path string) ([]byte, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, 64<<10))
+}
+
+// statusUIDs reads the real, effective, saved and file-system user IDs
+// from the "Uid:" line of /proc/<pid>/status.
+func statusUIDs(status []byte) ([4]uint32, bool) {
+	for _, line := range strings.Split(string(status), "\n") {
+		rest, ok := strings.CutPrefix(line, "Uid:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) != 4 {
+			return [4]uint32{}, false
+		}
+		var ids [4]uint32
+		for i, f := range fields {
+			v, e := strconv.ParseUint(f, 10, 32)
+			if e != nil {
+				return [4]uint32{}, false
+			}
+			ids[i] = uint32(v)
+		}
+		return ids, true
+	}
+	return [4]uint32{}, false
+}
+
+// removeAccountFiles removes what an account has outside the home: its
+// site's TLS directory, the managed SFTP key file and the mail spool useradd
+// may have made. Each is removed only when it is the expected kind of
+// object, so a name reused later never inherits any of them. The store runs
+// a delete only after the site has left the OpenLiteSpeed config.
 func (n *linuxSystem) removeAccountFiles(r record) error {
 	if !validUsername(r.Account.Username) {
 		return ErrRecovery
@@ -852,10 +1360,26 @@ func (n *linuxSystem) removeAccountFiles(r record) error {
 	if !idPattern.MatchString(r.Account.ID) {
 		return ErrRecovery
 	}
+	if e := n.removeSiteTLS(r); e != nil {
+		return e
+	}
 	// The temporary name SetSSHKeys writes before its rename survives a crash
 	// between the two; it holds only public keys but goes with the account.
 	for _, path := range []string{filepath.Join(n.sshDir, r.Account.Username), filepath.Join(n.sshDir, ".new-"+r.Account.ID)} {
 		if e := removeRegular(path, 0, false); e != nil {
+			return e
+		}
+	}
+	// The crontab, whoever wrote it (cronie's crontab run by root leaves it
+	// root's, by the user the user's), and SetCron's temporary name. crond
+	// keeps a crontab whose user is gone as an orphan and loads it again
+	// when a user of that name appears (cronie database.c, check_orphans),
+	// so it must not outlive the account.
+	if !filepath.IsAbs(n.cronDir) {
+		return ErrUnavailable
+	}
+	for _, name := range []string{r.Account.Username, cronTempName(r.Account.ID)} {
+		if e := removeRegular(filepath.Join(n.cronDir, name), r.Account.UID, true); e != nil {
 			return e
 		}
 	}
@@ -1009,10 +1533,12 @@ func syncDirectory(path string) error {
 	return nil
 }
 
+// SetState checks only what root controls, before and after: a suspend must
+// not depend on anything the account's own user can change.
 func (n *linuxSystem) SetState(ctx context.Context, r record, state string) error {
 	current := r
 	current.Pending = nil
-	if e := n.Verify(ctx, current); e != nil {
+	if e := n.VerifyAccount(ctx, current); e != nil {
 		return e
 	}
 	expiry := ""
@@ -1022,5 +1548,5 @@ func (n *linuxSystem) SetState(ctx context.Context, r record, state string) erro
 	if _, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", expiry, "--lock", "--", r.Account.Username); e != nil {
 		return e
 	}
-	return n.Verify(ctx, targetRecord(r, state))
+	return n.VerifyAccount(ctx, targetRecord(r, state))
 }

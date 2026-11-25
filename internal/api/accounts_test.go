@@ -13,11 +13,12 @@ import (
 
 // This spy tests HTTP admission only; it is not Linux provisioning evidence.
 type accountSpy struct {
-	calls   int
-	actor   string
-	err     error
-	created hostaccounts.CreateInput
-	changed hostaccounts.StateInput
+	calls     int
+	actor     string
+	err       error
+	created   hostaccounts.CreateInput
+	changed   hostaccounts.StateInput
+	abandoned hostaccounts.AbandonCreateInput
 }
 
 func (s *accountSpy) Capability(context.Context) (hostaccounts.Capability, error) {
@@ -49,6 +50,57 @@ func (s *accountSpy) Delete(_ context.Context, _ string, _ hostaccounts.DeleteIn
 	s.calls++
 	s.actor = actor
 	return hostaccounts.Account{}, s.err
+}
+func (s *accountSpy) AbandonCreate(_ context.Context, id string, in hostaccounts.AbandonCreateInput, actor string) (hostaccounts.Account, error) {
+	s.calls++
+	s.actor = actor
+	s.abandoned = in
+	return hostaccounts.Account{ID: id, State: "recovery_required"}, s.err
+}
+
+// An admin abandons an unfinished create with a reason only; a refusal says
+// why nothing was removed, and other broker answers map as for any account
+// change.
+func TestAccountAbandonCreate(t *testing.T) {
+	f := websiteFixture(t)
+	s := &accountSpy{}
+	f.handler = New(Options{Operator: f.manager, Accounts: s, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	path := "/api/v1/accounts/" + strings.Repeat("a", 32) + "/abandon-create"
+	if w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, nil, ""); w.Code != 401 {
+		t.Fatalf("unauthenticated status %d", w.Code)
+	}
+	cookie, csrf := websiteSignIn(t, f)
+	for _, body := range []string{`{"reason":"Leftover","state":"active"}`, `{"reason":"Leftover","expected_revision":1}`, `{"Reason":"Leftover"}`, `null`} {
+		if w := websiteRequest(f.handler, "POST", path, body, cookie, csrf); w.Code != 400 {
+			t.Fatalf("%s: status %d", body, w.Code)
+		}
+	}
+	if w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, cookie, ""); w.Code != 403 {
+		t.Fatalf("without CSRF: %d", w.Code)
+	}
+	if s.calls != 0 {
+		t.Fatal("an invalid request reached the broker")
+	}
+	w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover of a killed useradd"}`, cookie, csrf)
+	if w.Code != 200 || s.abandoned.Reason != "Leftover of a killed useradd" || s.actor == "" {
+		t.Fatalf("abandon: %d %s", w.Code, w.Body.String())
+	}
+	for _, tc := range []struct {
+		err  error
+		want int
+		says string
+	}{
+		{&hostaccounts.AbandonRefusedError{Reason: hostaccounts.AbandonHomeNotEmpty}, 409, "holds files this create did not make"},
+		{&hostaccounts.AbandonRefusedError{Reason: hostaccounts.AbandonNoCreate}, 409, "no unfinished create"},
+		{hostaccounts.ErrNotFound, 404, ""},
+		{hostaccounts.ErrRecovery, 503, ""},
+	} {
+		s.err = tc.err
+		w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, cookie, csrf)
+		if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.says) {
+			t.Fatalf("%v: %d %s", tc.err, w.Code, w.Body.String())
+		}
+	}
 }
 
 func TestAccountHTTPAdmission(t *testing.T) {

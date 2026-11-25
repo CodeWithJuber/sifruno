@@ -15,6 +15,16 @@ const (
 	// TLSRoot holds listener certificates directly and one directory per site
 	// (TLSRoot/<site name>/) for that site's certificate and key.
 	TLSRoot = "/etc/sifruno/tls"
+	// ACMEChallengeDir holds the HTTP-01 challenge files for every site. It
+	// is outside every home, so no tenant can write or link into it. Every
+	// vhost maps /.well-known/acme-challenge/ to it; tokens are random, so
+	// one directory serves all sites.
+	ACMEChallengeDir = "/var/lib/sifruno-acme"
+	// SuspendedDocRoot is the vhRoot and docRoot of every suspended site: an
+	// empty directory owned by root, outside every home, which the root
+	// broker makes. A suspended vhost names no path its tenant controls, so
+	// the tenant cannot make its config test fail and keep the site serving.
+	SuspendedDocRoot = "/var/lib/sifruno-suspended"
 	// NamePrefix starts every virtual host, listener and external app name
 	// Sifruno emits, so they never collide with the administrator's own.
 	NamePrefix = "sifruno-"
@@ -25,6 +35,15 @@ const (
 	// root-owned and outside every home so a tenant cannot plant a symlink
 	// where the server opens its log files.
 	LogRoot = ServerRoot + "/logs/sifruno"
+	// CacheRoot holds each active site's LSCache store,
+	// CacheRoot/NamePrefix+NAME, outside every home. The installer makes it,
+	// root's own and 0711, so the server user can reach a store by name but
+	// not list them. OpenLiteSpeed creates a store as root when it loads the
+	// config and gives only that directory to the server user (2770); it
+	// never changes CacheRoot, as it does its own cachedata at every start.
+	// So only root can put a link in place of a store's name, and the root
+	// broker removes a deleted site's store under it.
+	CacheRoot = "/var/lib/sifruno-lscache"
 )
 
 // Bounds. OpenLiteSpeed aborts a whole file at a line of 8192 bytes or more,
@@ -35,6 +54,11 @@ const (
 	MaxDomainsPerSite = 16
 	MaxPathBytes      = 200
 	maxLineBytes      = 8191
+	// MaxRedirectsPerSite bounds a site's redirects, domain and path ones
+	// together; MaxRedirectPathBytes and MaxRedirectTargetBytes bound each.
+	MaxRedirectsPerSite    = 100
+	MaxRedirectPathBytes   = 128
+	MaxRedirectTargetBytes = 256
 )
 
 // Defaults applied when a limit is zero in the spec.
@@ -59,7 +83,9 @@ type Server struct {
 
 // Listener is one Sifruno-owned listener. Plain listeners map every site; a
 // secure listener maps only the sites that have their own certificate, so no
-// site is served under another name's certificate.
+// site is served under another name's certificate. A secure listener is
+// rendered only while at least one site has a certificate: with none it
+// would serve no site.
 type Listener struct {
 	Name string `json:"name"`
 	// Address is "*" for all interfaces or a literal IPv4/IPv6 address.
@@ -86,6 +112,29 @@ type Site struct {
 	Limits     Limits    `json:"limits"`
 	Isolation  Isolation `json:"isolation"`
 	TLS        TLS       `json:"tls"`
+	// Redirects are rendered as the vhost's own rewrite rules, after the
+	// deny rules, for an active site only: a suspended site refuses every
+	// request and redirects none.
+	Redirects []Redirect `json:"redirects,omitempty"`
+	// Folders are the site's protected folders (access.go), sorted by path,
+	// rendered for an active site only: a suspended site refuses every
+	// request anyway.
+	Folders []Folder `json:"folders,omitempty"`
+}
+
+// Redirect answers requests with a 301 or 302 to Target. Exactly one of
+// Domain and Path is set.
+type Redirect struct {
+	// Domain sends every request for that one of the site's domains to
+	// Target, which is then a scheme and host only; the request's path and
+	// query are kept. ACME challenges for the domain are still served, so its
+	// certificate can renew.
+	Domain string `json:"domain,omitempty"`
+	// Path sends requests for exactly this path, on every domain of the
+	// site, to Target. A path without a trailing slash also matches with one.
+	Path   string `json:"path,omitempty"`
+	Target string `json:"target"`
+	Status int    `json:"status"`
 }
 
 // Limits are applied to the site's lsphp process group as rlimits and LSAPI
@@ -113,6 +162,10 @@ type Isolation struct {
 type TLS struct {
 	CertFile string `json:"cert_file,omitempty"`
 	KeyFile  string `json:"key_file,omitempty"`
+	// Domains are the site's domains the certificate covers; the secure
+	// listener maps only these, so a domain it does not cover is not served
+	// under it. Empty: it covers all of them.
+	Domains []string `json:"domains,omitempty"`
 }
 
 // ErrInvalid is wrapped by every validation error.

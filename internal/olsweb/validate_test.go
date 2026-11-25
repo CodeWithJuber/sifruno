@@ -170,3 +170,28 @@ func TestValidateHostile(t *testing.T) {
 		})
 	}
 }
+
+// ProcessFloor is the number Validate holds a site's process limit to: the
+// floor itself is accepted and one below it is refused, with the assumed
+// httpd workers and with a stated count.
+func TestProcessFloor(t *testing.T) {
+	if got := ProcessFloor(4, 0); got != (3*4+50)*DefaultHTTPDWorkers {
+		t.Fatalf("ProcessFloor(4, 0) = %d", got)
+	}
+	if got := ProcessFloor(6, 2); got != 136 {
+		t.Fatalf("ProcessFloor(6, 2) = %d", got)
+	}
+	for _, workers := range []int{0, 1, 4, 16} {
+		s := baseServer()
+		s.HTTPDWorkers = workers
+		s.Sites = s.Sites[:1]
+		s.Sites[0].Limits = Limits{PHPChildren: 4, Processes: ProcessFloor(4, workers)}
+		if err := Validate(s); err != nil {
+			t.Fatalf("workers %d: the floor is refused: %v", workers, err)
+		}
+		s.Sites[0].Limits.Processes--
+		if err := Validate(s); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("workers %d: one below the floor is accepted: %v", workers, err)
+		}
+	}
+}

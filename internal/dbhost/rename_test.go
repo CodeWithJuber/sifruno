@@ -40,7 +40,7 @@ func TestRenameDatabase(t *testing.T) {
 		"CREATE DATABASE IF NOT EXISTS `acct1_new`",
 		"RENAME TABLE `acct1_old`.`wp_posts` TO `acct1_new`.`wp_posts`",
 		"RENAME TABLE `acct1_old`.`wp_options` TO `acct1_new`.`wp_options`",
-		"UPDATE mysql.db SET Db='acct1_new' WHERE Db='acct1_old'",
+		`UPDATE mysql.db SET Db='acct1\\_new' WHERE Db IN ('acct1\\_old', 'acct1_old')`,
 		"DROP DATABASE IF EXISTS `acct1_old`",
 		"FLUSH PRIVILEGES",
 	} {

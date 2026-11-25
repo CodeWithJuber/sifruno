@@ -106,20 +106,34 @@ func uniqueJSON(d *json.Decoder, depth int) error {
 	}
 	return nil
 }
+
+// exactFields admits an object whose keys are exactly typ's JSON names: every
+// field must be present except those tagged omitempty or omitzero, which may
+// be left out, and no other key is admitted.
 func exactFields(b []byte, typ reflect.Type) error {
 	var obj map[string]json.RawMessage
-	if json.Unmarshal(b, &obj) != nil || len(obj) != typ.NumField() {
+	if json.Unmarshal(b, &obj) != nil {
 		return errContract
 	}
+	known := 0
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)
-		k := f.Tag.Get("json")
+		k, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if k == "" {
 			k = f.Name
 		}
-		if _, ok := obj[k]; !ok {
+		optional := false
+		for _, o := range strings.Split(opts, ",") {
+			optional = optional || o == "omitempty" || o == "omitzero"
+		}
+		if _, ok := obj[k]; ok {
+			known++
+		} else if !optional {
 			return errContract
 		}
+	}
+	if known != len(obj) {
+		return errContract
 	}
 	return nil
 }

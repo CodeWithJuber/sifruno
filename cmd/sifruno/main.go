@@ -12,11 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"sifruno/config"
+	"sifruno/internal/acme"
 	"sifruno/internal/api"
 	"sifruno/internal/backuphost"
 	"sifruno/internal/budget"
@@ -26,14 +29,18 @@ import (
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/hostpkgs"
 	"sifruno/internal/mailhost"
+	"sifruno/internal/migrateverify"
 	"sifruno/internal/operator"
 	"sifruno/internal/panelcert"
+	"sifruno/internal/phpmyadmin"
 	"sifruno/internal/securestate"
 	"sifruno/internal/serverinfo"
+	"sifruno/internal/sitebackups"
 	"sifruno/internal/sites"
 	"sifruno/internal/tlshost"
 	"sifruno/internal/trail"
 	"sifruno/internal/whmapi"
+	"sifruno/internal/wizard"
 )
 
 func main() {
@@ -61,17 +68,25 @@ func run() error {
 	dnsNS2 := flag.String("dns-ns2", "ns2.hostlelo.com", "Default second nameserver for account zones")
 	dnsIP := flag.String("dns-ip", "127.0.0.1", "Default A-record address for account zones (set to the public web IP in production)")
 	tlsRoot := flag.String("tls-root", "", "TLS certificate store root (installssl/listcrts); empty disables the TLS surface")
-	acmeDirectory := flag.String("acme-directory", "", "ACME v2 directory URL for AutoSSL issuance (e.g. Let's Encrypt staging/production); empty disables AutoSSL")
-	acmeEmail := flag.String("acme-email", "", "Contact email for the ACME account")
+	acmeDirectory := flag.String("acme-directory", acme.LetsEncrypt, "ACME v2 directory URL for website certificates; the WHM AutoSSL surface uses it only when this flag is given")
+	acmeEmail := flag.String("acme-email", "", "Contact email for the ACME account; with --accounts-socket it turns on website certificates (HTTP-01) and accepts the certificate authority's terms of service")
+	acmeCAFile := flag.String("acme-ca-file", "", "Optional PEM bundle trusted for the ACME server only, instead of the system roots (a test CA such as Pebble)")
+	acmeTestProbeLoopback := flag.Bool("acme-test-probe-loopback", false, "Test only: let the website aliases' reachability probe connect to loopback addresses, for a test CA such as Pebble whose DNS answers 127.0.0.1; refused unless --acme-directory names a loopback address. Never set in production")
 	acmeInsecure := flag.Bool("acme-insecure-skip-verify", false, "Skip ACME directory TLS verification (test rigs with a private CA only; never in production)")
 	acmeResolver := flag.String("acme-dns-resolver", "127.0.0.1:53", "Resolver used to confirm _acme-challenge TXT propagation before ACME validation")
 	backupRoot := flag.String("backup-root", "", "Backup archive root; empty disables the backup surface")
-	httpsListen := flag.String("https-listen", "", "Optional HTTPS address for the panel beyond loopback, e.g. 0.0.0.0:2083; only admin sign-in (password and code) works there")
+	httpsListen := flag.String("https-listen", "", "Optional HTTPS address for the panel beyond loopback, e.g. 0.0.0.0:2083; admins and customers sign in there with a password and code, the access key does not work there")
 	panelHosts := flag.String("panel-host", "", "Comma-separated host names or IPs the HTTPS listener answers for; required with --https-listen")
 	tlsCert := flag.String("tls-cert", "", "Certificate chain for --https-listen; without it a self-signed certificate is kept in the state directory")
 	tlsKey := flag.String("tls-key", "", "Private key for --tls-cert")
 	dbSocket := flag.String("db-socket", "/var/lib/mysql/mysql.sock", "Local MariaDB unix socket; when reachable the database surface is enabled (fail-closed offline otherwise)")
+	pmaListen := flag.String("phpmyadmin-listen", "", "HTTPS address of phpMyAdmin's own origin, e.g. 0.0.0.0:8444: the --panel-host names and certificate of --https-listen on another port, serving phpMyAdmin only. It turns on Open phpMyAdmin on each website's Databases page; empty turns it off")
+	pmaUpstream := flag.String("phpmyadmin-upstream", "", "Loopback IP:PORT of OpenLiteSpeed's phpMyAdmin listener (the installer's is 127.0.0.1:8090); required with --phpmyadmin-listen")
+	pmaSocket := flag.String("phpmyadmin-socket", "/run/sifruno-panel/phpmyadmin.sock", "Unix socket on which phpMyAdmin's sign-in script redeems a one-time code; its folder must exist")
+	pmaUID := flag.Int("phpmyadmin-uid", -1, "User ID phpMyAdmin's PHP runs as (the installer's sifpma); the socket answers that user only")
 	flag.Parse()
+	given := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	host, port, err := net.SplitHostPort(*listen)
 	if err != nil {
 		return err
@@ -143,6 +158,9 @@ func run() error {
 	}
 	var whmHandler http.Handler
 	var whmServer *whmapi.Server
+	// The database service is built with the WHM transport and shared with
+	// the website wizard, so both write the same registry.
+	var dbSvc *dbhost.LocalService
 	if *accountsSocket != "" {
 		// WHM API 1 compatibility transport over the real account broker.
 		// Tokens live in a root-only JSON file; an absent store denies all
@@ -183,7 +201,9 @@ func run() error {
 		if *tlsRoot != "" {
 			tlsStore := &tlshost.Store{Root: *tlsRoot}
 			whmServer.SetTLSStore(tlsStore)
-			if *acmeDirectory != "" {
+			// Before --acme-directory had a default, AutoSSL ran only when
+			// it was given; that stays so.
+			if *acmeDirectory != "" && given["acme-directory"] {
 				acme := tlshost.NewACMEClient(*acmeDirectory, *acmeEmail, filepath.Join(*tlsRoot, "_acme"))
 				if *acmeInsecure {
 					acme.HTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} // test rigs only
@@ -200,7 +220,7 @@ func run() error {
 		if dberr != nil {
 			return dberr
 		}
-		dbSvc := &dbhost.LocalService{
+		dbSvc = &dbhost.LocalService{
 			Run:      dbhost.CLIRunner{Socket: *dbSocket, DefaultsFile: *dbDefaults},
 			Registry: dbReg,
 		}
@@ -239,9 +259,62 @@ func run() error {
 			whmServer.SetBackupStore(bs)
 		}
 	}
+	var websiteJobs *wizard.Runner
+	var siteMigrations hostaccounts.MigrationService
+	var siteBackups *sitebackups.Manager
+	var certificates *acme.Manager
+	if *accountsSocket != "" && dbSvc != nil {
+		broker := hostaccounts.NewClient(*accountsSocket)
+		web, okWeb := broker.(hostaccounts.WebService)
+		wordpress, okWordPress := broker.(hostaccounts.WordPressService)
+		placeholder, okPlaceholder := broker.(hostaccounts.PlaceholderService)
+		if !okWeb || !okWordPress || !okPlaceholder {
+			return errors.New("the account broker client lacks the web, WordPress or placeholder operation")
+		}
+		jobs, jerr := wizard.OpenStore(filepath.Join(dir, "wizard"))
+		if jerr != nil {
+			return jerr
+		}
+		// A nil interface, not a nil *acme.Manager: the wizard reads nil as
+		// "certificates are not set up".
+		var certs wizard.Certificates
+		if *acmeEmail != "" {
+			if installer := certificateInstaller(broker); installer == nil {
+				fmt.Fprintln(os.Stderr, "Website certificates are off: the account broker client has no certificate operation, so new websites use http")
+			} else {
+				m, aerr := acme.New(acme.Config{Email: *acmeEmail, Directory: *acmeDirectory, CAFile: *acmeCAFile, StateDir: filepath.Join(dir, "acme"), TestProbeLoopback: *acmeTestProbeLoopback}, installer, brokerSites{broker})
+				if aerr != nil {
+					return aerr
+				}
+				certificates, certs = m, m
+			}
+		}
+		websiteJobs = wizard.New(wizard.Broker{Service: broker, WebService: web, WordPressService: wordpress, PlaceholderService: placeholder}, dbSvc, jobs, certs)
+		// Move a website here: the broker reads the old server and copies
+		// the account; verify compares the copy on this server's own web
+		// server with the old site, and --dns-ip is the address the DNS
+		// records point at when the website is marked ready.
+		migrationBroker, okMigrations := broker.(wizard.MigrationBroker)
+		if !okMigrations {
+			return errors.New("the account broker client lacks the migration operations")
+		}
+		websiteJobs.EnableMigrations(wizard.MigrationOptions{Broker: migrationBroker, Databases: dbSvc, Verify: migrateverify.Run, Connect: "127.0.0.1:80", Address: *dnsIP})
+		siteMigrations = migrationBroker.(hostaccounts.MigrationService)
+		// Website backups: the broker runs restic; the panel schedules the
+		// nightly backups, the weekly prune and drill, and the jobs a person
+		// starts. Nothing runs until backup storage is set up.
+		backupBroker, okBackups := broker.(sitebackups.Broker)
+		if !okBackups {
+			return errors.New("the account broker client lacks the backup operations")
+		}
+		if siteBackups, err = sitebackups.Open(sitebackups.StatePath(dir), backupBroker, dbSvc); err != nil {
+			return err
+		}
+	}
 	var remoteServer *http.Server
 	var remoteListener net.Listener
 	var remoteHosts []string
+	var remoteTLS *tls.Config
 	var httpsNote string
 	if *httpsListen != "" {
 		hosts := splitHosts(*panelHosts)
@@ -252,18 +325,21 @@ func run() error {
 		if cerr != nil {
 			return cerr
 		}
-		listener, lerr := tls.Listen("tcp", *httpsListen, &tls.Config{Certificates: []tls.Certificate{cert.Certificate}, MinVersion: tls.VersionTLS12})
+		remoteTLS = &tls.Config{Certificates: []tls.Certificate{cert.Certificate}, MinVersion: tls.VersionTLS12}
+		listener, lerr := tls.Listen("tcp", *httpsListen, remoteTLS)
 		if lerr != nil {
 			return lerr
 		}
 		defer listener.Close()
 		remote := &http.Server{Addr: *httpsListen, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 		remoteServer, remoteListener, remoteHosts = remote, listener, hosts
+		// Customers' setup links start with the address they reach the panel at.
+		access.SetPublicAddress(publicAddress(hosts[0], *httpsListen))
 		kind := "operator-provided"
 		if cert.SelfSigned {
 			kind = "self-signed; browsers warn until you add --tls-cert"
 		}
-		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — admin sign-in only\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
+		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — password sign-in only (admins and customers)\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
 			*httpsListen, strings.Join(hosts, ", "), kind, cert.NotAfter.UTC().Format("2006-01-02"), cert.Fingerprint)
 	}
 	if *whmListen != "" {
@@ -275,7 +351,74 @@ func run() error {
 		servers = append(servers, ingressServer)
 		listeners = append(listeners, ingressListener)
 	}
-	server.Handler = api.New(api.Options{Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}})
+	// phpMyAdmin: temporary database users for one website, handed to
+	// phpMyAdmin's sign-in script through a one-time code on a Unix socket
+	// only its PHP user is answered on, and phpMyAdmin's own HTTPS origin,
+	// which proxies to its listener and serves nothing of the panel's.
+	var pma *phpmyadmin.Service
+	var pmaListener, pmaOriginListener net.Listener
+	var pmaServer *http.Server
+	if *pmaUpstream != "" && *pmaListen == "" {
+		return errors.New("--phpmyadmin-upstream needs --phpmyadmin-listen: phpMyAdmin is served on its own HTTPS port, never the panel's")
+	}
+	if *pmaListen != "" {
+		if dbSvc == nil {
+			return errors.New("--phpmyadmin-listen needs --accounts-socket: phpMyAdmin opens a website's databases")
+		}
+		if remoteTLS == nil {
+			return errors.New("--phpmyadmin-listen needs --https-listen and --panel-host: phpMyAdmin's origin uses the panel's host names and certificate")
+		}
+		_, pmaPort, perr := net.SplitHostPort(*pmaListen)
+		_, panelPort, _ := net.SplitHostPort(*httpsListen)
+		publicPort, nerr := strconv.Atoi(pmaPort)
+		if perr != nil || nerr != nil || publicPort < 1 || publicPort > 65535 || pmaPort == panelPort {
+			return errors.New("--phpmyadmin-listen must be an address with its own port, not --https-listen's, such as 0.0.0.0:8444")
+		}
+		if *pmaUID < 1 || *pmaUID == os.Getuid() || (*pmaUID >= 20000 && *pmaUID <= 60000) {
+			return errors.New("--phpmyadmin-uid must be the user ID phpMyAdmin's PHP runs as: not root, not the panel's own, and outside the hosting accounts' 20000 to 60000")
+		}
+		if !filepath.IsAbs(*pmaSocket) {
+			return errors.New("--phpmyadmin-socket must be an absolute path")
+		}
+		pmaProxy, perr := phpmyadmin.NewProxy(*pmaUpstream)
+		if perr != nil {
+			return perr
+		}
+		if pma, err = phpmyadmin.New(phpmyadmin.Config{StateDir: filepath.Join(dir, "phpmyadmin"), Database: dbSvc, PublicPort: publicPort, LoginTTL: phpMyAdminLoginTTL()}); err != nil {
+			return err
+		}
+		if pmaListener, err = phpmyadmin.ListenRedeem(*pmaSocket); err != nil {
+			return fmt.Errorf("phpMyAdmin's sign-in socket %s: %w", *pmaSocket, err)
+		}
+		defer pmaListener.Close()
+		if pmaOriginListener, err = tls.Listen("tcp", *pmaListen, remoteTLS); err != nil {
+			return err
+		}
+		defer pmaOriginListener.Close()
+		// Each request may take longer (an import or export): the origin
+		// extends its own deadlines.
+		pmaServer = &http.Server{Addr: *pmaListen, Handler: phpmyadmin.NewOrigin(pma, pmaProxy, remoteHosts), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+		servers = append(servers, pmaServer)
+		listeners = append(listeners, pmaOriginListener)
+	}
+	// A nil interface, not a nil *phpmyadmin.Service: the API reads nil as
+	// "phpMyAdmin is not set up".
+	var sitePhpMyAdmin api.PhpMyAdmin
+	if pma != nil {
+		sitePhpMyAdmin = pma
+	}
+	// A nil interface, not a nil *dbhost.LocalService: the API reads nil as
+	// "databases are not set up".
+	var siteDatabases api.Databases
+	if dbSvc != nil {
+		siteDatabases = dbSvc
+	}
+	// A nil interface, not a nil *acme.Manager, when certificates are off.
+	var siteCertificates api.SiteCertificates
+	if certificates != nil {
+		siteCertificates = certificates
+	}
+	server.Handler = api.New(api.Options{Certificates: siteCertificates, PanelHosts: splitHosts(*panelHosts), Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, PhpMyAdmin: sitePhpMyAdmin, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}, Migrations: siteMigrations})
 	if remoteServer != nil {
 		// The same API, behind operator.Remote: only the panel's host names,
 		// only TLS, and only admin sessions.
@@ -292,6 +435,32 @@ func run() error {
 	} else {
 		defer stop()
 	}
+	if certificates != nil {
+		renewDone := make(chan struct{})
+		go func() { defer close(renewDone); certificates.Run(ctx) }()
+		defer func() { stop(); <-renewDone }()
+	}
+	if pma != nil {
+		// The sweeper drops expired temporary users now and every minute;
+		// the socket hands out each login once.
+		sweepDone, redeemDone := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(sweepDone)
+			pma.Run(ctx, func(err error) { fmt.Fprintln(os.Stderr, "phpMyAdmin sign-ins:", err) })
+		}()
+		go func() {
+			defer close(redeemDone)
+			if err := pma.ServeRedeem(ctx, pmaListener, *pmaUID); err != nil {
+				fmt.Fprintln(os.Stderr, "phpMyAdmin's sign-in socket stopped:", err)
+			}
+		}()
+		defer func() { stop(); <-sweepDone; <-redeemDone }()
+	}
+	if siteBackups != nil {
+		backupsDone := make(chan struct{})
+		go func() { defer close(backupsDone); siteBackups.Run(ctx) }()
+		defer func() { stop(); <-backupsDone }()
+	}
 	done := make(chan error, len(servers))
 	for i, running := range servers {
 		go func(s *http.Server, l net.Listener) { done <- s.Serve(l) }(running, listeners[i])
@@ -301,6 +470,9 @@ func run() error {
 		fmt.Printf("Local static website listener http://%s\n", *sitesListen)
 	}
 	fmt.Print(httpsNote)
+	if pma != nil {
+		fmt.Printf("phpMyAdmin on its own origin, HTTPS on %s for %s (OpenLiteSpeed listener %s, sign-ins last %s)\n", *pmaListen, strings.Join(remoteHosts, ", "), *pmaUpstream, pma.LoginTTL())
+	}
 	select {
 	case err = <-done:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -317,6 +489,79 @@ func run() error {
 		}
 	}
 	return err
+}
+
+// certificateInstaller joins the account broker's certificate operation to
+// the panel's acme.Installer; nil (certificates off) when the client has no
+// such operation.
+func certificateInstaller(service hostaccounts.Service) acme.Installer {
+	certs, ok := service.(hostaccounts.CertificateService)
+	if !ok {
+		return nil
+	}
+	return brokerInstaller{certs}
+}
+
+// brokerInstaller installs an issued certificate through the broker's typed
+// SetCertificate operation, which validates it again before it goes live.
+type brokerInstaller struct {
+	hostaccounts.CertificateService
+}
+
+func (b brokerInstaller) Install(ctx context.Context, accountID string, revision uint64, certPEM, keyPEM []byte) (uint64, time.Time, error) {
+	res, err := b.SetCertificate(ctx, accountID, hostaccounts.CertificateInput{
+		ExpectedRevision: revision,
+		CertPEM:          string(certPEM),
+		KeyPEM:           string(keyPEM),
+		Reason:           "Let's Encrypt certificate",
+	}, "panel certificates")
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return res.Account.Revision, time.Unix(res.Certificate.NotAfter, 0), nil
+}
+
+// brokerSites lists the broker's accounts for the certificate renewal loop.
+type brokerSites struct{ hostaccounts.Service }
+
+func (b brokerSites) Sites(ctx context.Context) ([]acme.Site, error) {
+	accounts, err := b.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sites := make([]acme.Site, 0, len(accounts))
+	for _, a := range accounts {
+		sites = append(sites, certificateSite(a))
+	}
+	return sites, nil
+}
+
+// certificateSite is a broker account as the certificate manager sees it:
+// its domain, its aliases, and the domains its certificate names.
+func certificateSite(a hostaccounts.Account) acme.Site {
+	site := acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: a.State == "active"}
+	if a.SiteDomains != nil {
+		site.Aliases = slices.Clone(a.SiteDomains.Aliases)
+	}
+	if a.Certificate.NotAfter > 0 {
+		site.NotAfter = time.Unix(a.Certificate.NotAfter, 0)
+	}
+	if a.Certificate.Names != "" {
+		site.Covered = strings.Split(a.Certificate.Names, ",")
+	}
+	return site
+}
+
+// publicAddress is the https:// address of the HTTPS listener at a panel
+// host name, with the listener's port unless it is 443.
+func publicAddress(host, listen string) string {
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if _, port, err := net.SplitHostPort(listen); err == nil && port != "443" && port != "" {
+		return "https://" + host + ":" + port
+	}
+	return "https://" + host
 }
 
 // splitHosts reads --panel-host: comma-separated, lower-cased, de-duplicated.

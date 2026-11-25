@@ -29,7 +29,7 @@ const time = (timestamp: string) => new Date(timestamp).toLocaleTimeString(undef
 
 type HostingTarget = "websites" | "accounts" | "backups" | "files" | "access";
 const hostingModules = [
-  { id: "websites", label: "Websites", description: "Create and manage your websites.", detail: "Static sites", icon: Globe },
+  { id: "websites", label: "Websites", description: "Create and manage your websites.", detail: "WordPress sites", icon: Globe },
   { id: "accounts", label: "Customers", description: "Customer accounts and their home folders.", detail: "Linux broker required", icon: Users },
   { id: "backups", label: "Backups", description: "Create, download and restore website backups.", detail: "Native ZIP snapshots", icon: Archive },
   { id: "files", label: "Files", description: "View and edit your website's files.", detail: "Website files", icon: Folder },

@@ -2,8 +2,13 @@
 // localStorage, the URL or logs. Server messages for these routes are written
 // for people, so they are shown as they come.
 
-export interface AuthSession { authenticated: true; csrf_token: string; expires_at: string; username?: string }
+// role is "customer" for a site owner's login, which reaches only its own
+// websites; view_as names the customer an admin is viewing the panel as.
+// routes comes with a restricted session: the API routes it may use, as the
+// server's customer table names them ("POST /api/v1/websites/sites/{account_id}/php").
+export interface AuthSession { authenticated: true; csrf_token: string; expires_at: string; username?: string; role?: "admin" | "customer"; view_as?: string; routes?: string[] }
 export interface SetupSecret { secret: string; otpauth_uri: string; expires_at: string }
+export interface CustomerSetupSecret extends SetupSecret { username: string }
 
 export class AuthError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -12,9 +17,14 @@ export class AuthError extends Error {
 const object = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === "string";
 
+const name = (v: unknown) => text(v) && /^[a-z][a-z0-9._-]{2,31}$/.test(v);
+
 function validSession(v: unknown): v is AuthSession {
   return object(v) && v.authenticated === true && text(v.csrf_token) && v.csrf_token.length === 43 && text(v.expires_at)
-    && !Number.isNaN(Date.parse(v.expires_at)) && (v.username === undefined || (text(v.username) && /^[a-z][a-z0-9._-]{2,31}$/.test(v.username)));
+    && !Number.isNaN(Date.parse(v.expires_at)) && (v.username === undefined || name(v.username))
+    && (v.role === undefined || v.role === "admin" || v.role === "customer") && (v.view_as === undefined || (name(v.view_as) && v.role !== "customer"))
+    && (v.role !== "customer" || name(v.username))
+    && (v.routes === undefined || (Array.isArray(v.routes) && v.routes.length <= 512 && v.routes.every((r) => text(r) && r.length <= 200)));
 }
 function validSecret(v: unknown): v is SetupSecret {
   return object(v) && text(v.secret) && /^[A-Z2-7]{32}$/.test(v.secret) && text(v.otpauth_uri) && v.otpauth_uri.startsWith("otpauth://totp/") && text(v.expires_at);
@@ -65,8 +75,43 @@ export const beginSetup = (csrf: string, username: string) =>
 export const finishSetup = (csrf: string, username: string, password: string, totp_code: string) =>
   request("/api/v1/session/setup/admin", validSession, { method: "POST", body: { username, password, totp_code }, csrf });
 
+// A customer's setup from the link an admin sent: the link's secret proves
+// who it is, so these need no session.
+export const beginCustomerSetup = (token: string) =>
+  request("/api/v1/session/customer-setup/begin", (v): v is CustomerSetupSecret => validSecret(v) && object(v) && name(v.username), { method: "POST", body: { token } });
+export const finishCustomerSetup = (token: string, password: string, totp_code: string) =>
+  request("/api/v1/session/customer-setup/finish", validSession, { method: "POST", body: { token, password, totp_code } });
+
+// View as customer: the admin's own session takes the customer's access
+// until it goes back.
+export const viewAsCustomer = (csrf: string, username: string) =>
+  request("/api/v1/session/view-as", validSession, { method: "POST", body: { username }, csrf });
+export const endViewAs = (csrf: string) =>
+  request("/api/v1/session/view-as/end", validSession, { method: "POST", body: {}, csrf });
+
+// The signed-in person's own login: a new password, or a new authenticator
+// app. Each needs the current password and a current code; the server limits
+// wrong tries like sign-ins.
+export const changeOwnPassword = (csrf: string, current_password: string, totp_code: string, new_password: string) =>
+  request("/api/v1/session/password", (v): v is { other_sessions_ended: number } => object(v) && Number.isInteger(v.other_sessions_ended) && (v.other_sessions_ended as number) >= 0,
+    { method: "POST", body: { current_password, totp_code, new_password }, csrf });
+export const beginAuthenticatorChange = (csrf: string, current_password: string, totp_code: string) =>
+  request("/api/v1/session/authenticator/begin", validSecret, { method: "POST", body: { current_password, totp_code }, csrf });
+export const finishAuthenticatorChange = (csrf: string, totp_code: string) =>
+  request("/api/v1/session/authenticator/finish", (v): v is { changed: true } => object(v) && v.changed === true, { method: "POST", body: { totp_code }, csrf });
+
+// Whether a session reaches only one customer's websites: a customer's own,
+// or an admin's while it views as a customer.
+export const restricted = (session: AuthSession | null) => Boolean(session && (session.role === "customer" || session.view_as));
+
+// Whether the session may use an API route, named as the server's customer
+// table names it. An admin may use all; a restricted session only the routes
+// its session lists, and none when the list is missing. The panel hides what
+// this refuses; the server still checks every request.
+export const allows = (session: AuthSession | null, route: string) => !restricted(session) || Boolean(session?.routes?.includes(route));
+
 // On the server itself the panel is reached through loopback; anywhere else it
-// came through the HTTPS listener, where only admin sign-in works.
+// came through the HTTPS listener, where only password sign-in works.
 export const onThisServer = () => ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 
 // Groups of four are easier to type into an authenticator app.

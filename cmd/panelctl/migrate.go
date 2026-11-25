@@ -162,7 +162,7 @@ func readProbesFile(path string) ([]migrateverify.Probe, error) {
 	}
 	var probes []migrateverify.Probe
 	if err = json.Unmarshal(raw, &probes); err != nil {
-		return nil, errors.New(`probes file must be a JSON array of {"path": "...", "kind": "auth"|"deny"} objects`)
+		return nil, errors.New(`probes file must be a JSON array of {"path": "...", "kind": "auth"|"deny"|"allow"} objects`)
 	}
 	return probes, nil
 }

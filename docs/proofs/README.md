@@ -68,3 +68,76 @@ What this run does not show:
 - **A tenant's broken site during another account's change.** Section 6 records OpenLiteSpeed's real output for a moved docroot and judges it with the broker's rule; it does not run a change while the docroot is broken, for the same reason.
 - **The recovery paths.** An apply interrupted by a crash, a delete whose config fails its test, and a filesystem without quota enforcement are covered by unit tests, not on the VM.
 - **Speed on real hardware.** Under software emulation the web operation took 16 seconds in this run (10 to 13 in earlier ones).
+
+## Phase 1: the broker's WordPress install
+
+Run on 2026-11-23 with `scripts/devvm/proof.sh broker-wordpress` on the dev VM, built from `36f2a55`. The broker ran with `--web-user nobody`; `dbdrive` created the site's database through the panel's `dbhost` code (as root over the socket, standing in for the panel's admin option file), and `brokerdrive` asked the broker to install WordPress.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| WordPress install: WP-CLI 2.12.0 pinned by sha512, run as the site user with its LSPHP, the database and admin passwords on stdin (no process argument held either in 153 samples taken during the install), `wp-config.php` 0600 pointing at 127.0.0.1, tables and admin user in the site's database, the site serving WordPress, a second install refused at the download step with nothing changed, and delete afterwards | [phase1-broker-wordpress.txt](phase1-broker-wordpress.txt) | 22 passed, 0 failed |
+
+The install took 230 s under software emulation, past the broker's 45 s request limit, so this run also shows that the long-running response arrives. Later commits refused a suspend or web change during an install, refused passwords with an edge space (WP-CLI's prompt trims them), and gave OpenLiteSpeed's test and restart their own time limits; those are covered by unit tests and by the wizard proof below, which ran the same install through the panel. A re-run on `d99cdd0` failed at its first step because the proof's own driver stopped waiting for the web change after 60 s while the broker finished it; the driver now waits six minutes (`0b9bd2c`).
+
+## Phase 1: the installer's sshd pre-checks
+
+Run on 2026-11-24 with `scripts/devvm/proof.sh installer-sshd` on the dev VM (OpenSSH 9.9p1, SELinux enforcing), with `install.sh` and the guest script as in `3ba55f1`. The installer turns SSH passwords off; these checks decide whether someone could still sign in once it does. The proof loads the installer's functions alone and works on copies of the VM's sshd configuration and throwaway users.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| sshd pre-checks: the candidate copy with the policy is accepted by `sshd -t`; other users get SFTP only and no passwords; root with a key counts, but not with `PermitRootLogin no`, an Allow or Deny rule that leaves it out, `AuthenticationMethods` needing a password, or a ForceCommand; Match rules on addresses are judged for the admin's own SSH connection, and refused when there is none; a wheel member counts only with a valid key, StrictModes-safe modes and a login shell; other users who would lose a shell are listed; the live sshd files are unchanged | [phase1-installer-sshd.txt](phase1-installer-sshd.txt) | 30 passed, 0 failed |
+
+What this run does not show: a failed SELinux relabel, which was not provoked. The installer writing the policy on a fresh server is the fresh-install test below.
+
+## Phase 1: one command installs on a fresh server
+
+Run on 2026-11-24 with `scripts/devvm/fresh-install-test.sh --destroy-vm`, from source `10cd1ad` (release sha256 `3513fead…81a6`). It destroyed the dev VM, created a new AlmaLinux 9.9 one with SELinux enforcing, and provisioned it with `scripts/install/install.sh`, starting the services. It then smoke-tested the result and ran the installer a second time.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Fresh install: preflight on the new server (root, AlmaLinux 9, x86_64, `/home` XFS with user quota and empty, and root still able to sign in with a key once the sshd policy is in place); the release checked against its SHA256SUMS; packages, nsswitch and the sshd policy (written, checked, reloaded); both units active and enabled; the panel answering as `sifpanel`; the broker socket `sifpanel` 0600; `hostbroker --check-host`; SELinux still enforcing; a second run that succeeds and reports nothing changed | [phase1-fresh-install.txt](phase1-fresh-install.txt) | 12 passed, 0 failed |
+
+The test drives the VM over SSH as root with a key throughout. Every command after the sshd step reached the VM through a new key sign-in under the new policy, which is the "second sign-in" the installer asks the operator to check. The installer took 61 minutes under software emulation, mostly package installation.
+
+What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins) and the nightly schedule the plan asks for (not set up; it needs a runner the owner chooses). An upgrade is the next section.
+
+## Phase 1: upgrading an installed server
+
+Run on 2026-11-24 on the same dev VM, which the fresh-install test had installed from `10cd1ad`. The release built from `1871199` was copied in, checked against its `.sha256`, unpacked into a new folder, and its `install.sh --no-start` run over the existing installation, then run once more.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Upgrade in place: the tarball and every file match their checksums, preflight passes on the installed server, and the run adds only what the newer release brings (bzip2 and restic 0.20.0 at its pinned sha256 `c109579d…`), replaces the four programs and the panel UI, and leaves the units as they were (disabled, as `--no-start` asks); the run after it reports `Changed in this run: nothing` | [phase1-upgrade-install.txt](phase1-upgrade-install.txt) | installer exit 0, second run 0 |
+
+What this run does not show: an upgrade with the units running (the panel and broker restarting under live sites), a downgrade, and an upgrade across a change to the broker's journal format.
+
+## Phase 1: the site page's changes at the broker
+
+Run on 2026-11-24 with `scripts/devvm/proof.sh broker-site-actions` on the dev VM the fresh-install test built (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4), from `2ae3d56`'s broker and driver.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Site actions: a live site moves from PHP 8.3 to 8.4 and the account list shows it; suspend answers 403 for the home page and a PHP file, from `/var/lib/sifruno-suspended` (root 0755, empty, `var_lib_t`) with no `/home` path in the vhost, the site's files untouched and a file the tenant puts under `.well-known` not served; a second suspend is a recorded change; resume serves PHP 8.4 again from the home; delete removes the vhost and the user | [phase1-broker-site-actions.txt](phase1-broker-site-actions.txt) | 22 passed, 0 failed |
+
+While suspended, the ACME challenge path served a challenge from the panel's own folder with 200: OpenLiteSpeed applies the challenge context before the vhost's deny rule, so renewal keeps working. An earlier run failed after the suspend because the proof's driver stopped waiting after 60 s while the broker finished the change (`d2246a5`).
+
+What this run does not show: a tenant changing its own folders (the broker-isolation proof), and the panel's site page in a browser.
+
+## Phase 1: the New website wizard, with SSL
+
+Run on 2026-11-24 with `scripts/devvm/proof.sh wordpress-wizard` on the dev VM (AlmaLinux 9.9, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3, MariaDB 10.11, QEMU software emulation), built from `70efa12`. The panel ran in the VM as `sifpanel` with the real broker (`--web-user`), the MariaDB admin option file, and ACME pointed at Pebble 2.10.1, Let's Encrypt's test CA, installed by provisioning (its DNS answers 127.0.0.1 for every name, so it validates HTTP-01 against this VM's OpenLiteSpeed). Headless Chrome on the host reached the panel through `vm.sh forward` and drove the wizard as an admin would.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| New website: first-run admin sign-in, the wizard form (autocomplete, feedback only after leaving a field), a panel job that creates the account, puts the site live, gets a certificate (lego in the panel, HTTP-01 through the broker's challenge path, installed by the broker's `SetCertificate`), creates the database and installs WordPress with https; the job page and the last screen (https links, DNS help, reload, phone width), the same domain refused, the WordPress admin password in neither the jobs API, the browser's storage nor the job file; on the VM the site serves over https with a certificate chained to Pebble's root that names exactly the domain and is the broker's `cert.pem` (root 0600), and WordPress's home and siteurl are https | [phase1-wordpress-wizard.txt](phase1-wordpress-wizard.txt) | 43 passed, 0 failed |
+
+Screenshots are in [phase1-wordpress-wizard/](phase1-wordpress-wizard/): the form (the password masked), the job while it runs, and the last screen at desktop and phone width.
+
+Earlier runs found and fixed: a broker command limit too short for OpenLiteSpeed's restart on a busy VM (`b8d3b97`), a delete cut off by the request's own limit (`f3affc7`), and proof checks that looked for the step list on the last screen (`caf5b99`). One run on `caf5b99` passed every https check but its first plain-http request found no page within ten minutes, while the same page served at once later in the run and in the next run; the cause is not known.
+
+What this run does not show:
+
+- **Real DNS and a public CA.** Pebble stands in for Let's Encrypt and its DNS points every name at the VM.
+- **Renewal.** The renewal loop and its one-week wait after a refused install are unit tests (`internal/acme`); no certificate came near expiry here.
+- **The failure paths on the VM.** Undo after a failed step, a pre-existing database name, a slow step, a panel restart during a job and a skipped SSL step are unit tests (`internal/wizard`).
+- **More than one job.** Jobs run one at a time; the refusal of a second is a unit test.

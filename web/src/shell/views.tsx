@@ -15,9 +15,21 @@ import type { PageId } from "@/shell/pages";
 const Trail = lazy(() => import("@/Tools").then((m) => ({ default: m.Trail })));
 const Budget = lazy(() => import("@/Tools").then((m) => ({ default: m.Budget })));
 const Access = lazy(() => import("@/Access"));
+const ApiTokens = lazy(() => import("@/ApiTokens").then((m) => ({ default: m.ApiTokens })));
 const Storage = lazy(() => import("@/HostResources").then((m) => ({ default: m.Storage })));
 const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ default: m.NetworkResources })));
 const PanelPreview = lazy(() => import("@/PanelPreview"));
+const NewWebsite = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.NewWebsite })));
+const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.WebsiteJob })));
+const MoveWebsite = lazy(() => import("@/MoveWebsite").then((m) => ({ default: m.MoveWebsite })));
+const MoveJob = lazy(() => import("@/MoveWebsite").then((m) => ({ default: m.MoveJob })));
+const WebsitesList = lazy(() => import("@/WebsitesPage").then((m) => ({ default: m.WebsitesList })));
+const WebsiteLayout = lazy(() => import("@/WebsiteLayout").then((m) => ({ default: m.WebsiteLayout })));
+const BackupStorage = lazy(() => import("@/BackupStorage").then((m) => ({ default: m.BackupStorage })));
+const FilesSitePicker = lazy(() => import("@/SiteFiles").then((m) => ({ default: m.FilesSitePicker })));
+const Customers = lazy(() => import("@/Customers").then((m) => ({ default: m.Customers })));
+const CustomerAccount = lazy(() => import("@/CustomerLogin").then((m) => ({ default: m.CustomerAccount })));
+const CustomerSetup = lazy(() => import("@/CustomerLogin").then((m) => ({ default: m.CustomerSetup })));
 
 export function LoadingState({ label }: { label: string }) {
   return <div className="flex flex-col gap-4" role="status" aria-label={label}><Skeleton className="h-28 w-full" /><Skeleton className="h-64 w-full" /><span className="sr-only">{label}</span></div>;
@@ -46,6 +58,8 @@ function useReport(id: PageId, resource: Resource<unknown>) {
 export function HomeView() {
   const shell = useShell();
   const navigate = useNavigate();
+  // A customer's Home is its websites; the server's readings are the admin's.
+  if (shell.viewer.restricted) return <WebsitesList />;
   return <div className="content-stack dashboard-stack">
     <HostingWorkspace publicPreview={shell.publicPreview} platform={shell.platform.data} onNavigate={shell.open} onPreview={() => navigate({ to: "/tour" })} />
     <section className="monitoring-workspace" aria-labelledby="monitoring-heading">
@@ -57,8 +71,11 @@ export function HomeView() {
 }
 
 export function ServerTabs({ active }: { active: PageId }) {
-  return <nav aria-label="Server sections" className="mb-5 flex gap-1 border-b border-border">
-    {serverTabs.map((id) => {
+  const { publicPreview } = useShell();
+  // The public demo has no backup storage; it shows only its own tabs.
+  const tabs = serverTabs.filter((id) => !publicPreview || pageById(id).audience !== "private");
+  return <nav aria-label="Server sections" className="mb-5 flex flex-wrap gap-1 border-b border-border">
+    {tabs.map((id) => {
       const page = pageById(id);
       const current = id === active;
       return <Link key={id} to={page.path} activeOptions={{ exact: true }} data-testid={id === "server" ? "tab-services" : page.testId} aria-current={current ? "page" : undefined}
@@ -84,6 +101,10 @@ export function NetworkView() {
   return <><ServerTabs active="network" /><DataState resource={shell.server} retry={shell.refresh}>{shell.server.data && <NetworkResources report={shell.server.data} range={shell.range} setRange={shell.setRange} />}</DataState></>;
 }
 
+export function BackupStorageView() {
+  return <><ServerTabs active="backup-storage" /><BackupStorage /></>;
+}
+
 export function ActivityView() {
   const shell = useShell();
   const trail = useResource("/api/v1/trail", validTrail, shell.revision);
@@ -107,11 +128,61 @@ export function SecurityView() {
   return <Access revision={revision} onStatus={onStatus} />;
 }
 
+export function CustomersView() {
+  return <Customers />;
+}
+
+export function AccountView() {
+  return <CustomerAccount />;
+}
+
+// Where a customer's setup link lands; the secret is in the address's #.
+export function CustomerSetupView() {
+  return <CustomerSetup />;
+}
+
+export function ApiTokensView() {
+  return <ApiTokens />;
+}
+
 export function TourView() {
   return <PanelPreview />;
 }
 
-// Kept-alive screens (Websites, Files, Backups, Customers) are rendered by the
+export function NewWebsiteView() {
+  return <NewWebsite />;
+}
+
+// Keyed by the id, so moving from one setup job to another starts fresh.
+export function WebsiteJobView({ jobId }: { jobId: string }) {
+  return <WebsiteJob key={jobId} jobId={jobId} />;
+}
+
+export function MoveWebsiteView() {
+  return <MoveWebsite />;
+}
+
+// Keyed by the id, so moving from one move to another starts fresh.
+export function MoveJobView({ jobId }: { jobId: string }) {
+  return <MoveJob key={jobId} jobId={jobId} />;
+}
+
+export function WebsitesView() {
+  return <WebsitesList />;
+}
+
+// One website's page with its tabs. Keyed by the id, so moving from one
+// website to another starts fresh.
+export function WebsiteView({ accountId }: { accountId: string }) {
+  return <WebsiteLayout key={accountId} accountId={accountId} />;
+}
+
+// Websites → Files: choose a website, then its Files page opens.
+export function FilesView() {
+  return <FilesSitePicker />;
+}
+
+// Kept-alive screens (Static sites and their files, Backups, Customers) are rendered by the
 // shell itself so their unsaved state survives navigation; their routes only
 // claim the URL.
 export function ShellRendered() {

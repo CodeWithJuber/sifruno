@@ -25,6 +25,9 @@ usage: vm.sh <command>
   ssh [cmd]   run a command (or open a shell) as root in the VM
   put SRC DST copy a local file into the VM
   get SRC DST copy a file out of the VM
+  forward PORT
+              forward 127.0.0.1:PORT on this host to 127.0.0.1:PORT in the VM
+              over SSH until stopped (the panel binds loopback only)
   status      say whether the VM is running and on which ports
   stop        power the VM off
   destroy     stop the VM and delete its disks, key and seed (keeps the image)
@@ -49,6 +52,10 @@ running() {
 ssh_base() {
   # shellcheck disable=SC1091
   . "$DIR/ports"
+  # A ports file may name another host (VM_HOST=address, SSH_PORT=22): a
+  # throwaway cloud server used in place of the local VM. ssh, put, get and
+  # forward then reach it; create, start and stop stay QEMU-only.
+  VM_HOST="${VM_HOST:-127.0.0.1}"
   SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$DIR/known_hosts"
     -o ConnectTimeout=30 -o ServerAliveInterval=30 -o BatchMode=yes -o LogLevel=ERROR
     -i "$DIR/id_ed25519")
@@ -97,40 +104,60 @@ SEED
   echo "Created. Next: vm.sh start"
 }
 
+# boot_vm starts QEMU on the ports in $DIR/ports, with $accel and $cpu set.
+boot_vm() {
+  qemu-system-x86_64 -name sifruno-dev -machine q35 -accel "$accel" -cpu "$cpu" \
+    -smp "$CPUS" -m "$MEM_MB" -display none -monitor none -serial "file:$DIR/console.log" \
+    -drive "file=$DIR/root.qcow2,if=virtio,cache=unsafe" \
+    -drive "file=$DIR/home.qcow2,if=virtio,cache=unsafe" \
+    -drive "file=$DIR/seed.iso,if=virtio,format=raw,readonly=on" \
+    -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,hostfwd=tcp:127.0.0.1:${HTTP_PORT}-:80,hostfwd=tcp:127.0.0.1:${HTTPS_PORT}-:443" \
+    -device virtio-net-pci,netdev=n0 -device virtio-rng-pci \
+    -daemonize -pidfile "$DIR/qemu.pid"
+}
+
 cmd_start() {
   need qemu-system-x86_64 python3 ssh
   [ -f "$DIR/root.qcow2" ] || { echo "vm.sh: no VM in $DIR; run 'vm.sh create' first" >&2; exit 1; }
+  accel="tcg,thread=multi"
+  cpu="max"
+  if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+    accel="kvm"
+    cpu="host"
+  fi
   if running; then
     echo "Already running"
   else
     printf 'SSH_PORT=%s\nHTTP_PORT=%s\nHTTPS_PORT=%s\n' "$(free_port)" "$(free_port)" "$(free_port)" > "$DIR/ports"
     # shellcheck disable=SC1091
     . "$DIR/ports"
-    accel="tcg,thread=multi"
-    cpu="max"
-    if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-      accel="kvm"
-      cpu="host"
-    else
-      echo "No usable /dev/kvm: using software emulation. Expect the first boot to take a few minutes."
-    fi
-    qemu-system-x86_64 -name sifruno-dev -machine q35 -accel "$accel" -cpu "$cpu" \
-      -smp "$CPUS" -m "$MEM_MB" -display none -monitor none -serial "file:$DIR/console.log" \
-      -drive "file=$DIR/root.qcow2,if=virtio,cache=unsafe" \
-      -drive "file=$DIR/home.qcow2,if=virtio,cache=unsafe" \
-      -drive "file=$DIR/seed.iso,if=virtio,format=raw,readonly=on" \
-      -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22,hostfwd=tcp:127.0.0.1:${HTTP_PORT}-:80,hostfwd=tcp:127.0.0.1:${HTTPS_PORT}-:443" \
-      -device virtio-net-pci,netdev=n0 -device virtio-rng-pci \
-      -daemonize -pidfile "$DIR/qemu.pid"
+    [ "$accel" = kvm ] || echo "No usable /dev/kvm: using software emulation. Expect the first boot to take a few minutes."
+    boot_vm
   fi
   ssh_base
   echo "Waiting for SSH on 127.0.0.1:${SSH_PORT}"
+  local boots=1
   for _ in $(seq 1 90); do
     if ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" root@127.0.0.1 'cloud-init status --wait >/dev/null 2>&1; true' 2>/dev/null; then
       echo "Up: ssh ${SSH_PORT}, http ${HTTP_PORT}, https ${HTTPS_PORT}"
       return 0
     fi
     running || { echo "vm.sh: QEMU exited; see $DIR/console.log" >&2; exit 1; }
+    # Under software emulation on a busy host the guest's disks can appear
+    # after its initramfs stopped waiting for the root filesystem (90 s);
+    # the guest then sits in its emergency shell. Boot it again, a few times.
+    if grep -aq 'Entering emergency mode' "$DIR/console.log" 2>/dev/null; then
+      if [ "$boots" -ge 3 ]; then
+        echo "vm.sh: the guest stopped in its emergency shell on $boots boots; see $DIR/console.log" >&2
+        exit 1
+      fi
+      echo "The guest's initramfs gave up waiting for its disks (a slow boot under emulation); booting it again."
+      kill "$(cat "$DIR/qemu.pid")" 2>/dev/null || true
+      for _ in $(seq 1 15); do running || break; sleep 1; done
+      mv -f "$DIR/console.log" "$DIR/console.boot$boots.log"
+      boots=$((boots + 1))
+      boot_vm
+    fi
     sleep 10
   done
   echo "vm.sh: SSH did not answer in 15 minutes; see $DIR/console.log" >&2
@@ -139,19 +166,26 @@ cmd_start() {
 
 cmd_ssh() {
   ssh_base
-  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" root@127.0.0.1 "$@"
+  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" "root@$VM_HOST" "$@"
 }
 
 cmd_put() {
   [ $# -eq 2 ] || { usage >&2; exit 2; }
   ssh_base
-  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "$1" "root@127.0.0.1:$2"
+  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "$1" "root@$VM_HOST:$2"
 }
 
 cmd_get() {
   [ $# -eq 2 ] || { usage >&2; exit 2; }
   ssh_base
-  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "root@127.0.0.1:$1" "$2"
+  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "root@$VM_HOST:$1" "$2"
+}
+
+cmd_forward() {
+  [ $# -eq 1 ] || { usage >&2; exit 2; }
+  case "$1" in ''|*[!0-9]*) usage >&2; exit 2 ;; esac
+  ssh_base
+  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$1:127.0.0.1:$1" "root@$VM_HOST"
 }
 
 cmd_status() {
@@ -191,6 +225,7 @@ case "${1:-}" in
   ssh) shift; cmd_ssh "$@" ;;
   put) shift; cmd_put "$@" ;;
   get) shift; cmd_get "$@" ;;
+  forward) shift; cmd_forward "$@" ;;
   status) cmd_status ;;
   stop) cmd_stop ;;
   destroy) cmd_destroy ;;

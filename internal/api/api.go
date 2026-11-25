@@ -21,8 +21,10 @@ import (
 	"sifruno/internal/operator"
 	"sifruno/internal/platform"
 	"sifruno/internal/serverinfo"
+	"sifruno/internal/sitebackups"
 	"sifruno/internal/sites"
 	"sifruno/internal/trail"
+	"sifruno/internal/wizard"
 )
 
 type Options struct {
@@ -43,6 +45,28 @@ type Options struct {
 	// WHM, when non-nil, serves the WHM API 1 compatibility transport under
 	// /json-api/ (internal/whmapi). Nil keeps the fail-closed 501 placeholder.
 	WHM http.Handler
+	// Wizard runs the "create a WordPress site" jobs. Nil answers 503 on the
+	// /api/v1/websites routes.
+	Wizard *wizard.Runner
+	// Databases manages a site's databases and database users. Nil answers
+	// 503 on the /api/v1/websites/sites/{account_id}/databases routes.
+	Databases Databases
+	// Backups runs website backups through the broker. Nil answers 503 on
+	// the backup routes.
+	Backups *sitebackups.Manager
+	// Certificates brings a website's certificate up to date after its
+	// domains change; nil when website certificates are not set up.
+	Certificates SiteCertificates
+	// PanelHosts are the panel's own --panel-host names, which no website
+	// may take as a domain.
+	PanelHosts []string
+	// PhpMyAdmin opens phpMyAdmin for a website, on phpMyAdmin's own origin
+	// (internal/phpmyadmin): never this one. Nil answers 503 on the open
+	// route.
+	PhpMyAdmin PhpMyAdmin
+	// Migrations is the broker's migration surface for "Move a website
+	// here"; nil answers 503 on /api/v1/websites/migrations.
+	Migrations hostaccounts.MigrationService
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {
@@ -60,13 +84,28 @@ type serverOutput struct{ Body ServerReport }
 type servicesOutput struct{ Body serverinfo.Services }
 
 func New(o Options) http.Handler {
-	mux := http.NewServeMux()
+	h, _ := build(o)
+	return h
+}
+
+// build is New, and also returns the mux so tests can list every route.
+func build(o Options) (http.Handler, *routeMux) {
+	mux := newRouteMux()
 	cfg := huma.DefaultConfig("Sifruno feasibility workbench", "0.1.0")
 	cfg.DocsPath = ""
 	cfg.SchemasPath = "" // Local spec, no third-party documentation CDN.
 	api := humago.New(mux, cfg)
 	registerSites(api, o)
 	registerAccounts(api, o)
+	registerWizard(api, o)
+	registerMigrations(api, o)
+	registerWebsites(api, o)
+	registerWebsiteDomains(api, o)
+	registerSiteDatabases(api, o)
+	registerSiteDatabasePhpMyAdmin(api, o)
+	registerSiteBackups(api, o)
+	registerSiteTools(api, o)
+	registerWebsiteFiles(mux, api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)
@@ -74,6 +113,10 @@ func New(o Options) http.Handler {
 	registerRestorePreview(mux, api, o)
 	if o.Operator != nil {
 		o.Operator.Register(mux)
+		o.Operator.SetCustomerRoutes(customerAllowedRoutes())
+		if o.Accounts != nil {
+			o.Operator.CheckWebsitesWith(missingWebsites(o.Accounts))
+		}
 	}
 	collector := func() *serverinfo.Collector {
 		if o.Server != nil {
@@ -192,7 +235,22 @@ func New(o Options) http.Handler {
 	for _, origin := range o.AllowedOrigins {
 		origins[origin] = true
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// admit is Authorize for the site, account and wizard routes, with the
+	// customer table for a restricted session (customer_routes.go). It runs
+	// again after a body is read. The request it returns carries the actor
+	// and the principal.
+	admit := func(w http.ResponseWriter, r *http.Request, mutation bool) (*http.Request, bool) {
+		p, ok := o.Operator.AuthorizePrincipal(w, r, mutation)
+		if !ok {
+			return r, false
+		}
+		if p.Restricted() && !customerAdmitted(w, r, mux, p) {
+			return r, false
+		}
+		ctx := context.WithValue(r.Context(), actorKey{}, p.Actor)
+		return r.WithContext(context.WithValue(ctx, principalKey{}, p)), true
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
@@ -206,7 +264,7 @@ func New(o Options) http.Handler {
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !origins[origin] && !(remote && origin == "https://"+r.Host) {
-			if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isSessionPath(r.URL.Path) {
+			if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isWizardPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 				operator.WriteError(w, 403, "origin_not_allowed", "Origin not allowed")
 				return
 			}
@@ -221,7 +279,10 @@ func New(o Options) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
-		if remote && !remoteAdmitted(w, r, o.Operator) {
+		if !customerScope(w, r, mux, o.Operator) {
+			return
+		}
+		if remote && !remoteAdmitted(w, r, o.Operator, mux) {
 			return
 		}
 		for _, prefix := range []string{"/json-api", "/execute", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
@@ -235,21 +296,25 @@ func New(o Options) http.Handler {
 			}
 		}
 		mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedSessionMutation(r)
+		allowedMutation := allowedSiteMutation(r) || allowedAccountMutation(r) || allowedWizardMutation(r) || allowedDatabaseMutation(r) || allowedBackupMutation(r) || allowedCronMutation(r) || allowedFileMutation(r) || allowedSessionMutation(r)
 		if mutation && strings.HasPrefix(r.URL.Path, "/api/") && !allowedMutation {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isSessionPath(r.URL.Path) {
+		if len(r.Header.Values("Authorization")) > 0 && !tokenArea(r.URL.Path) {
+			operator.WriteError(w, 403, "token_not_allowed", "An API token cannot use this part of the panel API. Sign in to the panel in a browser to do this.")
+			return
+		}
+		if isSitePath(r.URL.Path) || isAccountPath(r.URL.Path) || isWizardPath(r.URL.Path) || isSessionPath(r.URL.Path) {
 			if o.Operator == nil {
 				operator.WriteError(w, 503, "operator_unavailable", "Operator authentication unavailable")
 				return
 			}
 		}
+		var ok bool
 		if isSitePath(r.URL.Path) {
-			actor, ok := o.Operator.Authorize(w, r, mutation)
-			if !ok {
+			if r, ok = admit(w, r, mutation); !ok {
 				return
 			}
 			if o.Sites == nil {
@@ -262,16 +327,13 @@ func New(o Options) http.Handler {
 				}
 				// Recheck sessions that may have expired or been revoked while
 				// reading the body. Admission does not cancel dispatched work.
-				actor, ok = o.Operator.Authorize(w, r, true)
-				if !ok {
+				if r, ok = admit(w, r, true); !ok {
 					return
 				}
 			}
-			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
 		}
 		if isAccountPath(r.URL.Path) {
-			actor, ok := o.Operator.Authorize(w, r, mutation)
-			if !ok {
+			if r, ok = admit(w, r, mutation); !ok {
 				return
 			}
 			if mutation {
@@ -281,24 +343,72 @@ func New(o Options) http.Handler {
 				// Body reads can outlive logout, revocation or session expiry.
 				// Recheck admission before dispatch; this does not cancel work
 				// already admitted to the account service.
-				actor, ok = o.Operator.Authorize(w, r, true)
-				if !ok {
+				if r, ok = admit(w, r, true); !ok {
 					return
 				}
 			}
-			r = r.WithContext(context.WithValue(r.Context(), actorKey{}, actor))
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
 		}
+		if isWizardPath(r.URL.Path) {
+			// The same admission as the account routes: session, and for the
+			// POST also Origin and CSRF, rechecked after the body is read.
+			if r, ok = admit(w, r, mutation); !ok {
+				return
+			}
+			if mutation {
+				// Each POST has its own keys: the wizard's, or a database route's.
+				prepare := prepareWizardJSON
+				if allowedDatabaseMutation(r) {
+					prepare = prepareDatabaseJSON
+				}
+				if allowedBackupMutation(r) {
+					prepare = prepareBackupJSON
+				}
+				if allowedCronMutation(r) {
+					prepare = prepareCronJSON
+				}
+				if allowedFileMutation(r) {
+					prepare = prepareFileJSON
+				}
+				if !prepare(w, r) {
+					return
+				}
+				if r, ok = admit(w, r, true); !ok {
+					return
+				}
+			}
+			// Starting a job lists accounts and probes the database first. A
+			// site action waits for the broker, whose web change takes minutes
+			// on a busy host.
+			wait := 60 * time.Second
+			if mutation && websiteAction(r.URL.Path) != "" {
+				wait = websiteActionWait
+			}
+			if mutation && allowedBackupMutation(r) {
+				wait = backupWait(r)
+			}
+			if files := fileRouteWait(r); files > 0 {
+				wait = files
+			}
+			if isMigrationSlow(r) {
+				wait = migrationWait
+			}
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait))
+		}
+		// The host name the request came to, already checked: a panel host
+		// name over HTTPS (operator.Remote), else loopback.
+		r = r.WithContext(context.WithValue(r.Context(), requestHostKey{}, requestHost{name: host, remote: remote}))
 		mux.ServeHTTP(w, r)
 	})
+	return handler, mux
 }
 
 // remoteAdmitted applies the network rules: the panel page and its assets
 // load for anyone (they hold no data), session routes check themselves, the
 // WHM transport has its own listener, and every other API or spec route needs
-// an admin session, including the monitoring readings that loopback serves
-// without one.
-func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager) bool {
+// a session, including the monitoring readings that loopback serves without
+// one: an admin's, or a customer's on the routes the customer table allows.
+func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager, mux *routeMux) bool {
 	path := r.URL.Path
 	for _, prefix := range []string{"/json-api", "/execute", "/cpsess", "/scripts/", "/usr/local/cpanel/"} {
 		if strings.HasPrefix(path, prefix) {
@@ -314,6 +424,9 @@ func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager
 		return false
 	}
 	mutation := r.Method != http.MethodGet && r.Method != http.MethodHead
-	_, ok := op.Authorize(w, r, mutation)
+	p, ok := op.AuthorizePrincipal(w, r, mutation)
+	if ok && p.Restricted() {
+		return customerAdmitted(w, r, mux, p)
+	}
 	return ok
 }

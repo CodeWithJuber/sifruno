@@ -83,7 +83,7 @@ function SignIn({ onSession }: { onSession: Props["onSession"] }) {
     <Button variant="link" className="mt-3 px-0" onClick={() => setUseKey(false)}>Back to username and password</Button>
   </section>;
   return <section className={panel} aria-labelledby="sign-in-title" data-testid="admin-sign-in">
-    <Heading id="sign-in-title" icon={<LogIn />} title="Sign in">Use your admin username, password and the 6-digit code from your authenticator app.</Heading>
+    <Heading id="sign-in-title" icon={<LogIn />} title="Sign in">Use your username, password and the 6-digit code from your authenticator app.</Heading>
     <form onSubmit={submit}>
       <FieldGroup>
         <Field><FieldLabel htmlFor="sign-in-username">Username</FieldLabel>

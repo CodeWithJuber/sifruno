@@ -64,6 +64,9 @@ func validWebState(w WebState) bool {
 // webDigest is the journal target for a web operation.
 func webDigest(w WebState) string { return fmt.Sprintf("php=%s;quota=%d", w.PHPVersion, w.QuotaMiB) }
 
+// sitePHPChildren is the LSAPI children of every site's lsphp app.
+const sitePHPChildren = 4
+
 // siteName is the vhost name: the account ID, which is unique and fits
 // OpenLiteSpeed's name rules (usernames may hold underscores; names may not).
 func siteName(id string) string { return "u" + id[:31] }
@@ -74,7 +77,10 @@ func softQuotaMiB(hard int) int { return hard - hard/10 }
 // webSites lists every live site as OpenLiteSpeed should serve it, sorted by
 // name, without the account named by except (used while removing a site).
 // Settings in flight are used for the account they belong to, so a recovery
-// renders the same config as the interrupted write.
+// renders the same config as the interrupted write. A site with a
+// certificate gets its files in olsweb.TLSRoot/<site name>/. A suspended
+// account's site stays in the list marked suspended, so OpenLiteSpeed
+// refuses every request for it; a state change in flight counts as done.
 func webSites(items []record, except string) []olsweb.Site {
 	sites := []olsweb.Site{}
 	for _, r := range items {
@@ -88,23 +94,71 @@ func webSites(items []record, except string) []olsweb.Site {
 		if !w.enabled() || (r.Pending != nil && r.Pending.Action == "delete") {
 			continue
 		}
-		sites = append(sites, olsweb.Site{
+		certificate := r.TLS
+		if r.Pending != nil && r.Pending.Action == "certificate" {
+			certificate = r.TLSNext
+		}
+		state := r.Account.State
+		if r.Pending != nil && r.Pending.Action == "state" {
+			state = r.Pending.Target
+		}
+		limits := recordLimits(r)
+		// The account's own domain first, then its aliases; a domains
+		// change in flight counts as done. olsweb renders the redirects for
+		// an active site only.
+		extra := recordSiteDomains(r)
+		site := olsweb.Site{
 			Name:       siteName(r.Account.ID),
 			Username:   r.Account.Username,
 			Group:      r.Account.Username,
-			Domains:    []string{r.Account.Domain},
+			Domains:    append([]string{r.Account.Domain}, extra.Aliases...),
+			Redirects:  olswebRedirects(extra.Redirects),
+			Folders:    recordFolders(r),
 			DocRoot:    r.Account.PublicHTML,
 			PHPVersion: w.PHPVersion,
-			Limits:     olsweb.Limits{PHPChildren: 4},
-			Isolation:  olsweb.Isolation{Namespace: true},
-		})
+			Suspended:  state == "suspended",
+			// The account's limits for its lsphp app: memory as each
+			// process's RLIMIT_AS, processes as RLIMIT_NPROC, raised to the
+			// floor OpenLiteSpeed keeps for these children (it would raise a
+			// lower number itself). OpenLiteSpeed 1.9.4 sets these rlimits on
+			// the path without its namespace container; in the container's
+			// path (ns.c) it sets none. The account-wide bound comes from
+			// cgroups: with them on, lscgid puts lsphp in
+			// user-<uid>.slice/litespeed-exec.scope (cgroup_v2 in lscgid.cpp),
+			// under the slice's TasksMax, MemoryMax and CPUQuota.
+			Limits:    olsweb.Limits{PHPChildren: sitePHPChildren, MemoryMiB: limits.MemoryMiB, Processes: max(limits.Processes, olsweb.ProcessFloor(sitePHPChildren, 0))},
+			Isolation: olsweb.Isolation{Namespace: true, CGroups: true},
+		}
+		if certificate.installed() {
+			// The HTTPS listener maps only the domains the certificate
+			// names, so an alias it does not cover (its DNS may not point
+			// here yet, or it was added since) is served over http only.
+			site.TLS = siteTLS(site.Name)
+			site.TLS.Domains = coveredDomains(certificate, site.Domains, r.Account.Domain)
+		}
+		sites = append(sites, site)
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].Name < sites[j].Name })
 	return sites
 }
 
 // webServer is the whole OpenLiteSpeed fragment the broker owns: plain HTTP
-// on port 80 for now; certificates are a later slice.
+// on port 80 for every site, and HTTPS on 443 for the sites with their own
+// certificate. olsweb leaves the HTTPS listener out while no site has one.
 func webServer(sites []olsweb.Site) olsweb.Server {
-	return olsweb.Server{Listeners: []olsweb.Listener{{Name: "http", Address: "*", Port: 80}}, Sites: sites}
+	return olsweb.Server{Listeners: []olsweb.Listener{
+		{Name: "http", Address: "*", Port: 80},
+		{Name: "https", Address: "*", Port: 443, Secure: true, CertFile: olsweb.TLSRoot + "/" + listenerCertFile, KeyFile: olsweb.TLSRoot + "/" + listenerKeyFile},
+	}, Sites: sites}
+}
+
+// anyCertificate reports whether a site list renders the HTTPS listener,
+// which needs the listener's own certificate on disk.
+func anyCertificate(sites []olsweb.Site) bool {
+	for _, s := range sites {
+		if s.TLS.CertFile != "" {
+			return true
+		}
+	}
+	return false
 }

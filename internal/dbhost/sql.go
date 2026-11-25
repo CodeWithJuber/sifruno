@@ -101,12 +101,31 @@ func sqlCreateDatabase(db string) string {
 	return fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", quoteIdent(db))
 }
 
+// sqlCreateDatabaseStrict fails with error 1007 if the database exists.
+func sqlCreateDatabaseStrict(db string) string {
+	return fmt.Sprintf("CREATE DATABASE %s CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", quoteIdent(db))
+}
+
 func sqlDropDatabase(db string) string {
 	return fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdent(db))
 }
 
 func sqlCreateUser(user, host, password string) string {
 	return fmt.Sprintf("CREATE USER IF NOT EXISTS %s@%s IDENTIFIED BY %s", quoteString(user), quoteString(host), quoteString(password))
+}
+
+// sqlCreateUserStrict fails with error 1396 if the user exists on that host.
+func sqlCreateUserStrict(user, host, password string) string {
+	return fmt.Sprintf("CREATE USER %s@%s IDENTIFIED BY %s", quoteString(user), quoteString(host), quoteString(password))
+}
+
+// sqlCreateUserWithHashStrict makes a user whose password is a
+// mysql_native_password hash copied from another server, so a site's
+// configuration keeps working without the password itself; it fails with
+// error 1396 if the user exists on that host. The caller checks the hash's
+// form (NativePasswordHash).
+func sqlCreateUserWithHashStrict(user, host, hash string) string {
+	return fmt.Sprintf("CREATE USER %s@%s IDENTIFIED VIA mysql_native_password USING %s", quoteString(user), quoteString(host), quoteString(hash))
 }
 
 func sqlDropUser(user, host string) string {
@@ -117,12 +136,48 @@ func sqlSetPassword(user, host, password string) string {
 	return fmt.Sprintf("ALTER USER %s@%s IDENTIFIED BY %s", quoteString(user), quoteString(host), quoteString(password))
 }
 
+// grantDB is a database name as a database-level GRANT or REVOKE must spell
+// it. There, and in the Db column of the grant tables, "_" and "%" are
+// wildcards: a grant on `acct_x_wp` would also cover another account's
+// `acctyx_wp`. Escaped, the grant names exactly one database.
+func grantDB(db string) string {
+	return strings.NewReplacer(`\`, `\\`, `_`, `\_`, `%`, `\%`).Replace(db)
+}
+
+// GrantDatabase is a validated database name as a database-level GRANT must
+// name it: escaped as grantDB does and backquoted, so the grant covers
+// exactly that one database. The broker's restore user is granted with it.
+func GrantDatabase(db string) string {
+	return quoteIdent(grantDB(db))
+}
+
 func sqlGrant(db, user, host string, privs []string) string {
-	return fmt.Sprintf("GRANT %s ON %s.* TO %s@%s", strings.Join(privs, ", "), quoteIdent(db), quoteString(user), quoteString(host))
+	return fmt.Sprintf("GRANT %s ON %s.* TO %s@%s", strings.Join(privs, ", "), quoteIdent(grantDB(db)), quoteString(user), quoteString(host))
 }
 
 func sqlRevokeAll(db, user, host string) string {
+	return fmt.Sprintf("REVOKE ALL PRIVILEGES ON %s.* FROM %s@%s", quoteIdent(grantDB(db)), quoteString(user), quoteString(host))
+}
+
+// sqlRevokeAllPlain revokes a grant written before grantDB, with the plain
+// name. A REVOKE matches the grant's spelling exactly, so the escaped form
+// never removes it.
+func sqlRevokeAllPlain(db, user, host string) string {
 	return fmt.Sprintf("REVOKE ALL PRIVILEGES ON %s.* FROM %s@%s", quoteIdent(db), quoteString(user), quoteString(host))
+}
+
+// sqlForgetGrants removes every grant on db, for any user, whether its Db
+// was written escaped or, before grantDB, as a plain name. MariaDB keeps
+// grants when a database is dropped, so without this a later database of
+// the same name would open to the old users.
+func sqlForgetGrants(db string) string {
+	names := quoteString(grantDB(db)) + ", " + quoteString(db)
+	var b strings.Builder
+	for _, table := range []string{"db", "tables_priv", "columns_priv", "procs_priv"} {
+		fmt.Fprintf(&b, "DELETE FROM mysql.%s WHERE Db IN (%s);\n", table, names)
+	}
+	b.WriteString("FLUSH PRIVILEGES")
+	return b.String()
 }
 
 func sqlRenameUser(user, host, newUser string) string {
@@ -134,6 +189,16 @@ const (
 	sqlListUsers     = "SELECT User, Host FROM mysql.user WHERE User NOT IN ('root','mysql','mariadb.sys','mysql.sys','mysql.session','mysql.infoschema','debian-sys-maint') ORDER BY User"
 	sqlVersion       = "SELECT VERSION()"
 )
+
+// sqlServerHasDatabase and sqlServerHasUser count what the server itself
+// holds, registered or not; a user counts on any host.
+func sqlServerHasDatabase(db string) string {
+	return fmt.Sprintf("SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=%s", quoteString(db))
+}
+
+func sqlServerHasUser(user string) string {
+	return fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User=%s", quoteString(user))
+}
 
 func sqlPrivileges(user string) string {
 	return fmt.Sprintf("SHOW GRANTS FOR %s@'localhost'", quoteString(user))

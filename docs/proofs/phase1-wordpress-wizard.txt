@@ -1,0 +1,60 @@
+# guest: AlmaLinux release 9.9 (Chartreuse Bobcat), kernel 5.14.0-741.22.1.el9_9.x86_64, SELinux Enforcing
+# openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+PASS  the broker runs with the web operation on
+PASS  Pebble serves its ACME directory at https://127.0.0.1:14000/dir
+PASS  Pebble's DNS answers 127.0.0.1 for any name
+PASS  the ACME challenge folder is sifpanel's, mode 0755
+  Pebble issues from: subject=CN=Pebble Root CA 6421a9
+PASS  Pebble's root CA for this run is saved in /var/lib/sifpanel/wizard-20261123T225922Z/pebble-root.pem
+PASS  the panel answers on 127.0.0.1:37749 as sifpanel
+## Browser: sign in and open the wizard
+PASS  the admin signs in to the panel
+PASS  Websites has a New website button that opens the wizard at /websites/new
+PASS  the website type is WordPress
+PASS  the admin password field asks for a new password
+PASS  the admin email and username fields autofill correctly
+PASS  no error while typing
+PASS  a bad domain is marked after leaving the field
+## Browser: create the site and follow the job
+PASS  Create starts a job and opens its page
+PASS  the form's password is not in the URL
+  the job ended succeeded after 287 s
+PASS  the job succeeds and the page shows the last screen
+PASS  the last screen names the domain
+  hosting account wiz75004, WordPress 7.1.5
+PASS  it shows the hosting account and the WordPress version
+  steps: account done, web done, ssl done, database done, wordpress done
+PASS  the steps include HTTPS, after the site goes live and before the database
+PASS  the HTTPS step is done, with a certificate from the test CA
+PASS  while the job ran, the step list showed the HTTPS step's state
+PASS  the last screen says the site uses https
+PASS  Open site points at the new site over https
+PASS  Open WordPress admin points at wp-admin over https
+PASS  Set up DNS explains the record to add
+PASS  the job page still shows the result after a reload
+PASS  the result fits a phone screen
+## Browser: the same domain again is refused
+  shown: The website was not created. wiz75004.proof.test already belongs to the hosting account wiz75004. Use another domain, or remove that account first. Next step: Do what the message above says, then try
+PASS  a second site for the same domain is refused with a reason
+## The password is held nowhere
+PASS  the jobs API never returns the WordPress admin password
+PASS  the browser's storage holds no password
+PASS  the job file on the server never holds the WordPress admin password
+PASS  no browser errors
+RESULT (browser): 26 passed, 0 failed
+  account made by the wizard: wiz75004
+PASS  the job file is the panel's and private (0600 in a 0700 folder)
+PASS  the account's Linux user exists
+PASS  WordPress is in its public_html, owned by it
+PASS  wp-config.php is mode 0600
+  over http: 200
+PASS  over http the site serves WordPress, or sends the visitor to its https address
+PASS  wp-admin redirects to the login page
+  its certificate folder: /etc/sifruno/tls/u2cf56ecd979e8531cb8b4d7651a357a
+PASS  the site serves WordPress over https with a certificate from Pebble's root
+  names in the served certificate: DNS:wiz75004.proof.test
+PASS  the served certificate names exactly the domain
+PASS  it is the certificate in /etc/sifruno/tls/u2cf56ecd979e8531cb8b4d7651a357a/cert.pem
+PASS  cert.pem and key.pem are root's, mode 0600
+  WordPress home and siteurl in wiz75004_wp: https://wiz75004.proof.test https://wiz75004.proof.test
+PASS  WordPress's home and siteurl are https

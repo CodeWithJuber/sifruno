@@ -17,9 +17,10 @@ jobs:
   source:
     name: Go, UI and fixture source checks
     # The owner's runner (github-runners kit). GitHub bills its hosted runners in a private
-    # repository, and the account's $0 budget stops them.
+    # repository, and the account's $0 budget stops them. The full Go suite takes longer on a
+    # shared runner, so the job gets 45 minutes.
     runs-on: [self-hosted, linux, x64, sifruno]
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly
@@ -44,8 +45,10 @@ jobs:
         run: |
           # The process test rebuilds with -trimpath under a short startup deadline.
           # Prime this runner's local compiler cache from a cold checkout.
+          # One hostaccounts fixture needs the default umask (AGENTS.md).
+          umask 022
           go build -mod=readonly -trimpath -o "$RUNNER_TEMP/sifruno-ci" ./cmd/sifruno
-          go test ./... -count=1
+          go test ./... -count=1 -timeout 30m
       - name: Go vet
         run: go vet ./...
       - name: Install pinned development dependencies
@@ -56,8 +59,8 @@ jobs:
         run: |
           npm run panel:typecheck
           npm run panel:build
-      - name: Private session, schedule and restore preview UI contract checks
-        run: node --test web/src/lib/sites-api.test.mjs web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs web/src/lib/restorePreview.test.mjs
+      - name: Private session, schedule, restore preview and website wizard UI contract checks
+        run: node --test web/src/lib/sites-api.test.mjs web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs web/src/lib/restorePreview.test.mjs web/src/lib/wordpress-api.test.mjs web/src/lib/websites-api.test.mjs web/src/lib/databases-api.test.mjs web/src/lib/site-backups-api.test.mjs web/src/lib/site-domains-api.test.mjs web/src/lib/files-api.test.mjs web/src/lib/customers-api.test.mjs web/src/lib/customer-routes.test.mjs
       - name: Runtime package policy and controller layout report checks
         run: node --test scripts/runtime-package.test.mjs lab/controller-layout-guest/report.test.mjs
       - name: Native preview tool identities and report checks

@@ -5,6 +5,7 @@ package hostaccounts
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -83,8 +84,13 @@ func (l admittedListener) Accept() (net.Conn, error) {
 		return conn, nil
 	}
 }
+
+// validBrokerPaths also keeps the controller out of the account range
+// (firstAccountID to lastAccountID): the broker never gives the controller's
+// UID to an account, and the installer's pam_limits line and each UID's
+// slice limits are meant for accounts only.
 func validBrokerPaths(opts BrokerOptions) bool {
-	if opts.ControllerUID == 0 || !validSocketName(opts.SocketPath) {
+	if opts.ControllerUID == 0 || (opts.ControllerUID >= firstAccountID && opts.ControllerUID <= lastAccountID) || !validSocketName(opts.SocketPath) {
 		return false
 	}
 	for _, p := range []string{opts.StateDir, opts.HomesDir, filepath.Dir(opts.SocketPath)} {
@@ -179,6 +185,37 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	}
 	defer s.close()
 	s.web = web
+	// Backups need no option: each operation checks restic's pin and its
+	// tools when it runs, and answers unavailable without them.
+	engine := newResticEngine(s.opts.StateDir)
+	s.backup = engine
+	// What an interrupted restore or drill left (its staging folder holds a
+	// temporary MariaDB password) goes before the socket accepts requests.
+	// A failure does not stop the broker: each backup operation tries again
+	// first.
+	cleaning, cancelCleaning := context.WithTimeout(ctx, 30*time.Second)
+	if s.cleanBackupLeftoversAtStart(cleaning) != nil {
+		fmt.Fprintln(os.Stderr, "sifruno broker: what an interrupted backup restore or drill left could not all be removed at start (MariaDB may not be running yet); the next backup operation tries again first")
+	}
+	cancelCleaning()
+	// Migrations share the backup engine's runner and staging. An expired
+	// migration's key, or a folder no record names, goes before the socket
+	// accepts requests; each migration operation sweeps again.
+	s.migrate = newMigrator(s.opts.StateDir, engine)
+	// Expired migrations are ended in the background, now and every 30
+	// minutes: removing a key line from an old server may wait on its SSH
+	// port, which must not hold up the socket.
+	go s.expireMigrations(ctx, 30*time.Minute)
+	// Every account's limits go to its slice drop-in before the socket
+	// accepts requests: accounts made before limits were recorded get the
+	// defaults, and a deleted account's leftover goes. A failure does not
+	// stop the broker or hold up any account: each plan change writes its
+	// account's drop-in again.
+	syncing, cancelSyncing := context.WithTimeout(ctx, 2*time.Minute)
+	if s.syncLimitsAtStart(syncing) != nil {
+		fmt.Fprintln(os.Stderr, "sifruno broker: the accounts' process, memory and CPU limits could not all be written to their systemd slices at start; a plan change of an account writes its limits again")
+	}
+	cancelSyncing()
 	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: opts.SocketPath, Net: "unix"})
 	if e != nil {
 		return ErrUnavailable

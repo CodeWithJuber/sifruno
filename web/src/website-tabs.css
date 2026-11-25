@@ -1,0 +1,64 @@
+/* A website's tab bar (WebsiteLayout). It stays one row and scrolls sideways
+   when the tabs do not fit, as on a phone in Advanced view. Where
+   scroll-driven animations work, the scrollbar is hidden and each edge fades
+   while more tabs are beyond it; elsewhere a thin scrollbar shows instead.
+   Tailwind cannot declare @property or @keyframes, so this lives here. */
+
+@property --site-tabs-fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --site-tabs-fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+.site-tabs {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+@supports (animation-timeline: scroll()) {
+  .site-tabs {
+    --fade-size: 2.5rem;
+    /* Gradient directions and mask positions are physical: flipped below for right-to-left. */
+    --fade-dir: right;
+    --fade-start-pos: 0;
+    --fade-end-pos: 100%;
+    scrollbar-width: none;
+    /* A focused or scrolled-to tab never stops inside a fade. */
+    scroll-padding-inline: var(--fade-size);
+    mask:
+      linear-gradient(black, black) no-clip subtract,
+      linear-gradient(to var(--fade-dir), black, transparent) var(--fade-start-pos) 0 / var(--site-tabs-fade-start) 100% no-repeat no-clip,
+      linear-gradient(to var(--fade-dir), transparent, black) var(--fade-end-pos) 0 / var(--site-tabs-fade-end) 100% no-repeat no-clip;
+    /* Longhands: the build expands the shorthand with a 0s duration, and a
+       scroll-driven animation's duration is auto. */
+    animation-name: site-tabs-reveal-start, site-tabs-hide-end;
+    animation-duration: auto;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(self inline);
+    animation-range: 0 var(--fade-size), calc(100% - var(--fade-size)) 100%;
+  }
+
+  /* The build turns :dir(rtl) into a list of right-to-left languages, so the
+     dir attribute is matched too, as Tailwind's rtl: variant does. */
+  .site-tabs:is(:dir(rtl), [dir="rtl"], [dir="rtl"] *) {
+    --fade-dir: left;
+    --fade-start-pos: 100%;
+    --fade-end-pos: 0;
+  }
+}
+
+@keyframes site-tabs-reveal-start {
+  to { --site-tabs-fade-start: var(--fade-size); }
+}
+
+@keyframes site-tabs-hide-end {
+  from { --site-tabs-fade-end: var(--fade-size); }
+}

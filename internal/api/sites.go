@@ -8,6 +8,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +21,23 @@ import (
 type actorKey struct{}
 
 func siteActor(ctx context.Context) string { actor, _ := ctx.Value(actorKey{}).(string); return actor }
+
+// principalKey carries who an admitted request acts for (operator.Principal).
+type principalKey struct{}
+
+// requestPrincipal is the admitted request's principal. ok is false when
+// none was admitted, which a handler must treat as a refusal.
+func requestPrincipal(ctx context.Context) (operator.Principal, bool) {
+	p, ok := ctx.Value(principalKey{}).(operator.Principal)
+	return p, ok
+}
+
+// mayNameOthers reports whether an answer may name another website: an
+// admin's may, a customer's must not.
+func mayNameOthers(ctx context.Context) bool {
+	p, ok := requestPrincipal(ctx)
+	return ok && !p.Restricted()
+}
 
 type siteIDInput struct {
 	ID string `path:"id"`
@@ -276,6 +295,75 @@ func isSitePath(path string) bool {
 }
 func isSessionPath(path string) bool {
 	return path == "/api/v1/session" || strings.HasPrefix(path, "/api/v1/session/")
+}
+
+// tokenAreas are the parts of the API an API token may use: the hosting work
+// a script such as the WHMCS module does, and the API description. It is an
+// allow list, so a route added later anywhere else, a credential route
+// included, refuses tokens until it is named here.
+var tokenAreas = []string{"/api/v1/accounts", "/api/v1/server", "/api/v1/services", "/api/v1/sites", "/api/v1/status", "/api/v1/websites"}
+
+// tokenRefused are routes inside those areas that set up credentials: backup
+// storage holds the storage server's details and shows the repository
+// password until it is saved, and a migration holds a key that signs in to
+// another server as root. They are for a signed-in admin only.
+var tokenRefused = []string{"/api/v1/websites/backup-storage", "/api/v1/websites/migrations"}
+
+// tokenRefusedSiteBackups are a website's backup routes a token may not
+// use: a restore overwrites the site's files and database, and a drill
+// stages a whole copy of the site. Backing up now and the backup list stay
+// open to tokens. The site's id sits in the middle of the path, so these
+// cannot be prefixes in tokenRefused.
+var tokenRefusedSiteBackups = []string{"restore", "drill"}
+
+func tokenRefusedSiteBackup(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/websites/sites/")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	return len(parts) >= 3 && parts[1] == "backups" && slices.Contains(tokenRefusedSiteBackups, parts[2])
+}
+
+// tokenRefusedOldSiteBackups are the older ZIP backup routes under
+// /api/v1/sites/{id} that overwrite a site, remove a backup or hand out its
+// contents. Taking a backup and listing them stay open to tokens.
+var tokenRefusedOldSiteBackups = []string{"restore", "restore-preview", "restore-file", "restore-file-preview", "archive-restore", "remove-backup"}
+
+func tokenRefusedOldSiteBackup(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/sites/")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) >= 2 && slices.Contains(tokenRefusedOldSiteBackups, parts[1]) {
+		return true
+	}
+	// /api/v1/sites/{id}/backups/{backupID}/download
+	return len(parts) >= 4 && parts[1] == "backups" && parts[3] == "download"
+}
+
+func tokenArea(p string) bool {
+	if path.Clean(p) != p {
+		return false
+	}
+	if p == "/openapi.json" {
+		return true
+	}
+	for _, refused := range tokenRefused {
+		if p == refused || strings.HasPrefix(p, refused+"/") {
+			return false
+		}
+	}
+	if tokenRefusedSiteBackup(p) || tokenRefusedOldSiteBackup(p) || tokenRefusedSiteFile(p) || tokenRefusedSiteDatabase(p) || isAbandonCreatePath(p) {
+		return false
+	}
+	for _, area := range tokenAreas {
+		if p == area || strings.HasPrefix(p, area+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func isSiteTransferMutation(r *http.Request) bool {

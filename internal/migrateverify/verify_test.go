@@ -549,6 +549,10 @@ func TestProbeClassification(t *testing.T) {
 		{ProbeAuth, resp(401, "basic"), resp(403, ""), CodeNewDiffers, false},
 		{ProbeAuth, resp(401, "basic"), resp(401, "digest"), CodeAuthSchemeDiffers, false},
 		{ProbeDeny, resp(403, ""), Response{Error: "connection refused"}, CodeRequestFailed, false},
+		{ProbeAllow, resp(200, ""), resp(200, ""), CodeOK, false},
+		{ProbeAllow, resp(200, ""), resp(403, ""), CodeNewDiffers, false},
+		{ProbeAllow, resp(403, ""), resp(403, ""), CodeOldUnexpectedStatus, false},
+		{ProbeAllow, resp(404, ""), resp(200, ""), CodeOldUnexpectedStatus, false},
 	}
 	for _, c := range cases {
 		got := judgeProbe(Probe{Path: "/x", Kind: c.kind}, c.old, c.new)

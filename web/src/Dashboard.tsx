@@ -97,7 +97,7 @@ type HostingTarget = "websites" | "accounts" | "backups" | "files" | "access";
 const hostingModules = [
   { id: "websites", label: "Websites", description: "Create and manage your websites.", detail: "WordPress sites", icon: Globe },
   { id: "accounts", label: "Customers", description: "Customer accounts and their home folders.", detail: "Linux broker required", icon: Users },
-  { id: "backups", label: "Backups", description: "Create, download and restore website backups.", detail: "Native ZIP snapshots", icon: Archive },
+  { id: "backups", label: "Static site backups (old)", description: "ZIP backups of the websites made with the old static-file model.", detail: "Native ZIP snapshots", icon: Archive },
   { id: "files", label: "Files", description: "View and edit your website's files.", detail: "Website files", icon: Folder },
   { id: "access", label: "Security", description: "Sessions signed in to this panel.", detail: "Operator sessions", icon: LockKeyhole },
 ] as const;

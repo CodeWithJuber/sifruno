@@ -159,7 +159,7 @@ try {
   check("Files in the menu opens the website picker, the one current menu link", path(page) === "/websites/files" && current === 1, `${path(page)}, ${current} current`);
 
   await page.goto(origin + "/websites/backups");
-  await page.getByRole("heading", { name: "Backups", level: 1 }).waitFor();
+  await page.getByRole("heading", { name: "Static site backups (old)", level: 1 }).waitFor();
   check("deep link /websites/backups loads after reload", path(page) === "/websites/backups");
   await page.getByRole("button", { name: "Sign out locally", exact: true }).waitFor({ timeout: 15000 }).then(() => check("session survives reload", true), () => check("session survives reload", false));
 

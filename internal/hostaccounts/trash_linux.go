@@ -170,14 +170,15 @@ type entryStat struct {
 	mode     uint16
 	dev, ino uint64
 	mnt      uint64
-	mntKnown bool
 }
 
 func (e entryStat) dir() bool { return e.mode&unix.S_IFMT == unix.S_IFDIR }
 
 // statEntry reads name in the folder fd holds (name "": that folder) with
-// statx, never following a link. The mount ID is known on Linux 5.8 and
-// later (AlmaLinux 9 runs 5.14); a mount of the same device shows only in it.
+// statx, never following a link. A mount of the same device (a bind
+// mount) shows only in the mount ID, which Linux 5.8 and later report
+// (AlmaLinux 9 runs 5.14). A kernel that does not report it is refused, so
+// the remover never enters a folder it cannot tell is on another mount.
 func statEntry(fd int, name string) (entryStat, error) {
 	flags := unix.AT_SYMLINK_NOFOLLOW | unix.AT_STATX_SYNC_AS_STAT
 	if name == "" {
@@ -187,10 +188,11 @@ func statEntry(fd int, name string) (entryStat, error) {
 	if e := unix.Statx(fd, name, flags, unix.STATX_TYPE|unix.STATX_INO|unix.STATX_MNT_ID, &x); e != nil {
 		return entryStat{}, e
 	}
-	if x.Mask&(unix.STATX_TYPE|unix.STATX_INO) != unix.STATX_TYPE|unix.STATX_INO {
+	const need = unix.STATX_TYPE | unix.STATX_INO | unix.STATX_MNT_ID
+	if x.Mask&need != need {
 		return entryStat{}, ErrUnavailable
 	}
-	return entryStat{mode: x.Mode, dev: unix.Mkdev(x.Dev_major, x.Dev_minor), ino: x.Ino, mnt: x.Mnt_id, mntKnown: x.Mask&unix.STATX_MNT_ID != 0}, nil
+	return entryStat{mode: x.Mode, dev: unix.Mkdev(x.Dev_major, x.Dev_minor), ino: x.Ino, mnt: x.Mnt_id}, nil
 }
 
 // trashRemover empties the trash in the background, outside the store
@@ -329,7 +331,7 @@ func (t *trashRemover) removeEntry(ctx context.Context, trash int, name string) 
 	if e != nil {
 		return ErrUnavailable
 	}
-	if top.dev != root.dev || top.mntKnown && root.mntKnown && top.mnt != root.mnt {
+	if top.dev != root.dev || top.mnt != root.mnt {
 		return errOtherDevice
 	}
 	// A folder a read missed an entry of (one added or listed while it was
@@ -408,7 +410,7 @@ func (t *trashRemover) removeTree(ctx context.Context, trash int, name string, t
 				if kept[[2]uint64{st.dev, st.ino}] {
 					continue
 				}
-				if st.dev != top.dev || st.mntKnown && top.mntKnown && st.mnt != top.mnt {
+				if st.dev != top.dev || st.mnt != top.mnt {
 					kept[[2]uint64{st.dev, st.ino}] = true
 					path[len(path)-1].kept = true
 					continue
@@ -467,7 +469,7 @@ func (t *trashRemover) enter(parent int, name string, st entryStat) (int, error)
 		return -1, ErrUnavailable
 	}
 	opened, e := statEntry(fd, "")
-	if e != nil || opened.dev != st.dev || opened.ino != st.ino || st.mntKnown && opened.mntKnown && opened.mnt != st.mnt {
+	if e != nil || opened.dev != st.dev || opened.ino != st.ino || opened.mnt != st.mnt {
 		unix.Close(fd)
 		return -1, errTrashChanged
 	}

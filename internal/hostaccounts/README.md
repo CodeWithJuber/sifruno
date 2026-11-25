@@ -165,8 +165,9 @@ tag, home and nologin shell; a group only when it is the account's private
 group alone, also one userdel left; the home only when it is the recorded
 directory; then the account's files, the marker last, and the slice
 drop-in. What is already gone counts as removed; anything else stays
-pending, its reason logged. A delete that stopped before userdel changed
-anything still ends rejected. The delete's last row (`succeeded`, or
+pending, its reason logged. A delete that stopped before it saved
+`user_removal` still ends rejected; one that saved it is finished at the
+start even if userdel had not run yet. The delete's last row (`succeeded`, or
 `reconciled` at a start) and the removal of the record are one bbolt
 transaction that reads the stored record again: a crash leaves the delete
 unfinished or ended, never one without the other. The account list refuses
@@ -181,8 +182,9 @@ that comes first. Then the native delete runs as at a start, without
 checking the account first, and checks everything before it removes
 anything: a refusal answers 409 `delete_refused` with its reason
 (`no_unfinished_delete`, `marker`, `user`, `group`, `home`, `trash`,
-`processes`), removes nothing and journals nothing, and the recovery log
-names it. Otherwise it removes as a delete does, the slice drop-in goes,
+`processes`), removes no user, group or file and journals nothing, and the
+recovery log names it; a site this run took out of the config stays out,
+since the delete is still the account's pending operation. Otherwise it removes as a delete does, the slice drop-in goes,
 and one bbolt transaction journals the delete's last row (status
 `finished`, with the operator's actor and reason) and removes the record,
 so every other account can change again. A run stopped half way leaves
@@ -422,7 +424,9 @@ other account waits for it (Jev, `detach_then_delete` 0.99; forge D-0001).
   never follows a link, checks its context before every entry, never
   enters a folder on another device or mount (that folder and those above
   it stay, the rest of the entry goes, and the entry is left and logged),
-  and logs by account ID only. A removal stopped half way is resumed by
+  and logs by account ID only. A bind mount of the same device shows only
+  in the statx mount ID, so a kernel that does not report it (before Linux
+  5.8) makes the remover refuse to run rather than guess. A removal stopped half way is resumed by
   the next run.
 - Plan, the only allocator of UIDs and GIDs, skips every UID and GID that
   owns a trash entry, so a deleted account's files never count against a

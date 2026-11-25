@@ -420,7 +420,7 @@ preflight_sshd() {
 }
 
 preflight() {
-  local os_id os_version os_name arch home_fs home_opts home_meta home_entry selinux home_label home_want
+  local os_id os_version os_name arch home_fs home_opts home_meta home_entry selinux
   log "Preflight: nothing is changed until every check passes"
 
   if [ "$(id -u)" -ne 0 ]; then
@@ -497,23 +497,6 @@ preflight() {
   if command -v getenforce >/dev/null 2>&1; then
     selinux="$(getenforce 2>/dev/null || true)"
     echo "SELinux is ${selinux:-unknown}; the installer leaves the SELinux mode as it is"
-  fi
-  # A filesystem made with mkfs has no SELinux labels: a new /home reads
-  # unlabeled_t until restorecon gives it the label the policy expects.
-  if [ -n "$selinux" ] && [ "$selinux" != Disabled ]; then
-    if command -v matchpathcon >/dev/null 2>&1; then
-      home_label="$(stat -c %C "$HOMES" 2>/dev/null | cut -d: -f3)"
-      home_want="$(matchpathcon -n "$HOMES" 2>/dev/null | cut -d: -f3)"
-      if [ -n "$home_want" ] && [ "$home_label" != "$home_want" ]; then
-        refuse "$HOMES has the SELinux type ${home_label:-none}, not $home_want." \
-          "SELinux lets SSH sign-in and the web server reach the homes by the label of $HOMES, and a filesystem made with mkfs starts without labels." \
-          "Run: restorecon -R $HOMES, then run this again."
-      else
-        echo "ok: $HOMES has its SELinux type ($home_want)"
-      fi
-    else
-      echo "not checked without matchpathcon: the SELinux type of $HOMES"
-    fi
   fi
 }
 

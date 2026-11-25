@@ -99,7 +99,7 @@ Run on 2026-11-24 with `scripts/devvm/fresh-install-test.sh --destroy-vm`, from 
 
 The test drives the VM over SSH as root with a key throughout. Every command after the sshd step reached the VM through a new key sign-in under the new policy, which is the "second sign-in" the installer asks the operator to check. The installer took 61 minutes under software emulation, mostly package installation.
 
-What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins) and the nightly schedule the plan asks for (not set up; it needs a runner the owner chooses). An upgrade is the next section.
+What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins) and the nightly schedule the plan asks for, which `.github/workflows/nightly-install.yml` now runs on a throwaway Linode once the owner adds its token. An upgrade is the next section.
 
 ## Phase 1: upgrading an installed server
 
@@ -185,7 +185,7 @@ What these runs do not show:
 - **A real cPanel server.** The migration moves sites from a Podman stand-in with stub `whmapi1` and `uapi` scripts, not from cPanel.
 - **Create and delete recovery.** Its run on this server is in its own section above.
 - **The other proofs.** broker-sftp, wordpress-ols, broker-web, migrate-verify, installer-sshd, panel-shell and the upgrade install were not run on this server.
-- **A server the test made.** The fresh-install test used a server made beforehand, named in the dev VM's ports file; making and deleting the server is QEMU-only.
+- **A server the test made.** The fresh-install test used a server made beforehand, named in the dev VM's ports file; `scripts/ci/nightly-fresh-install.sh` now also makes and deletes a Linode for it (one run passed 12/12).
 - **A public CA and real DNS.** Pebble stands in for Let's Encrypt in site-domains and wordpress-wizard, and its DNS answers this server for every name.
 - **WHMCS itself.** The module's functions ran from the PHP command line with the repo's stubs in place of WHMCS.
 - **A separate storage server.** For backups, an SFTP user on the same server stands in for one.

@@ -79,7 +79,8 @@ cmd_create() {
   # Root is the only login, so /home starts empty: the account broker needs a
   # homes directory that holds nothing but its own accounts. The second disk
   # becomes /home on XFS with user and group quota switched on at mount time,
-  # which is the only moment XFS lets quota be enabled.
+  # which is the only moment XFS lets quota be enabled, and restorecon gives
+  # the new filesystem its SELinux label, as docs/installation.md says.
   cat > "$DIR/user-data" <<SEED
 #cloud-config
 hostname: sifruno-dev
@@ -96,6 +97,8 @@ fs_setup:
     overwrite: false
 mounts:
   - [/dev/vdb, /home, xfs, "defaults,uquota,gquota", "0", "0"]
+runcmd:
+  - [restorecon, -R, /home]
 SEED
   printf 'instance-id: sifruno-dev-%s\nlocal-hostname: sifruno-dev\n' "$(date +%s)" > "$DIR/meta-data"
   cloud-localds "$DIR/seed.iso" "$DIR/user-data" "$DIR/meta-data"

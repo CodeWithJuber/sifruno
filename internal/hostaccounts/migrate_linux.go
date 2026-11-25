@@ -3,18 +3,22 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -35,12 +39,27 @@ type migrator struct {
 	// a test that is not root can run the engine on scratch folders.
 	prepareDir func() error
 	tools      func() error
+	// webUID is the web server's user (OpenLiteSpeed's), 0 while the web
+	// operation is off.
+	webUID int
+	// groupOf reads a staged entry's group; a field so a test that is not
+	// root can say which entries rsync gave which group.
+	groupOf func(path string, info fs.FileInfo) (uint32, bool)
 }
 
-func newMigrator(stateDir string, e *resticEngine) *migrator {
-	m := &migrator{e: e, dir: stateDir + "/migrate", tools: checkMigrateTools}
+func newMigrator(stateDir string, e *resticEngine, webUID int) *migrator {
+	m := &migrator{e: e, dir: stateDir + "/migrate", tools: checkMigrateTools, webUID: webUID, groupOf: stagedGroup}
 	m.prepareDir = func() error { return ensureOwnDir(filepath.Dir(m.dir), filepath.Base(m.dir), 0700) }
 	return m
+}
+
+// stagedGroup is the group lstat gives a staged entry.
+func stagedGroup(_ string, info fs.FileInfo) (uint32, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Gid, true
 }
 
 // checkMigrateTools accepts ssh, ssh-keyscan, rsync, cp and the MariaDB
@@ -311,7 +330,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 		}
 	}()
 	out, code, err := m.rsync(copying, rec, func(rsh string) ([]string, bool) {
-		return fetchArgs(rsh, rec.Host, home, stagePath+"/files")
+		return fetchArgs(rsh, rec.Host, home, stagePath+"/files", r.Account.GID)
 	}, backupTimeout)
 	stop()
 	if <-full {
@@ -338,6 +357,15 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if err != nil {
 		return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The old site's public_html is not a folder (it may be a link), so it cannot be copied over this site's public_html."}
 	}
+	// What the old server's web server read through its group alone is
+	// found while rsync's group marks are still there (D-0001).
+	var webRead []string
+	if m.webUID > 0 {
+		if webRead, err = m.webGroupEntries(stagePath+"/files", r.Account.GID); err != nil {
+			public.Close()
+			return MigrateFilesResult{}, ErrUnavailable
+		}
+	}
 	// Everything staged goes to root and the site's group, as a restore's
 	// does (groupStaged): nothing counts against the site's quota until its
 	// own copy. The copy gives the home and public_html the staged folders'
@@ -352,6 +380,12 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	public.Close()
 	if err != nil {
 		return MigrateFilesResult{}, ErrUnavailable
+	}
+	// This server's web server gets read on those entries through an ACL
+	// entry, set on the staged copy while the staging folder is root's
+	// alone; cp --preserve=mode carries it into the home with the mode.
+	if err = grantWebRead(files, webRead, m.webUID); err != nil {
+		return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "Some files the old server's web server read through their group could not be given the same read access for this server's web server, so the files were not put into the site."}
 	}
 	// The panel checked the tier from the source; the files as copied are
 	// checked and converted again before they reach the home, so a site
@@ -563,6 +597,131 @@ func subfolderProbes(public string, rules []htaccess.FolderRule) []MigrationProb
 		}
 	}
 	return out
+}
+
+// groupReadOnly reports an entry the web server could read only through
+// its group: a folder with group read and traverse, or a regular file with
+// group read, that others may not read.
+func groupReadOnly(mode uint32) bool {
+	switch mode & unix.S_IFMT {
+	case unix.S_IFDIR:
+		return mode&0050 == 0050 && mode&0004 == 0
+	case unix.S_IFREG:
+		return mode&0040 != 0 && mode&0004 == 0
+	}
+	return false
+}
+
+// webGroupEntries lists, by path relative to the staged home, each entry
+// the old server's web server read through its group alone: rsync marked
+// its group with mark (fetchArgs), and groupReadOnly holds. The staged home
+// and public_html are left out: GrantWebAccess sets their ACLs. It runs
+// before groupStaged gives every entry the site's group, while the staging
+// folder is root's alone, and follows no link: WalkDir reads entries with
+// lstat, and a link is neither a folder nor a regular file.
+func (m *migrator) webGroupEntries(dir string, mark int) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return ErrUnavailable
+		}
+		info, err := d.Info()
+		if err != nil {
+			return ErrUnavailable
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil || strings.ContainsRune(rel, 0) {
+			return ErrUnavailable
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || rel == "." || rel == "public_html" || !groupReadOnly(st.Mode) {
+			return nil
+		}
+		if group, ok := m.groupOf(p, info); ok && group == uint32(mark) {
+			out = append(out, rel)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// grantWebRead gives the web server user read on each listed staged entry,
+// and traverse on a folder, through one named entry in its access ACL, so
+// the site's own group does not cut it off from what the old server's web
+// server read (D-0001). Each entry is reached from the staged home's handle
+// one folder at a time without following a link, must still be a folder
+// or a regular file groupReadOnly holds for, and keeps its mode: the ACL's
+// mask is the group bits, which already hold the named entry's.
+func grantWebRead(files *os.File, rels []string, webUID int) error {
+	for _, rel := range rels {
+		if err := grantWebReadAt(files, rel, webUID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func grantWebReadAt(files *os.File, rel string, webUID int) error {
+	parts := strings.Split(rel, "/")
+	dir := files
+	for _, part := range parts[:len(parts)-1] {
+		next, err := openDirectoryAt(int(dir.Fd()), part)
+		if dir != files {
+			dir.Close()
+		}
+		if err != nil {
+			return ErrUnavailable
+		}
+		dir = next
+	}
+	if dir != files {
+		defer dir.Close()
+	}
+	fd, err := unix.Openat(int(dir.Fd()), parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer unix.Close(fd)
+	var before, after unix.Stat_t
+	if unix.Fstat(fd, &before) != nil || !groupReadOnly(before.Mode) {
+		return ErrUnavailable
+	}
+	want := webReadACL(before.Mode, webUID)
+	if unix.Fsetxattr(fd, aclXattr, want, 0) != nil {
+		return ErrUnavailable
+	}
+	got := make([]byte, 256)
+	size, err := unix.Fgetxattr(fd, aclXattr, got)
+	if err != nil || !bytes.Equal(got[:size], want) || unix.Fstat(fd, &after) != nil || after.Mode != before.Mode {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// webReadACL is the access ACL of an entry with this mode plus a named
+// entry for the web server: read on a file, read and traverse on a folder.
+// The owner, group and other entries are the mode's bits and the mask its
+// group bits, which hold the named entry's (groupReadOnly), so the mode
+// stays as it is (the encoding is webACL's).
+func webReadACL(mode uint32, webUID int) []byte {
+	named := uint16(4)
+	if mode&unix.S_IFMT == unix.S_IFDIR {
+		named = 5
+	}
+	var b bytes.Buffer
+	_ = binary.Write(&b, binary.LittleEndian, uint32(aclVersion))
+	entry := func(tag, p uint16, id uint32) {
+		_ = binary.Write(&b, binary.LittleEndian, tag)
+		_ = binary.Write(&b, binary.LittleEndian, p)
+		_ = binary.Write(&b, binary.LittleEndian, id)
+	}
+	group := uint16(mode>>3) & 7
+	entry(aclUserObj, uint16(mode>>6)&7, aclUndefined)
+	entry(aclUser, named, uint32(webUID))
+	entry(aclGroupObj, group, aclUndefined)
+	entry(aclMask, group, aclUndefined)
+	entry(aclOther, uint16(mode)&7, aclUndefined)
+	return b.Bytes()
 }
 
 // regularAt reports a regular file at a relative path, following no link.

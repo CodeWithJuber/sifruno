@@ -207,7 +207,7 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	// Migrations share the backup engine's runner and staging. An expired
 	// migration's key, or a folder no record names, goes before the socket
 	// accepts requests; each migration operation sweeps again.
-	s.migrate = newMigrator(s.opts.StateDir, engine)
+	s.migrate = newMigrator(s.opts.StateDir, engine, system.webUID)
 	// Expired migrations are ended in the background, now and every 30
 	// minutes: removing a key line from an old server may wait on its SSH
 	// port, which must not hold up the socket.

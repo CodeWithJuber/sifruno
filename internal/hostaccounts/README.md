@@ -1479,6 +1479,21 @@ root step. The design, with the owner's choices recorded from Jev on
   restore's copy does, so files keep the old server's modes, and the web
   server's access is granted again. Root writes nothing
   into a path the tenant controls, and the tenant never holds the key.
+- Group read (D-0001). The copy gives files the site's own group, so what
+  the old web server read through the group alone (a 0640 file, a 0750
+  folder, group `nobody` on cPanel or `apache` on a plain Apache) would
+  be closed to OpenLiteSpeed. rsync marks the groups (`-g
+  --groupmap=nobody:<site gid>,apache:<site gid>,*:0`, by the source's
+  group names); before `groupStaged` takes the marks away, each marked
+  folder with group read and traverse, or regular file with group read,
+  that others may not read is listed. On the staged copy, while the
+  staging folder is root's alone, each gets one named ACL entry for the
+  web server user (`r--`, `r-x` on a folder), reached from the staged
+  home's handle one folder at a time without following a link, with the
+  mask equal to the group bits so the mode stays; `cp --preserve=mode`
+  carries the ACL into the home. Nothing else changes: no mode, no group,
+  no other path. A folder the group may only traverse (0710) gets
+  nothing, so a file below it stays closed to the web server.
 - `POST /v1/accounts/{id}/migrate-database` (`migration`, `database`,
   `expected_revision`, `reason`): the database must exist here (the panel
   made it, with the same name, and the user with the same hash, so

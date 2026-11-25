@@ -399,13 +399,19 @@ func senderPath(home string) (string, bool) {
 // links, modes without setuid or setgid bits, times, devices and special
 // files left out, one filesystem, the excludes above. Owners are not
 // copied: the staged files are root's until groupStaged gives them the
-// site's group.
-func fetchArgs(rsh, host, home, dest string) ([]string, bool) {
+// site's group. Groups mark one thing only: an entry whose group on the
+// source is the old web server's (nobody on cPanel, apache on a plain
+// Apache) gets webMark, every other one group 0 (rsync's --groupmap
+// matches the source's group names, and "*" the rest, nameless ones
+// included), so webGroupEntries can find what that web server read
+// through the group (D-0001).
+func fetchArgs(rsh, host, home, dest string, webMark int) ([]string, bool) {
 	sender, ok := senderPath(home)
-	if !ok {
+	if !ok || webMark <= 0 {
 		return nil, false
 	}
-	args := []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlpt", "--sparse", "--chmod=ug-s", "--one-file-system", "--timeout=600"}
+	mark := strconv.Itoa(webMark)
+	args := []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlptg", "--groupmap=nobody:" + mark + ",apache:" + mark + ",*:0", "--sparse", "--chmod=ug-s", "--one-file-system", "--timeout=600"}
 	for _, x := range migrateExcludes {
 		args = append(args, "--exclude="+x)
 	}

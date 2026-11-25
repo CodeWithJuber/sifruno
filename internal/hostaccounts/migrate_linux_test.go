@@ -3,19 +3,24 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"sifruno/internal/cpsource"
 	"sifruno/internal/htaccess"
 	"sifruno/internal/olsweb"
@@ -38,6 +43,38 @@ type fakeSource struct {
 	realCopy bool
 	modes    map[string]os.FileMode
 	counts   string // the copy's row counts (rootSQL), when they differ
+	// groups names the group of entries on the source (default the
+	// account's own); staged is the group each staged entry got, by path,
+	// as the copy's --groupmap maps those names (no --groupmap: none).
+	groups map[string]string
+	staged map[string]uint32
+}
+
+// stagedGroup answers the migrator's groupOf from what the fake rsync
+// mapped.
+func (f *fakeSource) stagedGroup(p string, _ fs.FileInfo) (uint32, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.staged[p], true
+}
+
+// groupMap applies rsync's --groupmap to a source group name: the first
+// FROM that matches, a name or "*", gives the gid; no --groupmap leaves 0.
+func groupMap(args []string, name string) uint32 {
+	for _, a := range args {
+		spec, ok := strings.CutPrefix(a, "--groupmap=")
+		if !ok {
+			continue
+		}
+		for _, pair := range strings.Split(spec, ",") {
+			from, to, _ := strings.Cut(pair, ":")
+			if from == name || from == "*" {
+				gid, _ := strconv.Atoi(to)
+				return uint32(gid)
+			}
+		}
+	}
+	return 0
 }
 
 func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error) {
@@ -72,6 +109,20 @@ func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error
 			if !htaccessOnly {
 				os.Chmod(filepath.Join(dest, name), mode)
 			}
+		}
+		if !htaccessOnly {
+			f.mu.Lock()
+			f.staged = map[string]uint32{}
+			filepath.WalkDir(dest, func(p string, _ fs.DirEntry, err error) error {
+				rel, _ := filepath.Rel(dest, p)
+				group, ok := f.groups[rel]
+				if !ok {
+					group = "fixtureacct"
+				}
+				f.staged[p] = groupMap(c.args, group)
+				return err
+			})
+			f.mu.Unlock()
 		}
 		return nil, 0, nil
 	case cpPath:
@@ -150,7 +201,7 @@ func testMigrator(t *testing.T) (*migrator, *fakeSource, *[]chownCall) {
 	e, _, calls := testEngine(t)
 	f := &fakeSource{t: t, home: map[string]string{}, remote: map[string]string{}}
 	e.run = f.run
-	m := &migrator{e: e, dir: filepath.Dir(e.dir) + "/migrate", tools: func() error { return nil }}
+	m := &migrator{e: e, dir: filepath.Dir(e.dir) + "/migrate", tools: func() error { return nil }, groupOf: f.stagedGroup}
 	m.prepareDir = func() error { return os.MkdirAll(m.dir, 0700) }
 	return m, f, calls
 }
@@ -302,7 +353,7 @@ func TestRsyncSenderRunsAsTheAccount(t *testing.T) {
 	}
 	for name, args := range map[string]func() ([]string, bool){
 		"copy": func() ([]string, bool) {
-			return fetchArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/files")
+			return fetchArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/files", 20000)
 		},
 		"htaccess": func() ([]string, bool) {
 			return htaccessArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/htaccess")
@@ -313,8 +364,16 @@ func TestRsyncSenderRunsAsTheAccount(t *testing.T) {
 			t.Errorf("%s: %q", name, list)
 		}
 	}
-	if _, ok := fetchArgs("/usr/bin/ssh", "source.example.test", "/home/root", "/stage/files"); ok {
+	if _, ok := fetchArgs("/usr/bin/ssh", "source.example.test", "/home/root", "/stage/files", 20000); ok {
 		t.Error("a copy as root was built")
+	}
+	// Groups mark only what the old web server's group held, by name.
+	list, _ := fetchArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/files", 20000)
+	if !slices.Contains(list, "-rlptg") || !slices.Contains(list, "--groupmap=nobody:20000,apache:20000,*:0") {
+		t.Errorf("copy: %q", list)
+	}
+	if _, ok := fetchArgs("/usr/bin/ssh", "source.example.test", "/home/fixtureacct", "/stage/files", 0); ok {
+		t.Error("a copy without a group mark was built")
 	}
 }
 
@@ -387,6 +446,151 @@ func TestMigrateFilesKeepsTheOldServersModes(t *testing.T) {
 	want := []string{"g-r:bin/run.sh\x00public_html/private/notes.txt\x00public_html/wp-config.php\x00", "g-rx:public_html/private\x00"}
 	if !slices.Equal(fixes, want) {
 		t.Errorf("mode fixes %q, want %q", fixes, want)
+	}
+}
+
+// aclEntries reads a path's access ACL as "tag:id:perm" words (id -1 for
+// the entries without one), or nil when it has none.
+func aclEntries(t *testing.T, p string) []string {
+	t.Helper()
+	buf := make([]byte, 512)
+	size, err := unix.Lgetxattr(p, aclXattr, buf)
+	if errors.Is(err, unix.ENODATA) {
+		return nil
+	}
+	if err != nil || size < 4 || (size-4)%8 != 0 {
+		t.Fatalf("%s: ACL of %d bytes: %v", p, size, err)
+	}
+	var out []string
+	for b := buf[4:size]; len(b) > 0; b = b[8:] {
+		tag, perm, id := uint16(b[0])|uint16(b[1])<<8, uint16(b[2])|uint16(b[3])<<8, uint32(b[4])|uint32(b[5])<<8|uint32(b[6])<<16|uint32(b[7])<<24
+		if id == aclUndefined {
+			out = append(out, fmt.Sprintf("%d:-1:%d", tag, perm))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%d:%d:%d", tag, id, perm))
+	}
+	return out
+}
+
+// TestMigrateFilesKeepsTheWebServersGroupRead: on the old server the web
+// server read some files only through their group (nobody on cPanel,
+// apache on a plain Apache): 0640 files, 0750 folders. The copy keeps
+// their modes and gives them the site's own group, so without more the
+// web server (OpenLiteSpeed, as nobody) could not read them here. Each
+// such entry gets a read ACL entry for the web server user, traverse too
+// on a folder, and nothing else changes: not its mode, not another file.
+func TestMigrateFilesKeepsTheWebServersGroupRead(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	m.webUID = 65534
+	rec := openedRecord(t, m)
+	r := engineRecord(filepath.Dir(m.e.dir))
+	if err := os.MkdirAll(r.Account.Home, 0750); err != nil {
+		t.Fatal(err)
+	}
+	f.realCopy = true
+	f.home = map[string]string{
+		"public_html/index.html": "home", "public_html/css/site.css": "a{}", "public_html/css/print.css": "b{}",
+		"public_html/secret.txt": "s", "public_html/open.css": "o", "public_html/own.txt": "x", "public_html/link.css": "->css/site.css",
+		"public_html/listed/a.txt": "a", "data/report.txt": "r",
+	}
+	f.modes = map[string]os.FileMode{
+		"public_html": 0750, "public_html/index.html": 0640, "public_html/css": 0750, "public_html/css/site.css": 0640, "public_html/css/print.css": 0660,
+		"public_html/secret.txt": 0600, "public_html/open.css": 0644, "public_html/own.txt": 0640, "public_html/listed": 0710, "public_html/listed/a.txt": 0640,
+		"data": 0750, "data/report.txt": 0640,
+	}
+	f.groups = map[string]string{
+		"public_html": "nobody", "public_html/index.html": "apache", "public_html/css": "nobody", "public_html/css/site.css": "nobody", "public_html/css/print.css": "apache",
+		"public_html/secret.txt": "apache", "public_html/open.css": "apache", "public_html/link.css": "apache", "public_html/listed": "nobody", "public_html/listed/a.txt": "nobody",
+		"data": "nobody", "data/report.txt": "apache",
+	}
+	if _, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 1, backupLeftover{Op: strings.Repeat("f", 32)}, noProtection(t)); err != nil {
+		t.Fatal(err)
+	}
+	// tag 1 owner, 2 named user, 4 group, 16 mask, 32 other.
+	read := func(owner, group, other int, named int) []string {
+		return []string{fmt.Sprintf("1:-1:%d", owner), fmt.Sprintf("2:65534:%d", named), fmt.Sprintf("4:-1:%d", group), fmt.Sprintf("16:-1:%d", group), fmt.Sprintf("32:-1:%d", other)}
+	}
+	for name, want := range map[string]struct {
+		mode os.FileMode
+		acl  []string
+	}{
+		"public_html/index.html":    {0640, read(6, 4, 0, 4)},
+		"public_html/css":           {0750, read(7, 5, 0, 5)},
+		"public_html/css/site.css":  {0640, read(6, 4, 0, 4)},
+		"public_html/css/print.css": {0660, read(6, 6, 0, 4)},
+		"public_html/listed/a.txt":  {0640, read(6, 4, 0, 4)},
+		"data":                      {0750, read(7, 5, 0, 5)},
+		"data/report.txt":           {0640, read(6, 4, 0, 4)},
+		// Not the web server's group, readable by others anyway, not
+		// readable by the group, or a folder the group may only traverse.
+		"public_html/own.txt":    {0640, nil},
+		"public_html/open.css":   {0644, nil},
+		"public_html/secret.txt": {0600, nil},
+		"public_html/listed":     {0710, nil},
+	} {
+		p := filepath.Join(r.Account.Home, name)
+		info, err := os.Lstat(p)
+		if err != nil || info.Mode().Perm() != want.mode {
+			t.Errorf("%s: mode %v %v, want %o", name, info.Mode().Perm(), err, want.mode)
+		}
+		if got := aclEntries(t, p); !slices.Equal(got, want.acl) {
+			t.Errorf("%s: ACL %v, want %v", name, got, want.acl)
+		}
+	}
+	// The link stays a link; GrantWebAccess sets the home's and
+	// public_html's own ACLs.
+	if info, err := os.Lstat(filepath.Join(r.Account.Home, "public_html/link.css")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("link: %v %v", info, err)
+	}
+	for _, name := range []string{".", "public_html"} {
+		if got := aclEntries(t, filepath.Join(r.Account.Home, name)); got != nil {
+			t.Errorf("%s: ACL %v", name, got)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Account.Home, "public_html/css/site.css")); !bytes.Equal(b, []byte("a{}")) {
+		t.Errorf("content %q", b)
+	}
+}
+
+// TestWebReadFollowsNoLink: the read entry goes on the listed entry
+// itself, reached one folder at a time from the held staged home; a link
+// on the way or at the end, or an entry others may read by now, is
+// refused, and what a link points to is left as it was.
+func TestWebReadFollowsNoLink(t *testing.T) {
+	base := t.TempDir()
+	staged, target := filepath.Join(base, "files"), filepath.Join(base, "target")
+	for _, d := range []string{staged + "/real", target} {
+		if err := os.MkdirAll(d, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{staged + "/real/a.css", target + "/a.css", staged + "/open.css"} {
+		if err := os.WriteFile(p, []byte("x"), 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Chmod(staged+"/open.css", 0644)
+	os.Symlink(target, staged+"/folder")
+	os.Symlink(target+"/a.css", staged+"/file.css")
+	files, err := os.Open(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.Close()
+	for _, rel := range []string{"folder/a.css", "file.css", "open.css", "missing.css"} {
+		if err := grantWebRead(files, []string{rel}, 65534); err == nil {
+			t.Errorf("%s: granted", rel)
+		}
+	}
+	if got := aclEntries(t, target+"/a.css"); got != nil {
+		t.Fatalf("a link's target got an ACL: %v", got)
+	}
+	if err := grantWebRead(files, []string{"real", "real/a.css"}, 65534); err != nil {
+		t.Fatal(err)
+	}
+	if got := aclEntries(t, staged+"/real/a.css"); !slices.Contains(got, "2:65534:4") {
+		t.Fatalf("ACL %v", got)
 	}
 }
 

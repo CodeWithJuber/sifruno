@@ -277,6 +277,12 @@ func renderFolders(b *bytes.Buffer, v site) {
 	for i, f := range v.Folders {
 		b.WriteString("\ncontext exp:" + folderPattern(f) + " {\n")
 		if f.Hosts == HostsNone {
+			// A closed folder serves nothing, so its location is the empty
+			// root-owned SuspendedDocRoot: OpenLiteSpeed then looks for the
+			// context's .htaccess there, not at a name in the tenant's
+			// document root, which it would read as root when the config
+			// loads (HttpContext::config, configRewriteRule).
+			kv(b, "location", SuspendedDocRoot+"/")
 			kv(b, "allowBrowse", "0")
 		} else {
 			kv(b, "allowBrowse", "1")

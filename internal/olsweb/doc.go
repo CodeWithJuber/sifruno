@@ -250,7 +250,11 @@
 //     them. When the config loads, OpenLiteSpeed stats the regex context's
 //     location template, "$DOC_ROOT$0", as root: a tenant who makes a "$0"
 //     folder in its public_html can turn its own protected files into 404s,
-//     never open them.
+//     never open them. For a folder with a realm or an address list it also
+//     reads "$DOC_ROOT$0.htaccess" as root if the tenant made one, as it
+//     already reads public_html/.htaccess (HttpContext::config); the
+//     context's rewriting is off, so no rule from it runs. A closed
+//     folder's location is SuspendedDocRoot, so neither happens for it.
 //   - The exact bytes Render produces have not been loaded by OpenLiteSpeed
 //     from this package's tests; the tests check them against the grammar
 //     above, not against a server.

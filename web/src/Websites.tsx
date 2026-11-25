@@ -528,9 +528,10 @@ export default function Websites({ revision, active, onStatus, onOpenSiteTool, i
           <Button variant="ghost" size="sm" className={touch} disabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)}><RefreshCw aria-hidden="true" />Refresh websites</Button>
           <Button variant="outline" size="sm" className={touch} disabled={Boolean(busy) || sites.length >= 100} onClick={() => { rememberDialogTrigger(); setDiscardDraftForImport(false); setError(undefined); setImportOpen(true); }}><Upload aria-hidden="true" />Import native ZIP</Button>
           <Button variant="outline" size="sm" className={touch} disabled={Boolean(busy) || dirty || sites.length >= 100} onClick={() => { if (!requireClean()) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }}><Plus aria-hidden="true" />Create website</Button>
-          {/* Base link styles inherit colour, so the primary text colour is marked important;
-              text-sm font-normal match the buttons, whose font the base styles inherit. */}
-          <Link to="/websites/new" className={buttonVariants({ size: "sm", className: cn("text-sm font-normal text-primary-foreground!", touch) })} data-testid="new-website-link"><Plus aria-hidden="true" />New website</Link>
+          {/* Base link styles inherit colour and size sm sets 0.8rem, so the primary text colour
+              and text-sm are marked important; with min-h-7.5 and font-normal the link matches
+              the buttons, whose font and minimum height the base styles set. */}
+          <Link to="/websites/new" className={buttonVariants({ size: "sm", className: cn("min-h-7.5 text-sm! font-normal text-primary-foreground!", touch) })} data-testid="new-website-link"><Plus aria-hidden="true" />New website</Link>
         </div>
       </section>
       <div className="flex items-start gap-2 text-xs text-muted-foreground"><Info className="mt-px size-4 shrink-0" aria-hidden="true" /><span className="wrap-anywhere">Static websites and native site ZIPs · local HTTP preview. DNS, TLS, PHP, mail and databases are unavailable.</span></div>

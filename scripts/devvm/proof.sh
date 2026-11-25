@@ -163,7 +163,11 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 root:root mode-0 home) is finished when the broker starts
                 again; a create it cannot finish holds up every account until
                 the operator abandons it, which is refused for an active
-                account and for a home the create did not make; then the
+                account and for a home the create did not make. A delete
+                whose userdel waits on the same lock is finished by the next
+                start; one the broker cannot finish waits for the operator's
+                finish-delete; a 200,000-file home is deleted at once while
+                the trash drains and its UID is held back. Then the
                 root-only Go tests of the same code run.
 USAGE
 }

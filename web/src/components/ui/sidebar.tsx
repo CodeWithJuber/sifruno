@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/tooltip"
 import { PanelLeftIcon } from "lucide-react"
 
+// Sifruno: side is a physical edge; the shell passes "right" in a right-to-left
+// page, so the border between menu and content is drawn with physical classes.
 // Sifruno: the Ctrl+B shortcut and the sidebar_state cookie were removed.
 // The desktop shell has no control to reopen a hidden sidebar, the file
 // editor needs the key, and the cookie would ride along on every API call.
@@ -213,7 +215,7 @@ function Sidebar({
           // Adjust the padding for floating and inset variants.
           variant === "floating" || variant === "inset"
             ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
-            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-e group-data-[side=right]:border-s",
+            : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
           className
         )}
         {...props}

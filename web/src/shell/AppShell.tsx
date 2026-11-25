@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { ArrowLeft, Eye, Info, LogOut, Menu, Moon, RefreshCw, Search, ShieldAlert, Sun, UserRound } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -49,6 +49,16 @@ function pageForPath(pathname: string): Page | undefined {
   return pages.find((p) => p.path === path || p.pattern?.test(path));
 }
 
+// The reading direction of the page: a right-to-left language sets dir="rtl"
+// on <html>. shadcn's Sidebar places its fixed panel by a physical side, so the
+// shell follows the direction and puts the menu on its start side.
+function subscribeDirection(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["dir"] });
+  return () => observer.disconnect();
+}
+const documentDirection = (): "ltr" | "rtl" => document.documentElement.dir.toLowerCase() === "rtl" ? "rtl" : "ltr";
+
 function initialTheme(): "light" | "dark" {
   try {
     if (localStorage.getItem("sifruno-theme") === "dark") return "dark";
@@ -69,6 +79,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const page = pageForPath(pathname);
+  const direction = useSyncExternalStore(subscribeDirection, documentDirection);
   const [theme, setTheme] = useState(initialTheme);
   const [revision, setRevision] = useState(0);
   const [range, setRange] = useState("60");
@@ -225,7 +236,7 @@ export function AppShell() {
     <TooltipProvider>
       <SidebarProvider>
         <a href="#panel-main" className="skip-link">Skip to panel content</a>
-        <PanelSidebar page={page} publicPreview={publicPreview} role={menuRole} status={status} theme={theme} onToggleTheme={toggleTheme} session={signedIn ? auth.session : null} onSignOut={() => void endSession()} />
+        <PanelSidebar direction={direction} page={page} publicPreview={publicPreview} role={menuRole} status={status} theme={theme} onToggleTheme={toggleTheme} session={signedIn ? auth.session : null} onSignOut={() => void endSession()} />
         <div className="flex min-w-0 flex-1 flex-col bg-background">
           <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-card px-4 md:px-7">
             <MobileMenuButton />
@@ -313,7 +324,7 @@ function MobileMenuButton() {
   </Button>;
 }
 
-function PanelSidebar({ page, publicPreview, role, status, theme, onToggleTheme, session, onSignOut }: { page?: Page; publicPreview: boolean; role: MenuRole; status: ReturnType<typeof serverState>; theme: "light" | "dark"; onToggleTheme: () => void; session: AuthSession | null; onSignOut: () => void }) {
+function PanelSidebar({ direction, page, publicPreview, role, status, theme, onToggleTheme, session, onSignOut }: { direction: "ltr" | "rtl"; page?: Page; publicPreview: boolean; role: MenuRole; status: ReturnType<typeof serverState>; theme: "light" | "dark"; onToggleTheme: () => void; session: AuthSession | null; onSignOut: () => void }) {
   const { setOpenMobile } = useSidebar();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   useEffect(() => { setOpenMobile(false); }, [pathname, setOpenMobile]);
@@ -339,7 +350,7 @@ function PanelSidebar({ page, publicPreview, role, status, theme, onToggleTheme,
       </SidebarMenuSub>}
     </SidebarMenuItem>;
   };
-  return <Sidebar>
+  return <Sidebar side={direction === "rtl" ? "right" : "left"} dir={direction}>
     <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
       <Link to="/" activeOptions={{ exact: true }} aria-label="Sifruno home" className="w-fit"><img src="/brand/logos/sifruno-logo-on-dark.svg" alt="Sifruno" width="148" height="42" className="block h-auto w-[148px]" /></Link>
     </SidebarHeader>

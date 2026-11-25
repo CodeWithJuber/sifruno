@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -101,5 +102,35 @@ func TestWebsiteDomainCASNoOpAndActualRouting(t *testing.T) {
 		if w.Code != row.status || (row.status == 200 && w.Body.String() != file.Content) {
 			t.Fatal("actual domain routing", row.host, w.Code)
 		}
+	}
+}
+
+// A domain another website uses answers 409 with its own error code, so the
+// panel does not report it as a changed revision; a stale revision has none.
+func TestWebsiteDomainTakenHasItsOwnErrorCode(t *testing.T) {
+	f := websiteFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	code := func(w *httptest.ResponseRecorder) string {
+		t.Helper()
+		var problem struct {
+			Status int    `json:"status"`
+			Error  string `json:"error"`
+		}
+		if w.Code != 409 || json.Unmarshal(w.Body.Bytes(), &problem) != nil || problem.Status != 409 {
+			t.Fatalf("want a 409 problem, got %d: %s", w.Code, w.Body.String())
+		}
+		return problem.Error
+	}
+	first := siteResponse(t, websiteRequest(f.handler, "POST", "/api/v1/sites", sites.CreateInput{Name: "First", Domain: "taken.test"}, cookie, csrf))
+	if got := code(websiteRequest(f.handler, "POST", "/api/v1/sites", sites.CreateInput{Name: "Second", Domain: "TAKEN.test"}, cookie, csrf)); got != "domain_taken" {
+		t.Fatalf("duplicate create code %q", got)
+	}
+	second := siteResponse(t, websiteRequest(f.handler, "POST", "/api/v1/sites", sites.CreateInput{Name: "Second", Domain: "free.test"}, cookie, csrf))
+	path := "/api/v1/sites/" + second.ID + "/domain"
+	if got := code(websiteRequest(f.handler, "PUT", path, sites.DomainInput{Domain: first.Domain, ExpectedRevision: second.Revision}, cookie, csrf)); got != "domain_taken" {
+		t.Fatalf("duplicate domain change code %q", got)
+	}
+	if got := code(websiteRequest(f.handler, "PUT", path, sites.DomainInput{Domain: "other.test", ExpectedRevision: second.Revision + 1}, cookie, csrf)); got != "" {
+		t.Fatalf("stale revision carried code %q", got)
 	}
 }

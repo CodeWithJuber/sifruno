@@ -129,7 +129,7 @@ async function notices(destination, target) {
   }
   // Include licenses for actual UI imports and their runtime dependency closure.
   // shadcn CLI is a build tool; its MIT license is retained for generated source.
-  const queue = ['react', 'react-dom', '@astryxdesign/core', '@astryxdesign/theme-neutral', '@stylexjs/stylex', '@base-ui/react', '@tanstack/react-router', 'lucide-react', 'class-variance-authority', 'cn', 'tw-animate-css', 'tailwindcss'];
+  const queue = ['react', 'react-dom', '@stylexjs/stylex', '@base-ui/react', '@tanstack/react-router', 'lucide-react', 'class-variance-authority', 'cn', 'tw-animate-css', 'tailwindcss'];
   const seen = new Set();
   while (queue.length) {
     const name = queue.shift();
@@ -139,9 +139,9 @@ async function notices(destination, target) {
     const pkg = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'));
     const metadata = { name: pkg.name, version: pkg.version, declared_license: pkg.license };
     const hasNotice = (await readdir(directory)).some(file => /^(license|licence|copying|notice)(\.|$|-)/i.test(file));
-    const upstreamNotices = { '@astryxdesign/core': ['astryx', 'facebook/astryx'], '@astryxdesign/theme-neutral': ['astryx', 'facebook/astryx'], '@stylexjs/stylex': ['stylex', 'facebook/stylex'] };
+    const upstreamNotices = { '@stylexjs/stylex': ['stylex', 'facebook/stylex'] };
     if (!hasNotice && upstreamNotices[name]) {
-      // These exact npm distributions omit LICENSE. Preserve the official
+      // This exact npm distribution omits LICENSE. Preserve the official
       // commit-pinned upstream notice; unknown packages still fail closed.
       const [noticeFolder, repository] = upstreamNotices[name];
       const noticeDirectory = join(root, 'web/licenses', noticeFolder);

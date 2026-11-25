@@ -119,7 +119,10 @@ echo
 echo "## 2. The cPanel stand-in (Podman, not cPanel)"
 podman pull -q "$IMAGE" >/dev/null 2>&1
 check "the stand-in's base image is the pinned digest" test "$(podman image inspect -f '{{.Digest}}' "$IMAGE" 2>/dev/null)" = "${IMAGE#*@}"
-podman run -d --name "$CTR" --hostname cpanel-standin "$IMAGE" sleep infinity >/dev/null
+# AUDIT_WRITE: EL9's sshd fails a public-key sign-in when it cannot write
+# the audit record ("linux_audit_write_entry failed"), and Podman's default
+# capabilities leave it out, so without it every key is refused.
+podman run -d --name "$CTR" --cap-add AUDIT_WRITE --hostname cpanel-standin "$IMAGE" sleep infinity >/dev/null
 CIP="$(podman inspect -f '{{.NetworkSettings.IPAddress}}' "$CTR")"
 echo "  stand-in address: ${CIP:-none}"
 in_ctr "dnf -y -q module enable php:8.3 >/dev/null 2>&1 || dnf -y -q module enable php:8.2 >/dev/null 2>&1; \
@@ -144,6 +147,11 @@ SHOP_PW="$(secret)" STAFF_PW="$(secret)" TRIG_PW="$(secret)" HT_PW="$(secret)"
 printf '%s' "$SHOP_PW" > "$WORK/shop.pw"
 {
   echo "set -e"
+  # cPanel's layout: public_html is the user's with the web server's group
+  # (nobody there, apache here), 0750; inside it, folders are 0755 and files
+  # 0644, the user's own, so the web server reads them as anyone may. The
+  # shop site is the exception: a hardened site its web server reads through
+  # the group alone (D-0001, below).
   for u in "$SHOP" "$STAFF" "$TRIG" "$RACE" "$HARD" "$ODD"; do
     echo "useradd -m -d /home/$u $u; chmod 0711 /home/$u; install -d -o $u -g apache -m 0750 /home/$u/public_html"
   done
@@ -167,7 +175,9 @@ printf '%s' "$SHOP_PW" > "$WORK/shop.pw"
 podman cp "$WORK/standin-setup.sh" "$CTR:/root/standin-setup.sh"
 check "the stand-in's four accounts, sites and databases are made" in_ctr "bash /root/standin-setup.sh"
 in_ctr "rm -f /root/standin-setup.sh"
-wp() { in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- php /usr/local/bin/wp-cli.phar --no-color $*"; }
+# WP-CLI unpacks the WordPress archive in memory: PHP's default 128M runs out.
+WPRUN="php -d memory_limit=512M /usr/local/bin/wp-cli.phar --no-color"
+wp() { in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN $*"; }
 # WordPress 7.1.5, the current release on 2026-11-24, whose Akismet
 # .htaccess the converter's test pins.
 wp "core download --version=7.1.5 --quiet" >/dev/null 2>&1
@@ -178,10 +188,10 @@ AKISMET="/home/$SHOP/public_html/wp-content/plugins/akismet"
 check "the stand-in WordPress keeps the stock Akismet .htaccess (deny all, <FilesMatch>, both branches)" in_ctr "grep -q 'Require all denied' $AKISMET/.htaccess && grep -q 'Deny from all' $AKISMET/.htaccess && grep -q '<FilesMatch' $AKISMET/.htaccess"
 echo "  Akismet $(in_ctr "sed -n 's/^ \* Version: //p' $AKISMET/akismet.php" 2>/dev/null), .htaccess sha256 $(in_ctr "sha256sum $AKISMET/.htaccess" 2>/dev/null | cut -d' ' -f1) (the converter's test pins WordPress 7.1.5's: 63553e7f...)"
 podman cp "$WORK/shop.pw" "$CTR:/root/shop.pw"
-in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- php /usr/local/bin/wp-cli.phar --no-color config create --dbname=${SHOP}_wp --dbuser=${SHOP}_wpu --prompt=dbpass < /root/shop.pw && rm -f /root/shop.pw" >/dev/null 2>&1
+in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN config create --dbname=${SHOP}_wp --dbuser=${SHOP}_wpu --prompt=dbpass < /root/shop.pw && rm -f /root/shop.pw" >/dev/null 2>&1
 secret > "$WORK/admin.pw"
 podman cp "$WORK/admin.pw" "$CTR:/root/admin.pw"
-in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- php /usr/local/bin/wp-cli.phar --no-color core install --url=http://$SHOP_DOMAIN --title='$TITLE' --admin_user=standin --admin_email=standin@proof.test --skip-email --prompt=admin_password < /root/admin.pw && rm -f /root/admin.pw" >/dev/null 2>&1
+in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN core install --url=http://$SHOP_DOMAIN --title='$TITLE' --admin_user=standin --admin_email=standin@proof.test --skip-email --prompt=admin_password < /root/admin.pw && rm -f /root/admin.pw" >/dev/null 2>&1
 wp "post create --post_title='Moved with Sifruno' --post_status=publish" >/dev/null 2>&1
 # WordPress's own rewrite block, and a rewrite deny OpenLiteSpeed honours.
 in_ctr "cat > /home/$SHOP/public_html/.htaccess <<'HT'
@@ -196,7 +206,8 @@ RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress
 HT
-chown -R $SHOP:apache /home/$SHOP/public_html; find /home/$SHOP/public_html -type d -exec chmod 0750 {} +; find /home/$SHOP/public_html -type f -exec chmod 0640 {} +"
+chown -R $SHOP:apache /home/$SHOP/public_html
+find /home/$SHOP/public_html -type d -exec chmod 0750 {} +; find /home/$SHOP/public_html -type f -exec chmod 0640 {} +"
 in_ctr "echo '*/15 * * * * php /home/$SHOP/public_html/wp-cron.php >/dev/null 2>&1' | crontab -u $SHOP -"
 # staff: a password folder (the password file outside public_html, as
 # cPanel's Directory Privacy keeps it, with a subfolder and a PHP page in
@@ -204,7 +215,8 @@ in_ctr "echo '*/15 * * * * php /home/$SHOP/public_html/wp-cron.php >/dev/null 2>
 # 127.0.0.2 only and one closed to it only (this server's copy is asked
 # from 127.0.0.2 and 127.0.0.1; the old server sees neither), and root
 # rewrite rules into the closed folders, which must not open them.
-in_ctr "set -e; install -d -o $STAFF -g apache -m 0750 /home/$STAFF/public_html/private /home/$STAFF/public_html/private/sub /home/$STAFF/public_html/backups /home/$STAFF/public_html/office /home/$STAFF/public_html/lobby /home/$STAFF/.htpasswds/public_html/private
+in_ctr "set -e; install -d -o $STAFF -g $STAFF -m 0755 /home/$STAFF/public_html/private /home/$STAFF/public_html/private/sub /home/$STAFF/public_html/backups /home/$STAFF/public_html/office /home/$STAFF/public_html/lobby
+install -d -o $STAFF -g apache -m 0750 /home/$STAFF/.htpasswds /home/$STAFF/.htpasswds/public_html /home/$STAFF/.htpasswds/public_html/private
 echo '<?php echo \"Staff site\";' > /home/$STAFF/public_html/index.php
 echo 'Payroll' > /home/$STAFF/public_html/private/index.html
 echo 'Payroll archive' > /home/$STAFF/public_html/private/sub/index.html
@@ -218,7 +230,8 @@ echo 'Office' > /home/$STAFF/public_html/office/index.html
 printf 'Order Allow,Deny\nAllow from all\nDeny from 127.0.0.2\n' > /home/$STAFF/public_html/lobby/.htaccess
 echo 'Lobby' > /home/$STAFF/public_html/lobby/index.html
 printf 'RewriteEngine On\nRewriteRule ^pub/(.*)\$ /private/\$1 [L]\nRewriteRule ^old-backups/(.*)\$ /backups/\$1 [L]\n' > /home/$STAFF/public_html/.htaccess
-chown -R $STAFF:apache /home/$STAFF; chmod 0711 /home/$STAFF"
+chown -R $STAFF:$STAFF /home/$STAFF/public_html; chgrp apache /home/$STAFF/public_html
+chown $STAFF:apache /home/$STAFF/.htpasswds/public_html/private/passwd; chmod 0640 /home/$STAFF/.htpasswds/public_html/private/passwd"
 # odd: a directive the converter does not know.
 in_ctr "set -e; echo 'Odd site' > /home/$ODD/public_html/index.html; install -d -o $ODD -g apache -m 0750 /home/$ODD/public_html/tools
 printf 'Deny from all\nSifrunoProofUnknown On\n' > /home/$ODD/public_html/tools/.htaccess
@@ -374,7 +387,7 @@ m() { json "$WORK/job.json" "d['job']['migration']$1"; }
 check "the move succeeded" test "$state" = succeeded
 check "the tier is Native (rewrite rules, and Akismet's access rules converted)" test "$(m "['tier']")" = native
 echo "  converted: $(m "['converted']")"
-check "the job names Akismet's .htaccess as converted" test "$(m "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
+check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.json" "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
 check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
 src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
 dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"
@@ -400,6 +413,17 @@ for path in /wp-content/plugins/akismet/_inc/akismet.css /wp-content/plugins/aki
 done
 echo "  probes: $(m "['probes']")"
 check "verify checked Akismet's closed folder and its open files, all passing" test "$(m "['verify']['probes_fail']")" = 0 -a "$(m "['verify']['probes_pass']")" -ge 2
+# D-0001: the stand-in's Apache read this site through the group alone
+# (0640 files, 0750 folders, group apache). The copy keeps those modes with
+# the site's own group, and this server's web server reads them through one
+# ACL entry each; the home and public_html keep GrantWebAccess's own.
+css="/home/$SHOP/public_html/wp-content/plugins/akismet/_inc/akismet.css"
+check "a moved 0640 file of group apache keeps its mode, has the site's group, and ${ols_user:-nobody} reads it through its ACL" bash -c "[ \"\$(stat -c '%a %G' $css)\" = '640 $SHOP' ] && getfacl -p $css 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r--' && getfacl -p $css 2>/dev/null | grep -qx 'mask::r--'"
+check "a moved 0750 folder of group apache keeps its mode, and ${ols_user:-nobody} reads and enters it through its ACL" bash -c "[ \"\$(stat -c '%a' /home/$SHOP/public_html/wp-content)\" = 750 ] && getfacl -p /home/$SHOP/public_html/wp-content 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r-x'"
+check "the home and public_html keep the web server's own ACL entries (--x, r-x)" bash -c "getfacl -p /home/$SHOP 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:--x' && getfacl -p /home/$SHOP/public_html 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r-x'"
+# D-0002: below the closed Akismet folder verify also asks for its first
+# subfolder, expecting 403.
+check "verify probed Akismet's _inc/ subfolder as closed (403)" test "$(json "$WORK/job.json" "[p['kind'] for p in d['job']['migration']['probes'] if p['path'] == '/wp-content/plugins/akismet/_inc/']")" = "['deny']"
 check "the scheduled job arrived in the site user's crontab" grep -q "wp-cron.php" "/var/spool/cron/$SHOP"
 page="$(curl -s -H "Host: $SHOP_DOMAIN" http://127.0.0.1/)"
 check "the preview (this server, the site's Host header) serves the site's title" grep -q "$TITLE" <<<"$page"
@@ -441,7 +465,10 @@ check "the job names the four converted .htaccess files" test "$(json "$WORK/job
 staff_account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
 staff_site="u${staff_account:0:31}"
 staff_vhconf="$LSWS/conf/vhosts/sifruno-$staff_site/vhconf.conf"
-realm="/var/lib/sifruno-realms/$staff_site/realm1.htpasswd"
+# A realm's file is numbered by its folder's place among the site's
+# protected folders: /private/ is the fourth here.
+realm="$(sed -n "s|^ *location  *\(/var/lib/sifruno-realms/$staff_site/realm[0-9]*\.htpasswd\)\$|\1|p" "$staff_vhconf" 2>/dev/null | head -1)"
+realm="${realm:-/var/lib/sifruno-realms/$staff_site/none}"
 check "the vhost has a realm whose user file is outside the home" grep -q "location  *$realm\$" "$staff_vhconf"
 check "the realm file is root's, 0640, readable by the web server user ($ols_user) through its ACL" bash -c "[ \"\$(stat -c '%U:%G %a' $realm)\" = 'root:root 640' ] && getfacl -p $realm 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r--' && getfacl -p $realm 2>/dev/null | grep -qx 'group::---'"
 check "the realm file holds the old user and hash, comments left out" bash -c "[ \"\$(cut -d: -f1 $realm)\" = staff ] && grep -q '^staff:\\\$apr1\\\$' $realm && ! grep -q '#' $realm"
@@ -495,7 +522,22 @@ check "port 80 listens on IPv4 only (0.0.0.0:80, no [::]:80 or *:80)" bash -c "g
 check "a request over IPv6 to port 80 is not answered" bash -c "! curl -s -o /dev/null -g --max-time 5 -H 'Host: $STAFF_DOMAIN' 'http://[::1]/lobby/'"
 check "the site's own page is open (200)" test "$(new "$STAFF_DOMAIN" /)" = 200
 echo "  probes: $(m "['probes']"); verify: $(m "['verify']['verdict']")"
-check "verify checked /private/ (401) and /backups/ (403) on both sites, all passing" test "$(m "['verify']['probes_pass']")" = 2 -a "$(m "['verify']['probes_fail']")" = 0
+check "verify probed /private/ (401) and /backups/ (403)" test "$(json "$WORK/job.json" "sorted((p['path'], p['kind']) for p in d['job']['migration']['probes'] if p['path'] in ('/private/', '/backups/'))")" = "[('/backups/', 'deny'), ('/private/', 'auth')]"
+# D-0002: verify also asks for the password folder's first subfolder
+# (401), and checks each address-list folder against the status its rule
+# gives each side's client address: the stand-in's view of this server,
+# which its sshd reported to the plan, and the copy's 127.0.0.1.
+seen="$(m ".get('client_address')")"
+apache_saw="$(in_ctr "awk '/Sifruno-MigrationVerify/ {ip=\$1} END {print ip}' /var/log/httpd/access_log")"
+check "the job keeps the address the old server's sshd saw this server come from ($seen), the one its Apache saw verify come from ($apache_saw)" test -n "$seen" -a "$seen" = "$apache_saw"
+check "verify probed /private/sub/ (auth) and /lobby/ and /office/ by their address lists" test "$(json "$WORK/job.json" "sorted((p['path'], p['kind'], p.get('hosts')) for p in d['job']['migration']['probes'] if p['path'] in ('/private/sub/', '/lobby/', '/office/'))")" = "[('/lobby/', 'hosts', 'except'), ('/office/', 'hosts', 'only'), ('/private/sub/', 'auth', None)]"
+echo "  verify problems: $(m "['verify'].get('problems')")"
+sub_ok="$([ "$(new "$STAFF_DOMAIN" /private/sub/)" = 401 ] && echo yes || echo no)"
+lobby_ok="$([ "$(from 127.0.0.1 /lobby/)" = 200 ] && echo yes || echo no)"
+office_ok="$([ "$(from 127.0.0.1 /office/)" = 403 ] && echo yes || echo no)"
+check "verify allows cutover only if the copy answers /private/sub/ 401, /lobby/ 200 and /office/ 403 to 127.0.0.1 (copy: $sub_ok $lobby_ok $office_ok)" bash -c "[ '$sub_ok $lobby_ok $office_ok' = 'yes yes yes' ] || [ '$(m "['verify']['cutover_allowed']")' = False ]"
+check "a folder the copy answers against its address list is named in verify's plain problems" bash -c "[ '$lobby_ok' = yes ] || grep -qF '/lobby/' <<<\"\$1\"" _ "$(m "['verify'].get('problems')")"
+check "with the copy right, verify passes all five folder checks" bash -c "[ '$sub_ok $lobby_ok $office_ok' != 'yes yes yes' ] || [ '$(m "['verify']['probes_pass']") $(m "['verify']['probes_fail']")' = '5 0' ]"
 check "the key is removed after the move" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 
 echo
@@ -530,7 +572,10 @@ in_ctr "runuser -u $RACE -- bash -c 'cd /home/$RACE/public_html; while :; do mv 
 run_job "$RACE"
 in_ctr "pkill -u $RACE -f 'while :'" >/dev/null 2>&1
 echo "  ended $state; why: $(json "$WORK/job.json" "(d['job'].get('error') or {}).get('why', '')")"
-check "the move either finished or stopped on what the account may not read" bash -c "[ $state = succeeded ] || grep -q 'cannot be read by the account itself' $WORK/job.json"
+# Three safe ends, by when the swap lands: the real folder is copied; the
+# account cannot read /root through the link; or the link itself is copied
+# and the check of the copied files refuses a folder reached through it.
+check "the move finished, or stopped on what the account may not read or on the copied link" bash -c "[ $state = succeeded ] || grep -qe 'cannot be read by the account itself' -e 'a folder reached through a link, which the check does not follow' $WORK/job.json"
 check "nothing of /root reached this server (homes, staging)" bash -c "! grep -rqsF '$ROOT_MARK' /home /var/lib/sifruno-restore"
 check "the key is removed afterwards" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 

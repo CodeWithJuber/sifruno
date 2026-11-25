@@ -1,0 +1,69 @@
+# File manager at the broker: the helper as the site's user
+# 2026-11-25T03:36:31Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 systemd-252-67.el9_8.6.alma.1.x86_64  SELinux Enforcing
+# site user fil77791, domain fil77791.proof.test
+
+## 1. The helper is where the release installs it, and the broker runs with the web operation
+  root:root 755, 1 link(s) /usr/local/lib/sifruno/bin/sifruno-files, SELinux system_u:object_r:lib_t:s0
+PASS  the helper is root's, 0755, one link
+PASS  the helper refuses to run as root
+PASS  the broker started with --web-user nobody
+
+## 2. A live site with the smallest quota, 64 MiB
+PASS  the account is live with UID 20000
+
+## 3. The helper runs as the site's user, in its slice, with no new privileges
+  pid 181929: user fil77791, uid 20000, groups -
+  exe /usr/local/lib/sifruno/bin/sifruno-files, cwd /home/fil77791
+  cgroup /user.slice/user-20000.slice/sifruno-site-20000-4edeeaa799223d4a.scope
+  CapInh: 0000000000000000  CapPrm: 0000000000000000  CapEff: 0000000000000000  CapBnd: 0000000000000000  CapAmb: 0000000000000000  NoNewPrivs: 1  Seccomp: 0  
+  unit: RuntimeMaxUSec=15min Slice=user-20000.slice TasksMax=100 KillMode=control-group KillSignal=9 Description=sifruno site step
+PASS  it runs as fil77791
+PASS  it runs from the release path
+PASS  it starts in the home, /home/fil77791
+PASS  it is in user-20000.slice, in its own sifruno-site scope
+PASS  NoNewPrivs is set and it holds no capability, not even in its bounding set
+PASS  the paused upload finished
+PASS  no helper is left running
+
+## 4. An upload lands owned by the site's user and counts against its quota
+  fil77791:fil77791 644 20971520 bytes public_html/big.bin; quota use 1024 KiB -> 21504 KiB
+PASS  the file is the site user's, 0644
+PASS  the bytes arrived whole
+PASS  the account's quota use grew by at least 20 MiB
+PASS  50 MiB more is refused at the quota
+PASS  the refused upload left nothing behind
+  quota use after the refusal: 21504 KiB
+
+## 5. A link to /etc/shadow cannot be read through the file manager
+PASS  the links are listed as links
+PASS  reading the link is refused
+PASS  downloading the link is refused
+PASS  reading through a linked folder is refused
+PASS  writing through the link is refused
+PASS  a path out of the home is refused before it is sent
+PASS  nothing of /etc/shadow reached the proof
+PASS  the link is still a link to /etc/shadow
+
+## 6. An edit of index.php changes what the site serves
+PASS  the site serves the first text
+PASS  the site serves the edited text
+PASS  a save at the old version is refused as changed
+PASS  the site still serves the edited text
+  fil77791:fil77791 644 public_html/index.php
+
+## 7. Deleting a folder with links inside leaves the links' targets alone
+PASS  the folder is gone
+PASS  the linked folder and its file are untouched
+PASS  /etc is untouched
+
+## 8. A suspended site's files can be read, not changed
+PASS  the files list while suspended
+PASS  a new folder is refused while suspended
+PASS  a new folder is made once resumed
+PASS  the new folder is the site user's, 0755
+
+## 9. Nothing of this is in the account's journal, and the delete still works
+PASS  the account's revision moved only for the state changes
+PASS  the Linux user is gone
+
+RESULT: all checks passed

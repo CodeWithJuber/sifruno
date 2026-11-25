@@ -116,12 +116,25 @@ type sitesOutput struct{ Body sitesBody }
 type siteFilesOutput struct{ Body siteFilesBody }
 type siteBackupsOutput struct{ Body siteBackupsBody }
 
+// siteProblem is a problem answer with an error code, as the operator
+// session problems carry, so the panel can tell causes with one status apart.
+type siteProblem struct {
+	huma.ErrorModel
+	Code string `json:"error"`
+}
+
+// domainTaken is the code of a create, import or domain change refused
+// because another website already uses the domain.
+const domainTaken = "domain_taken"
+
 func websiteError(err error) error {
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, sites.ErrNotFound):
 		return huma.Error404NotFound("Website resource not found")
+	case errors.Is(err, sites.ErrDomainTaken):
+		return &siteProblem{ErrorModel: huma.ErrorModel{Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict, Detail: "Another website already uses this domain"}, Code: domainTaken}
 	case errors.Is(err, sites.ErrConflict):
 		return huma.Error409Conflict("Website revision or file content changed; refresh before retrying")
 	case errors.Is(err, sites.ErrInvalid):
@@ -355,7 +368,7 @@ func tokenArea(p string) bool {
 			return false
 		}
 	}
-	if tokenRefusedSiteBackup(p) || tokenRefusedOldSiteBackup(p) || tokenRefusedSiteFile(p) || tokenRefusedSiteDatabase(p) || isAbandonCreatePath(p) {
+	if tokenRefusedSiteBackup(p) || tokenRefusedOldSiteBackup(p) || tokenRefusedSiteFile(p) || tokenRefusedSiteDatabase(p) || isAbandonCreatePath(p) || isFinishDeletePath(p) {
 		return false
 	}
 	for _, area := range tokenAreas {

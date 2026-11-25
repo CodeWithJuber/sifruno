@@ -54,7 +54,7 @@ func (e *MigrationError) Error() string        { return "migration " + e.Step + 
 func (e *MigrationError) Is(target error) bool { return target == ErrMigrationFailed }
 
 // The steps a MigrationError can name. The panel explains each one.
-var migrationSteps = []string{"connect", "host_key", "source", "tier", "space", "fetch", "copy", "database", "dump", "import", "compare", "remove_key"}
+var migrationSteps = []string{"connect", "host_key", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
 
 func migrationFailed(step string, out []byte) error {
 	return &MigrationError{Step: step, Detail: installDetail(out)}
@@ -104,11 +104,17 @@ type MigrationPlanInput struct {
 }
 
 // MigrationProbe is a URL from the converted .htaccess rules that verify
-// checks on both sites: 401 (auth), 403 (deny), or 200 for a file a closed
-// folder leaves open to everyone (allow).
+// checks on both sites: 401 (auth), 403 (deny), 200 for a file a closed
+// folder leaves open to everyone (allow), or a folder open to some
+// addresses only (hosts), whose rule it carries: Hosts (only or except),
+// Networks and Realm. Verify works out from that rule what each site must
+// answer the address it sees verify come from.
 type MigrationProbe struct {
-	Path string `json:"path"`
-	Kind string `json:"kind"`
+	Path     string   `json:"path"`
+	Kind     string   `json:"kind"`
+	Hosts    string   `json:"hosts,omitempty"`
+	Networks []string `json:"networks,omitempty"`
+	Realm    bool     `json:"realm,omitempty"`
 }
 
 // MigrationPlan is what the source holds for one account. Users' hashes are
@@ -136,6 +142,10 @@ type MigrationPlan struct {
 	TierRefusals []string          `json:"tier_refusals"`
 	Probes       []MigrationProbe  `json:"probes"`
 	Htaccess     int               `json:"htaccess_files"`
+	// ClientAddress is the address the source sees this server's
+	// connections come from (its SSH_CONNECTION), or empty when it did not
+	// say: verify needs it for folders open to some addresses only.
+	ClientAddress string `json:"client_address"`
 }
 
 // MigrateFilesInput copies the source account of the same name into the
@@ -149,11 +159,14 @@ type MigrateFilesInput struct {
 // MigrateFilesResult says whether the copy holds a WordPress site
 // (wp-config.php in public_html or the home), which protected folders its
 // .htaccess files were converted to, now in the site's web server config,
-// and the URLs verify checks for them, open files among them.
+// and the URLs verify checks for them, open files among them. Revision is
+// the account's revision after the copy: protected folders going live
+// raise it, and the panel's next step for the account sends this one.
 type MigrateFilesResult struct {
 	WordPress bool              `json:"wordpress"`
 	Folders   []MigrationFolder `json:"folders"`
 	Probes    []MigrationProbe  `json:"probes"`
+	Revision  uint64            `json:"revision"`
 }
 
 // MigrateDatabaseInput copies one source database of the account into the
@@ -386,13 +399,19 @@ func senderPath(home string) (string, bool) {
 // links, modes without setuid or setgid bits, times, devices and special
 // files left out, one filesystem, the excludes above. Owners are not
 // copied: the staged files are root's until groupStaged gives them the
-// site's group.
-func fetchArgs(rsh, host, home, dest string) ([]string, bool) {
+// site's group. Groups mark one thing only: an entry whose group on the
+// source is the old web server's (nobody on cPanel, apache on a plain
+// Apache) gets webMark, every other one group 0 (rsync's --groupmap
+// matches the source's group names, and "*" the rest, nameless ones
+// included), so webGroupEntries can find what that web server read
+// through the group (D-0001).
+func fetchArgs(rsh, host, home, dest string, webMark int) ([]string, bool) {
 	sender, ok := senderPath(home)
-	if !ok {
+	if !ok || webMark <= 0 {
 		return nil, false
 	}
-	args := []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlpt", "--sparse", "--chmod=ug-s", "--one-file-system", "--timeout=600"}
+	mark := strconv.Itoa(webMark)
+	args := []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlptg", "--groupmap=nobody:" + mark + ",apache:" + mark + ",*:0", "--sparse", "--chmod=ug-s", "--one-file-system", "--timeout=600"}
 	for _, x := range migrateExcludes {
 		args = append(args, "--exclude="+x)
 	}

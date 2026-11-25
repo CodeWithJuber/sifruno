@@ -84,6 +84,16 @@ type record struct {
 	// changes and after its realm user files were written.
 	Folders     string `json:"folders,omitempty"`
 	FoldersNext string `json:"folders_next,omitempty"`
+	// UserRemoval marks a pending delete whose native removal has begun: it
+	// is durable before the account's user can go, so the next start
+	// finishes the delete from the journal without verifying the account
+	// first, which a user already gone would fail (finishDeleteAtStart).
+	// Only a pending delete carries it.
+	UserRemoval bool `json:"user_removal,omitempty"`
+	// HomeInTrash records that the delete moved the home into the trash
+	// (README, Delete), right after the move. A delete stopped between the
+	// two finds the home gone from the homes folder, which counts as moved.
+	HomeInTrash bool `json:"home_in_trash,omitempty"`
 }
 
 // maxRecordBytes bounds one stored record: the account, the SFTP keys, two
@@ -166,12 +176,14 @@ type nativeSystem interface {
 	// request, its answer goes to stdout. It returns nil only when the
 	// helper exited 0. Root opens nothing in the home.
 	RunFiles(ctx context.Context, r record, stdin io.Reader, stdout io.Writer) error
-	// Delete removes the managed system identity and owned home after
-	// ownership verification; it must be safe to retry after a crash. It
-	// ends the account's processes first. errAccountBusy: userdel still
-	// refused the user as busy, and nothing changed. errNothingRemoved: it
-	// stopped for another reason before userdel ran, and nothing changed.
-	Delete(context.Context, record) error
+	// Delete removes the managed system identity after ownership
+	// verification and moves its home into the trash, calling moved once
+	// the home is there; it must be safe to retry after a crash, and judges
+	// what is left by the journal alone. It ends the account's processes
+	// first. errAccountBusy: userdel still refused the user as busy, and
+	// nothing changed. errNothingRemoved: it stopped for another reason
+	// before userdel ran, and nothing changed.
+	Delete(ctx context.Context, r record, moved func() error) error
 	// EndProcesses ends every process that runs as the account's user, by
 	// signalling as that user, never as root. errAccountBusy: some were
 	// still running after its last pass. It changes no record.
@@ -242,6 +254,9 @@ type store struct {
 	// is compacted: historyCompactAt; 0 (tests only) turns compaction off
 	// to exercise the limits behind it.
 	compactAt uint64
+	// trashWake asks the trash remover to run (nil: none, as in tests);
+	// it never waits (wakeTrash).
+	trashWake func()
 }
 
 // auditBatch is how many accounts each refresh verifies in full (identity
@@ -434,6 +449,11 @@ func (s *store) records() ([]record, error) {
 				return ErrRecovery
 			}
 			if !validStoredFolders(r.Account.ID, r.Folders) || (r.FoldersNext != "" && (r.Pending == nil || r.Pending.Action != "folders")) {
+				return ErrRecovery
+			}
+			// A start finishes a flagged delete without verifying the account
+			// first; on any other record the flag would skip that check.
+			if r.UserRemoval && (r.Pending == nil || r.Pending.Action != "delete") || r.HomeInTrash && !r.UserRemoval {
 				return ErrRecovery
 			}
 			step = "journal history"
@@ -644,6 +664,11 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					return ErrRecovery
 				}
 				continue
+			} else if r.Pending.Action == "delete" {
+				if s.finishDeleteAtStart(ctx, items, i, r) != nil {
+					return ErrRecovery
+				}
+				continue
 			} else if e := s.native.VerifyAccount(ctx, targetRecord(r, r.Pending.Target)); e != nil {
 				// A state change whose account verifies in its old state
 				// changed nothing: the broker stopped before the account
@@ -662,64 +687,6 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					continue
 				}
 				logRecovery(r.Pending.Action, r, "finish at start", e)
-				continue
-			}
-			if r.Pending.Action == "delete" {
-				operation := *r.Pending
-				if r.Web.enabled() {
-					switch e := s.applySitesWithout(ctx, items, r.Account.ID); {
-					case errors.Is(e, ErrWebRejected):
-						r.Pending = nil
-						if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
-							return ErrRecovery
-						}
-						continue
-					case e != nil:
-						logRecovery(operation.Action, r, "finish at start: site list", e)
-						continue
-					}
-				}
-				// The removal runs on its own limit, as in delete: userdel
-				// killed by the start's shorter one would leave the user
-				// half removed.
-				removeCtx, cancel := webContext(ctx)
-				e := s.native.Delete(removeCtx, r)
-				cancel()
-				if e != nil {
-					// A delete that stopped before userdel changed anything (a
-					// busy user, a failed /proc read, time run out) ends
-					// rejected, as in delete: the site goes back and nothing
-					// else changed. Any other failure keeps the record and
-					// retries on the next refresh; an uncertain destructive
-					// effect is never force-closed.
-					if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
-						live := append([]record(nil), items...)
-						live[i].Pending = nil
-						if r.Web.enabled() {
-							if back := s.applySites(ctx, live, ""); back != nil {
-								logRecovery(operation.Action, r, "finish at start: site list back", back)
-								continue
-							}
-						}
-						r.Pending = nil
-						if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
-							return ErrRecovery
-						}
-						continue
-					}
-					logRecovery(operation.Action, r, "finish at start", e)
-					continue
-				}
-				s.removeLimits(ctx, r.Account.UID)
-				s.removeSiteCache(ctx, r.Account.ID)
-				s.removeSiteRealms(ctx, r.Account.ID)
-				if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
-					return ErrRecovery
-				}
-				if e := s.purge(r.Account.ID); e != nil {
-					return ErrRecovery
-				}
-				s.removeUsageState(r.Account.ID)
 				continue
 			}
 			if r.Pending.Action == "state" && r.Web.enabled() {
@@ -948,31 +915,6 @@ func (s *store) setSSHKeys(ctx context.Context, id string, in SSHKeysInput, acto
 	return SSHKeysResult{Account: r.Account, Keys: keys}, nil
 }
 
-// purge removes the account record key after a completed delete. Operation
-// history rows are retained under the history bucket for audit; the account
-// inventory no longer lists the identity.
-func (s *store) purge(id string) error {
-	gone := record{Account: Account{ID: id}}
-	if !idPattern.MatchString(id) {
-		return recovery("delete", record{}, "remove the record", ErrInvalid)
-	}
-	if err := s.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(accountBucket)
-		if b == nil {
-			return ErrRecovery
-		}
-		if c := tx.Bucket(cronBucket); c != nil {
-			if e := c.Delete([]byte(id)); e != nil {
-				return e
-			}
-		}
-		return b.Delete([]byte(id))
-	}); err != nil {
-		return recovery("delete", gone, "remove the record", err)
-	}
-	return nil
-}
-
 func (s *store) setPlan(ctx context.Context, id string, in PlanInput, actor string) (Account, error) {
 	if snapshotReentry(ctx, s) {
 		return Account{}, ErrConflict
@@ -1144,11 +1086,19 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 			return Account{}, ErrRecovery
 		}
 	}
+	// From here the user may go. The flag is durable first, so a start that
+	// finds this delete unfinished finishes it from the journal instead of
+	// verifying an account whose user may already be gone.
+	r.UserRemoval = true
+	if e := s.save(r); e != nil {
+		s.recoveryRequired(r, *r.Pending, "record that the user's removal began", e)
+		return Account{}, ErrRecovery
+	}
 	// After the intent is journaled the removal runs on its own limit, so a
 	// caller that gives up (or a slow site rewrite before it) does not leave
 	// a half-removed user for recovery.
 	removeCtx, cancel := webContext(ctx)
-	e = s.native.Delete(removeCtx, r)
+	e = s.native.Delete(removeCtx, r, s.homeMoved(&r))
 	cancel()
 	if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
 		// The native delete stopped before userdel changed anything and put
@@ -1166,7 +1116,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 			}
 		}
 		operation := *r.Pending
-		r.Pending = nil
+		r.Pending, r.UserRemoval = nil, false
 		if _, err := s.resultEvent(r, operation, "rejected"); err != nil {
 			return Account{}, ErrRecovery
 		}
@@ -1183,15 +1133,103 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	s.removeSiteCache(ctx, r.Account.ID)
 	s.removeSiteRealms(ctx, r.Account.ID)
 	operation := *r.Pending
-	r.Pending = nil
-	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {
-		return Account{}, ErrRecovery
-	}
-	if e := s.purge(r.Account.ID); e != nil {
+	if e := s.endDelete(r, operation, "succeeded", operation.Actor, operation.Reason); e != nil {
 		return Account{}, ErrRecovery
 	}
 	s.removeUsageState(r.Account.ID)
+	s.wakeTrash()
 	return before, nil
+}
+
+// homeMoved is the delete's callback once the native delete moved the home
+// into the trash: it records that on r, durably.
+func (s *store) homeMoved(r *record) func() error {
+	return func() error {
+		r.HomeInTrash = true
+		return s.save(*r)
+	}
+}
+
+// wakeTrash asks the trash remover, which runs outside the lock, to empty
+// the trash now; it never waits for it.
+func (s *store) wakeTrash() {
+	if s.trashWake != nil {
+		s.trashWake()
+	}
+}
+
+// finishDeleteAtStart finishes the interrupted delete r, items[i], when the
+// broker starts. Before the user's removal began (no UserRemoval) the
+// account must still verify as it was and its site leaves the config, as
+// in delete; the flag is then made durable. Once the removal has begun the
+// user may be gone, so nothing is verified first: the native delete removes
+// only what the journal proves is the account's (a user and private group
+// with its name, IDs and tag, its recorded home, its files and marker) and
+// counts what is gone as removed; the slice drop-in follows. A delete that
+// stopped before userdel changed anything ends rejected, the site back, as
+// in delete. One that cannot be finished stays pending, its reason logged.
+// The error is only for a journal that cannot be written.
+func (s *store) finishDeleteAtStart(ctx context.Context, items []record, i int, r record) error {
+	operation := *r.Pending
+	if !r.UserRemoval {
+		if e := s.native.VerifyAccount(ctx, targetRecord(r, operation.Target)); e != nil {
+			logRecovery(operation.Action, r, "finish at start", e)
+			return nil
+		}
+		if r.Web.enabled() {
+			switch e := s.applySitesWithout(ctx, items, r.Account.ID); {
+			case errors.Is(e, ErrWebRejected):
+				r.Pending = nil
+				if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+					return ErrRecovery
+				}
+				return nil
+			case e != nil:
+				logRecovery(operation.Action, r, "finish at start: site list", e)
+				return nil
+			}
+		}
+		r.UserRemoval = true
+		if s.save(r) != nil {
+			return ErrRecovery
+		}
+	}
+	// The removal runs on its own limit, as in delete: userdel killed by
+	// the start's shorter one would leave the user half removed.
+	removeCtx, cancel := webContext(ctx)
+	e := s.native.Delete(removeCtx, r, s.homeMoved(&r))
+	cancel()
+	if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
+		// The user was still there and is as it was: the site goes back and
+		// the delete ends rejected, the account unchanged.
+		live := append([]record(nil), items...)
+		live[i].Pending = nil
+		if r.Web.enabled() {
+			if back := s.applySites(ctx, live, ""); back != nil {
+				logRecovery(operation.Action, r, "finish at start: site list back", back)
+				return nil
+			}
+		}
+		r.Pending, r.UserRemoval = nil, false
+		if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+			return ErrRecovery
+		}
+		return nil
+	}
+	if e != nil {
+		// An uncertain destructive effect is never force-closed: the
+		// record stays and the next start tries again.
+		logRecovery(operation.Action, r, "finish at start", e)
+		return nil
+	}
+	s.removeLimits(ctx, r.Account.UID)
+	s.removeSiteCache(ctx, r.Account.ID)
+	s.removeSiteRealms(ctx, r.Account.ID)
+	if s.endDelete(r, operation, "reconciled", operation.Actor, operation.Reason) != nil {
+		return ErrRecovery
+	}
+	s.removeUsageState(r.Account.ID)
+	return nil
 }
 
 // removeLimits takes a deleted account's slice drop-in away once its user
@@ -1386,7 +1424,10 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	// The account's limits are in place before its user exists, so nothing
 	// it runs ever starts without them. A failure refuses the create before
 	// anything is journaled: the drop-in names only this unused UID, and the
-	// next create of it, or the broker's next start, rewrites it.
+	// next create of it, or the broker's next start, rewrites it. The same
+	// write replaces a drop-in a deleted account left for this UID (its
+	// removal failed), so the new account never runs under the old one's
+	// limits (TestLeftoverDropInNeverReachesTheNextAccount).
 	if s.native.ApplyLimits(rootCtx, uid, DefaultLimits) != nil {
 		return Account{}, ErrUnavailable
 	}

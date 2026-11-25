@@ -4,6 +4,7 @@ package sites
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -13,6 +14,10 @@ var (
 	ErrInvalid     = errors.New("invalid website input")
 	ErrUnavailable = errors.New("website storage or recovery unavailable")
 )
+
+// ErrDomainTaken is the conflict of a domain another website already uses.
+// It matches ErrConflict too, so every caller still answers 409.
+var ErrDomainTaken = fmt.Errorf("%w: domain used by another website", ErrConflict)
 
 const (
 	MaxSites         = 100

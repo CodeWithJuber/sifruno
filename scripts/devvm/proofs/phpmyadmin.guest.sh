@@ -36,7 +36,13 @@ check() {
   shift
   if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi
 }
-sql() { mysql --protocol=socket -uroot -N -B -e "$1" 2>&1; }
+# --raw, as the panel's own client: batch mode would print SHOW GRANTS's
+# escaped "_" as "\\_".
+sql() { mysql --protocol=socket -uroot -N -B -r -e "$1" 2>&1; }
+# Every program started while phpMyAdmin opens, with its arguments, from
+# the kernel's audit log: the panel's mysql client lives a few milliseconds,
+# too short for the process sampler to see on a fast server.
+AUDIT_RULE=("always,exit" -F arch=b64 -S execve -k sifruno-pma-proof)
 # The temporary users on the server, one per line.
 temp_users() { sql "SELECT User FROM mysql.user WHERE User LIKE 'SifrunoPMA\\_%' ORDER BY User"; }
 
@@ -99,6 +105,9 @@ case "${1:-}" in
     # Every process's arguments, sampled until the check step stops it.
     nohup bash -c 'while :; do ps -eo args; echo --; sleep 0.2; done' > "$dir/ps-samples.txt" 2>/dev/null &
     echo $! > "$dir/sampler.pid"
+    auditctl -D -k sifruno-pma-proof >/dev/null 2>&1
+    date '+%x %T' > "$dir/audit.since"
+    check "the audit log records every program started from now on" auditctl -a "${AUDIT_RULE[@]}"
     runuser -u sifpanel -- sh -c "nohup ./sifruno --listen 127.0.0.1:$port --sites-listen '' --state ./state --ui ./dist \
       --accounts-socket $SOCKET --db-defaults-file /var/lib/sifpanel/db-admin.cnf \
       --https-listen 127.0.0.1:$panel --panel-host $PANEL_HOST --phpmyadmin-listen 127.0.0.1:$pma \
@@ -120,6 +129,9 @@ case "${1:-}" in
     user="$3"
     other="$4"
     kill "$(cat "$dir/sampler.pid")" 2>/dev/null
+    auditctl -d "${AUDIT_RULE[@]}" >/dev/null 2>&1
+    # shellcheck disable=SC2046 # the saved date and time are two words
+    ausearch --input-logs -i -k sifruno-pma-proof --start $(cat "$dir/audit.since") > "$dir/execs.txt" 2>/dev/null
     mapfile -t temps < <(temp_users)
     echo "  temporary users: ${temps[*]:-none}"
     check "there is exactly one temporary user" test "${#temps[@]}" = 1
@@ -152,9 +164,10 @@ case "${1:-}" in
     check "with it the temporary user signs in to MariaDB and sees $user's database only" bash -c \
       "[ \"\$(MYSQL_PWD=\"\$0\" mysql --protocol=socket -u '$temp' -N -B -e 'SHOW DATABASES' | grep -v '^information_schema\$' | paste -sd ' ')\" = '${user}_wp' ]" "$password"
     samples="$(grep -c '^--$' "$dir/ps-samples.txt")"
-    echo "  process-argument samples taken while phpMyAdmin opened: $samples"
-    check "no process argument held the temporary user's password" bash -c "[ $samples -gt 0 ] && ! grep -qF -- \"\$0\" '$dir/ps-samples.txt'" "$password"
-    check "the panel ran the mysql client during the samples" grep -q -- '--defaults-extra-file=/var/lib/sifpanel/db-admin.cnf' "$dir/ps-samples.txt"
+    execs="$(grep -c '^type=EXECVE ' "$dir/execs.txt")"
+    echo "  process-argument samples taken while phpMyAdmin opened: $samples; programs started, from the audit log: $execs"
+    check "no process argument held the temporary user's password" bash -c "[ $samples -gt 0 ] && [ $execs -gt 0 ] && ! grep -qF -- \"\$0\" '$dir/ps-samples.txt' '$dir/execs.txt'" "$password"
+    check "the panel ran the mysql client meanwhile (audit log)" grep -q -- '--defaults-extra-file=/var/lib/sifpanel/db-admin.cnf' "$dir/execs.txt"
     # The password goes to mysql in its environment, never as an argument.
     # shellcheck disable=SC2317 # called through check
     as_temp() { MYSQL_PWD="$password" mysql --protocol=socket -u "$temp" -N -B -e "$1"; }

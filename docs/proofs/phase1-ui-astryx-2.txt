@@ -1,0 +1,67 @@
+# Phase 1 new UI shell: Hosting accounts and Backups on shadcn/ui (Astryx slice 2)
+# 2026-11-25T07:15Z  local run without root: ./cmd/sifruno (Go code of 04697ba, unchanged since) with throwaway
+# state on 127.0.0.1 and --backup-scheduler, web/dist built from 48f1887, Chrome 158 (agent-browser 0.44.0) over CDP
+#
+# Decision (Jev, TypeSafe): rebuild both pages, not remove them (Hosting accounts 1.00, Backups 0.99); keep the
+# native confirmation dialogs (0.86); show errors as what happened, why, next step and Technical details, made in
+# each page from the messages it already had (0.90).
+#
+# Backups ran on real data: two static sites made through POST /api/v1/sites, their files edited between two ZIP
+# backups made with the rebuilt "Create ZIP backup" button, and a daily schedule saved through the rebuilt form.
+# Hosting accounts: this run has no Linux account broker, so the real page says so (1440-light-accounts-no-broker);
+# every other Hosting accounts screen shows a synthetic four-account inventory the browser put in place of the
+# broker's answers (named below). Two error states were made the same way, each named below; no other answer was
+# replaced. Right-to-left: dir="rtl" set on the page by the browser; the panel has no right-to-left language yet.
+
+PASS  signed in: the Backups page opens inside the shell
+NOTE  console before sign-in: 2 entries, all HTTP 401 session reads
+PASS  Backups with no websites shows the empty state
+NOTE  POST /api/v1/sites northwind-bakery.test: HTTP 200
+NOTE  POST /api/v1/sites juniper-studio.test: HTTP 200
+NOTE  PUT index.html: HTTP 200
+NOTE  upload about.html: HTTP 200
+NOTE  PUT index.html: HTTP 200
+PASS  Create ZIP backup made real backups through the rebuilt button (2 backups of northwind-bakery.test)
+PASS  schedule dialog: focus starts on the safe action
+PASS  schedule saved and enabled through the rebuilt dialog
+PASS  light 1440 /websites/backups: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 390 /websites/backups: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 1440 /websites/backups: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 390 /websites/backups: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  Backups: Tab reaches the site picker, Create ZIP backup and each row's Restore (22 stops)
+PASS  Backups: every focused control shows a focus ring
+PASS  restore dialog: the server-verified preview shows counts and files
+PASS  restore dialog: focus starts on Cancel restore
+PASS  restore dialog: Esc closes it and focus returns to its Restore button
+PASS  restore dialog at 390: fits the screen with no sideways scroll ({"w":356,"sw":354,"cw":354,"inner":390})
+PASS  remove dialog: focus starts on Cancel ZIP removal
+PASS  remove dialog: Cancel keeps every backup
+PASS  Hosting accounts (real panel): says no broker is configured
+PASS  menu: Hosting accounts and Backups are still listed
+NOTE  Hosting accounts below: GET /api/v1/accounts/capability, GET /api/v1/accounts and GET /api/v1/accounts/web-preview answered in the browser with a synthetic four-account inventory; this run has no Linux account broker.
+PASS  light 1440 /customers/accounts: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 390 /customers/accounts: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 1440 /customers/accounts: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 390 /customers/accounts: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  Hosting accounts: four accounts listed, the first one selected
+PASS  Hosting accounts: choosing an account marks it current and shows Activate
+PASS  Hosting accounts: search filters the list
+PASS  Hosting accounts: no match offers Clear search
+PASS  Hosting accounts: Tab reaches Create Linux account, the search and each account (10 stops)
+PASS  Hosting accounts: every focused control shows a focus ring
+PASS  Hosting accounts: the web preview shows the snapshot and its 7 files
+PASS  Hosting accounts: Dismiss returns focus to Preview web configuration
+PASS  create dialog: focus starts on Username
+PASS  create dialog: Esc closes it and focus returns to Create Linux account
+PASS  suspend dialog: focus starts on Reason
+PASS  error copy: the create dialog closes and the page says what happened, why, next step and Technical details (The Linux account was not created.The Linux account broker is unavailable. No account change was confirmed.Next step: Check that the Linux account broker is run)
+NOTE  The create error above: POST /api/v1/accounts answered 503 {"error":"broker_unavailable"} in the browser.
+PASS  error copy on Backups: what happened, why, next step and Technical details (The ZIP backup was not created.This local capability is unavailable. No successful result was confirmed.Next step: Use Refresh backup records. If it keeps faili)
+PASS  error state at 390: no horizontal scroll (scrollWidth 390, viewport 390)
+NOTE  The Backups error above: POST /api/v1/sites/{id}/backups answered 503 {"error":"storage_unavailable"} in the browser.
+PASS  rtl 1440 /websites/backups: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 1440 /customers/accounts: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 390 /websites/backups: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  rtl 390 /customers/accounts: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  no page errors or console errors
+42 passed, 0 failed

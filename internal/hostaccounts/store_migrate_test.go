@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -30,6 +31,8 @@ type fakeMigrate struct {
 	failFiles error
 	// protection is what the copy converts to; Files hands it to protect.
 	protection SiteProtection
+	// copied runs when Files has put the files in the home.
+	copied func()
 }
 
 func newFakeMigrate() *fakeMigrate {
@@ -43,6 +46,7 @@ func newFakeMigrate() *fakeMigrate {
 			"/usr/local/cpanel/bin/uapi --output=json --user=fixtureacct Mysql list_users":     `{"result":{"data":[{"user":"fixtureacct_wpu","databases":["fixtureacct_wp"]}],"status":1}}`,
 			cpsource.SQLCommand():                "sifruno-user\tfixtureacct_wpu\nCREATE USER `fixtureacct_wpu`@`localhost` IDENTIFIED BY PASSWORD '" + hash + "'\nsifruno-grant\tfixtureacct_wpu\tfixtureacct\\_wp\t" + strings.TrimSuffix(strings.Repeat("Y\t", 18), "\t") + "\n",
 			"/usr/bin/crontab -l -u fixtureacct": "*/5 * * * * php /home/fixtureacct/public_html/wp-cron.php\n",
+			cpsource.ClientAddressCommand():      "203.0.113.5 51234 198.51.100.7 22\n",
 		}}
 }
 
@@ -94,6 +98,9 @@ func (f *fakeMigrate) Files(_ context.Context, _ migrationRecord, home string, r
 		if err := protect(protection); err != nil {
 			return MigrateFilesResult{}, err
 		}
+	}
+	if f.copied != nil && f.failFiles == nil {
+		f.copied()
 	}
 	return MigrateFilesResult{WordPress: true}, f.failFiles
 }
@@ -184,7 +191,7 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Domain != "fixture.test" || plan.PHPSource != "ea-php82" || plan.Tier != "native" || plan.DiskUsedMiB != 20 || len(plan.Cron) != 1 {
+	if plan.Domain != "fixture.test" || plan.PHPSource != "ea-php82" || plan.Tier != "native" || plan.DiskUsedMiB != 20 || len(plan.Cron) != 1 || plan.ClientAddress != "203.0.113.5" {
 		t.Fatalf("plan: %+v", plan)
 	}
 	if len(plan.Users) != 1 || plan.Users[0].Hash == "" || !slices.Equal(plan.Users[0].Grants[0].Privileges, []string{"ALL PRIVILEGES"}) {
@@ -193,13 +200,30 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	if items, _ := s.leftovers(); len(items) != 0 || len(b.cleaned) != 1 {
 		t.Fatalf("the preflight's staging folder must be removed: %v %v", items, b.cleaned)
 	}
+	// A source whose sshd does not say where this server comes from still
+	// plans; verify then fails the folders that depend on it.
+	f.answers[cpsource.ClientAddressCommand()] = "\n"
+	if plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator"); err != nil || plan.ClientAddress != "" {
+		t.Fatalf("no client address: %q %v", plan.ClientAddress, err)
+	}
+	delete(f.answers, cpsource.ClientAddressCommand())
+	if plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator"); err != nil || plan.ClientAddress != "" {
+		t.Fatalf("a failed client address command: %q %v", plan.ClientAddress, err)
+	}
 	// An access rule the converter takes stays Native, with the conversion
 	// and its probe in the plan.
 	closed := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\n"))
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{closed}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "native" || len(plan.Converted) != 1 || plan.Converted[0].Path != "/private/" || !slices.Equal(plan.Probes, []MigrationProbe{{Path: "/private/", Kind: "deny"}}) {
+	if err != nil || plan.Tier != "native" || len(plan.Converted) != 1 || plan.Converted[0].Path != "/private/" || !reflect.DeepEqual(plan.Probes, []MigrationProbe{{Path: "/private/", Kind: "deny"}}) {
 		t.Fatalf("converted: %+v %v", plan, err)
+	}
+	// A folder open to some addresses only goes to verify with its rule.
+	lobby := htaccess.ClassifyFile("lobby/.htaccess", "/lobby/", []byte("Order Allow,Deny\nAllow from all\nDeny from 192.0.2.0/24\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{lobby}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || !reflect.DeepEqual(plan.Probes, []MigrationProbe{{Path: "/lobby/", Kind: "hosts", Hosts: "except", Networks: []string{"192.0.2.0/24"}}}) {
+		t.Fatalf("address list: %+v %v", plan.Probes, err)
 	}
 	// One it refuses sends the site to Compat, saying why.
 	refused := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\nSatisfy Any\n"))
@@ -232,6 +256,9 @@ func TestMigrateCopiesOnlyTheSameNamedAccount(t *testing.T) {
 	if err != nil || !got.WordPress || !slices.Equal(f.files, []string{"/home/fixtureacct -> fixtureacct"}) {
 		t.Fatalf("files: %+v %v %v", got, err, f.files)
 	}
+	if got.Revision != a.Revision {
+		t.Fatalf("a copy without protected folders answered revision %d, not %d", got.Revision, a.Revision)
+	}
 	if len(s.installing) != 0 {
 		t.Fatal("the account stayed busy")
 	}
@@ -254,6 +281,63 @@ func TestMigrateCopiesOnlyTheSameNamedAccount(t *testing.T) {
 	var failed *MigrationError
 	if _, err = s.migrateFiles(ctx, other.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: other.Revision, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "source" {
 		t.Fatalf("a differently named account: %v", err)
+	}
+}
+
+// TestMigrateFilesReloadsTheSiteAfterTheCopy: OpenLiteSpeed reads a site's
+// .htaccess (its rewrite rules) only when it restarts, and the protected
+// folders' restart runs before the files reach the home. So once the files
+// are there and the web server's access is set, the unchanged site list is
+// installed once more, a graceful restart, while the account is still busy
+// (D-0004). Before, the copy, its preview and verify ran without the
+// site's rewrites until some later restart.
+func TestMigrateFilesReloadsTheSiteAfterTheCopy(t *testing.T) {
+	s, f, _ := migrateStore(t)
+	native := s.native.(*fakeNative)
+	s.web = &WebOptions{ServerUser: "nobody"}
+	ctx := context.Background()
+	m := pinnedMigration(t, s)
+	live := liveFixture(t, s)
+	f.protection = fixtureProtection(live.Account.ID)
+	appliesAtCopy, grantsAtCopy := -1, -1
+	f.copied = func() { appliesAtCopy, grantsAtCopy = native.siteApplies, native.webGrants }
+	got, err := s.migrateFiles(ctx, live.Account.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: live.Account.Revision, Reason: "Move a website here"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appliesAtCopy < 0 || native.siteApplies != appliesAtCopy+1 || native.webGrants != grantsAtCopy+1 {
+		t.Fatalf("site list installs: %d when the files were copied, %d after", appliesAtCopy, native.siteApplies)
+	}
+	// The reload installs the site list as it is, folders included, and
+	// changes no record.
+	if site := siteOf(t, native.sites, live.Account.ID); len(site.Folders) != 2 {
+		t.Fatalf("site %+v", site)
+	}
+	if r := recordFor(t, s, live.Account.ID); r.Account.Revision != got.Revision || r.Pending != nil || len(s.installing) != 0 {
+		t.Fatalf("record %+v, answered revision %d", r, got.Revision)
+	}
+
+	// A reload that fails stops the move with a reason of its own.
+	s2, f2, _ := migrateStore(t)
+	native2 := s2.native.(*fakeNative)
+	s2.web = &WebOptions{ServerUser: "nobody"}
+	m2 := pinnedMigration(t, s2)
+	live2 := liveFixture(t, s2)
+	f2.copied = func() { native2.failure = "sites" }
+	_, err = s2.migrateFiles(ctx, live2.Account.ID, MigrateFilesInput{Migration: m2.ID, ExpectedRevision: live2.Account.Revision, Reason: "Move a website here"}, "test operator")
+	var failed *MigrationError
+	if !errors.As(err, &failed) || failed.Step != "reload" || !strings.Contains(failed.Detail, "The files are in place") || len(s2.installing) != 0 {
+		t.Fatalf("a failed reload: %v", err)
+	}
+
+	// A site that is not live has nothing to reload.
+	s3, _, _ := migrateStore(t)
+	native3 := s3.native.(*fakeNative)
+	m3 := pinnedMigration(t, s3)
+	a := createFixture(t, s3)
+	before := native3.siteApplies
+	if _, err = s3.migrateFiles(ctx, a.ID, MigrateFilesInput{Migration: m3.ID, ExpectedRevision: a.Revision, Reason: "Move a website here"}, "test operator"); err != nil || native3.siteApplies != before {
+		t.Fatalf("not live: %d installs, %v", native3.siteApplies-before, err)
 	}
 }
 

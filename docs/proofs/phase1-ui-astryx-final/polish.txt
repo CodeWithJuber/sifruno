@@ -1,0 +1,70 @@
+# Phase 1 UI polish after the final Astryx slice: link sizes on Static sites (old), light chart lines
+# 2026-11-25T09:27Z  local run without root: ./cmd/sifruno built from 2d38a81 (its Go code is unchanged since
+# 1386a8e), Chrome 158 (agent-browser 0.44.0) driven over CDP
+#
+# Two throwaway panels on 127.0.0.1 with --backup-scheduler, each on its own copy of the final slice's throwaway
+# state: "before" serves web/dist built from 2d38a81, "after" serves web/dist built from c395b14 (the three fix
+# commits). The browser answered /api/v1/services with 31 standard Ubuntu services, so the host's own service
+# names are not published; every other request reached the running panel. The static sites are the samples on
+# example.test. The charts draw this host's own CPU, memory and network readings.
+#
+# Contrast is WCAG 2 relative luminance of the rendered colours: each line's computed stroke, each legend dot's
+# background and the first opaque background behind the chart, read through a 1x1 canvas in the page.
+#
+#                         line 1    line 2    card      lines apart  line 1 on card  line 2 on card
+#   before light          #087F6F   #66787C   #FFFFFF   1.06:1       4.91:1          4.62:1
+#   after  light          #2F9585   #142F35   #FFFFFF   3.87:1       3.65:1          14.12:1
+#   before dark           #2F9585   #F4F8F7   #1D3B41   3.41:1       3.28:1          11.18:1
+#   after  dark           #2F9585   #F4F8F7   #1D3B41   3.41:1       3.28:1          11.18:1
+# Line 1 is CPU on Home and Received on Network; line 2 is Memory and Sent. Both charts read the same colours.
+# After: line 1 is teal with 22% mint in both themes (one --chart-primary); line 2 is ink in light, paper in dark.
+#
+note  before: signed in as admin: admin
+note  before /websites/static "Local HTTP preview": <a> 12.8px, weight 400, height 28px, min-height auto
+note  before /websites/static "Open File Manager": <button> 14px, weight 400, height 30px, min-height 30px
+note  before /websites/static "Open Backups": <button> 14px, weight 400, height 30px, min-height 30px
+note  before /websites/static "New website": <a> 12.8px, weight 400, height 28px, min-height auto
+note  before /websites/static "Create website": <button> 14px, weight 400, height 30px, min-height 30px
+note  before /websites/static "Import native ZIP": <button> 14px, weight 400, height 30px, min-height 30px
+note  before /websites/static "Refresh websites": <button> 14px, weight 400, height 30px, min-height 30px
+note  before light /: first #087F6F, second #66787C, card #FFFFFF, legend #087F6F / #66787C; lines 1.06:1, first 4.91:1 and second 4.62:1 on the card
+note  before light /server/network: first #087F6F, second #66787C, card #FFFFFF, legend #087F6F / #66787C; lines 1.06:1, first 4.91:1 and second 4.62:1 on the card
+note  before dark /: first #2F9585, second #F4F8F7, card #1D3B41, legend #2F9585 / #F4F8F7; lines 3.41:1, first 3.28:1 and second 11.18:1 on the card
+note  before dark /server/network: first #2F9585, second #F4F8F7, card #1D3B41, legend #2F9585 / #F4F8F7; lines 3.41:1, first 3.28:1 and second 11.18:1 on the card
+note  after: signed in as admin: admin
+note  after /websites/static "Local HTTP preview": <a> 14px, weight 400, height 30px, min-height 30px
+note  after /websites/static "Open File Manager": <button> 14px, weight 400, height 30px, min-height 30px
+note  after /websites/static "Open Backups": <button> 14px, weight 400, height 30px, min-height 30px
+note  after /websites/static "New website": <a> 14px, weight 400, height 30px, min-height 30px
+note  after /websites/static "Create website": <button> 14px, weight 400, height 30px, min-height 30px
+note  after /websites/static "Import native ZIP": <button> 14px, weight 400, height 30px, min-height 30px
+note  after /websites/static "Refresh websites": <button> 14px, weight 400, height 30px, min-height 30px
+note  after light /: first #2F9585, second #142F35, card #FFFFFF, legend #2F9585 / #142F35; lines 3.87:1, first 3.65:1 and second 14.12:1 on the card
+note  after light /server/network: first #2F9585, second #142F35, card #FFFFFF, legend #2F9585 / #142F35; lines 3.87:1, first 3.65:1 and second 14.12:1 on the card
+note  after dark /: first #2F9585, second #F4F8F7, card #1D3B41, legend #2F9585 / #F4F8F7; lines 3.41:1, first 3.28:1 and second 11.18:1 on the card
+note  after dark /server/network: first #2F9585, second #F4F8F7, card #1D3B41, legend #2F9585 / #F4F8F7; lines 3.41:1, first 3.28:1 and second 11.18:1 on the card
+#
+# Checks on the fixed UI
+PASS  before: the preview link was smaller than its buttons (the defect) (12.8px link, 14px buttons)
+PASS  Static sites (old): Local HTTP preview matches Open File Manager and Open Backups in font size, weight and height (link 14px 400 30px; buttons 14px 400 30px and 14px 400 30px)
+PASS  before: the page's New website link was smaller than its buttons too (12.8px and 28px link, 14px and 30px buttons)
+PASS  Static sites (old): New website matches Create website and Import native ZIP in font size, weight and height (link 14px 400 30px; buttons 14px 400 30px and 14px 400 30px)
+PASS  light /: the two lines are 3:1 or more apart and each stands 3:1 on the card (lines 3.87:1, first 3.65:1, second 14.12:1 on the card)
+PASS  light /: the legend dots match the lines (#2F9585 = #2F9585, #142F35 = #142F35)
+PASS  light /server/network: the two lines are 3:1 or more apart and each stands 3:1 on the card (lines 3.87:1, first 3.65:1, second 14.12:1 on the card)
+PASS  light /server/network: the legend dots match the lines (#2F9585 = #2F9585, #142F35 = #142F35)
+PASS  dark /: the two lines are 3:1 or more apart and each stands 3:1 on the card (lines 3.41:1, first 3.28:1, second 11.18:1 on the card)
+PASS  dark /: the legend dots match the lines (#2F9585 = #2F9585, #F4F8F7 = #F4F8F7)
+PASS  dark /server/network: the two lines are 3:1 or more apart and each stands 3:1 on the card (lines 3.41:1, first 3.28:1, second 11.18:1 on the card)
+PASS  dark /server/network: the legend dots match the lines (#2F9585 = #2F9585, #F4F8F7 = #F4F8F7)
+PASS  dark /: chart and legend colours are unchanged (#2F9585, #F4F8F7 on #1D3B41)
+PASS  dark /server/network: chart and legend colours are unchanged (#2F9585, #F4F8F7 on #1D3B41)
+PASS  dark: every custom property on <html> computes as before (159 properties compared)
+PASS  light: only the two chart colours changed (159 properties compared; differ: --chart-memory, --chart-primary)
+PASS  no page errors or console errors
+note  expected console line: Failed to load resource: the server responded with a status of 401 (Unauthorized) — the session read before sign-in
+17 passed, 0 failed
+#
+# Not shown: the dev VM, 390 px widths and right to left (these changes touch neither layout nor direction), and
+# a Network chart with the two lines apart: this host received and sent at nearly the same rate, so in the
+# Network shots Sent, drawn second, covers most of Received. Home's chart shows both lines apart.

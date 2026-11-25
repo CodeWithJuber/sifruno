@@ -1,0 +1,114 @@
+# Per-account process, memory and CPU limits
+# 2026-11-25T03:33:40Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 systemd-252-67.el9_8.6.alma.1.x86_64 pam-1.5.1-28.el9_8.1.x86_64  SELinux Enforcing  cgroup fs cgroup2fs
+# account A lma77620 (lma77620.proof.test), account B lmb77620 (lmb77620.proof.test)
+
+## 1. The installer's three steps
+LSCache stores folder: root 711 /var/lib/sifruno-lscache
+  changed: 
+PASS  the limits file is root's, 0644
+PASS  it sets the backstop nproc 4096, soft and hard, for UIDs 20000:60000
+PASS  and the soft limit too
+  CGIRLimit cgroups: 1
+PASS  OpenLiteSpeed's CGIRLimit has cgroups 1
+PASS  the LSCache stores folder is root's, mode 0711
+PASS  the installer's steps change nothing the second time
+PASS  OpenLiteSpeed is running
+
+## 2. The broker writes each account's slice limits
+PASS  the broker started with --web-user nobody
+  /etc/systemd/system/user-20000.slice.d/50-sifruno-limits.conf:
+    # Written by the Sifruno broker for one hosting account. Do not edit:
+    # the broker rewrites it when the account's plan changes and at its start.
+    [Slice]
+    TasksMax=100
+    MemoryMax=1024M
+    CPUQuota=100%
+PASS  A's answer carries the default limits
+PASS  A's drop-in is root's, 0644
+PASS  systemd loaded it: TasksMax 100, MemoryMax 1 GiB, CPUQuota 100%
+
+## 3. A login session lands in the user slice with TasksMax set
+PASS  the sshd PAM stack registers a session with pam_systemd
+PASS  the crond PAM stack registers a session with pam_systemd
+PASS  the runuser-l PAM stack registers a session with pam_systemd
+  0::/user.slice/user-20000.slice/session-c1.scope
+  Max processes             4096                 4096                 processes 
+  Max address space         unlimited            unlimited            bytes     
+PASS  the session runs in user-20000.slice
+PASS  the session's RLIMIT_NPROC is the backstop 4096 (limits.d)
+  pids.max 100, memory.max 1073741824, cpu.max 100000 100000
+PASS  the active slice's pids.max is 100
+
+## 4. A plan change moves the limits, also of the active slice
+PASS  the answer carries the new limits
+PASS  the drop-in says TasksMax=120
+PASS  systemd loaded it: TasksMax 120, MemoryMax 2 GiB, CPUQuota 200%
+  after the change: pids.max 120, memory.max 2147483648, cpu.max 200000 100000
+PASS  daemon-reload applied it to the active slice: pids.max 120
+PASS  and memory.max 2 GiB
+PASS  the active slice's pids.max is 100 again
+  5 tasks: broker refused: invalid native account input
+PASS  limits out of bounds are refused
+
+## 5. A tenant's fork loop stops at the limit
+  children made, and fork's error: 96 Resource temporarily unavailable
+PASS  the loop made fewer than 100 children, not 150
+PASS  fork() failed with EAGAIN
+
+## 6. The site's lsphp and its limits
+  namespace                 2
+  cgroups                   2
+    memHardLimit            1024M
+    procHardLimit           496
+PASS  A's vhost asks for cgroups
+PASS  and renders memHardLimit 1024M, procHardLimit 496
+PASS  A serves PHP
+PASS  B serves PHP
+  lsphp 20291: 0::/user.slice/user-20000.slice/litespeed-exec.scope
+  Max processes             15366                15366                processes 
+  Max address space         unlimited            unlimited            bytes     
+PASS  lsphp runs in user-20000.slice/litespeed-exec.scope (OpenLiteSpeed cgroups)
+  slice: pids.max 100, memory.max 1073741824
+PASS  lsphp's slice holds it to A's plan: pids.max 100
+PASS  and memory.max 1 GiB
+
+## 7. Delete of the active site while a fork loop runs
+  A's processes with the loop running: 98; slice pids.current 100
+PASS  the loop runs, held at or under the limit
+PASS  B still serves while A's loop runs
+PASS  the delete of active A succeeds with its fork loop running (4 s)
+PASS  A's Linux user is gone
+PASS  no process runs as A's UID
+PASS  A's drop-in is gone
+PASS  B still serves
+
+## 8. Tenant code in a WordPress install step stays in the account's slice
+  loop process 36724: 0::/user.slice/user-20001.slice/sifruno-site-20001-191f5ba35806acdd.scope
+PASS  the loop runs in a sifruno-site scope in user-20001.slice
+PASS  the loop runs in a session of its own (setsid), not WP-CLI's
+  sifruno-site-20001-191f5ba35806acdd.scope: pids.current 98, pids.max 100; slice pids.current 100
+  unit: TasksMax 100, RuntimeMaxUSec 10min, KillMode control-group, KillSignal 9
+  WP-CLI 36722: user lmb77620, cwd /home/lmb77620/public_html, CapInh: 0000000000000000  CapPrm: 0000000000000000  CapEff: 0000000000000000  CapBnd: 0000000000000000  CapAmb: 0000000000000000  NoNewPrivs: 1  
+PASS  the unit's task limit is B's plan, 100
+PASS  the loop is held at or under it
+  the broker's own tasks: 8
+PASS  the broker's own cgroup holds few tasks
+  the broker answered a list in 0 s while the loop ran
+PASS  the broker answers while the loop runs
+PASS  WP-CLI's HOME is the broker's empty root-owned folder
+  WP-CLI's supplementary groups: Groups:	 
+PASS  WP-CLI has no supplementary group but the account's own
+PASS  the unit's description is the fixed 'sifruno site step'
+PASS  WP-CLI cannot gain privileges (NoNewPrivs)
+PASS  WP-CLI holds no capability, not even in its bounding set
+  install answer: broker refused: WordPress download step failed: Error: RuntimeException: Failed to get url 'https://api.wordpress.org/core/version-check/1.7/?locale=en_US': cURL error 6: getaddrinfo() thread failed to start. 
+PASS  no loop process of B is left after the steps
+PASS  no sifruno-site unit is left
+PASS  B's site answers again
+  B's cache store before the delete: nobody 2770 /var/lib/sifruno-lscache/sifruno-ue01d5a4690c7e4433db5c2ed532305f
+PASS  B's cache store is in /var/lib/sifruno-lscache
+PASS  B's Linux user is gone
+PASS  B's cache store is gone
+PASS  OpenLiteSpeed is still running
+
+RESULT: all checks passed

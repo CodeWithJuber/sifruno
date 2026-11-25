@@ -1,0 +1,126 @@
+# guest: AlmaLinux release 9.8 (Olive Jaguar), kernel 5.14.0-687.60.1.el9_8.x86_64, SELinux Enforcing
+# openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+LSCache stores folder: root 711 /var/lib/sifruno-lscache
+PASS  the LSCache stores folder is root's, mode 0711
+PASS  the broker runs with the web operation on
+PASS  Pebble serves its ACME directory at https://127.0.0.1:14000/dir
+PASS  Pebble's DNS answers 127.0.0.1 for any name
+PASS  the ACME challenge folder is sifpanel's, mode 0755
+  Pebble issues from: subject=CN=Pebble Root CA 68fb07
+PASS  Pebble's root CA for this run is saved in /var/lib/sifpanel/wizard-20261125T035702Z/pebble-root.pem
+PASS  the panel answers on 127.0.0.1:57777 as sifpanel
+## Browser: sign in and open the wizard
+PASS  the admin signs in to the panel
+PASS  Websites has a New website button that opens the wizard at /websites/new
+PASS  the website type is a radio group with WordPress chosen
+PASS  the admin password field asks for a new password
+PASS  the admin email and username fields autofill correctly
+PASS  no error while typing
+PASS  a bad domain is marked after leaving the field
+## Browser: create the site and follow the job
+PASS  Create starts a job and opens its page
+PASS  the form's password is not in the URL
+  the job ended succeeded after 40 s
+PASS  the job succeeds and the page shows the last screen
+PASS  the last screen names the domain
+  hosting account wiz79049, WordPress 7.1.5
+PASS  it shows the hosting account and the WordPress version
+  steps: account done, web done, ssl done, database done, wordpress done
+PASS  the steps include HTTPS, after the site goes live and before the database
+PASS  the HTTPS step is done, with a certificate from the test CA
+PASS  while the job ran, the step list showed the HTTPS step's state
+PASS  the last screen says the site uses https
+PASS  Open site points at the new site over https
+PASS  Open WordPress admin points at wp-admin over https
+PASS  Set up DNS explains the record to add
+PASS  the job page still shows the result after a reload
+PASS  the result fits a phone screen
+## Browser: the new site in Websites
+PASS  Go to Websites on the last screen opens /websites
+PASS  Websites lists the new domain
+PASS  its status badge says Live
+PASS  it has an https badge with the certificate's expiry
+PASS  the list shows the site's WordPress version
+PASS  Open site in the list is https
+PASS  the list fits a phone screen
+PASS  Details opens /websites/sites/<account id>
+PASS  the site page shows the WordPress version
+PASS  the site page shows the hosting account
+PASS  the site page's Open site is https
+PASS  the site page fits a phone screen
+## Browser: the site's tabs, Simple and Advanced
+  health: serving=ok https=ok php=ok backups=checking disk=ok
+PASS  the Overview's health checklist has its five lines
+PASS  Simple view has six tabs and no Email
+PASS  the domains tab opens at its own address
+PASS  the files tab opens at its own address
+PASS  the databases tab opens at its own address
+PASS  the backups tab opens at its own address
+PASS  the settings tab opens at its own address
+PASS  a reload keeps the Settings tab
+PASS  Advanced view adds Cron jobs and Logs tabs
+PASS  the Logs tab fits a phone screen
+## Browser: the same domain again is refused
+  shown: The website was not created. wiz79049.proof.test already belongs to the hosting account wiz79049. Use another domain, or remove that account first. Next step: Do what the message above says, then try
+PASS  a second site for the same domain is refused with a reason
+## Browser: a PHP site with a database, php-wiz79049.proof.test
+PASS  choosing PHP site leaves no WordPress fields
+  the PHP site job ended succeeded after 10 s
+PASS  the PHP site job succeeds
+  hosting account phpwiz79049
+PASS  its last screen says the PHP site is live over https
+PASS  it names the database
+PASS  it says how to upload: SFTP as the account, into public_html
+PASS  the placeholder step put index.php in place
+PASS  there is no WordPress admin link
+PASS  Open site points at https://php-wiz79049.proof.test/
+PASS  Websites lists it as a PHP site
+PASS  the jobs API never returns the database password
+## The password is held nowhere
+PASS  the jobs API never returns the WordPress admin password
+PASS  the websites API never returns it either
+PASS  the browser's storage holds no password
+PASS  the job file on the server never holds the WordPress admin password
+PASS  nor the PHP site's database password
+PASS  no browser errors
+RESULT (browser): 60 passed, 0 failed
+  account made by the wizard: wiz79049
+PASS  the job file is the panel's and private (0600 in a 0700 folder)
+PASS  the account's Linux user exists
+PASS  WordPress is in its public_html, owned by it
+PASS  wp-config.php is mode 0600
+  over http: 200
+PASS  over http the site serves WordPress, or sends the visitor to its https address
+PASS  wp-admin redirects to the login page
+  its certificate folder: /etc/sifruno/tls/ub8cdc2f4353b82403aed2e6d1061d20
+PASS  the site serves WordPress over https with a certificate from Pebble's root
+  names in the served certificate: DNS:wiz79049.proof.test
+PASS  the served certificate names exactly the domain
+PASS  it is the certificate in /etc/sifruno/tls/ub8cdc2f4353b82403aed2e6d1061d20/cert.pem
+PASS  cert.pem and key.pem are root's, mode 0600
+  WordPress home and siteurl in wiz79049_wp: https://wiz79049.proof.test https://wiz79049.proof.test
+PASS  WordPress's home and siteurl are https
+PASS  the site's vhconf.conf turns the cache module on with its own store
+PASS  httpd_config.conf registers the cache module (the package's block)
+  LiteSpeed Cache plugin: 7.9.3
+PASS  the LiteSpeed Cache plugin 7.9.3 is installed
+PASS  it is active
+PASS  its files match wordpress.org's checksums
+PASS  it does not cache signed-in visitors (cache-priv 0)
+  X-LiteSpeed-Cache on two GETs of https://wiz79049.proof.test/: hit, hit
+PASS  the second GET of the home page is served from the cache
+  X-LiteSpeed-Cache on a POST: none
+PASS  a POST is not served from the cache
+PASS  the store is the web server's, 2770, outside every home
+  PHP site account made by the wizard: phpwiz79049
+PASS  the account's Linux user exists
+PASS  the placeholder index.php is the site user's, mode 0644
+PASS  it is the only file in public_html
+PASS  it says the site is ready
+PASS  the site serves the placeholder over https, run by PHP, with a certificate from Pebble's root
+PASS  the served certificate names exactly the domain
+PASS  the site runs PHP 8.3 (lsphp83)
+PASS  its vhost has the cache module with its own store
+  X-LiteSpeed-Cache on two GETs of the placeholder: none, none
+PASS  the placeholder is not cached: the page does not ask for it
+PASS  the database phpwiz79049_wp and its user exist

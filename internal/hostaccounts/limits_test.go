@@ -371,6 +371,39 @@ func TestDeleteRemovesLimits(t *testing.T) {
 	}
 }
 
+// A delete whose drop-in removal failed leaves the drop-in of a freed UID
+// with the deleted account's limits. The next account given that UID never
+// runs under them: create writes the default drop-in for its UID before
+// useradd makes the user.
+func TestLeftoverDropInNeverReachesTheNextAccount(t *testing.T) {
+	s, f, _ := setupStore(t)
+	ctx := context.Background()
+	a := createFixture(t, s)
+	bigger := AccountLimits{Processes: 400, MemoryMiB: 4096, CPUPercent: 300}
+	a, err := s.setPlan(ctx, a.ID, PlanInput{Plan: "gold", Limits: bigger, ExpectedRevision: a.Revision, Reason: "Bigger"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.failure = "limits-remove"
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: a.Revision, Reason: "Remove"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	f.failure = ""
+	if f.dropIns[a.UID] != bigger {
+		t.Fatalf("fixture: the leftover drop-in is %+v", f.dropIns[a.UID])
+	}
+	b, err := s.create(ctx, CreateInput{Username: "nextacct", Domain: "next.test", Reason: "Same UID"}, "test operator")
+	if err != nil || b.UID != a.UID {
+		t.Fatalf("the freed UID was not given again: %+v %v", b, err)
+	}
+	if got := f.createdWith[b.UID]; got != DefaultLimits {
+		t.Fatalf("the user was made under the drop-in %+v, not the defaults", got)
+	}
+	if f.dropIns[b.UID] != DefaultLimits || b.Limits != DefaultLimits {
+		t.Fatalf("the new account's limits: drop-in %+v, account %+v", f.dropIns[b.UID], b.Limits)
+	}
+}
+
 // A slow limits step (a systemd reload on a busy host) does not make a
 // create fail at the caller's limit: the slice limits and the user's
 // creation run on the web operation's own limit, and the account is made.

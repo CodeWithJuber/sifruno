@@ -425,6 +425,40 @@ func handlerWithWebPreview(s *store, preview WebPreviewService) http.Handler {
 				return
 			}
 			json.NewEncoder(w).Encode(item)
+		case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && strings.HasSuffix(r.URL.Path, "/finish-delete"):
+			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/accounts/"), "/finish-delete")
+			if !idPattern.MatchString(id) {
+				writeError(w, ErrInvalid)
+				return
+			}
+			var in struct {
+				Input FinishDeleteInput `json:"input"`
+				Actor string            `json:"actor"`
+			}
+			if decodeBody(w, r, &in, []string{"reason"}) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			// userdel and the rest run on the operation's own limit.
+			if e := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(webApplyTimeout + time.Minute)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+				writeError(w, ErrUnavailable)
+				return
+			}
+			item, err := s.finishDelete(ctx, id, in.Input, in.Actor)
+			var refused *DeleteRefusedError
+			if errors.As(err, &refused) {
+				w.WriteHeader(409)
+				json.NewEncoder(w).Encode(struct {
+					Error  string `json:"error"`
+					Reason string `json:"reason"`
+				}{"delete_refused", refused.Reason})
+				return
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			json.NewEncoder(w).Encode(item)
 		case r.Method == "GET" && r.URL.Path == "/v1/backup":
 			if r.ContentLength != 0 {
 				writeError(w, ErrInvalid)

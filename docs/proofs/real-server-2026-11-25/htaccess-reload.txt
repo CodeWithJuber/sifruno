@@ -1,0 +1,58 @@
+# The .htaccess watcher: a tenant's rewrite rule takes effect with no panel action, and a flood is bounded
+# 2026-11-25T06:25:56Z  kernel 5.14.0-687.60.1.el9_8.x86_64  openlitespeed-1.9.4-3.el9.x86_64  SELinux Enforcing
+# /home is xfs; site user hta87956, domain hta87956.proof.test; quiet 5 s, window 30 s
+
+## 1. The broker runs with the web operation on, and its watcher starts
+PASS  the broker started with --web-user nobody
+  1795587965.341050 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 0 .htaccess changes and 1 times changes may have gone unseen (the watcher started, or its event queue was full)
+PASS  the watcher restarted OpenLiteSpeed once after the broker started
+PASS  the watcher did not log that it could not start
+
+## 2. A live site, with no rewrite rule yet
+PASS  the site serves its files
+  /proof-rule answers 404 before any .htaccess
+PASS  /proof-rule is not found before any .htaccess
+
+## 3. A rewrite rule the site's user writes takes effect, with no panel action
+PASS  /proof-rule serves the rule's target (7 s after the write)
+PASS  it took at most 60 s (quiet period 5 s and one restart)
+  1795588010.159780 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 2 .htaccess changes
+PASS  one write made exactly one restart
+
+## 4. Writes to other names restart nothing
+PASS  1000 writes each to notes.txt, .htaccess.bak and x.htaccess restarted nothing
+
+## 5. A flood of 1000 .htaccess writes restarts at most once per window
+PASS  the last write's rule is the one served
+  1001 writes over 68 s; 3 restarts in the 143 s since the flood began (at most 5)
+  1795588120.829410 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 433 .htaccess changes
+  1795588154.417591 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 499 .htaccess changes
+  1795588187.915885 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 69 .htaccess changes
+PASS  the flood restarted OpenLiteSpeed at least once
+PASS  the flood restarted it at most once per window (3 <= 5)
+PASS  consecutive restarts ended at least 30 s apart
+
+## 6. The broker's lines name counts only, and nothing failed
+  1795587965.341050 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 0 .htaccess changes and 1 times changes may have gone unseen (the watcher started, or its event queue was full)
+  1795588010.159780 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 2 .htaccess changes
+  1795588120.829410 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 433 .htaccess changes
+  1795588154.417591 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 499 .htaccess changes
+  1795588187.915885 localhost hostbroker[296935]: sifruno broker: htaccess: OpenLiteSpeed restarted gracefully for 69 .htaccess changes
+PASS  no htaccess line names the site's user, domain or home
+PASS  no restart failed (no recovery line for operation=htaccess)
+PASS  OpenLiteSpeed is running
+
+## 7. Delete
+PASS  the Linux user is gone
+
+## 8. The root-only Go tests of the watcher on this kernel
+  TMPDIR's filesystem: ext2/ext3
+  === RUN   TestHtaccessEventsFromTheKernel
+  --- PASS: TestHtaccessEventsFromTheKernel (2.02s)
+  === RUN   TestRootOnlyHtaccessWatchRestartsOnceForAWrite
+  --- PASS: TestRootOnlyHtaccessWatchRestartsOnceForAWrite (6.21s)
+  PASS
+PASS  a filesystem mark sees one .htaccess write as one restart
+PASS  the kernel's events are read and counted the watcher's way
+
+RESULT: all checks passed

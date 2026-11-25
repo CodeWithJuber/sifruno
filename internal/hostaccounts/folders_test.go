@@ -205,12 +205,17 @@ func TestMigrateFilesProtectsTheSiteFirst(t *testing.T) {
 	m := pinnedMigration(t, s)
 	live := liveFixture(t, s)
 	f.protection = fixtureProtection(live.Account.ID)
-	if _, err := s.migrateFiles(ctx, live.Account.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: live.Account.Revision, Reason: "Move a website here"}, "test operator"); err != nil {
+	got, err := s.migrateFiles(ctx, live.Account.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: live.Account.Revision, Reason: "Move a website here"}, "test operator")
+	if err != nil {
 		t.Fatal(err)
 	}
 	r := recordFor(t, s, live.Account.ID)
 	if r.Folders == "" || len(siteOf(t, native.sites, live.Account.ID).Folders) != 2 || len(s.installing) != 0 {
 		t.Fatalf("record %+v", r)
+	}
+	// The folders raised the revision; the panel's next step needs it.
+	if r.Account.Revision != live.Account.Revision+1 || got.Revision != r.Account.Revision {
+		t.Fatalf("revision: answered %d, stored %d, before %d", got.Revision, r.Account.Revision, live.Account.Revision)
 	}
 
 	s2, f2, _ := migrateStore(t)
@@ -220,7 +225,7 @@ func TestMigrateFilesProtectsTheSiteFirst(t *testing.T) {
 	live2 := liveFixture(t, s2)
 	f2.protection = fixtureProtection(live2.Account.ID)
 	native2.failure = "sites-reject"
-	_, err := s2.migrateFiles(ctx, live2.Account.ID, MigrateFilesInput{Migration: m2.ID, ExpectedRevision: live2.Account.Revision, Reason: "Move a website here"}, "test operator")
+	_, err = s2.migrateFiles(ctx, live2.Account.ID, MigrateFilesInput{Migration: m2.ID, ExpectedRevision: live2.Account.Revision, Reason: "Move a website here"}, "test operator")
 	var failed *MigrationError
 	if !errors.As(err, &failed) || failed.Step != "tier" {
 		t.Fatalf("a refused config: %v", err)

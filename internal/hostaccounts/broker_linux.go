@@ -185,6 +185,22 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	}
 	defer s.close()
 	s.web = web
+	// Deleted homes wait in the trash; the remover empties it now, after
+	// each delete and every trashRetry while entries remain, outside the
+	// store lock, so no delete or other account waits for it.
+	remover := newTrashRemover(opts.HomesDir)
+	s.trashWake = remover.wake
+	go remover.run(ctx)
+	// OpenLiteSpeed reads a .htaccess only when it restarts, so with the
+	// web operation on, a .htaccess change on the homes filesystem restarts
+	// it gracefully, at most once per window, through the store lock as a
+	// web change does (htaccess_watch.go). The watcher closes its fanotify
+	// group when the broker returns.
+	if web != nil {
+		watching, stopWatching := context.WithCancel(ctx)
+		defer stopWatching()
+		startHtaccessWatch(watching, opts.HomesDir, s.reloadWebServer)
+	}
 	// Backups need no option: each operation checks restic's pin and its
 	// tools when it runs, and answers unavailable without them.
 	engine := newResticEngine(s.opts.StateDir)
@@ -201,7 +217,7 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	// Migrations share the backup engine's runner and staging. An expired
 	// migration's key, or a folder no record names, goes before the socket
 	// accepts requests; each migration operation sweeps again.
-	s.migrate = newMigrator(s.opts.StateDir, engine)
+	s.migrate = newMigrator(s.opts.StateDir, engine, system.webUID)
 	// Expired migrations are ended in the background, now and every 30
 	// minutes: removing a key line from an old server may wait on its SSH
 	// port, which must not hold up the socket.

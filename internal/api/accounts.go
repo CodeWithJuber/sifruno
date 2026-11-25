@@ -39,6 +39,11 @@ type accountAbandonCreateInput struct {
 	ID   string `path:"id"`
 	Body AccountAbandonCreateBody
 }
+type AccountFinishDeleteBody hostaccounts.FinishDeleteInput
+type accountFinishDeleteInput struct {
+	ID   string `path:"id"`
+	Body AccountFinishDeleteBody
+}
 type accountOutput struct{ Body hostaccounts.Account }
 type accountListBody struct {
 	Items []hostaccounts.Account `json:"items"`
@@ -76,6 +81,18 @@ var abandonRefusals = map[string]string{
 	hostaccounts.AbandonHomeNotEmpty: "Nothing was removed: the home folder holds files this create did not make. Move them away, then try again.",
 	hostaccounts.AbandonMailSpool:    "Nothing was removed: the mail file with this account's name is not this account's. Check the server by hand.",
 	hostaccounts.AbandonProcesses:    "Nothing was removed: the account's processes kept running. Try again in a moment.",
+}
+
+// finishRefusals say why the broker removed nothing when asked to finish a
+// delete, by the reason it answers, and what the admin can do.
+var finishRefusals = map[string]string{
+	hostaccounts.DeleteNoUnfinished: "Nothing was removed: this hosting account has no unfinished delete to finish.",
+	hostaccounts.DeleteMarker:       "Nothing was removed: the broker's ownership marker for this account is missing or different, so it cannot prove what is left is this account's. Check the server by hand.",
+	hostaccounts.DeleteUser:         "Nothing was removed: a Linux user with this account's name or ID is not this account's. Check the server by hand.",
+	hostaccounts.DeleteGroup:        "Nothing was removed: a Linux group with this account's name or ID is not this account's. Check the server by hand.",
+	hostaccounts.DeleteHome:         "Nothing was removed: the home folder is not the one this account was given. Check the server by hand.",
+	hostaccounts.DeleteTrash:        "Nothing was removed: the folder deleted homes go to (.sifruno-trash in the homes folder) is not the broker's own. Make it a folder of root's with mode 0700 on the same disk, then try again.",
+	hostaccounts.DeleteProcesses:    "Nothing was removed: the account's processes kept running. Try again in a moment.",
 }
 
 func registerAccounts(a huma.API, o Options) {
@@ -170,6 +187,33 @@ func registerAccounts(a huma.API, o Options) {
 		forgetWebsite(o, in.ID)
 		return &accountOutput{Body: v}, nil
 	})
+	// An admin's way out of a delete that no start can finish: the broker
+	// removes only what is provably the account's and ends the delete, so
+	// the other accounts can change again. Admins only, never an API token
+	// (tokenArea).
+	huma.Register(a, op("finish-account-delete", "POST", "/api/v1/accounts/{id}/finish-delete"), func(ctx context.Context, in *accountFinishDeleteInput) (*accountOutput, error) {
+		if len(in.ID) > 64 || strings.ContainsAny(in.ID, "/\\?#%") {
+			return nil, accountError(hostaccounts.ErrInvalid)
+		}
+		recovery, ok := service.(hostaccounts.DeleteRecoveryService)
+		if !ok {
+			return nil, accountError(hostaccounts.ErrUnavailable)
+		}
+		v, err := recovery.FinishDelete(ctx, in.ID, hostaccounts.FinishDeleteInput(in.Body), siteActor(ctx))
+		var refused *hostaccounts.DeleteRefusedError
+		if errors.As(err, &refused) {
+			message, ok := finishRefusals[refused.Reason]
+			if !ok {
+				message = "Nothing was removed: the broker could not prove what is left is this account's."
+			}
+			return nil, huma.Error409Conflict(message)
+		}
+		if err != nil {
+			return nil, accountError(err)
+		}
+		forgetWebsite(o, in.ID)
+		return &accountOutput{Body: v}, nil
+	})
 }
 
 // forgetWebsite takes a deleted hosting account off every customer's
@@ -221,7 +265,7 @@ func allowedAccountMutation(r *http.Request) bool {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/"), "/")
-	return len(parts) == 2 && parts[0] != "" && (parts[1] == "state" || parts[1] == "plan" || parts[1] == "delete" || parts[1] == "abandon-create")
+	return len(parts) == 2 && parts[0] != "" && (parts[1] == "state" || parts[1] == "plan" || parts[1] == "delete" || parts[1] == "abandon-create" || parts[1] == "finish-delete")
 }
 
 // isAbandonCreatePath is an admin's abandon of an unfinished create.
@@ -229,6 +273,41 @@ func isAbandonCreatePath(p string) bool {
 	rest, ok := strings.CutPrefix(p, "/api/v1/accounts/")
 	parts := strings.Split(rest, "/")
 	return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "abandon-create"
+}
+
+// isPlanPath is an admin's change of an account's plan and limits.
+func isPlanPath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/accounts/")
+	parts := strings.Split(rest, "/")
+	return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "plan"
+}
+
+// strictLimits admits a plan change's limits only as an object of exactly
+// the three keys, spelled as the schema spells them, each once, each a
+// whole number (wholeNumber: no sign, fraction, exponent, quotes or null).
+// Their bounds are the broker's (validLimits).
+func strictLimits(raw json.RawMessage) bool {
+	if operator.DecodeObject(raw, &hostaccounts.AccountLimits{}) != nil {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 3 {
+		return false
+	}
+	for _, key := range []string{"processes", "memory_mib", "cpu_percent"} {
+		value, ok := fields[key]
+		if !ok || !wholeNumber.Match(bytes.TrimSpace(value)) {
+			return false
+		}
+	}
+	return true
+}
+
+// isFinishDeletePath is an admin's finish of an unfinished delete.
+func isFinishDeletePath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/api/v1/accounts/")
+	parts := strings.Split(rest, "/")
+	return ok && len(parts) == 2 && parts[0] != "" && parts[1] == "finish-delete"
 }
 
 func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
@@ -259,6 +338,10 @@ func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
 		target = &hostaccounts.CreateInput{}
 	case isAbandonCreatePath(r.URL.Path):
 		target = &hostaccounts.AbandonCreateInput{}
+	case isFinishDeletePath(r.URL.Path):
+		target = &hostaccounts.FinishDeleteInput{}
+	case isPlanPath(r.URL.Path):
+		target = &hostaccounts.PlanInput{}
 	default:
 		target = &hostaccounts.StateInput{}
 	}
@@ -278,7 +361,9 @@ func prepareAccountJSON(w http.ResponseWriter, r *http.Request) bool {
 		switch {
 		case r.URL.Path == "/api/v1/accounts":
 			valid = valid || key == "username" || key == "domain"
-		case isAbandonCreatePath(r.URL.Path):
+		case isAbandonCreatePath(r.URL.Path), isFinishDeletePath(r.URL.Path):
+		case isPlanPath(r.URL.Path):
+			valid = valid || key == "plan" || key == "expected_revision" || key == "limits" && strictLimits(fields[key])
 		default:
 			valid = valid || key == "state" || key == "expected_revision"
 		}

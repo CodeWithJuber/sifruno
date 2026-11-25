@@ -1,0 +1,71 @@
+# A tenant's own folder change stays with its own account
+# 2026-11-25T03:58:57Z  openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64  SELinux Enforcing
+# tenant A tna79137 (tna79137.proof.test), account B tnb79137 (tnb79137.proof.test)
+
+## 1. The broker runs with the web operation on
+PASS  the broker started with --web-user nobody
+PASS  LSPHP 8.4 is installed for B's version change
+
+## 2. Two accounts, both live on PHP 8.3
+PASS  A serves on PHP 8.3
+PASS  B serves on PHP 8.3
+
+## 3. Tenant A renames its public_html
+PASS  public_html is gone from A's home
+PASS  the list marks A's site folder changed, and A stays active
+PASS  the list does not mark B
+PASS  the account service stays available
+  openlitespeed -t on A's vhost now:
+    [WARN] [config:server:vhosts:vhost:sifruno-u739b28ecd9dee648ea2bfb6b76b42f4] configuration failed!
+  A's own PHP change: broker refused: native account identity or revision conflict
+PASS  A's own PHP change is refused as a conflict
+PASS  and A's revision did not move
+
+## 4. B carries on
+PASS  B serves on PHP 8.4
+PASS  B's suspend rewrote A's vhost (the older render is gone)
+PASS  B answers 403
+PASS  B serves on PHP 8.4 again
+PASS  account C is gone
+PASS  A is still active and marked, never recovery_required
+
+## 5. The operator suspends A
+PASS  A has a sleep and an SFTP server running
+PASS  B has a sleep and an SFTP server running
+  processes of A after the suspend: 
+PASS  the suspend ended every process of A
+PASS  B's processes still run
+PASS  A answers 403
+PASS  A's suspended vhost names no path in /home
+PASS  applying it again is a recorded change (revision moved from 3)
+  resume while public_html is gone: broker refused: web configuration rejected
+PASS  a resume while A's public_html is gone ends rejected
+PASS  and A still answers 403
+
+## 6. Recovery: the operator uses A's new public_html
+  with public_html a link to /etc: broker refused: native account identity or revision conflict
+PASS  a public_html that is a link is refused
+PASS  the link's target gained no ACL for the web server
+PASS  it is a recorded change (revision moved from 4)
+PASS  the list no longer marks A, still suspended
+PASS  the new public_html has mode 0750
+PASS  the web server may read it (ACL u:65534:r-x)
+PASS  A serves its new folder
+PASS  A's own web changes work again
+
+## 7. Delete, after the tenant changed its home's mode, with its processes running
+PASS  the list marks A's folder changed again
+PASS  A, active again, has a sleep and an SFTP server running
+PASS  A's Linux user is gone
+PASS  no process runs as A's UID
+PASS  A's home is gone
+PASS  A's vhost config is gone
+PASS  B still serves
+PASS  B's processes still run
+PASS  B can still change after A's delete
+PASS  B's Linux user is gone
+PASS  no process runs as B's UID
+PASS  OpenLiteSpeed is still running
+PASS  openlitespeed -t reports no error afterwards
+
+RESULT: all checks passed

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -57,16 +58,49 @@ func (f *fakeMigrationBroker) PlanMigration(_ context.Context, id string, in hos
 	f.order.add("plan " + in.Username)
 	return f.plan, f.planErr
 }
+
+// revision checks an expected revision as the broker does, and raises it
+// when the operation changes the account.
+func (f *fakeMigrationBroker) revision(id string, expected uint64, raise bool) error {
+	f.accounts.mu.Lock()
+	defer f.accounts.mu.Unlock()
+	for i := range f.accounts.accounts {
+		if f.accounts.accounts[i].ID == id {
+			if f.accounts.accounts[i].Revision != expected {
+				return hostaccounts.ErrConflict
+			}
+			if raise {
+				f.accounts.accounts[i].Revision++
+			}
+			return nil
+		}
+	}
+	return hostaccounts.ErrNotFound
+}
 func (f *fakeMigrationBroker) MigrateFiles(_ context.Context, id string, in hostaccounts.MigrateFilesInput, _ string) (hostaccounts.MigrateFilesResult, error) {
 	f.order.add(fmt.Sprintf("files %s rev=%d", id[28:], in.ExpectedRevision))
+	if f.filesErr != nil {
+		return hostaccounts.MigrateFilesResult{}, f.filesErr
+	}
 	res := f.filesResult
 	res.WordPress = true
-	return res, f.filesErr
+	// Protected folders go live as a journaled change of the account.
+	if err := f.revision(id, in.ExpectedRevision, len(res.Folders) > 0); err != nil {
+		return hostaccounts.MigrateFilesResult{}, err
+	}
+	res.Revision = in.ExpectedRevision
+	if len(res.Folders) > 0 {
+		res.Revision++
+	}
+	return res, nil
 }
 func (f *fakeMigrationBroker) MigrateDatabase(_ context.Context, id string, in hostaccounts.MigrateDatabaseInput, _ string) (hostaccounts.MigrateDatabaseResult, error) {
 	f.order.add("copy-db " + in.Database)
 	if f.dbErr != nil {
 		return hostaccounts.MigrateDatabaseResult{}, f.dbErr
+	}
+	if err := f.revision(id, in.ExpectedRevision, false); err != nil {
+		return hostaccounts.MigrateDatabaseResult{}, err
 	}
 	tables := f.tables
 	if tables == nil {
@@ -228,8 +262,48 @@ func TestConvertedSiteMigratesWithItsProbes(t *testing.T) {
 		t.Fatalf("files step: %q", job.Steps[i].Message)
 	}
 	want := []migrateverify.Probe{{Path: "/members/", Kind: migrateverify.ProbeAuth}, {Path: "/wp-content/plugins/akismet/", Kind: migrateverify.ProbeDeny}, {Path: "/wp-content/plugins/akismet/_inc/akismet.css", Kind: migrateverify.ProbeAllow}}
-	if len(f.verify) != 1 || !slices.Equal(f.verify[0].Probes, want) || len(job.Migration.Converted) != 2 {
+	if len(f.verify) != 1 || !reflect.DeepEqual(f.verify[0].Probes, want) || len(job.Migration.Converted) != 2 {
 		t.Fatalf("verify %+v converted %+v", f.verify, job.Migration.Converted)
+	}
+}
+
+// TestAddressListFoldersGoToVerifyWithBothAddresses: a folder open to some
+// addresses only reaches verify with its rule, the address the old server
+// saw this server come from, and the copy's own (the loopback address verify
+// connects from), on the first run and on a later one, after the key is gone.
+func TestAddressListFoldersGoToVerifyWithBothAddresses(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.plan.ClientAddress = "198.51.100.9"
+	lobby := hostaccounts.MigrationProbe{Path: "/lobby/", Kind: "hosts", Hosts: "except", Networks: []string{"127.0.0.2/32"}}
+	f.broker.filesResult = hostaccounts.MigrateFilesResult{
+		Folders: []hostaccounts.MigrationFolder{{File: "lobby/.htaccess", Path: "/lobby/", Rule: "closed to 127.0.0.2/32"}},
+		Probes:  []hostaccounts.MigrationProbe{lobby},
+	}
+	// A failed check's plain message goes to the person, critical ones
+	// first; the technical lines stay apart.
+	f.verdict = migrateverify.Report{Verdict: "CUTOVER LOCKED: 3 failed check(s)", Counts: migrateverify.Counts{PagesCompared: 5, PagesPass: 5, ProbesFail: 3}, Probes: []migrateverify.ProbeResult{
+		{Path: "/lobby/", Kind: migrateverify.ProbeHosts, Result: migrateverify.Fail, Code: migrateverify.CodeClientUnknown, Reason: "technical", Message: "/lobby/ is closed to some addresses. Check /lobby/ from an address it allows, then accept."},
+		{Path: "/office/", Kind: migrateverify.ProbeHosts, Result: migrateverify.Fail, Code: migrateverify.CodeNewOpen, Critical: true, Reason: "technical", Message: "/office/ is open only to some addresses. Accept only if it is closed."},
+		{Path: "/private/", Kind: migrateverify.ProbeAuth, Result: migrateverify.Fail, Code: migrateverify.CodeNewDiffers, Reason: "status 401 → 403"},
+	}}
+	job := f.migrate(t)
+	if job.State != StateSucceeded {
+		t.Fatalf("job: %+v %+v", job.State, job.Error)
+	}
+	v := job.Migration.Verify
+	if job.Migration.Gate != GateClosed || !slices.Equal(v.Problems, []string{f.verdict.Probes[1].Message, f.verdict.Probes[0].Message}) || len(v.Lines) != 3 {
+		t.Fatalf("gate %s verify %+v", job.Migration.Gate, v)
+	}
+	want := []migrateverify.Probe{{Path: "/lobby/", Kind: migrateverify.ProbeHosts, Hosts: migrateverify.HostsExcept, Networks: []string{"127.0.0.2/32"}}}
+	if len(f.verify) != 1 || !reflect.DeepEqual(f.verify[0].Probes, want) || f.verify[0].OldClient != "198.51.100.9" || f.verify[0].NewClient != "127.0.0.1" {
+		t.Fatalf("verify %+v", f.verify)
+	}
+	if _, err := f.runner.VerifyMigration(context.Background(), job.ID, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	f.runner.Wait()
+	if len(f.verify) != 2 || f.verify[1].OldClient != "198.51.100.9" || f.verify[1].NewClient != "127.0.0.1" {
+		t.Fatalf("verify again %+v", f.verify)
 	}
 }
 
@@ -282,6 +356,17 @@ func TestFailedMigrationUndoesWhatItMade(t *testing.T) {
 	raw, _ := json.Marshal(job)
 	if strings.Contains(string(raw), testHash) {
 		t.Fatal("the hash reached the job")
+	}
+}
+
+// A web server that could not reload after the copy is named as such, not
+// as a copy that failed.
+func TestFailedReloadSaysTheFilesAreInPlace(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.filesErr = &hostaccounts.MigrationError{Step: "reload", Detail: "The files are in place, but the web server could not reload to read the site's .htaccess rules, so its rewrites are not in force."}
+	job := f.migrate(t)
+	if job.State != StateFailed || job.Error.Step != StepFiles || strings.Contains(job.Error.Why, "could not be copied") || !strings.Contains(job.Error.Why, "could not reload") || !strings.Contains(job.Error.Next, "systemctl status lsws") {
+		t.Fatalf("job: %+v %+v", job.State, job.Error)
 	}
 }
 

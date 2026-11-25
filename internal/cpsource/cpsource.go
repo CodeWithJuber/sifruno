@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"path"
 	"regexp"
 	"strconv"
@@ -146,6 +147,46 @@ func DumpCommand(db string) (string, error) {
 	}
 	args := " --single-transaction --quick --skip-triggers --hex-blob --no-tablespaces --default-character-set=utf8mb4 -- " + db
 	return "if [ -x /usr/bin/mariadb-dump ]; then exec /usr/bin/mariadb-dump" + args + "; else exec /usr/bin/mysqldump" + args + "; fi", nil
+}
+
+// ClientAddressCommand prints the SSH session's SSH_CONNECTION, which the
+// source's sshd sets to "client-address client-port server-address
+// server-port" (OpenSSH ssh(1), ENVIRONMENT): its first field is the
+// address the source sees this server's connections come from. printf is
+// the shell's builtin, and the command reads no input.
+func ClientAddressCommand() string { return `printf '%s\n' "$SSH_CONNECTION"` }
+
+// ParseClientAddress reads ClientAddressCommand's answer: one line of four
+// fields, two addresses each with a port, and returns the client address
+// in its canonical form. An address with a zone, or an IPv4 address
+// written as IPv6, is refused, as htaccess refuses them in a rule: what
+// verify compares with a rule's lists must be one plain address.
+func ParseClientAddress(out []byte) (string, error) {
+	line, ok := strings.CutSuffix(string(out), "\n")
+	if !ok || len(line) > 200 || strings.ContainsAny(line, "\r\n\t") {
+		return "", ErrOutput
+	}
+	fields := strings.Split(line, " ")
+	if len(fields) != 4 {
+		return "", ErrOutput
+	}
+	var client netip.Addr
+	for i, f := range fields {
+		if i%2 == 1 {
+			if port, err := strconv.Atoi(f); err != nil || port < 1 || port > 65535 || strconv.Itoa(port) != f {
+				return "", ErrOutput
+			}
+			continue
+		}
+		a, err := netip.ParseAddr(f)
+		if err != nil || a.Zone() != "" || a.Is4In6() {
+			return "", ErrOutput
+		}
+		if i == 0 {
+			client = a
+		}
+	}
+	return client.String(), nil
 }
 
 // KeyComment names one migration's key in the source's authorized_keys.

@@ -140,6 +140,22 @@ func (c *client) AbandonCreate(ctx context.Context, id string, in AbandonCreateI
 	return out, err
 }
 
+// FinishDelete asks the broker to finish a delete that no start could
+// finish. A 409 delete_refused answer comes back as a *DeleteRefusedError
+// naming why: nothing was removed. It runs userdel and may wait on the
+// account's processes, so it has the slow limit.
+func (c *client) FinishDelete(ctx context.Context, id string, in FinishDeleteInput, actor string) (Account, error) {
+	if !idPattern.MatchString(id) || !validFinish(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	var out Account
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/finish-delete", struct {
+		Input FinishDeleteInput `json:"input"`
+		Actor string            `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
 // AdoptPublicHTML asks the broker to record the account's current
 // public_html as its site folder. A 409 conflict answer means the folder is
 // missing, a link, or not the account's, or the revision moved; 503
@@ -466,6 +482,11 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 				return ErrUnavailable
 			}
 			return &AbandonRefusedError{Reason: failure.Reason}
+		case "delete_refused":
+			if !abandonReasonPattern.MatchString(failure.Reason) {
+				return ErrUnavailable
+			}
+			return &DeleteRefusedError{Reason: failure.Reason}
 		default:
 			return ErrUnavailable
 		}

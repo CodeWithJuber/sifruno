@@ -188,21 +188,35 @@ func ruleText(rule htaccess.FolderRule) string {
 	return strings.Join(parts, "; ")
 }
 
-// foldersProbes are the closed paths verify checks: a folder closed to all
-// answers 403, a password folder open to every address 401. A folder open
-// to some addresses only is not probed: its status depends on the address
-// verify runs from.
+// foldersProbes are the folders verify checks: a folder closed to all
+// answers 403, a password folder open to every address 401, and a folder
+// open to some addresses only carries its rule, from which verify works
+// out what each site must answer the address it sees verify come from
+// (D-0002).
 func foldersProbes(rules []htaccess.FolderRule) []MigrationProbe {
 	out := []MigrationProbe{}
 	for _, rule := range rules {
-		switch {
-		case rule.Hosts.Kind == htaccess.HostsNone:
-			out = append(out, MigrationProbe{Path: rule.Path, Kind: "deny"})
-		case rule.Hosts.Kind == htaccess.HostsAll && rule.Realm != nil:
-			out = append(out, MigrationProbe{Path: rule.Path, Kind: "auth"})
+		switch kind := closedKind(rule); {
+		case kind != "":
+			out = append(out, MigrationProbe{Path: rule.Path, Kind: kind})
+		case rule.Hosts.Kind == htaccess.HostsOnly || rule.Hosts.Kind == htaccess.HostsExcept:
+			out = append(out, MigrationProbe{Path: rule.Path, Kind: "hosts", Hosts: string(rule.Hosts.Kind), Networks: slices.Clone(rule.Hosts.Networks), Realm: rule.Realm != nil})
 		}
 	}
 	return out
+}
+
+// closedKind is the probe kind of a folder that answers every address the
+// same: deny (403) when it is closed to all, auth (401) when it asks all
+// for a password; "" for any other folder.
+func closedKind(rule htaccess.FolderRule) string {
+	switch {
+	case rule.Hosts.Kind == htaccess.HostsNone:
+		return "deny"
+	case rule.Hosts.Kind == htaccess.HostsAll && rule.Realm != nil:
+		return "auth"
+	}
+	return ""
 }
 
 // setSiteFolders records a migrated site's protected folders and puts them

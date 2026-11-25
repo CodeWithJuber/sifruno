@@ -9,7 +9,7 @@ There are two ways to run Sifruno:
 
 The installer is `install.sh` inside the release tarball. It checks the server first and changes nothing if a check fails. You can run it again at any time: a second run changes nothing.
 
-Status: the proof for this section is `scripts/devvm/fresh-install-test.sh`, which installs on a new VM and saves a transcript. Until a transcript of it is in [docs/proofs](proofs/README.md), the installer has been checked in parts only (the release build, a dry run, and the nsswitch and sshd rollbacks in a sandbox), not on a whole server.
+Status: `scripts/devvm/fresh-install-test.sh` installs on a new server and saves a transcript. It passed on a new AlmaLinux 9.8 cloud server ([docs/proofs/real-server-2026-11-25/fresh-install.txt](proofs/real-server-2026-11-25/fresh-install.txt)), and `.github/workflows/nightly-install.yml` runs it every night on a throwaway one once the owner adds its Linode token.
 
 ### What the server needs
 

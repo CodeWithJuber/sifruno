@@ -48,6 +48,23 @@ async function mockFetch(mock, operation) {
   try { await operation(); } finally { globalThis.fetch = original; }
 }
 
+// Both a domain another website uses and a changed revision answer 409; the
+// API's error code tells them apart, so a refused create does not claim the
+// website changed.
+test("a 409 with the domain_taken code says the domain is in use, other 409s keep the revision message", async () => {
+  const problem = (extra) => new Response(JSON.stringify({ title: "Conflict", status: 409, detail: "Conflict", ...extra }), { status: 409, headers: { "Content-Type": "application/problem+json" } });
+  await mockFetch(async () => problem({ error: "domain_taken" }), async () => {
+    await assert.rejects(api.siteRequest("/api/v1/sites", api.validSite, { method: "POST", body: { name: "Second", domain: "taken.test" }, csrf: "fixture-csrf" }),
+      (error) => error.status === 409 && error.code === "domain_taken" && /already uses this domain/.test(error.message) && !/changed on the server/.test(error.message));
+  });
+  for (const body of [{}, { error: "conflict" }]) {
+    await mockFetch(async () => problem(body), async () => {
+      await assert.rejects(api.siteRequest(`/api/v1/sites/${id}/domain`, api.validSite, { method: "PUT", body: { domain: "other.test", expected_revision: 1 }, csrf: "fixture-csrf" }),
+        (error) => error.status === 409 && error.code !== "domain_taken" && /changed on the server/.test(error.message));
+    });
+  }
+});
+
 test("rename dispatches one authenticated checked mutation without file bytes", async () => {
   let calls = 0;
   await mockFetch(async (url, options) => {

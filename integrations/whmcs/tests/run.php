@@ -320,18 +320,39 @@ check('Suspend meanwhile says the website is still being created', str_contains(
 $r = sifruno_CreateAccount($params(4, 'second.example.com'));
 $messages[] = $r;
 check('a second order meanwhile gets the panel\'s one-job-at-a-time answer', str_contains($r, 'Another website is being created right now') && str_contains($r, 'HTTP 409') && SifrunoTestWHMCS::service(4)->password === '', $r);
+// As on a real server, the job finishes and its website is listed before the
+// module looks again (the wizard lists the account long before the job ends).
 mockState(static function (array $s): array {
     foreach ($s['jobs'] as $id => $job) {
         if ($job['domain'] === 'slow-news.example.com') {
-            $s['jobs'][$id]['release'] = true;
+            $account = bin2hex(random_bytes(16));
+            $s['jobs'][$id]['state'] = 'succeeded';
+            $s['jobs'][$id]['username'] = 'slownews';
+            foreach ($job['steps'] as $i => $step) {
+                $s['jobs'][$id]['steps'][$i]['state'] = $step['name'] === 'ssl' ? 'skipped' : 'done';
+            }
+            $s['jobs'][$id]['result'] = ['url' => 'http://slow-news.example.com/', 'admin_url' => 'http://slow-news.example.com/wp-admin/', 'wordpress_version' => '6.8.3', 'account_id' => $account];
+            unset($s['jobs'][$id]['release']);
+            $s['sites'][$account] = [
+                'account_id' => $account, 'username' => 'slownews', 'domain' => 'slow-news.example.com', 'state' => 'active',
+                'php_version' => $job['php_version'], 'created_at' => $job['created_at'], 'revision' => 1,
+            ];
         }
     }
     return $s;
 });
+// The admin tab finds the website on the panel by its domain too, but the
+// service's own job is what ties the website to this service: once the job
+// has finished, the tab saves its account ID (found on a real server, where
+// the create outlasted CreateAccount's wait).
+$fields = sifruno_AdminServicesTabFields($params(3, 'slow-news.example.com'));
+$messages[] = implode("\n", $fields);
+$site = siteFor('slow-news.example.com');
+check('once the job is done, the admin tab shows the website live and saves its account ID from the job', str_starts_with($fields['Sifruno website'] ?? '', 'Live: ') && $site !== null && SifrunoTestWHMCS::service(3)->serviceProperties->get(SifrunoPanel::ACCOUNT_FIELD) === $site['account_id'], json_encode($fields));
 $r = sifruno_SuspendAccount($params(3, 'slow-news.example.com'));
 $messages[] = $r;
 $site = siteFor('slow-news.example.com');
-check('once the job is done, Suspend finds the website through the job and saves its account ID', $r === 'success' && $site !== null && $site['state'] === 'suspended' && SifrunoTestWHMCS::service(3)->serviceProperties->get(SifrunoPanel::ACCOUNT_FIELD) === $site['account_id'], $r);
+check('Suspend then finds the website by its saved account ID', $r === 'success' && $site !== null && $site['state'] === 'suspended' && SifrunoTestWHMCS::service(3)->serviceProperties->get(SifrunoPanel::ACCOUNT_FIELD) === $site['account_id'], $r);
 
 echo "## Panel refusals and WHMCS failures\n";
 $r = sifruno_CreateAccount($params(5, 'slow-news.example.com'));

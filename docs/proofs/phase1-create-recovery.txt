@@ -1,0 +1,131 @@
+# Create recovery: no killed shadow-utils, a stopped useradd finished, an unfinishable create abandoned
+# 2026-11-25T05:18:19Z  AlmaLinux release 9.8 (Olive Jaguar)  shadow-utils-4.9-16.el9.x86_64 glibc-2.34-290.el9_9.x86_64  SELinux Enforcing
+# accounts A cra83899, B crb83899, C crc83899, D crd83899, E cre83899, F crf83899, G crg83899, H crh83899, I cri83899, J crj83899
+
+## 1. The broker starts; nothing is unfinished
+PASS  the broker started
+PASS  no account is recovery_required
+
+## 2. groupadd waits on its lock: the broker lets it finish and logs why the create stopped
+  create of cra83899 while the lock was held answered after 15 s: broker refused: native account recovery required
+PASS  A's create ends recovery_required (groupadd could not take its lock)
+  broker log since the create:
+    sifruno broker: recovery: operation=create account=aaa8903d282eb1d5fdb174ce176865ec user=cra83899 step="groupadd" error="groupadd exited with status 10"
+PASS  the log names A's create, step groupadd, and that groupadd exited by itself
+PASS  groupadd was not stopped at a time limit
+PASS  groupadd made no group
+  another create meanwhile: broker refused: native account recovery required
+PASS  another account's create is refused (recovery)
+PASS  the log names the account that holds it up
+
+## 3. useradd stopped after it made the home: the next start finishes the create
+  left: cra83899:x:20019:20019:sifruno-managed-aaa8903d282eb1d5fdb174ce176865ec:/home/cra83899:/usr/sbin/nologin
+  left: d---------. 2 root root 6 Nov 25 05:18 /home/cra83899
+PASS  the home is root:root, mode 0, empty
+PASS  the broker starts again
+PASS  A is active
+PASS  A's home is A's own with mode 0750
+PASS  A's public_html is A's own with mode 0750
+PASS  the start logged no recovery for A
+PASS  B is active
+
+## 4. A create the broker cannot finish holds up every account until the operator abandons it
+  create of crc83899 while the lock was held answered after 15 s: broker refused: native account recovery required
+PASS  C's create ends recovery_required
+PASS  the broker starts again
+PASS  C stays recovery_required: a group alone is not a finished create
+  broker log since the start:
+    sifruno broker: recovery: operation=create account=0401a97be3653b71903f8dc5b88665af user=crc83899 step="finish at start / passwd and group" error="differs from what the broker recorded"
+PASS  the log says why the start could not finish C
+PASS  another account's create is refused (recovery)
+  abandon of B, an active account: broker refused: abandon create refused: no_unfinished_create
+PASS  is refused: no_unfinished_create
+PASS  and B is still active
+  abandon of C with a home the create did not make: broker refused: abandon create refused: home
+PASS  is refused: home
+PASS  and removed nothing: C's group and the planted file are there
+  abandon of C: recovery_required
+PASS  C is gone from the list
+PASS  C's group is gone
+PASS  C's ownership marker is gone
+PASS  C's slice drop-in is gone
+PASS  the abandon logged no recovery
+PASS  D is active
+
+## 5. A delete whose userdel cannot take its lock stays pending; the next start finishes it
+  delete of E while the lock was held answered after 15 s: broker refused: native account recovery required
+PASS  E's delete ends recovery_required (userdel could not take its lock)
+PASS  E is recovery_required
+  broker log since the delete:
+    sifruno broker: recovery: operation=delete account=6b4c0e5a21b014bf179f2ad023edb295 user=cre83899 step="remove / remove user" error="userdel exited with status 1"
+PASS  the log names E's delete, step remove user, and that userdel exited by itself
+PASS  userdel changed nothing: E's user is still there
+PASS  another account's create is refused (recovery)
+PASS  the broker starts again
+PASS  E is gone from the list
+PASS  E's user and group are gone
+PASS  E's home left the homes folder
+PASS  E's ownership marker is gone
+PASS  E's slice drop-in is gone
+PASS  the trash remover empties E's home from the trash
+PASS  the start logged no recovery for E
+PASS  F is active
+
+## 6. A delete the broker cannot finish holds up every account until the operator finishes it
+  delete of G with a trash of mode 0755: broker refused: native account recovery required
+PASS  G's delete ends recovery_required
+PASS  the log names G's delete and the trash refusal
+PASS  the broker starts again
+PASS  G stays recovery_required: the start cannot finish it
+PASS  the log says why the start could not finish G
+PASS  another account's create is refused (recovery)
+  finish-delete of F, an active account: broker refused: delete refused: no_unfinished_delete
+PASS  is refused: no_unfinished_delete
+  finish-delete of G with the trash as it is: broker refused: delete refused: trash
+PASS  is refused: trash
+PASS  and removed nothing: G's user and home are there
+  finish-delete of G: c80d62176ef17f205e33328a22488502
+PASS  G is gone from the list
+PASS  G's user and group are gone
+PASS  G's home left the homes folder
+PASS  G's ownership marker is gone
+PASS  G's slice drop-in is gone
+PASS  the finish logged no recovery
+PASS  the trash remover empties G's home from the trash
+PASS  H is active
+
+## 7. A 200,000-file home: the delete answers at once, the trash drains, its UID is held back meanwhile
+PASS  the trash is empty before I is created
+PASS  I's home holds 200,000 files
+  the delete of 200,000 files answered after 1 s; 199917 of them were still in the trash then
+PASS  the delete answered within 30 s
+PASS  I is gone from the list
+PASS  I's home is in the trash, not in the homes folder
+PASS  I's UID is the one a create would get without the trash
+  I had UID 20024; J, created while I's home was in the trash, got 20025
+PASS  J did not get I's UID
+PASS  the trash drains I's 200,000 files
+PASS  the folder on another filesystem is left, logged by I's account ID
+PASS  no cleanup line names a file of I's home
+PASS  the broker starts again
+PASS  the trash remover empties I's home from the trash
+
+## 8. The root-only Go tests of the same native code
+  --- PASS: TestRootOnlyRecoverCreateAdoptsUseraddHome (0.44s)
+  --- PASS: TestRootOnlyAbandonCreate (0.96s)
+  --- PASS: TestRootOnlyDeleteFinishesAfterUserdel (1.25s)
+  --- PASS: TestRootOnlyFinishDelete (1.02s)
+  --- PASS: TestRootOnlyPlanSkipsATrashedUID (0.00s)
+  PASS
+PASS  TestRootOnlyRecoverCreateAdoptsUseraddHome passed
+PASS  TestRootOnlyAbandonCreate passed
+PASS  TestRootOnlyDeleteFinishesAfterUserdel passed
+PASS  TestRootOnlyFinishDelete passed
+PASS  TestRootOnlyPlanSkipsATrashedUID passed
+PASS  no root-only test failed
+
+## 9. Clean up
+PASS  no account of this run is left
+PASS  the trash empties
+
+RESULT: all checks passed

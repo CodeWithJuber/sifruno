@@ -60,7 +60,8 @@ providers are unsupported. It never rewrites this policy. A disposable guest may
 declare the files-only qualification fixture; that is an explicit precondition,
 not zero-configuration AlmaLinux, production installer or vendor compatibility.
 The policy is rechecked before operations. The dedicated homes parent starts
-empty and subsequently contains only journal-reserved account directories.
+empty and subsequently contains only journal-reserved account directories
+and the broker's trash of deleted homes (`.sifruno-trash`, Deleted homes).
 
 Usernames are3–32ASCIIbytes, `[a-z][a-z0-9_]*`, with reserved service names refused;
 these are native foundation limits, not cPanel username rules. Domain must be a
@@ -146,6 +147,51 @@ preexisting public_html, a home that differs from that state in any way,
 changed OS identity/ownership/inodes and other ambiguous results remain blocked.
 No automatic useradd retry, deletion or cleanup of OS accounts is attempted.
 
+A delete removes the ownership marker last, so a delete that finds it gone
+and no user of the account left had finished everything before it, and
+running it again finishes the rest. A marker counts as gone only when its
+own name is missing from the real markers folder (`<state>/owners`, root's,
+mode 0700, under parents only root can write, read through a handle that is
+still that folder); a missing or odd folder, a link or another file there
+is a recovery answer, never a missing marker.
+
+Once its site has left the config, and before its native removal begins,
+a delete saves `user_removal` on its pending record. A start that finds a
+delete unfinished without it checks the account first, as before; with it
+the user may already be gone, so the start finishes the delete from the
+journal alone, without that check: it removes a user only when it is the
+only one with the account's name and UID and has the journaled UID, GID,
+tag, home and nologin shell; a group only when it is the account's private
+group alone, also one userdel left; the home only when it is the recorded
+directory; then the account's files, the marker last, and the slice
+drop-in. What is already gone counts as removed; anything else stays
+pending, its reason logged. A delete that stopped before it saved
+`user_removal` still ends rejected; one that saved it is finished at the
+start even if userdel had not run yet. The delete's last row (`succeeded`, or
+`reconciled` at a start) and the removal of the record are one bbolt
+transaction that reads the stored record again: a crash leaves the delete
+unfinished or ended, never one without the other. The account list refuses
+a record that carries `user_removal` without a pending delete.
+
+A delete that cannot be finished automatically is the operator's to finish
+(`POST /v1/accounts/{id}/finish-delete`, reason only; the panel serves it
+to signed-in admins, never to an API token), once what stopped it is
+fixed. Only an account whose pending operation is a delete can be
+finished. If the delete had not yet taken the site out of the config,
+that comes first. Then the native delete runs as at a start, without
+checking the account first, and checks everything before it removes
+anything: a refusal answers 409 `delete_refused` with its reason
+(`no_unfinished_delete`, `marker`, `user`, `group`, `home`, `trash`,
+`processes`), removes no user, group or file and journals nothing, and the
+recovery log names it; a site this run took out of the config stays out,
+since the delete is still the account's pending operation. Otherwise it removes as a delete does, the slice drop-in goes,
+and one bbolt transaction journals the delete's last row (status
+`finished`, with the operator's actor and reason) and removes the record,
+so every other account can change again. A run stopped half way leaves
+the delete unfinished, and running it again treats what is already gone
+as removed. The same refusals hold a delete pending when it runs as
+usual or at a start.
+
 A create that cannot be finished is the operator's to abandon
 (`POST /v1/accounts/{id}/abandon-create`, reason only; the panel serves it to
 signed-in admins, never to an API token). Only an account whose pending
@@ -208,7 +254,7 @@ or public_html. That concerns its own account only:
 - Everything else verifies only what root controls, before and after the
   intent: state changes (so the operator can suspend, suspend again and
   resume), SFTP keys, plan and delete. Delete checks the home's object and
-  owner, not its mode, and removes it without following links. Restart
+  owner, not its mode, and moves it into the trash (Deleted homes). Restart
   finishes their interrupted operations the same way, so a tenant cannot
   keep one pending.
 - Other accounts' web changes do not judge the changed account's vhost
@@ -351,6 +397,42 @@ either way; if a process outlived the last pass the answer is 503
 `unavailable`, and a suspend of the suspended account, with or without a
 site, ends its processes again. A suspend the next start finishes does not
 end them: suspend again.
+
+## Deleted homes
+
+A delete detaches the home instead of removing its files under the store
+lock, so it answers at once however many files the home holds, and no
+other account waits for it (Jev, `detach_then_delete` 0.99; forge D-0001).
+
+- Under the lock, after userdel, the broker renames the home by handle:
+  `renameat2` with `RENAME_NOREPLACE` from the held homes directory into
+  the held trash, `<homes>/.sifruno-trash/<account ID>`. Before and after
+  the move it checks the entry's identity (device, inode, the account's
+  UID and GID, a directory, read with `fstatat` and `AT_SYMLINK_NOFOLLOW`).
+  It journals `home_in_trash` on the pending record and ends the delete as
+  before. A home already gone from the homes directory, moved or removed
+  whole, counts as done.
+- The trash is root's own: the broker makes it through the homes handle,
+  root:root mode 0700, and refuses a link, another owner, another mode or
+  a folder on another filesystem, before it removes anything.
+- A remover empties the trash outside the store lock: when the broker
+  starts, after each delete, and every 10 minutes while entries remain. It
+  starts only from entries named as account IDs. It walks by directory
+  handles (`openat` with `O_NOFOLLOW|O_DIRECTORY`, `unlinkat`), holding a
+  few descriptors at any depth; each step up through `..` is checked
+  against the folder it came from, and a folder that moved stops it. It
+  never follows a link, checks its context before every entry, never
+  enters a folder on another device or mount (that folder and those above
+  it stay, the rest of the entry goes, and the entry is left and logged),
+  and logs by account ID only. A bind mount of the same device shows only
+  in the statx mount ID, so a kernel that does not report it (before Linux
+  5.8) makes the remover refuse to run rather than guess. A removal stopped half way is resumed by
+  the next run.
+- Plan, the only allocator of UIDs and GIDs, skips every UID and GID that
+  owns a trash entry, so a deleted account's files never count against a
+  new account's XFS quota. A create checks its planned IDs are still free
+  rather than still the lowest, since the remover may free a lower one
+  meanwhile.
 
 ## Resource limits
 
@@ -622,6 +704,67 @@ Limits for now:
   process under the account's subordinate IDs in a namespace someone else
   made; kill as the account cannot end those, so such a delete ends
   rejected.
+
+### .htaccess changes
+
+OpenLiteSpeed reads a site's `.htaccess` only when it starts or restarts
+gracefully (`internal/htaccess` doc.go has the sources). A `.htaccess` that
+WordPress, WP-CLI, the file manager, a restore or the tenant over SFTP
+writes later is not used until the next restart, and one that was missing at
+the last restart stays unread. With the web operation on, the broker
+restarts OpenLiteSpeed itself when that happens (`htaccess_watch.go`,
+`htaccess_watch_linux.go`):
+
+- One fanotify group marks the homes filesystem (`FAN_MARK_FILESYSTEM`,
+  notification class, `FAN_REPORT_DFID_NAME`) for names created, closed
+  after writing, moved or deleted. Only a name that is exactly `.htaccess`
+  counts. The broker opens, reads and follows nothing a tenant names: it
+  skips the directory handle in each event, so it does not know which site
+  changed, and restarts for all of them, as any graceful restart does.
+- Changes are coalesced. A restart starts 5 seconds after the last change,
+  or 30 seconds after the first when changes keep coming, and at least 30
+  seconds after the previous restart ended. A tenant who writes `.htaccess`
+  in a loop, or floods the filesystem with other events until the kernel's
+  event queue overflows, costs every account one restart per window and no
+  memory: the kernel's queue is limited, and the broker reads into one
+  buffer and adds to two counters.
+- A restart is a web change that changes nothing: under the store lock, so
+  it never runs inside a web operation; refused while any operation is
+  unfinished (logged as `an unfinished operation holds up every change`,
+  naming no account); the site list installed again from the records (normally the
+  same bytes, so nothing is written), the config test, then `systemctl
+  reload lsws`, under the web operation's four-minute limit. It changes no
+  account and is not journaled. Each restart logs `sifruno broker:
+  htaccess: OpenLiteSpeed restarted gracefully for N .htaccess changes`,
+  with counts only, never a name or a path. A failed one logs a
+  `sifruno broker: recovery: operation=htaccess` line with the error's class
+  and is tried again 30 seconds after it ended; it holds up another account
+  only while it holds the lock.
+- The broker also restarts once, 5 seconds after it starts, for changes
+  made while no watcher ran.
+- If fanotify cannot be set up (no `CAP_SYS_ADMIN`, a kernel without
+  fanotify, a homes filesystem that refuses the mark, a group or mark
+  limit), the broker logs `the .htaccess watcher could not start` once and
+  runs without it: a `.htaccess` change then takes effect at the next web
+  change or OpenLiteSpeed restart. It does not poll instead, because it
+  cannot tell whether a `.htaccess` changed without reading tenants'
+  folders.
+
+Limits for now:
+
+- The mark covers the whole filesystem the homes folder is on, so a
+  `.htaccess` change elsewhere on it (the trash remover emptying a deleted
+  home, for example) restarts OpenLiteSpeed too.
+- A folder moved into place with a `.htaccess` already inside it, and
+  `truncate(2)` on a path, are not seen; the next change, web change or
+  restart picks them up.
+- While a tenant changes `.htaccess` without pause, other accounts' panel
+  operations wait for the lock during one restart per window (a restart
+  took about 20 seconds on a busy dev VM).
+- Read from the man pages and the Linux 5.14 source, and the event parsing
+  run against Linux 6.8 with a non-root directory mark. The filesystem mark
+  on AlmaLinux 9 (`TestRootOnlyHtaccessWatchRestartsOnceForAWrite` and
+  `scripts/devvm/proofs/htaccess-reload.guest.sh`) has not been run yet.
 
 ## Domains and redirects
 
@@ -1312,7 +1455,9 @@ root step. The design, with the owner's choices recorded from Jev on
   `php_get_vhost_versions`; `uapi Mysql list_databases`, `list_users`);
   `crontab -l -u`; SQL to the source's MariaDB on standard input (`SHOW
   CREATE USER` for each user's `mysql_native_password` hash, the
-  `mysql.db` grant table); the dump tool. ssh runs as
+  `mysql.db` grant table); the dump tool; `printf '%s\n'
+  "$SSH_CONNECTION"` for the address the source sees this server come
+  from. ssh runs as
   `/usr/bin/ssh -F /dev/null -T` with `BatchMode`,
   `StrictHostKeyChecking=yes`, only the migration's key and known_hosts
   under the alias `sifruno-migration-source`, no agent, no password
@@ -1321,7 +1466,10 @@ root step. The design, with the owner's choices recorded from Jev on
   `POST /v1/migrations/{id}/plan` (`username`, `reason`) reads one: its
   domain, home and document root (which must be `<home>/public_html`), PHP
   package, databases and users (which must carry the `<user>_` prefix),
-  each user's hash and grants, its crontab, and the tier. For the tier
+  each user's hash and grants, its crontab, the address the source sees
+  this server come from (`client_address`, empty when its sshd does not
+  say: verify then fails every folder open to some addresses only), and
+  the tier. For the tier
   rsync fetches only the `.htaccess` files of the home and public_html into
   a root-only staging folder, and `internal/htaccess` scans and converts
   them there. The answer carries the hashes: the panel hands them to its
@@ -1358,8 +1506,12 @@ root step. The design, with the owner's choices recorded from Jev on
   files are removed and the copy stops (`tier`). olsweb renders one regex
   context per folder with rewriting off inside it. The answer lists the
   folders and the URLs verify checks: 403 for a closed folder, 401 for a
-  password folder, 200 for up to three real files a closed folder leaves
-  open. A delete removes the site's realm files. The folders are a
+  password folder, the same for the first real subfolder below each of
+  them (by name, a name a URL holds as it is, from the staged copy), 200
+  for up to three real files a closed folder leaves open, and each folder
+  open to some addresses only with its rule, from which verify works out
+  what each site must answer the address it sees verify come from (D-0002).
+  A delete removes the site's realm files. The folders are a
   snapshot: a later edit of the tenant's `.htaccess` or user file changes
   nothing.
 - `POST /v1/accounts/{id}/migrate-files` (`migration`,
@@ -1388,6 +1540,27 @@ root step. The design, with the owner's choices recorded from Jev on
   restore's copy does, so files keep the old server's modes, and the web
   server's access is granted again. Root writes nothing
   into a path the tenant controls, and the tenant never holds the key.
+  For a live site the unchanged site list is then installed once more
+  (`ApplySites`, a graceful restart), while the account is still busy:
+  OpenLiteSpeed reads a site's `.htaccess` (its rewrite rules) only when it
+  restarts, and the protected folders' restart ran before the files were
+  in the home (D-0004). If it fails, the step is `reload`: the files are
+  in place, but the rewrites are not in force.
+- Group read (D-0001). The copy gives files the site's own group, so what
+  the old web server read through the group alone (a 0640 file, a 0750
+  folder, group `nobody` on cPanel or `apache` on a plain Apache) would
+  be closed to OpenLiteSpeed. rsync marks the groups (`-g
+  --groupmap=nobody:<site gid>,apache:<site gid>,*:0`, by the source's
+  group names); before `groupStaged` takes the marks away, each marked
+  folder with group read and traverse, or regular file with group read,
+  that others may not read is listed. On the staged copy, while the
+  staging folder is root's alone, each gets one named ACL entry for the
+  web server user (`r--`, `r-x` on a folder), reached from the staged
+  home's handle one folder at a time without following a link, with the
+  mask equal to the group bits so the mode stays; `cp --preserve=mode`
+  carries the ACL into the home. Nothing else changes: no mode, no group,
+  no other path. A folder the group may only traverse (0710) gets
+  nothing, so a file below it stays closed to the web server.
 - `POST /v1/accounts/{id}/migrate-database` (`migration`, `database`,
   `expected_revision`, `reason`): the database must exist here (the panel
   made it, with the same name, and the user with the same hash, so
@@ -1414,8 +1587,8 @@ root step. The design, with the owner's choices recorded from Jev on
   under it, so a plan waiting for `backupMu` behind a long backup never
   holds up the admin's finish.
 - A failed step answers 422 `migration_failed` with the step (`connect`,
-  `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `database`,
-  `dump`, `import`, `compare`, `remove_key`) and the end of its error
+  `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `reload`,
+  `database`, `dump`, `import`, `compare`, `remove_key`) and the end of its error
   output only: what a source command printed on standard output can hold
   password hashes.
   Copies run one at a time with backups (they share the staging root and
@@ -1446,8 +1619,11 @@ Known gaps, found in review and not fixed in v1:
 - The plan fetches only `.htaccess` files, so a password folder whose user
   file is missing, outside the home or holds a hash shape this server does
   not keep plans as Native and is refused at the copy (`tier`).
-- A folder open to some addresses only is not probed by verify: its status
-  depends on the address verify runs from.
+- Verify expects a folder open to some addresses only to answer the old
+  site's client as the address the source's sshd saw this server come
+  from. If the site's HTTP reaches the old server another way (a proxy or
+  CDN in front of it, IPv6 where SSH used IPv4), the check can fail; it
+  fails closed, and a person checks the folder and accepts.
 
 ## Verification cost
 

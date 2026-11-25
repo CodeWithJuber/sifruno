@@ -10,7 +10,7 @@ import (
 const SchemaVersion = 1
 
 // Scope states what this report proves so a green gate is not read as more.
-const Scope = "Pages discovered on the old site (status, redirect target, content type, HTML title, body size) and listed closed URLs (401/403). Screenshots, WordPress admin, database rows, mail, DNS and SSL are not compared."
+const Scope = "Pages discovered on the old site (status, redirect target, content type, HTML title, body size), listed closed URLs (401/403) and folders open to some addresses only (the status each folder's rule gives the address each site sees verify come from). Screenshots, WordPress admin, database rows, mail, DNS and SSL are not compared."
 
 // Result is the outcome of one page or probe check.
 type Result string
@@ -32,6 +32,9 @@ const (
 	CodeOldUnexpectedStatus ProbeCode = "old_unexpected_status"
 	CodeNewDiffers          ProbeCode = "new_differs"
 	CodeAuthSchemeDiffers   ProbeCode = "auth_scheme_differs"
+	// CodeClientUnknown is a ProbeHosts folder checked without a known
+	// client address for a site: what its rule gives that site is unknown.
+	CodeClientUnknown ProbeCode = "client_unknown"
 )
 
 // Response is what one site answered for one request target.
@@ -58,19 +61,25 @@ type PageResult struct {
 	New      Response `json:"new"`
 }
 
-// ProbeResult compares one closed URL on both sites.
+// ProbeResult compares one closed URL on both sites. For a ProbeHosts
+// folder ExpectedStatus is the old site's and ExpectedNewStatus the
+// copy's, each from the folder's rule and that site's client address, and
+// a failure carries Message: in plain words, the folder, why and what to
+// do next. Reason is the technical detail.
 type ProbeResult struct {
-	Path           string    `json:"path"`
-	Kind           ProbeKind `json:"kind"`
-	Result         Result    `json:"result"`
-	Code           ProbeCode `json:"code"`
-	Critical       bool      `json:"critical"`
-	Reason         string    `json:"reason"`
-	ExpectedStatus int       `json:"expected_status"`
-	OldStatus      int       `json:"old_status,omitempty"`
-	NewStatus      int       `json:"new_status,omitempty"`
-	OldAuthScheme  string    `json:"old_auth_scheme,omitempty"`
-	NewAuthScheme  string    `json:"new_auth_scheme,omitempty"`
+	Path              string    `json:"path"`
+	Kind              ProbeKind `json:"kind"`
+	Result            Result    `json:"result"`
+	Code              ProbeCode `json:"code"`
+	Critical          bool      `json:"critical"`
+	Reason            string    `json:"reason"`
+	Message           string    `json:"message,omitempty"`
+	ExpectedStatus    int       `json:"expected_status"`
+	ExpectedNewStatus int       `json:"expected_new_status,omitempty"`
+	OldStatus         int       `json:"old_status,omitempty"`
+	NewStatus         int       `json:"new_status,omitempty"`
+	OldAuthScheme     string    `json:"old_auth_scheme,omitempty"`
+	NewAuthScheme     string    `json:"new_auth_scheme,omitempty"`
 }
 
 // Counts summarises the results. Warnings includes report-level warnings,
@@ -96,6 +105,8 @@ type Report struct {
 	OldOrigin        string        `json:"old_origin"`
 	NewOrigin        string        `json:"new_origin"`
 	NewConnect       string        `json:"new_connect,omitempty"`
+	OldClient        string        `json:"old_client,omitempty"`
+	NewClient        string        `json:"new_client,omitempty"`
 	InsecureNewTLS   bool          `json:"insecure_new_tls"`
 	PageLimit        int           `json:"page_limit"`
 	AcceptedWarnings bool          `json:"accepted_warnings"`
@@ -210,6 +221,9 @@ func (r Report) Text() string {
 	}
 	line("Old site: %s", r.OldOrigin)
 	line("New site: %s", newSite)
+	if r.OldClient != "" || r.NewClient != "" {
+		line("Verify's address as each site sees it: old %s, new %s", orNone(r.OldClient), orNone(r.NewClient))
+	}
 	line("Pages: %d compared (limit %d): %d pass, %d warn, %d fail", r.Counts.PagesCompared, r.PageLimit, r.Counts.PagesPass, r.Counts.PagesWarn, r.Counts.PagesFail)
 	line("Closed URLs: %d checked: %d pass, %d fail", len(r.Probes), r.Counts.ProbesPass, r.Counts.ProbesFail)
 	if r.AcceptedWarnings {

@@ -482,7 +482,7 @@ func (s *Store) create(input CreateInput, data map[string][]byte, action, actor 
 	}
 	for _, r := range rs {
 		if r.Site.Domain == domain {
-			return Site{}, ErrConflict
+			return Site{}, ErrDomainTaken
 		}
 	}
 	id, err := newID()

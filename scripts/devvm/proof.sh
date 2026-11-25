@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -163,8 +163,20 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 root:root mode-0 home) is finished when the broker starts
                 again; a create it cannot finish holds up every account until
                 the operator abandons it, which is refused for an active
-                account and for a home the create did not make; then the
+                account and for a home the create did not make. A delete
+                whose userdel waits on the same lock is finished by the next
+                start; one the broker cannot finish waits for the operator's
+                finish-delete; a 200,000-file home is deleted at once while
+                the trash drains and its UID is held back. Then the
                 root-only Go tests of the same code run.
+  htaccess-reload
+                The broker's .htaccess watcher on a live site: a rewrite
+                rule the site's user writes into public_html/.htaccess takes
+                effect with no panel action; 1000 writes to other names
+                restart nothing; a flood of 1000 .htaccess writes restarts
+                OpenLiteSpeed at most once per 30 s window and its last rule
+                is served; the broker's lines name counts only. Then the
+                root-only Go test marks a filesystem the same way.
 USAGE
 }
 
@@ -389,6 +401,27 @@ case "${1:-}" in
     transcript="$OUT/create-recovery-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0
     "$HERE/vm.sh" ssh /opt/sifruno-proof/create-recovery.guest.sh | tee "$transcript" || status=$?
+    echo "Transcript: $transcript"
+    exit "$status"
+    ;;
+  htaccess-reload)
+    stage="$(mktemp -d)"
+    trap 'rm -rf -- "$stage"' EXIT
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    (cd "$REPO" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -trimpath -buildvcs=false -o "$stage/hostaccounts.test" ./internal/hostaccounts)
+    # A broker left running by an earlier proof holds its binary open, so
+    # stop it before the copy replaces the file. Its state stays on disk.
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in hostbroker brokerdrive hostaccounts.test; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
+    "$HERE/vm.sh" put "$HERE/proofs/htaccess-reload.guest.sh" /opt/sifruno-proof/htaccess-reload.guest.sh
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/hostaccounts.test /opt/sifruno-proof/htaccess-reload.guest.sh; restorecon -R /opt/sifruno-proof'
+    mkdir -p "$OUT"
+    transcript="$OUT/htaccess-reload-$(date -u +%Y%m%dT%H%M%SZ).txt"
+    status=0
+    "$HERE/vm.sh" ssh /opt/sifruno-proof/htaccess-reload.guest.sh | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

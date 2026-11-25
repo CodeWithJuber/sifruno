@@ -1,0 +1,46 @@
+# Phase 1 new UI shell: Home, Server and Security on shadcn/ui (Astryx slice 1)
+# 2026-11-25T06:29Z  local run without root: ./cmd/sifruno at acdc45a with throwaway state on 127.0.0.1,
+# web/dist built from the same commit, Chrome 158 (agent-browser 0.44.0) driven over CDP
+#
+# Every request reached the running panel except /api/v1/services, whose answer the browser replaced
+# with 31 standard Ubuntu services taken from the panel's real answer, so the host's own service names
+# are not published. Security ran signed in as an admin made by first-run setup on the throwaway state.
+# Right-to-left: dir="rtl" set on the page by the browser; the panel has no right-to-left language yet.
+
+PASS  light 1440 /: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 1440 /server: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 1440 /server/storage: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 1440 /server/network: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 1440 /security: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 390 /: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  light 390 /server: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  light 390 /server/storage: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  light 390 /server/network: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  light 390 /security: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 1440 /: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 1440 /server: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 1440 /server/storage: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 1440 /server/network: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 1440 /security: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 390 /: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 390 /server: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 390 /server/storage: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 390 /server/network: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 390 /security: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  Home: Tab reaches the module buttons
+PASS  Home: the time range is one tab stop (radio group) (1 minute, All)
+PASS  Home: every focused control shows a focus ring
+PASS  Home: memory and storage bars expose role=progressbar with a value ([["Memory used","20.068739038030515"],["Storage used","77.17556337760747"]])
+PASS  Home: arrow keys pick Stopped and the list shows only stopped services (stopped,stopped,stopped,stopped,stopped)
+PASS  rtl 1440 /: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 1440 /server: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 1440 /server/storage: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 1440 /server/network: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 1440 /security: mirrored, no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 390 /: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  rtl 390 /server: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  rtl 390 /server/storage: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  rtl 390 /server/network: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  rtl 390 /security: mirrored, no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  no page errors or console errors
+36 passed, 0 failed

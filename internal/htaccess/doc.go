@@ -63,6 +63,14 @@
 //     LiteSpeed Enterprise re-reads .htaccess without restart and claims full
 //     Apache compatibility. This package models OpenLiteSpeed only.
 //
+// So a .htaccess written after OpenLiteSpeed last started is not acted on
+// until it restarts. This package does not restart anything. The root
+// broker does: its web changes end with a graceful restart, and with the
+// web operation on it also watches the homes filesystem and restarts
+// gracefully, at most once per 30-second window, after any .htaccess is
+// created, written, moved or deleted (internal/hostaccounts
+// htaccess_watch.go and its README, ".htaccess changes").
+//
 // The supported set is the honoured column of directiveTable in table.go.
 // Correct it there; nothing else encodes it.
 //

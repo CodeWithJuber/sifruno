@@ -39,7 +39,7 @@ func (s *Store) ChangeDomain(id string, input DomainInput, actor string) (Site, 
 	for _, other := range records {
 		// A pending site's domain remains reserved while recovery is required.
 		if other.Site.ID != id && other.Site.Domain == domain {
-			return Site{}, ErrConflict
+			return Site{}, ErrDomainTaken
 		}
 	}
 	if r.Site.Domain == domain {

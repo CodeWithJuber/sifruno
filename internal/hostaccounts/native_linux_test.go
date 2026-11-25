@@ -328,6 +328,65 @@ func TestRemoveRegularOnlyTakesTheExpectedFile(t *testing.T) {
 	}
 }
 
+// A missing ownership marker reads as missing only when its own name is
+// absent from a real markers folder; everything else, a missing or odd
+// folder included, is a recovery answer, so a delete never takes a marker
+// it cannot see for one that is gone. The owner is the test's own user here;
+// the broker's is root.
+func TestMarkerMissingOnlyInTheRealFolder(t *testing.T) {
+	uid := uint32(os.Getuid())
+	base := t.TempDir()
+	owners := filepath.Join(base, "owners")
+	if os.Mkdir(owners, 0700) != nil || os.Chmod(owners, 0700) != nil {
+		t.Fatal("fixture")
+	}
+	const tag = "sifruno-managed-0123456789abcdef0123456789abcdef"
+	if _, err := markerIn(owners, "gone", tag, uid); !errors.Is(err, errMarkerMissing) {
+		t.Fatalf("a name the folder does not hold: %v", err)
+	}
+	marker := filepath.Join(owners, "kept")
+	if os.WriteFile(marker, []byte(tag+"\n"), 0600) != nil {
+		t.Fatal("fixture")
+	}
+	id, err := markerIn(owners, "kept", tag, uid)
+	var st syscall.Stat_t
+	if err != nil || syscall.Lstat(marker, &st) != nil || id != (fileIdentity{uint64(st.Dev), st.Ino}) {
+		t.Fatalf("the marker: %+v %v", id, err)
+	}
+	if _, err := markerIn(owners, "kept", "sifruno-managed-other", uid); err != ErrRecovery {
+		t.Fatalf("another tag: %v", err)
+	}
+	if os.Symlink(marker, filepath.Join(owners, "link")) != nil || os.Symlink(filepath.Join(base, "nowhere"), filepath.Join(owners, "dangling")) != nil || os.Mkdir(filepath.Join(owners, "folder"), 0700) != nil {
+		t.Fatal("fixture")
+	}
+	for _, name := range []string{"link", "dangling", "folder"} {
+		if _, err := markerIn(owners, name, tag, uid); err != ErrRecovery {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := markerIn(owners, "kept", tag, uid+1); err != ErrRecovery {
+		t.Fatalf("a folder of another owner: %v", err)
+	}
+	linked := filepath.Join(base, "linked-owners")
+	if os.Symlink(owners, linked) != nil {
+		t.Fatal("fixture")
+	}
+	wide := filepath.Join(base, "wide")
+	if os.Mkdir(wide, 0755) != nil || os.Chmod(wide, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	for name, dir := range map[string]string{"no folder": filepath.Join(base, "missing"), "a link to the folder": linked, "mode 0755": wide, "a file": marker} {
+		if _, err := markerIn(dir, "gone", tag, uid); err != ErrRecovery {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	// Parents a user can write are not the broker's state: a recovery
+	// answer, never a missing marker.
+	if _, err := markerIdentity(filepath.Join(owners, "gone"), tag); err != ErrRecovery {
+		t.Fatalf("under parents that are not root's: %v", err)
+	}
+}
+
 // Without the installer's root-owned 0711 key directory there is no SFTP key
 // surface: the broker reports unavailable and writes nothing. The successful
 // path needs root and is exercised by the root-only test below on the dev VM.
@@ -1155,4 +1214,260 @@ func TestRootOnlyAbandonCreate(t *testing.T) {
 			}
 		}
 	})
+}
+
+// runShadow runs a shadow-utils program as a root-only test's fixture.
+func runShadow(t *testing.T, path string, args ...string) {
+	t.Helper()
+	if out, err := exec.Command(path, args...).CombinedOutput(); err != nil {
+		t.Fatalf("%s %q: %v\n%s", path, args, err, out)
+	}
+}
+
+// freeTestID is an ID in the account range no user or group has, other
+// than skip.
+func freeTestID(t *testing.T, skip int) int {
+	t.Helper()
+	users, err := systemUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := systemGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := map[int]bool{skip: true}
+	for _, u := range users {
+		used[u.UID] = true
+	}
+	for _, g := range groups {
+		used[g.GID] = true
+	}
+	for id := lastAccountID - 2000; id > lastAccountID-3000; id-- {
+		if !used[id] {
+			return id
+		}
+	}
+	t.Fatal("no free ID")
+	return 0
+}
+
+// rootTestDeletable is a finished account as a create leaves it (its user,
+// private group, home with public_html and marker) and as a delete reads
+// it, pending.
+func rootTestDeletable(t *testing.T, n *linuxSystem) record {
+	t.Helper()
+	r := rootTestAccount(t, n, true)
+	if os.Mkdir(r.Account.Home, 0) != nil || os.Chmod(r.Account.Home, 0) != nil {
+		t.Fatal("fixture")
+	}
+	owned, err := n.RecoverCreate(t.Context(), r, func(ownership) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Ownership = owned
+	r.Account.State = "active"
+	r.Pending = &pending{Action: "delete"}
+	r.UserRemoval = true
+	return r
+}
+
+// Root-only: a delete stopped right after userdel (the user gone; its
+// private group left, as a userdel stopped half way or a host without
+// USERGROUPS_ENAB leaves it; the home and marker there) is finished by
+// Delete from the journal alone. Run again, it finds the marker missing
+// from the real markers folder and nothing else of the account, and counts
+// the delete as done. A group of the account's name with another GID is not
+// the account's: the delete refuses it and removes nothing. Run on the dev
+// VM with: go test -c ./internal/hostaccounts && sudo ./hostaccounts.test
+// -test.run RootOnly
+func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes users, groups and root-owned homes")
+	}
+	stopAfterUserdel := func(t *testing.T, r record) {
+		t.Helper()
+		runShadow(t, "/usr/sbin/userdel", "--", r.Account.Username)
+		if _, err := exec.Command("/usr/bin/getent", "group", r.Account.Username).Output(); err != nil {
+			runShadow(t, "/usr/sbin/groupadd", "--gid", strconv.Itoa(r.Account.GID), "--", r.Account.Username)
+		}
+	}
+	finished := func(t *testing.T, n *linuxSystem, r record) {
+		t.Helper()
+		db, err := n.database()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(db.usersByName[r.Account.Username]) != 0 || len(db.groupsByName[r.Account.Username]) != 0 || len(db.usersByUID[r.Account.UID]) != 0 || len(db.groupsByGID[r.Account.GID]) != 0 {
+			t.Fatal("a user or group of the account is left")
+		}
+		for _, path := range []string{r.Account.Home, n.markerPath(r)} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s is left: %v", path, err)
+			}
+		}
+		// The home waits in the trash, as the account's ID, for the remover.
+		var st unix.Stat_t
+		if err := unix.Lstat(filepath.Join(n.opts.HomesDir, trashName, r.Account.ID), &st); err != nil || !homeIs(st, r) {
+			t.Fatalf("the home is not in the trash: %v", err)
+		}
+		if err := n.Delete(t.Context(), r, func() error { return nil }); err != nil {
+			t.Fatalf("a delete run again after it finished: %v", err)
+		}
+	}
+	t.Run("the user gone, its group left", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		stopAfterUserdel(t, r)
+		moved := 0
+		if err := n.Delete(t.Context(), r, func() error { moved++; return nil }); err != nil {
+			t.Fatalf("the delete was not finished: %v", err)
+		}
+		if moved != 1 {
+			t.Fatalf("the move into the trash was recorded %d times", moved)
+		}
+		finished(t, n, r)
+	})
+	t.Run("the home in the trash already", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		stopAfterUserdel(t, r)
+		homes, err := openDirectoryAt(unix.AT_FDCWD, n.opts.HomesDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer homes.Close()
+		trash, err := trashIn(homes, true, rootOwner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer trash.Close()
+		if err := detachHome(homes, trash, r); err != nil {
+			t.Fatal(err)
+		}
+		moved := 0
+		if err := n.Delete(t.Context(), r, func() error { moved++; return nil }); err != nil || moved != 0 {
+			t.Fatalf("a delete stopped after its move was not finished: %v (moved %d)", err, moved)
+		}
+		finished(t, n, r)
+	})
+	t.Run("a trash on another filesystem", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		stopAfterUserdel(t, r)
+		trash := filepath.Join(n.opts.HomesDir, trashName)
+		if os.Mkdir(trash, 0700) != nil {
+			t.Fatal("fixture")
+		}
+		if err := unix.Mount("tmpfs", trash, "tmpfs", 0, "mode=0700"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = unix.Unmount(trash, unix.MNT_DETACH) })
+		var why *DeleteRefusedError
+		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.As(err, &why) || why.Reason != DeleteTrash {
+			t.Fatalf("a trash on another filesystem was used: %v", err)
+		}
+		for _, path := range []string{r.Account.PublicHTML, n.markerPath(r)} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("a refused delete removed %s: %v", path, err)
+			}
+		}
+		if _, err := exec.Command("/usr/bin/getent", "group", r.Account.Username).Output(); err != nil {
+			t.Fatal("a refused delete removed the group")
+		}
+	})
+	t.Run("a group that is not the account's", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		runShadow(t, "/usr/sbin/userdel", "--", r.Account.Username)
+		_ = exec.Command("/usr/sbin/groupdel", "--", r.Account.Username).Run()
+		runShadow(t, "/usr/sbin/groupadd", "--gid", strconv.Itoa(freeTestID(t, r.Account.GID)), "--", r.Account.Username)
+		var why *DeleteRefusedError
+		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.As(err, &why) || why.Reason != DeleteGroup {
+			t.Fatalf("a group of another GID was taken for the account's: %v", err)
+		}
+		for _, path := range []string{r.Account.PublicHTML, n.markerPath(r)} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("a refused delete removed %s: %v", path, err)
+			}
+		}
+		if _, err := exec.Command("/usr/bin/getent", "group", r.Account.Username).Output(); err != nil {
+			t.Fatal("a refused delete removed the other group")
+		}
+	})
+}
+
+// Root-only: the store over the native system, end to end. A delete the
+// broker cannot finish (a trash that is not its own: mode 0755) holds up
+// every account; the operator's finish is refused, nothing removed, until
+// the trash is fixed, and then removes the user, moves the home into the
+// trash, ends the delete with one row and unblocks a create. Slice drop-ins
+// go to a scratch folder; no web operation. Run on the dev VM with: go test
+// -c ./internal/hostaccounts && sudo ./hostaccounts.test -test.run RootOnly
+func TestRootOnlyFinishDelete(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes users, groups and root-owned homes")
+	}
+	n := rootTestSystem(t)
+	n.unitDir = filepath.Join(filepath.Dir(n.opts.StateDir), "units")
+	if os.Mkdir(n.unitDir, 0755) != nil || os.Chmod(n.unitDir, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	ctx := t.Context()
+	s, err := openStore(ctx, n.opts, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	name, other := "sffin"+strconv.Itoa(os.Getpid()), "sfoth"+strconv.Itoa(os.Getpid())
+	for _, user := range []string{name, other} {
+		t.Cleanup(func() {
+			_ = exec.Command("/usr/sbin/userdel", "--", user).Run()
+			_ = exec.Command("/usr/sbin/groupdel", "--", user).Run()
+			_ = os.Remove(filepath.Join(mailSpoolDir, user))
+		})
+	}
+	a, err := s.create(ctx, CreateInput{Username: name, Domain: name + ".test", Reason: "Finish delete proof"}, "root test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trash := filepath.Join(n.opts.HomesDir, trashName)
+	if os.Mkdir(trash, 0755) != nil || os.Chmod(trash, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: a.Revision, Reason: "Remove"}, "root test"); err != ErrRecovery {
+		t.Fatalf("a delete with a trash that is not the broker's: %v", err)
+	}
+	if _, err := s.create(ctx, CreateInput{Username: other, Domain: other + ".test", Reason: "Held up"}, "root test"); err != ErrRecovery {
+		t.Fatalf("a create while the delete is unfinished: %v", err)
+	}
+	var why *DeleteRefusedError
+	if _, err := s.finishDelete(ctx, a.ID, FinishDeleteInput{"Try"}, "root operator"); !errors.As(err, &why) || why.Reason != DeleteTrash {
+		t.Fatalf("finished with the trash as it was: %v", err)
+	}
+	if _, err := n.identity(recordFor(t, s, a.ID)); err != nil {
+		t.Fatalf("a refused finish changed the user: %v", err)
+	}
+	if _, err := os.Lstat(a.PublicHTML); err != nil {
+		t.Fatalf("a refused finish moved the home: %v", err)
+	}
+	if os.Chmod(trash, 0700) != nil {
+		t.Fatal("fixture")
+	}
+	if _, err := s.finishDelete(ctx, a.ID, FinishDeleteInput{"Trash fixed"}, "root operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.Command("/usr/bin/getent", "passwd", name).Output(); err == nil {
+		t.Fatal("the user is left")
+	}
+	if _, err := os.Lstat(filepath.Join(trash, a.ID)); err != nil {
+		t.Fatalf("the home is not in the trash: %v", err)
+	}
+	rows := historyOf(t, s, a.ID)
+	if last := rows[len(rows)-1]; last.Status != "finished" || last.Actor != "root operator" {
+		t.Fatalf("journal %+v", rows)
+	}
+	if _, err := s.create(ctx, CreateInput{Username: other, Domain: other + ".test", Reason: "Unblocked"}, "root test"); err != nil {
+		t.Fatalf("a create after the finish: %v", err)
+	}
 }

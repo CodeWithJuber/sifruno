@@ -1,7 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Theme } from "@astryxdesign/core/theme";
-import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { ArrowLeft, Eye, Info, LogOut, Menu, Moon, RefreshCw, Search, ShieldAlert, Sun, UserRound } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
@@ -51,6 +49,16 @@ function pageForPath(pathname: string): Page | undefined {
   return pages.find((p) => p.path === path || p.pattern?.test(path));
 }
 
+// The reading direction of the page: a right-to-left language sets dir="rtl"
+// on <html>. shadcn's Sidebar places its fixed panel by a physical side, so the
+// shell follows the direction and puts the menu on its start side.
+function subscribeDirection(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["dir"] });
+  return () => observer.disconnect();
+}
+const documentDirection = (): "ltr" | "rtl" => document.documentElement.dir.toLowerCase() === "rtl" ? "rtl" : "ltr";
+
 function initialTheme(): "light" | "dark" {
   try {
     if (localStorage.getItem("sifruno-theme") === "dark") return "dark";
@@ -71,6 +79,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const page = pageForPath(pathname);
+  const direction = useSyncExternalStore(subscribeDirection, documentDirection);
   const [theme, setTheme] = useState(initialTheme);
   const [revision, setRevision] = useState(0);
   const [range, setRange] = useState("60");
@@ -227,7 +236,7 @@ export function AppShell() {
     <TooltipProvider>
       <SidebarProvider>
         <a href="#panel-main" className="skip-link">Skip to panel content</a>
-        <PanelSidebar page={page} publicPreview={publicPreview} role={menuRole} status={status} theme={theme} onToggleTheme={toggleTheme} session={signedIn ? auth.session : null} onSignOut={() => void endSession()} />
+        <PanelSidebar direction={direction} page={page} publicPreview={publicPreview} role={menuRole} status={status} theme={theme} onToggleTheme={toggleTheme} session={signedIn ? auth.session : null} onSignOut={() => void endSession()} />
         <div className="flex min-w-0 flex-1 flex-col bg-background">
           <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-card px-4 md:px-7">
             <MobileMenuButton />
@@ -251,7 +260,6 @@ export function AppShell() {
           <main id="panel-main" tabIndex={-1} className="mx-auto w-full max-w-[1600px] min-w-0 flex-1 px-4 py-5 outline-none md:px-7 md:py-6">
             {heading && <div className="mb-5"><h1>{heading}</h1>{subtitle && <p className="mt-1.5 text-sm">{subtitle}</p>}</div>}
             {publicPreview && page && page.id !== "home" && <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground" role="status"><Info className="size-4" aria-hidden="true" /><span>{page.id === "tour" ? "Public panel tour with sample content. Changes stay in the local panel." : "Public preview of real server monitoring. Websites, files and backups stay in the local panel."}</span></div>}
-            <Theme theme={neutralTheme} mode={theme}>
               <Suspense fallback={<LoadingState label="Loading page" />}>
                 {gated && (auth.checked
                   ? <>{auth.error && <p className="mb-4 text-sm text-destructive" role="alert">{auth.error}</p>}<AuthGate adminRequired={auth.adminRequired} keySession={auth.session} onSession={onSession} /></>
@@ -265,7 +273,6 @@ export function AppShell() {
                 {!publicPreview && visited.has("static-files") && <div hidden={pageId !== "static-files"}><FileManager revision={revision} active={pageId === "static-files"} onStatus={reporters["static-files"]} siteHandoff={filesHandoff} onHandoffConsumed={consumeFilesHandoff} /></div>}
                 </div>
               </Suspense>
-            </Theme>
             <footer className="flex justify-between gap-4 pt-5 text-xs text-muted-foreground">
               <span>{page?.id === "tour" ? "Sample content, read-only" : active?.loadedAt ? `Last checked ${active.loadedAt.toLocaleTimeString()}` : "Waiting for server data"}</span>
               <span>Sifruno</span>
@@ -317,7 +324,7 @@ function MobileMenuButton() {
   </Button>;
 }
 
-function PanelSidebar({ page, publicPreview, role, status, theme, onToggleTheme, session, onSignOut }: { page?: Page; publicPreview: boolean; role: MenuRole; status: ReturnType<typeof serverState>; theme: "light" | "dark"; onToggleTheme: () => void; session: AuthSession | null; onSignOut: () => void }) {
+function PanelSidebar({ direction, page, publicPreview, role, status, theme, onToggleTheme, session, onSignOut }: { direction: "ltr" | "rtl"; page?: Page; publicPreview: boolean; role: MenuRole; status: ReturnType<typeof serverState>; theme: "light" | "dark"; onToggleTheme: () => void; session: AuthSession | null; onSignOut: () => void }) {
   const { setOpenMobile } = useSidebar();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   useEffect(() => { setOpenMobile(false); }, [pathname, setOpenMobile]);
@@ -343,7 +350,7 @@ function PanelSidebar({ page, publicPreview, role, status, theme, onToggleTheme,
       </SidebarMenuSub>}
     </SidebarMenuItem>;
   };
-  return <Sidebar>
+  return <Sidebar side={direction === "rtl" ? "right" : "left"} dir={direction}>
     <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
       <Link to="/" activeOptions={{ exact: true }} aria-label="Sifruno home" className="w-fit"><img src="/brand/logos/sifruno-logo-on-dark.svg" alt="Sifruno" width="148" height="42" className="block h-auto w-[148px]" /></Link>
     </SidebarHeader>
@@ -361,7 +368,7 @@ function PanelSidebar({ page, publicPreview, role, status, theme, onToggleTheme,
     <SidebarFooter className="border-t border-sidebar-border px-3 py-3">
       {session && <div className="flex items-center gap-2 border-b border-sidebar-border px-1 pb-2.5 text-xs" data-testid="signed-in-as">
         <UserRound className="size-4 shrink-0 text-sidebar-muted-foreground" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate">{session.view_as ? <>Viewing as <strong className="font-medium">{session.view_as}</strong></> : session.username ? <>Signed in as <strong className="font-medium">{session.username}</strong></> : "Signed in with the access key"}</span>
+        <span className="min-w-0 flex-1 wrap-anywhere">{session.view_as ? <>Viewing as <strong className="font-medium">{session.view_as}</strong></> : session.username ? <>Signed in as <strong className="font-medium">{session.username}</strong></> : "Signed in with the access key"}</span>
         <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-sidebar-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" onClick={onSignOut}><LogOut aria-hidden="true" />Sign out</Button>
       </div>}
       {role === "admin" && <div className="flex items-center gap-2.5 px-1 text-xs" role="status">

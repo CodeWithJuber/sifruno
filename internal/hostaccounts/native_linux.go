@@ -212,18 +212,27 @@ func (n *linuxSystem) GuardHomes(records []record) error {
 		return ErrRecovery
 	}
 	defer f.Close()
-	entries, e := f.ReadDir(MaxAccounts + 1)
-	if e != nil && !errors.Is(e, io.EOF) || len(entries) > MaxAccounts {
+	// The accounts' homes, and the trash deletes move homes into, which is
+	// checked where it is used (trashIn).
+	entries, e := f.ReadDir(MaxAccounts + 2)
+	if e != nil && !errors.Is(e, io.EOF) || len(entries) > MaxAccounts+1 {
 		return ErrRecovery
 	}
-	known := map[string]bool{}
+	known := map[string]bool{trashName: true}
 	for _, r := range records {
 		known[r.Account.Username] = true
 	}
+	homes := 0
 	for _, entry := range entries {
 		if !known[entry.Name()] || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			return ErrRecovery
 		}
+		if entry.Name() != trashName {
+			homes++
+		}
+	}
+	if homes > MaxAccounts {
+		return ErrRecovery
 	}
 	return nil
 }
@@ -402,41 +411,14 @@ func systemGroups() ([]nativeGroup, error) {
 	}
 	return out, nil
 }
+
+// Plan is the only allocator of account IDs: the lowest ID in the account
+// range that is no user's, group's, the controller's or a trash entry's
+// owner (usedIDs), for a name nothing has yet.
 func (n *linuxSystem) Plan(ctx context.Context, name string) (int, int, error) {
-	if ctx == nil || ctx.Err() != nil || !validUsername(name) {
-		return 0, 0, ErrInvalid
-	}
-	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
-		return 0, 0, ErrUnavailable
-	}
-	if authority(n.opts.HomesDir) != nil {
-		return 0, 0, ErrUnavailable
-	}
-	users, e := systemUsers()
+	used, e := n.usedIDs(ctx, name)
 	if e != nil {
 		return 0, 0, e
-	}
-	groups, e := systemGroups()
-	if e != nil {
-		return 0, 0, e
-	}
-	used := map[int]bool{int(n.opts.ControllerUID): true}
-	for _, u := range users {
-		if u.Username == name {
-			return 0, 0, ErrConflict
-		}
-		used[u.UID] = true
-	}
-	for _, g := range groups {
-		if g.Name == name {
-			return 0, 0, ErrConflict
-		}
-		used[g.GID] = true
-	}
-	if _, e = os.Lstat(filepath.Join(n.opts.HomesDir, name)); e == nil {
-		return 0, 0, ErrConflict
-	} else if !errors.Is(e, os.ErrNotExist) {
-		return 0, 0, ErrUnavailable
 	}
 	for id := firstAccountID; id <= lastAccountID; id++ {
 		if !used[id] {
@@ -444,6 +426,63 @@ func (n *linuxSystem) Plan(ctx context.Context, name string) (int, int, error) {
 		}
 	}
 	return 0, 0, ErrConflict
+}
+
+// usedIDs answers every ID no new account may take: the controller's, every
+// user's and group's, and the owners of the trash's entries. ErrConflict: a
+// user, group or home already has the name.
+func (n *linuxSystem) usedIDs(ctx context.Context, name string) (map[int]bool, error) {
+	if ctx == nil || ctx.Err() != nil || !validUsername(name) {
+		return nil, ErrInvalid
+	}
+	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
+		return nil, ErrUnavailable
+	}
+	if authority(n.opts.HomesDir) != nil {
+		return nil, ErrUnavailable
+	}
+	users, e := systemUsers()
+	if e != nil {
+		return nil, e
+	}
+	groups, e := systemGroups()
+	if e != nil {
+		return nil, e
+	}
+	used := map[int]bool{int(n.opts.ControllerUID): true}
+	for _, u := range users {
+		if u.Username == name {
+			return nil, ErrConflict
+		}
+		used[u.UID] = true
+	}
+	for _, g := range groups {
+		if g.Name == name {
+			return nil, ErrConflict
+		}
+		used[g.GID] = true
+	}
+	if _, e = os.Lstat(filepath.Join(n.opts.HomesDir, name)); e == nil {
+		return nil, ErrConflict
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return nil, ErrUnavailable
+	}
+	// A deleted account's home waits in the trash until the remover has
+	// emptied it, its files still its UID's and GID's: neither is given out
+	// meanwhile, so those files never count against a new account's quota.
+	homes, e := openDirectoryAt(unix.AT_FDCWD, n.opts.HomesDir)
+	if e != nil {
+		return nil, ErrUnavailable
+	}
+	trashed, e := trashOwners(homes, rootOwner)
+	homes.Close()
+	if e != nil {
+		return nil, ErrUnavailable
+	}
+	for id := range trashed {
+		used[id] = true
+	}
+	return used, nil
 }
 func stampOf(path string) (fileStamp, error) {
 	info, e := trustedFile(path, false)
@@ -603,8 +642,11 @@ func (n *linuxSystem) admission(ctx context.Context, r record) error {
 	return nil
 }
 func (n *linuxSystem) Create(ctx context.Context, r record, persist func(ownership) error) (ownership, error) {
-	uid, gid, e := n.Plan(ctx, r.Account.Username)
-	if e != nil || uid != r.Account.UID || gid != r.Account.GID {
+	// The planned ID must still be free; not still the lowest, since the
+	// trash remover, which runs outside the store lock, may have freed a
+	// lower one meanwhile.
+	used, e := n.usedIDs(ctx, r.Account.Username)
+	if e != nil || used[r.Account.UID] || used[r.Account.GID] {
 		return ownership{}, atStep("plan", ErrRecovery)
 	}
 	owners := filepath.Join(n.opts.StateDir, "owners")
@@ -694,22 +736,65 @@ func dirIdentity(path string, uid, gid int, mode os.FileMode) (fileIdentity, err
 	}
 	return fileIdentity{uint64(st.Dev), st.Ino}, nil
 }
+
+// errMarkerMissing is markerIdentity's answer when the markers folder is
+// there, a real directory of root's with mode 0700 under parents only root
+// can write, and holds no entry with the marker's name. Every other failure,
+// a missing or odd markers folder included, is ErrRecovery: only this one
+// says the marker is gone.
+var errMarkerMissing = errors.New("ownership marker missing")
+
+// markerIdentity answers the identity of the ownership marker at path when
+// it is the broker's: a regular file of root's, mode 0600, one link, holding
+// exactly tag and a newline. errMarkerMissing: its folder is the markers
+// folder and has no entry with its name.
 func markerIdentity(path, tag string) (fileIdentity, error) {
-	info, e := os.Lstat(path)
-	if e != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+	dir := filepath.Dir(path)
+	if authority(filepath.Dir(dir)) != nil {
 		return fileIdentity{}, ErrRecovery
 	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != 0 || st.Nlink != 1 || info.Size() > 128 {
-		return fileIdentity{}, ErrRecovery
-	}
-	f, e := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	return markerIn(dir, filepath.Base(path), tag, 0)
+}
+
+// markerIn is markerIdentity below the markers folder's parents: dir must be
+// a directory of owner's (root's; a test's own user), not a link, with the
+// permission bits 0700 Create gives it, and it is read through a handle. A name it does not hold is
+// errMarkerMissing only while the folder held is still the one at dir and
+// not removed, so a folder replaced or removed meanwhile never reads as a
+// missing marker.
+func markerIn(dir, name, tag string, owner uint32) (fileIdentity, error) {
+	folder, e := openDirectoryAt(unix.AT_FDCWD, dir)
 	if e != nil {
 		return fileIdentity{}, ErrRecovery
 	}
+	defer folder.Close()
+	fd := int(folder.Fd())
+	var held unix.Stat_t
+	if unix.Fstat(fd, &held) != nil || held.Mode&unix.S_IFMT != unix.S_IFDIR || held.Uid != owner || held.Mode&0777 != 0700 {
+		return fileIdentity{}, ErrRecovery
+	}
+	var st unix.Stat_t
+	switch e := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); {
+	case errors.Is(e, unix.ENOENT):
+		var now, again unix.Stat_t
+		if unix.Lstat(dir, &now) != nil || now.Dev != held.Dev || now.Ino != held.Ino || unix.Fstat(fd, &again) != nil || again.Nlink == 0 {
+			return fileIdentity{}, ErrRecovery
+		}
+		return fileIdentity{}, errMarkerMissing
+	case e != nil:
+		return fileIdentity{}, ErrRecovery
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07777 != 0600 || st.Uid != owner || st.Nlink != 1 || st.Size > 128 {
+		return fileIdentity{}, ErrRecovery
+	}
+	opened, e := unix.Openat(fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if e != nil {
+		return fileIdentity{}, ErrRecovery
+	}
+	f := os.NewFile(uintptr(opened), name)
 	defer f.Close()
-	opened, e := f.Stat()
-	if e != nil || !os.SameFile(info, opened) {
+	var same unix.Stat_t
+	if unix.Fstat(opened, &same) != nil || same.Dev != st.Dev || same.Ino != st.Ino {
 		return fileIdentity{}, ErrRecovery
 	}
 	b, e := io.ReadAll(io.LimitReader(f, 129))
@@ -912,65 +997,118 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 	return atStep("password lock and expiry", n.admission(ctx, r))
 }
 
-// Delete removes the managed identity. Every destructive step is gated on
-// the recorded ownership evidence: the marker must match first (proof we
-// manage this account), the system user must match the recorded UID/GID/home
-// exactly (a foreign or recycled UID is refused), and the home directory is
-// removed only when it is the exact recorded path with the recorded
-// identity. The marker is removed last so a crash mid-delete stays visible
-// and the operation can be safely retried by the store's reconciliation.
-// The account's processes end before userdel (removeUser); the store takes
-// a live site out of the config before it calls Delete.
-func (n *linuxSystem) Delete(ctx context.Context, r record) error {
+// Delete removes the managed identity, judging what is there by the journal
+// alone, so it also finishes a delete whose user is already gone. Before it
+// removes anything it checks: the marker must be the recorded one (proof we
+// manage this account), or missing from the real markers folder once no
+// user or group of the account is left; a user with the account's name or
+// UID must be the only one, with the recorded UID, GID, tag, home and the
+// nologin shell; a group with its name or GID must be its private group
+// alone; the home, when there, must be the recorded directory of the
+// account's, and the trash the broker's own; otherwise it answers a
+// *DeleteRefusedError naming which, having removed nothing. Then it
+// removes the user (its processes ended first), the private group if
+// userdel left it, moves the home into the trash (moved records that),
+// removes the account's files, and the marker last, so a crash mid-delete
+// stays visible and running it again finishes the rest: what is already
+// gone counts as removed, a home in the trash too. The store takes a live
+// site out of the config before it calls Delete.
+func (n *linuxSystem) Delete(ctx context.Context, r record, moved func() error) error {
+	if !validUsername(r.Account.Username) || !idPattern.MatchString(r.Account.ID) || r.Account.UID < firstAccountID || r.Account.UID > lastAccountID || r.Account.GID != r.Account.UID || r.Account.UID == int(n.opts.ControllerUID) || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
+		return atStep("record", ErrRecovery)
+	}
+	// Only a marker missing from the real markers folder (errMarkerMissing)
+	// lets a delete go on without it; an odd or missing folder, or another
+	// marker, stops it.
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
-	if e == nil && marker != r.Ownership.Marker {
-		return atStep("marker", ErrRecovery)
+	missing := errors.Is(e, errMarkerMissing)
+	if e != nil && !missing || e == nil && marker != r.Ownership.Marker {
+		return atStep("marker", deleteRefused(DeleteMarker))
 	}
-	if e != nil && !errors.Is(e, os.ErrNotExist) {
-		return atStep("marker", ErrUnavailable)
+	if supportedNSS() != nil || supportedUseraddDefaults() != nil {
+		return atStep("host policy", ErrUnavailable)
 	}
-	// A missing marker with a still-present user is not owned deletable
-	// state; a missing marker with everything already gone is a completed
-	// delete (safe retry).
-	users, e := systemUsers()
+	db, e := n.database()
 	if e != nil {
-		return atStep("passwd", e)
+		return atStep("passwd and group", e)
 	}
-	present := false
-	for _, u := range users {
-		if u.Username == r.Account.Username {
-			if u.UID != r.Account.UID || u.GID != r.Account.GID || u.Home != r.Account.Home {
-				return atStep("passwd", ErrRecovery)
-			}
-			present = true
-		} else if u.UID == r.Account.UID {
-			return atStep("passwd", ErrRecovery)
+	// The rules a create's leftovers are judged by (abandon_linux.go): the
+	// journal's name, IDs, tag, home and shell, and a private group alone.
+	userThere, e := createdUser(db, r)
+	if e != nil {
+		return atStep("passwd", deleteRefused(DeleteUser))
+	}
+	groupThere, e := createdGroup(db, r)
+	if e != nil {
+		return atStep("group", deleteRefused(DeleteGroup))
+	}
+	// The marker goes last: missing while a user or group of the account is
+	// there, it was not this delete that removed it.
+	if missing && (userThere || groupThere) {
+		return atStep("marker", deleteRefused(DeleteMarker))
+	}
+	if authority(n.opts.HomesDir) != nil {
+		return atStep("homes folder", ErrRecovery)
+	}
+	homes, e := openDirectoryAt(unix.AT_FDCWD, n.opts.HomesDir)
+	if e != nil {
+		return atStep("homes folder", e)
+	}
+	defer homes.Close()
+	// The recorded object and its owner, which only root can change; not its
+	// mode, which the account may have changed. A home not there was moved
+	// to the trash already, or removed whole.
+	var home unix.Stat_t
+	homeThere := false
+	switch e := unix.Fstatat(int(homes.Fd()), r.Account.Username, &home, unix.AT_SYMLINK_NOFOLLOW); {
+	case errors.Is(e, unix.ENOENT):
+	case e != nil:
+		return atStep("home", ErrUnavailable)
+	case !homeIs(home, r):
+		return atStep("home", deleteRefused(DeleteHome))
+	default:
+		homeThere = true
+	}
+	// The trash is checked, or made, before anything is removed: a delete
+	// never stops between userdel and the home for want of it.
+	var trash *os.File
+	if homeThere {
+		switch trash, e = trashIn(homes, true, rootOwner); {
+		case errors.Is(e, ErrRecovery):
+			return atStep("trash", deleteRefused(DeleteTrash))
+		case e != nil:
+			return atStep("trash", e)
 		}
+		defer trash.Close()
 	}
-	if present && marker != r.Ownership.Marker {
-		return atStep("marker", ErrRecovery)
-	}
-	if present {
+	if userThere {
 		if e = n.removeUser(ctx, r); e != nil {
 			return atStep("remove user", e)
 		}
 	}
-	if info, e := os.Lstat(r.Account.Home); e == nil {
-		if !info.IsDir() || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
-			return atStep("home", ErrRecovery)
+	// userdel removes the user's private group itself (USERGROUPS_ENAB);
+	// one it left, stopped half way or by the host's policy, goes by name
+	// once it is still that group alone.
+	if db, e = n.database(); e != nil {
+		return atStep("groupdel", e)
+	}
+	if groupThere, e = createdGroup(db, r); e != nil {
+		return atStep("group", ErrRecovery)
+	}
+	if groupThere {
+		if _, e := n.command(ctx, groupdelPath, "--", r.Account.Username); e != nil {
+			return atStep("groupdel", e)
 		}
-		// The recorded object and its owner, which only root can change; not
-		// its mode, which the account may have changed. RemoveAll does not
-		// follow links inside it.
-		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
-		if e != nil || home != r.Ownership.Home {
-			return atStep("home", ErrRecovery)
+	}
+	// The home leaves the homes folder at once, whatever it holds; the trash
+	// remover empties it in the background (trash_linux.go).
+	if homeThere {
+		if e = detachHome(homes, trash, r); e != nil {
+			return atStep("home", e)
 		}
-		if e = os.RemoveAll(r.Account.Home); e != nil {
-			return atStep("home", ErrUnavailable)
+		if moved() != nil {
+			return atStep("record", ErrRecovery)
 		}
-	} else if !errors.Is(e, os.ErrNotExist) {
-		return atStep("home", ErrUnavailable)
 	}
 	if e = n.removeAccountFiles(r); e != nil {
 		return atStep("account files", e)

@@ -83,7 +83,8 @@ type Migration struct {
 	// then the copy's.
 	Converted []hostaccounts.MigrationFolder `json:"converted"`
 	// Probes are the URLs of the converted rules verify checks: 403, 401,
-	// and 200 for files a closed folder leaves open.
+	// 200 for files a closed folder leaves open, and folders open to some
+	// addresses only, with their rule.
 	Probes   []migrateverify.Probe `json:"probes"`
 	Verify   *VerifySummary        `json:"verify,omitempty"`
 	Gate     string                `json:"gate"`
@@ -94,6 +95,11 @@ type Migration struct {
 	DNS        []DNSRecord `json:"dns,omitempty"`
 	KeyRemoved bool        `json:"key_removed"`
 	Activity   []Activity  `json:"activity"`
+	// ClientAddress is the address the old server saw this server come
+	// from, learned while the key was there, so a later comparison can still
+	// tell what an address-list folder should answer it. Empty when the old
+	// server did not say: those folders' checks then fail.
+	ClientAddress string `json:"client_address,omitempty"`
 }
 
 // clone copies the record so callers never share its slices.
@@ -110,6 +116,7 @@ func (m *Migration) clone() *Migration {
 	if m.Verify != nil {
 		v := *m.Verify
 		v.Lines = slices.Clone(m.Verify.Lines)
+		v.Problems = slices.Clone(m.Verify.Problems)
 		c.Verify = &v
 	}
 	if m.Accepted != nil {
@@ -141,6 +148,10 @@ type VerifySummary struct {
 	ProbesFail     int      `json:"probes_fail"`
 	Lines          []string `json:"lines"`
 	FinishedAt     string   `json:"finished_at"`
+	// Problems says in plain words, for each failed check that has such a
+	// message, what differs and what to check before accepting it; Lines
+	// are the technical detail.
+	Problems []string `json:"problems"`
 }
 
 // Acceptance is a person's decision to cut over with red lines.
@@ -388,6 +399,8 @@ func migrationStepText(step string) (why, next string) {
 		return "This server does not have room for the copy.", "Free space on this server, then move the website again."
 	case "fetch", "copy":
 		return "The website's files could not be copied.", "Open Technical details to see why, fix the cause, then move the website again."
+	case "reload":
+		return "The web server did not reload after the copy.", "Check that OpenLiteSpeed runs on this server (systemctl status lsws) and read its error log, then move the website again."
 	case "database", "dump", "import", "compare":
 		return "A database could not be copied.", "Open Technical details to see why, fix the cause, then move the website again."
 	}
@@ -475,6 +488,7 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		mr.cronJobs = append(mr.cronJobs, job)
 	}
 	m.Probes = probesOf(plan.Probes)
+	m.ClientAddress = plan.ClientAddress
 	m.Converted = slices.Clone(plan.Converted)
 	converted := ""
 	if len(plan.Converted) > 0 {
@@ -487,7 +501,7 @@ func probesOf(in []hostaccounts.MigrationProbe) []migrateverify.Probe {
 	out := []migrateverify.Probe{}
 	for _, p := range in {
 		if len(out) < migrateverify.MaxProbes {
-			out = append(out, migrateverify.Probe{Path: p.Path, Kind: migrateverify.ProbeKind(p.Kind)})
+			out = append(out, migrateverify.Probe{Path: p.Path, Kind: migrateverify.ProbeKind(p.Kind), Hosts: p.Hosts, Networks: slices.Clone(p.Networks), Realm: p.Realm})
 		}
 	}
 	return out
@@ -546,6 +560,11 @@ func (j *run) migrateFiles(ctx context.Context) (string, *stepError) {
 	res, err := j.migration.options.Broker.MigrateFiles(ctx, j.accountID, hostaccounts.MigrateFilesInput{Migration: j.job.Migration.Source, ExpectedRevision: j.revision, Reason: migrateReason}, j.actor)
 	if err != nil {
 		return "", j.migrationFailure(err)
+	}
+	// Protected folders going live raised the account's revision. Zero is
+	// no revision: a broker from before it answered one.
+	if res.Revision != 0 {
+		j.revision = res.Revision
 	}
 	j.migration.wordpress = res.WordPress
 	j.job.Migration.WordPress = res.WordPress
@@ -654,22 +673,33 @@ func (j *run) verifyStep(ctx context.Context) {
 
 // runVerify runs one comparison: the old site by its domain, the copy on
 // this server with the same Host header (curl --resolve), the closed URLs
-// the .htaccess scan found, and WordPress's login and admin pages.
+// the .htaccess scan found, the folders open to some addresses only with
+// the address each site sees verify come from, and WordPress's login and
+// admin pages.
 func (r *Runner) runVerify(ctx context.Context, job Job) VerifySummary {
 	o := r.migrationOptions()
 	ctx, cancel := context.WithTimeout(ctx, verifyLimit)
 	defer cancel()
-	opts := migrateverify.Options{Old: "http://" + job.Domain, New: "http://" + job.Domain, NewConnect: o.Connect, Probes: job.Migration.Probes}
+	opts := migrateverify.Options{Old: "http://" + job.Domain, New: "http://" + job.Domain, NewConnect: o.Connect, Probes: job.Migration.Probes,
+		OldClient: job.Migration.ClientAddress, NewClient: copyClient(o.Connect)}
 	if job.Migration.WordPress {
 		opts.Paths = []string{"/wp-login.php", "/wp-admin/"}
 	}
 	report, err := o.Verify(ctx, opts)
 	now := timestamp(time.Now())
 	if err != nil {
-		return VerifySummary{Verdict: "The comparison could not run: " + scrub(err.Error()), Lines: []string{}, FinishedAt: now}
+		return VerifySummary{Verdict: "The comparison could not run: " + scrub(err.Error()), Problems: []string{}, Lines: []string{}, FinishedAt: now}
 	}
 	s := VerifySummary{Ran: true, CutoverAllowed: report.CutoverAllowed, Verdict: report.Verdict, PagesCompared: report.Counts.PagesCompared, PagesPass: report.Counts.PagesPass,
-		PagesWarn: report.Counts.PagesWarn, PagesFail: report.Counts.PagesFail, ProbesPass: report.Counts.ProbesPass, ProbesFail: report.Counts.ProbesFail, Lines: []string{}, FinishedAt: now}
+		PagesWarn: report.Counts.PagesWarn, PagesFail: report.Counts.PagesFail, ProbesPass: report.Counts.ProbesPass, ProbesFail: report.Counts.ProbesFail, Problems: []string{}, Lines: []string{}, FinishedAt: now}
+	// Critical ones first, as in the lines.
+	for _, critical := range []bool{true, false} {
+		for _, p := range report.Probes {
+			if p.Result == migrateverify.Fail && p.Critical == critical && p.Message != "" && len(s.Problems) < maxVerifyLines {
+				s.Problems = append(s.Problems, scrub(p.Message))
+			}
+		}
+	}
 	for _, line := range strings.Split(report.Text(), "\n") {
 		if strings.HasPrefix(line, "CRITICAL ") || strings.HasPrefix(line, "FAIL ") || strings.HasPrefix(line, "WARN ") || strings.HasPrefix(line, "PASS closed URL ") {
 			if len(s.Lines) < maxVerifyLines {
@@ -678,6 +708,19 @@ func (r *Runner) runVerify(ctx context.Context, job Job) VerifySummary {
 		}
 	}
 	return s
+}
+
+// copyClient is the address the copy sees verify come from. Verify
+// connects to the copy over loopback (Connect, 127.0.0.1:80 on the server
+// itself), and the kernel gives such a connection the loopback address as
+// its source. Any other Connect leaves it unknown, so verify fails the
+// folders open to some addresses only instead of guessing.
+func copyClient(connect string) string {
+	host, _, err := net.SplitHostPort(connect)
+	if err == nil && (host == "127.0.0.1" || host == "::1") {
+		return host
+	}
+	return ""
 }
 
 // gateFor opens the gate only when verify ran green and nothing is left
@@ -782,7 +825,7 @@ func (r *Runner) VerifyMigration(ctx context.Context, id, actor string) (Job, er
 	if m.Gate == GateReady {
 		return Job{}, refuse(ErrConflict, "This website is marked ready; DNS may point here already, so the old site cannot be compared any more.")
 	}
-	m.Verify = &VerifySummary{Running: true, Lines: []string{}}
+	m.Verify = &VerifySummary{Running: true, Problems: []string{}, Lines: []string{}}
 	addActivity(m, actor, "Asked to compare the copy with the old site again.")
 	r.save(job)
 	r.wg.Add(1)

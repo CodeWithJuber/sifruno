@@ -134,6 +134,11 @@ try {
   console.log(`  websites: ${siteA?.domain} (the customer's) and ${siteB?.domain} (not the customer's)`);
 
   console.log("## Admin: a login for the first website");
+  // The admin signed in on /customers, which read the website list before
+  // the sites existed; opening Websites first, as an admin would, makes
+  // Customers read it again.
+  await admin.getByTestId("nav-websites").click();
+  await admin.getByTestId("websites-count").filter({ hasText: "website" }).waitFor();
   await admin.getByTestId("nav-customers").click();
   await admin.getByTestId("create-login").waitFor();
   check("Customers opens the customer logins page at /customers", path(admin) === "/customers");
@@ -147,6 +152,9 @@ try {
   if (await sitesProblem.count()) {
     await admin.screenshot({ path: join(outDir, "1440-admin-websites-problem.png"), fullPage: true });
     console.log(`  the page could not list the websites: ${(await sitesProblem.innerText()).replace(/\s+/g, " ")}`);
+  } else if (!(await pick.count())) {
+    await admin.screenshot({ path: join(outDir, "1440-admin-no-website-to-pick.png"), fullPage: true });
+    console.log(`  the form offered no ${siteA.domain} to pick; it shows: ${(await admin.getByTestId("create-login").innerText()).replace(/\s+/g, " ")}`);
   }
   await pick.check();
   await admin.getByTestId("create-login-submit").click();

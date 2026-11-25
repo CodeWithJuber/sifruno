@@ -189,29 +189,55 @@ func (s *store) resultEvent(r record, p pending, status string) (record, error) 
 	return s.appendEvent(r, event)
 }
 
-// abandonedStatus ends a create the operator abandoned (endAbandonedCreate).
-const abandonedStatus = "abandoned"
+// abandonedStatus ends a create the operator abandoned (endAbandonedCreate);
+// finishedStatus a delete the operator finished (finishDelete).
+const (
+	abandonedStatus = "abandoned"
+	finishedStatus  = "finished"
+)
 
 // endAbandonedCreate ends the unfinished create p of r, whose leftovers
-// AbandonCreate removed. In one transaction it appends the create's last
-// row, status abandoned, with the operator's actor and reason and the
-// account as the record left it, and removes the record and its cron sets
-// as purge does. The rows stay for audit; replay reads only the histories
-// of records that exist, so it never reads them again. The record removed
-// is the one read, unchanged. A crash leaves the create unfinished, or
-// ended and its record gone: never one without the other.
+// AbandonCreate removed: its last row is status abandoned, with the
+// operator's actor and reason (endWithRecord).
 func (s *store) endAbandonedCreate(r record, p pending, actor, reason string) error {
-	intent, e := s.operationIntent(r, p)
-	if e != nil || intent.Action != "create" || p.Action != "create" {
+	if p.Action != "create" {
 		return recovery("abandon_create", r, "find the create's intent", ErrRecovery)
 	}
-	if historyLength(r) >= MaxHistoryRows {
-		return recovery("abandon_create", r, "journal abandoned row: history full", ErrConflict)
+	return s.endWithRecord("abandon_create", r, p, abandonedStatus, actor, reason)
+}
+
+// endDelete ends the delete p of r, whose user, group, home, files and
+// marker are gone: its last row is status (succeeded, reconciled at start,
+// finished by the operator) with the actor and reason given
+// (endWithRecord).
+func (s *store) endDelete(r record, p pending, status, actor, reason string) error {
+	if p.Action != "delete" {
+		return recovery("delete", r, "find the delete's intent", ErrRecovery)
 	}
-	row := operationEvent{Version: 1, Sequence: r.HistorySequence + 1, OperationID: p.OperationID, AccountID: r.Account.ID, Action: p.Action, Status: abandonedStatus, Actor: actor, Reason: reason, Before: intent.Before, After: r.Account, RecordedAt: time.Now().UTC()}
+	return s.endWithRecord("delete", r, p, status, actor, reason)
+}
+
+// endWithRecord ends p, r's pending operation, and removes its account. In
+// one transaction it appends p's last row (this status, actor and reason,
+// the account as the record left it) and removes the record and its cron
+// sets. The record removed must be the stored one, read again in the
+// transaction: r with p pending, unchanged. The rows stay for audit; replay
+// reads only the histories of records that exist, so it never reads them
+// again. A crash leaves the operation unfinished, or ended and its record
+// gone: never one without the other. operation names it in the recovery
+// log.
+func (s *store) endWithRecord(operation string, r record, p pending, status, actor, reason string) error {
+	intent, e := s.operationIntent(r, p)
+	if e != nil || intent.Action != p.Action {
+		return recovery(operation, r, "find the "+p.Action+"'s intent", ErrRecovery)
+	}
+	if historyLength(r) >= MaxHistoryRows {
+		return recovery(operation, r, "journal "+status+" row: history full", ErrConflict)
+	}
+	row := operationEvent{Version: 1, Sequence: r.HistorySequence + 1, OperationID: p.OperationID, AccountID: r.Account.ID, Action: p.Action, Status: status, Actor: actor, Reason: reason, Before: intent.Before, After: r.Account, RecordedAt: time.Now().UTC()}
 	raw, e := json.Marshal(row)
 	if e != nil {
-		return recovery("abandon_create", r, "journal abandoned row", e)
+		return recovery(operation, r, "journal "+status+" row", e)
 	}
 	e = s.db.Update(func(tx *bolt.Tx) error {
 		accounts, history := tx.Bucket(accountBucket), tx.Bucket(historyBucket)
@@ -241,7 +267,7 @@ func (s *store) endAbandonedCreate(r record, p pending, actor, reason string) er
 		return accounts.Delete([]byte(r.Account.ID))
 	})
 	if e != nil {
-		return recovery("abandon_create", r, "journal abandoned row and remove the record", e)
+		return recovery(operation, r, "journal "+status+" row and remove the record", e)
 	}
 	return nil
 }

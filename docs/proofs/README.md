@@ -99,7 +99,7 @@ Run on 2026-11-24 with `scripts/devvm/fresh-install-test.sh --destroy-vm`, from 
 
 The test drives the VM over SSH as root with a key throughout. Every command after the sshd step reached the VM through a new key sign-in under the new policy, which is the "second sign-in" the installer asks the operator to check. The installer took 61 minutes under software emulation, mostly package installation.
 
-What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins) and the nightly schedule the plan asks for (not set up; it needs a runner the owner chooses). An upgrade is the next section.
+What this run does not show: a real server provider's image (cloud-init users, other sshd drop-ins) and the nightly schedule the plan asks for, which `.github/workflows/nightly-install.yml` now runs on a throwaway Linode once the owner adds its token. An upgrade is the next section.
 
 ## Phase 1: upgrading an installed server
 
@@ -141,3 +141,106 @@ What this run does not show:
 - **Renewal.** The renewal loop and its one-week wait after a refused install are unit tests (`internal/acme`); no certificate came near expiry here.
 - **The failure paths on the VM.** Undo after a failed step, a pre-existing database name, a slow step, a panel restart during a job and a skipped SSL step are unit tests (`internal/wizard`).
 - **More than one job.** Jobs run one at a time; the refusal of a second is a unit test.
+
+## Phase 1: create and delete recovery
+
+Run on 2026-11-25 with `scripts/devvm/proof.sh create-recovery` on a throwaway AlmaLinux 9.8 cloud server with a fresh Sifruno install (SELinux enforcing, shadow-utils 4.9-16.el9, hardware virtualization rather than QEMU emulation), from `3478a75`, whose broker and native code are `22ead56`'s. `brokerdrive`, acting as the panel's user, sent the typed requests.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Create and delete recovery: groupadd and userdel wait on shadow-utils' lock and exit by themselves, with nothing killed, and the broker logs which step stopped; a useradd stopped after it made the home is finished at the next start; a create or delete the broker cannot finish holds up every account until the operator abandons the create or finishes the delete, and both refuse an account that is not stuck; a 200,000-file home's delete answers in 1 s, the trash drains it, and its UID is not given out meanwhile; the root-only Go tests of the same code | [phase1-create-recovery.txt](phase1-create-recovery.txt) | 81 passed, 0 failed |
+
+Two things the code assumed and this run shows: with `/etc/.pwd.lock` held, userdel waited about 15 s and exited with status 1 by itself, changing nothing; and a home holding a tmpfs mount was renamed into the trash with the mount inside it, and the remover left that folder and logged it by the account's ID.
+
+What this run does not show: the panel's screens for an account that needs recovery. The proof drives the broker directly.
+
+## Phase 1 on a real server (2026-11-25)
+
+Run on 2026-11-25 on a throwaway AlmaLinux 9.8 cloud server (hardware virtualization, SELinux enforcing, OpenLiteSpeed 1.9.4, LSPHP 8.3.37, MariaDB 10.11.18). `fresh-install-test.sh` installed Sifruno on it from a release built from `6a8e579`, and that installed release stayed on the server for every run below. Each proof builds its own broker and panel from the checkout and copies them in, so the table gives the checkout each run was built from, read from the checkout's reflog at the run's start time. `b7107cf` has the same product code and the same scripts for these proofs as `6a8e579`.
+
+| Proof | Transcript | Checkout | Result |
+| --- | --- | --- | --- |
+| One command installs on the server; a second run changes nothing | [fresh-install.txt](real-server-2026-11-25/fresh-install.txt) | release and script from `6a8e579` | 12 passed, 0 failed |
+| The broker's WordPress install | [broker-wordpress.txt](real-server-2026-11-25/broker-wordpress.txt) | `6a8e579` | 24 passed, 0 failed |
+| Per-account process, memory and CPU limits | [account-limits.txt](real-server-2026-11-25/account-limits.txt) | `6a8e579` | 58 passed, 0 failed |
+| Backups with restic over SFTP, restore of files and database, restore drill | [backups.txt](real-server-2026-11-25/backups.txt) | `6a8e579` | 50 passed, 0 failed |
+| File manager at the broker, as the site's user | [files.txt](real-server-2026-11-25/files.txt) | `6a8e579` | 37 passed, 0 failed |
+| Scheduled jobs, logs and usage at the broker | [site-tools.txt](real-server-2026-11-25/site-tools.txt) | `6a8e579` | 21 passed, 0 failed |
+| The New website wizard, with SSL | [wordpress-wizard.txt](real-server-2026-11-25/wordpress-wizard.txt) | `b7107cf` | 97 passed, 0 failed |
+| A tenant's own folder change stays with its own account | [broker-isolation.txt](real-server-2026-11-25/broker-isolation.txt) | `b7107cf` | 46 passed, 0 failed |
+| Site actions: PHP version, suspend, resume, delete | [broker-site-actions.txt](real-server-2026-11-25/broker-site-actions.txt) | `b7107cf` | 22 passed, 0 failed |
+| Admin and customer login | [customer-login.txt](real-server-2026-11-25/customer-login.txt) | `993dc83` | 70 passed, 0 failed |
+| A site's other domains and redirects, with a certificate | [site-domains.txt](real-server-2026-11-25/site-domains.txt) | `993dc83` | 53 passed, 0 failed |
+| The WHMCS module: create, suspend, unsuspend, terminate | [whmcs-module.txt](real-server-2026-11-25/whmcs-module.txt) | `82de04a` | 24 passed, 0 failed |
+| One-click phpMyAdmin | [phpmyadmin.txt](real-server-2026-11-25/phpmyadmin.txt) | `3478a75` | 86 passed, 0 failed |
+| Migration v1 from a cPanel stand-in over root SSH: discovery, two sites moved (a hardened one its old web server read through the group, and one with a password folder, a closed folder and address lists), refusals and undo for four more | [migrate-cpanel.txt](real-server-2026-11-25/migrate-cpanel.txt) | `000813a` | 141 passed, 0 failed |
+| The broker's .htaccess watcher: a tenant's rewrite rule takes effect with no panel action, and a flood of writes restarts OpenLiteSpeed at most once per window | [htaccess-reload.txt](real-server-2026-11-25/htaccess-reload.txt) | `000813a` | 19 passed, 0 failed |
+
+Earlier runs on this server found and fixed: site-domains parsed the certificate manager's log line along with the JSON answer (`2e041f1`); customer-login's website picker had read the list before the proof made the sites (`993dc83`); the phpMyAdmin proof counted OpenLiteSpeed's listener once per worker and its request client ignored the browser's host mapping (`e99c721`), then read escaped grants, sampled too slowly to see the panel's mysql client, and counted the proof's own refusals as browser errors (`3478a75`); the WHMCS module lost a slow create's account ID, a product fix (`25402f9`); and migrate-cpanel's stand-in refused the migration key and never installed WordPress (`47ea830`), its checks and file layout did not match cPanel's or the product's (`289578d`, `000813a`), and its moves found three product bugs, fixed before the saved run: the database step's revision conflict (`82de04a`), a moved site's root `.htaccess` that OpenLiteSpeed loaded only at its next restart (`b0de7ee`), and files the old web server read only through their group (`8f14e45`).
+
+In migrate-cpanel.txt the server's public address is written `SERVER_IP`; nothing else is changed. `000813a` has the product code of `733056d`. Timed beside the htaccess-reload run (not in its transcript): each graceful restart held the broker's store lock for about 3.2 s (`openlitespeed -t` 0.1 s, `systemctl reload lsws` 3.1 s), and a broker request that arrived meanwhile waited up to 3.8 s; during the flood that happened once per restart, about every 33.5 s.
+
+What these runs do not show:
+
+- **A real cPanel server.** The migration moves sites from a Podman stand-in with stub `whmapi1` and `uapi` scripts, not from cPanel.
+- **Create and delete recovery.** Its run on this server is in its own section above.
+- **The other proofs.** broker-sftp, wordpress-ols, broker-web, migrate-verify, installer-sshd, panel-shell and the upgrade install were not run on this server.
+- **A server the test made.** The fresh-install test used a server made beforehand, named in the dev VM's ports file; `scripts/ci/nightly-fresh-install.sh` now also makes and deletes a Linode for it (one run passed 12/12).
+- **A public CA and real DNS.** Pebble stands in for Let's Encrypt in site-domains and wordpress-wizard, and its DNS answers this server for every name.
+- **WHMCS itself.** The module's functions ran from the PHP command line with the repo's stubs in place of WHMCS.
+- **A separate storage server.** For backups, an SFTP user on the same server stands in for one.
+- **The panel over the internet.** The browser proofs reached the panel through SSH port forwards from the machine that ran them, not through a firewall opened to the public.
+
+## Phase 1: Home, Server and Security on the design system
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary and UI of `acdc45a` with throwaway state on loopback, driven by Chrome 158 through agent-browser. The browser replaced only the service list's answer, with 31 standard Ubuntu services taken from the real one, so the host's own service names are not published; every other reading came from the running panel.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Home, Server (Services, Storage, Network) and Security rebuilt on shadcn/ui: no horizontal scroll at 1440 and 390 px in light and dark, keyboard focus, radio-group filters, progress bars, right-to-left layout | [phase1-ui-astryx-1.txt](phase1-ui-astryx-1.txt) | 36 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-1/](phase1-ui-astryx-1/): each screen at 1440 and 390 px in light and dark, the public-preview Home, the revoke confirmation, and the service list's unavailable state.
+
+What this run does not show: the dev VM (the readings are the runner host's, minus its service names), Security's own access-key form (the shell's sign-in comes first, so the page opens signed in), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar then still sat on the left and covered the content there, which [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) fixes).
+
+## Phase 1: Hosting accounts and Backups on the design system
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary of `04697ba` (its Go code is unchanged since) and the UI of `48f1887`, with throwaway state on loopback and the static-site backup runner switched on, driven by Chrome 158 through agent-browser. Jev chose to rebuild both pages rather than remove them: no newer screen lists every Linux account, makes a bare one or suspends one with a reason, and none touches the old static sites' ZIP backups.
+
+Backups ran on real data: two static sites, two ZIP backups made with the rebuilt button around real file edits, and a daily schedule saved through the rebuilt form. This run has no Linux account broker, so Hosting accounts shows the real "no configured broker" answer once; its other screens show a synthetic four-account inventory the browser put in place of the broker's answers. Two error states (a refused account and a refused ZIP backup) were answered by the browser too; the transcript names each replaced answer.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Hosting accounts and Backups rebuilt on shadcn/ui: no horizontal scroll at 1440 and 390 px in light and dark, keyboard focus, dialog focus and Esc, restore preview, schedule save, error copy with Technical details, right-to-left layout | [phase1-ui-astryx-2.txt](phase1-ui-astryx-2.txt) | 42 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-2/](phase1-ui-astryx-2/): both pages at 1440 and 390 px in light and dark, Backups with no websites, the restore, remove and schedule confirmations, Hosting accounts with no broker, its web configuration preview, the create and suspend dialogs, an error on each page, and both pages right to left.
+
+What this run does not show: the dev VM, a real Linux account broker (no account was created or suspended; the create and suspend dialogs were opened, not confirmed), a confirmed restore, removal, download or ZIP upload, the pages' own access-key forms (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar then still sat on the left, which [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) fixes).
+
+## Phase 1: Static sites (old) and the Panel tour on the design system
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary and UI of `13de92f` with throwaway state on loopback, driven by Chrome 158 through agent-browser. Nothing was replaced in the browser: the pages show only sample static sites on `example.test` that the run made through the panel's own API. The tour ran as the public preview, with the meta tag `cmd/panelpreview` adds.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Static sites (old) and the public Panel tour rebuilt on shadcn/ui: no horizontal scroll at 1440 and 390 px in light and dark, keyboard focus, the Files / ZIP backups radio group, dialog focus, save, backup, rename, suspend, create, import, remove, the File Manager and restore handoffs, no private calls from the tour, right-to-left layout | [phase1-ui-astryx-3.txt](phase1-ui-astryx-3.txt) | 42 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-3/](phase1-ui-astryx-3/): both pages at 1440 and 390 px in light and dark, the ZIP backups pane, a binary file's details, the remove, import and refused-create dialogs, a search with no match, the tour's Backups, and right-to-left views.
+
+What this run does not show: the dev VM, the old File Manager's own screen (still on Astryx in this run and only opened by the handoff; [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) rebuilds it), a site that needs recovery (the run cannot cause one), the pages' own access-key form (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar then still sat on the left and covered the content there, which [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) fixes).
+
+## Phase 1: the File Manager and the end of Astryx
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary and UI of `1386a8e` with throwaway state on loopback, driven by Chrome 158 through agent-browser. The browser replaced only the service list's answer, with 31 standard Ubuntu services, so the host's own service names are not published; the static sites are samples on `example.test`.
+
+The old static sites' File Manager (`/websites/static/files`) is rebuilt on shadcn/ui, the last Astryx screen, and the `@astryxdesign` packages, their CSS and the `<Theme>` wrapper are gone (`rg -i astryx web/src web/package.json` finds nothing). Before the final run, the UI before and after the removal served the same state side by side: the computed styles of 4,044 elements on 20 pages, in light and dark, differ only in the font-family fallback list after the loaded Inter, because a small base layer keeps the colour scheme, font smoothing and text line height the screens were built with. The shell now puts its menu on the start side in a right-to-left page, at 1440 px and in the phone menu. The run also checks the slice's small fixes: a duplicate domain says so, alert titles match their text, the old ZIP backups page is named "Static site backups (old)", the dark charts' two lines differ by 3.41:1, and the sidebar footer shows the whole sign-in line.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| File Manager rebuilt on shadcn/ui and Astryx removed: no horizontal scroll at 1440 and 390 px in light and dark, test ids and accessible names, upload, multiple upload, save, a changed-revision conflict, replace, rename, download, the saved-file link, delete, dialog focus and Esc, keyboard focus, right-to-left page and shell, earlier screens without Astryx, the small fixes | [phase1-ui-astryx-final.txt](phase1-ui-astryx-final.txt) | 56 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-final/](phase1-ui-astryx-final/): the File Manager at 1440 and 390 px in light and dark, its binary-file, upload, multiple-upload, conflict, replace, rename and delete views, right to left at both widths with the phone menu, one light 1440 px shot of each earlier rebuilt screen (Home, Server, Storage, Network, Security, Customers, Hosting accounts, Static site backups (old), Static sites (old) and the Panel tour), the dark charts, the duplicate-domain dialog and the sidebar footer.
+
+What this run does not show: the dev VM, the File Manager's own access-key form and a site that needs recovery (as before), the native ZIP import's duplicate-domain message (that route keeps its own error code), and a right-to-left language (the browser set `dir="rtl"`).
+
+Follow-up polish, run the same way at 2026-11-25T09:27Z (UI of `2d38a81` before, `c395b14` after; [phase1-ui-astryx-final/polish.txt](phase1-ui-astryx-final/polish.txt), 17 passed, 0 failed): on Static sites (old) the "Local HTTP preview" and "New website" links went from 12.8 px and 28 px to 14 px and 30 px like the buttons beside them; the light charts' two lines went from 1.06:1 to 3.87:1 apart, with the teal mix 3.65:1 and ink 14.12:1 on the white card and the legend matching; the dark charts read as before (3.41:1, 3.28:1 and 11.18:1). Screenshots are the `polish-1440-*.jpg` files: Static sites (old) in light, Home and Network in light and dark.

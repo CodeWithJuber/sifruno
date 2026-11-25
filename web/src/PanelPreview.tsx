@@ -1,9 +1,12 @@
 import { useState } from "react";
-import { Button } from "@astryxdesign/core/Button";
-import { Card } from "@astryxdesign/core/Card";
+import type { ReactNode } from "react";
+import { cn } from "cn";
 import { Archive, ArrowRight, ChevronRight, Code2, File, Folder, Globe, Layers, LockKeyhole, Search } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { panel, TechnicalDetails } from "@/Dashboard";
 import type { Site, SiteBackup, SiteFile } from "@/lib/sites-api";
-import "./panel-preview.css";
 
 type Module = "files" | "backups" | "websites";
 type PreviewFile = SiteFile & { content: string };
@@ -31,6 +34,43 @@ const modules = [
 const formatBytes = (value: number) => value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KiB`;
 const formatDate = (value: string) => new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(value));
 
+// The base styles colour <p> outside Tailwind's layers, so coloured text uses
+// div or span, as on the other rebuilt screens.
+const muted = "text-xs text-muted-foreground";
+// Rows sit in a padded list, so the global focus outline has room to show.
+const row = "flex w-full items-center gap-2.5 rounded-md border border-transparent px-2.5 py-3 text-start text-sm text-foreground hover:bg-muted aria-pressed:border-border aria-pressed:bg-secondary [&>svg]:shrink-0 [&>svg:first-child]:size-4.5 [&>svg:first-child]:text-muted-foreground aria-pressed:[&>svg:first-child]:text-primary";
+
+function Card({ className, children }: { className?: string; children: ReactNode }) {
+  return <div className={cn(panel, "min-w-0 overflow-hidden", className)}>{children}</div>;
+}
+
+function CardHeading({ title, note, children }: { title: ReactNode; note: string; children: ReactNode }) {
+  return <div className="flex min-h-18 items-center justify-between gap-3 border-b border-border p-4">
+    <div className="min-w-0"><h3 className="flex items-center gap-2 text-sm! wrap-anywhere">{title}</h3><div className={cn("mt-1", muted)}>{note}</div></div>
+    {children}
+  </div>;
+}
+
+function Count({ children }: { children: ReactNode }) {
+  return <span className="shrink-0 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">{children}</span>;
+}
+
+function Facts({ testId, children }: { testId?: string; children: ReactNode }) {
+  return <dl className="grid grid-cols-2 gap-4 p-4" data-testid={testId}>{children}</dl>;
+}
+
+function Fact({ label, wide, children }: { label: string; wide?: boolean; children: ReactNode }) {
+  return <div className={cn("min-w-0", wide && "col-span-full")}><dt className={muted}>{label}</dt><dd className="mt-1.5 text-sm text-foreground wrap-anywhere">{children}</dd></div>;
+}
+
+function ContextNote({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return <div className="flex items-start gap-2.5 border-t border-border bg-muted px-4 py-3.5 [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground">{icon}<div className="text-xs leading-relaxed text-muted-foreground">{children}</div></div>;
+}
+
+function Workspace({ children }: { children: ReactNode }) {
+  return <div className="grid min-w-0 items-start gap-4 @3xl:grid-cols-[minmax(16rem,0.9fr)_minmax(0,1.25fr)]">{children}</div>;
+}
+
 function FileGallery() {
   const [folder, setFolder] = useState("");
   const [query, setQuery] = useState("");
@@ -39,52 +79,88 @@ function FileGallery() {
   const folders = Array.from(new Set(files.filter((file) => file.path.startsWith(folder ? folder + "/" : "")).map((file) => file.path.slice(folder ? folder.length + 1 : 0).split("/")).filter((parts) => parts.length > 1).map((parts) => folder ? folder + "/" + parts[0] : parts[0])));
   const visible = files.filter((file) => search ? file.path.toLowerCase().includes(search) : file.path.split("/").slice(0, -1).join("/") === folder);
   function openFolder(path: string) { setFolder(path); setQuery(""); }
-  return <div className="pp-workspace">
-    <Card className="pp-card pp-browser" padding={0}>
-      <div className="pp-card-heading"><div><h3>Files</h3><p>Studio website · sample inventory</p></div><span className="pp-count">5 files</span></div>
-      <div className="pp-search"><Search aria-hidden="true" /><input aria-label="Search sample files" placeholder="Search sample files…" value={query} onChange={(event) => setQuery(event.target.value)} data-testid="preview-file-search" /></div>
-      <nav className="pp-breadcrumb" aria-label="Sample folder path"><button type="button" onClick={() => openFolder("")}>public_html</button>{folder.split("/").filter(Boolean).map((part, index, parts) => <span key={index}><ChevronRight aria-hidden="true" /><button type="button" onClick={() => openFolder(parts.slice(0, index + 1).join("/"))}>{part}</button></span>)}</nav>
-      <div className="pp-list" aria-label="Sample files">
-        {!search && folders.map((path) => <button type="button" key={path} onClick={() => openFolder(path)} data-testid="preview-folder" data-path={path}><Folder aria-hidden="true" /><span>{path.split("/").at(-1)}<small>Folder</small></span><ChevronRight aria-hidden="true" /></button>)}
-        {visible.map((file) => <button type="button" key={file.path} aria-pressed={selected.path === file.path} onClick={() => setSelected(file)} data-testid="preview-file-row" data-path={file.path}><File aria-hidden="true" /><span>{search ? file.path : file.path.split("/").at(-1)}<small>UTF-8 text</small></span><small>{formatBytes(file.bytes)}</small></button>)}
-        {!visible.length && (search || !folders.length) && <p className="pp-empty" role="status">No sample files match this search.</p>}
+  const crumb = "rounded-sm py-0.5 text-xs text-primary hover:underline";
+  return <Workspace>
+    <Card>
+      <CardHeading title="Files" note="Studio website · sample inventory"><Count>5 files</Count></CardHeading>
+      <div className="relative mx-4 mt-4">
+        <Search className="pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <Input type="search" name="sample-file-search" autoComplete="off" spellCheck={false} aria-label="Search sample files" placeholder="Search sample files…" value={query} onChange={(event) => setQuery(event.target.value)} data-testid="preview-file-search" className="ps-8 pointer-coarse:h-11!" />
       </div>
-      <p className="pp-card-footnote">Browse folders or select a file to inspect its content.</p>
+      <nav className="flex flex-wrap items-center gap-1 px-4 pt-3.5 pb-1.5" aria-label="Sample folder path">
+        <button type="button" className={crumb} onClick={() => openFolder("")}>public_html</button>
+        {folder.split("/").filter(Boolean).map((part, index, parts) => <span key={index} className="flex items-center gap-1"><ChevronRight className="size-3 text-muted-foreground rtl:-scale-x-100" aria-hidden="true" /><button type="button" className={crumb} onClick={() => openFolder(parts.slice(0, index + 1).join("/"))}>{part}</button></span>)}
+      </nav>
+      <div className="grid gap-1 p-3" role="group" aria-label="Sample files">
+        {!search && folders.map((path) => <button type="button" key={path} className={row} onClick={() => openFolder(path)} data-testid="preview-folder" data-path={path}>
+          <Folder aria-hidden="true" /><span className="min-w-0 flex-1 wrap-anywhere">{path.split("/").at(-1)}<small className={cn("mt-1 block", muted)}>Folder</small></span><ChevronRight className="size-3.5 text-muted-foreground rtl:-scale-x-100" aria-hidden="true" />
+        </button>)}
+        {visible.map((file) => <button type="button" key={file.path} className={row} aria-pressed={selected.path === file.path} onClick={() => setSelected(file)} data-testid="preview-file-row" data-path={file.path}>
+          <File aria-hidden="true" /><span className="min-w-0 flex-1 wrap-anywhere">{search ? file.path : file.path.split("/").at(-1)}<small className={cn("mt-1 block", muted)}>UTF-8 text</small></span><small className={muted}>{formatBytes(file.bytes)}</small>
+        </button>)}
+        {!visible.length && (search || !folders.length) && <div className={cn("px-2.5 py-4", muted)} role="status">No sample files match this search.</div>}
+      </div>
+      <div className={cn("px-4 pt-1 pb-4", muted)}>Browse folders or select a file to inspect its content.</div>
     </Card>
-    <Card className="pp-card pp-file-preview" padding={0}>
-      <div className="pp-card-heading"><div><h3><Code2 aria-hidden="true" />{selected.path}</h3><p>File content preview</p></div><span className="pp-readonly"><LockKeyhole aria-hidden="true" />Read-only</span></div>
-      <pre data-testid="preview-file-content" data-path={selected.path}><code>{selected.content}</code></pre>
-      <dl className="pp-file-facts"><div><dt>Size</dt><dd>{formatBytes(selected.bytes)}</dd></div><div><dt>Encoding</dt><dd>UTF-8</dd></div><div className="pp-wide"><dt>SHA-256 of this sample text</dt><dd><code>{selected.sha256}</code></dd></div></dl>
+    <Card>
+      <CardHeading title={<><Code2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />{selected.path}</>} note="File content preview"><Badge variant="outline" className="text-muted-foreground"><LockKeyhole aria-hidden="true" />Read-only</Badge></CardHeading>
+      {/* Code reads left to right in every language. */}
+      <pre dir="ltr" className="m-0 max-h-110 min-h-60 overflow-y-auto bg-muted px-4 py-5 text-start font-mono text-xs leading-[1.9] whitespace-pre-wrap text-foreground wrap-anywhere" data-testid="preview-file-content" data-path={selected.path}><code>{selected.content}</code></pre>
+      <div className="border-t border-border">
+        <Facts><Fact label="Size">{formatBytes(selected.bytes)}</Fact><Fact label="Encoding">UTF-8</Fact></Facts>
+        <div className="px-4 pb-4"><TechnicalDetails>SHA-256 of this sample text{"\n"}{selected.sha256}</TechnicalDetails></div>
+      </div>
     </Card>
-  </div>;
+  </Workspace>;
 }
 
 function BackupGallery() {
   const [selected, setSelected] = useState(backups[0]);
-  return <div className="pp-workspace">
-    <Card className="pp-card" padding={0}><div className="pp-card-heading"><div><h3>Website snapshots</h3><p>Studio website · sample archive records</p></div><span className="pp-count">2 snapshots</span></div>
-      <div className="pp-list">{backups.map((backup) => <button type="button" key={backup.id} onClick={() => setSelected(backup)} aria-pressed={selected.id === backup.id} data-testid="preview-backup-row"><Archive aria-hidden="true" /><span>{backup.id}<small>{formatDate(backup.created_at)} · revision {backup.revision}</small></span><small>{formatBytes(backup.bytes)}</small></button>)}</div>
-      <p className="pp-card-footnote">Select a snapshot to see its recorded metadata.</p>
+  return <Workspace>
+    <Card>
+      <CardHeading title="Website snapshots" note="Studio website · sample archive records"><Count>2 snapshots</Count></CardHeading>
+      <div className="grid gap-1 p-3" role="group" aria-label="Sample snapshots">{backups.map((backup) => <button type="button" key={backup.id} className={row} onClick={() => setSelected(backup)} aria-pressed={selected.id === backup.id} data-testid="preview-backup-row">
+        <Archive aria-hidden="true" /><span className="min-w-0 flex-1 wrap-anywhere">{backup.id}<small className={cn("mt-1 block", muted)}>{formatDate(backup.created_at)} · {backup.files} files</small></span><small className={muted}>{formatBytes(backup.bytes)}</small>
+      </button>)}</div>
+      <div className={cn("px-4 pt-1 pb-4", muted)}>Select a snapshot to see its recorded metadata.</div>
     </Card>
-    <Card className="pp-card" padding={0}><div className="pp-card-heading"><div><h3>Snapshot details</h3><p>Illustrative ZIP metadata</p></div><Archive aria-hidden="true" /></div>
-      <dl className="pp-details" data-testid="preview-backup-details"><div><dt>Archive</dt><dd>{selected.id}</dd></div><div><dt>Created</dt><dd><time dateTime={selected.created_at}>{formatDate(selected.created_at)}</time></dd></div><div><dt>Files</dt><dd>{selected.files} static files</dd></div><div><dt>Revision</dt><dd>{selected.revision}</dd></div><div className="pp-wide"><dt>Illustrative SHA-256</dt><dd><code>{selected.sha256}</code></dd></div></dl>
-      <div className="pp-context-note"><Layers aria-hidden="true" /><p>Private Backups manages native Sifruno static-site ZIPs. This tour displays sample records only.</p></div>
+    <Card>
+      <CardHeading title="Snapshot details" note="Illustrative ZIP metadata"><Archive className="size-4 text-muted-foreground" aria-hidden="true" /></CardHeading>
+      <Facts testId="preview-backup-details">
+        <Fact label="Archive">{selected.id}</Fact>
+        <Fact label="Created"><time dateTime={selected.created_at}>{formatDate(selected.created_at)}</time></Fact>
+        <Fact label="Files">{selected.files} static files</Fact>
+        <Fact label="Size">{formatBytes(selected.bytes)}</Fact>
+      </Facts>
+      <div className="px-4 pb-4"><TechnicalDetails>Revision {selected.revision}{"\n"}Illustrative SHA-256{"\n"}{selected.sha256}</TechnicalDetails></div>
+      <ContextNote icon={<Layers aria-hidden="true" />}>Private Backups manages native Sifruno static-site ZIPs. This tour displays sample records only.</ContextNote>
     </Card>
-  </div>;
+  </Workspace>;
 }
 
 function WebsiteGallery() {
   const [selected, setSelected] = useState(sites[0]);
-  return <div className="pp-workspace">
-    <Card className="pp-card" padding={0}><div className="pp-card-heading"><div><h3>Websites</h3><p>Sample workspace inventory</p></div><span className="pp-count">2 websites</span></div>
-      <div className="pp-list">{sites.map((site) => <button type="button" key={site.id} onClick={() => setSelected(site)} aria-pressed={selected.id === site.id} data-testid="preview-site-row"><Globe aria-hidden="true" /><span>{site.name}<small>{site.domain}</small></span><span className={`pp-site-state ${site.state === "active" ? "pp-active" : ""}`}>{site.state === "active" ? "Active" : "Suspended"}</span></button>)}</div>
-      <p className="pp-card-footnote">Domains and states shown here are sample metadata.</p>
+  const state = (site: typeof selected) => site.state === "active" ? "Active" : "Suspended";
+  return <Workspace>
+    <Card>
+      <CardHeading title="Websites" note="Sample workspace inventory"><Count>2 websites</Count></CardHeading>
+      <div className="grid gap-1 p-3" role="group" aria-label="Sample websites">{sites.map((site) => <button type="button" key={site.id} className={row} onClick={() => setSelected(site)} aria-pressed={selected.id === site.id} data-testid="preview-site-row">
+        <Globe aria-hidden="true" /><span className="min-w-0 flex-1 wrap-anywhere">{site.name}<small className={cn("mt-1 block", muted)}>{site.domain}</small></span><Badge variant={site.state === "active" ? "secondary" : "outline"} className={site.state === "active" ? "text-primary" : "text-muted-foreground"}>{state(site)}</Badge>
+      </button>)}</div>
+      <div className={cn("px-4 pt-1 pb-4", muted)}>Domains and states shown here are sample metadata.</div>
     </Card>
-    <Card className="pp-card" padding={0}><div className="pp-card-heading"><div><h3>{selected.name}</h3><p>Configuration preview</p></div><Globe aria-hidden="true" /></div>
-      <dl className="pp-details" data-testid="preview-site-details"><div className="pp-wide"><dt>Sample domain</dt><dd><code>{selected.domain}</code></dd></div><div><dt>Website state</dt><dd>{selected.state === "active" ? "Active" : "Suspended"}</dd></div><div><dt>Revision</dt><dd>{selected.revision}</dd></div><div><dt>Content type</dt><dd>Static files</dd></div><div><dt>Workspace</dt><dd>App-owned site</dd></div></dl>
-      <div className="pp-context-note"><Folder aria-hidden="true" /><p>The private Websites view connects site records, file content and native ZIP snapshots.</p></div>
+    <Card>
+      <CardHeading title={selected.name} note="Configuration preview"><Globe className="size-4 text-muted-foreground" aria-hidden="true" /></CardHeading>
+      <Facts testId="preview-site-details">
+        <Fact label="Sample domain" wide><code>{selected.domain}</code></Fact>
+        <Fact label="Website state">{state(selected)}</Fact>
+        <Fact label="Content type">Static files</Fact>
+        <Fact label="Workspace">App-owned site</Fact>
+      </Facts>
+      <div className="px-4 pb-4"><TechnicalDetails>Revision {selected.revision}</TechnicalDetails></div>
+      <ContextNote icon={<Folder aria-hidden="true" />}>The private Websites view connects site records, file content and native ZIP snapshots.</ContextNote>
     </Card>
-  </div>;
+  </Workspace>;
 }
 
 export interface PanelPreviewProps { className?: string }
@@ -93,11 +169,22 @@ export interface PanelPreviewProps { className?: string }
 export default function PanelPreview({ className = "" }: PanelPreviewProps) {
   const [module, setModule] = useState<Module>("files");
   const current = modules.find((item) => item.id === module)!;
-  return <section className={`panel-preview ${className}`} data-testid="panel-preview" aria-label="Sample panel workspace">
-    <div className="pp-banner"><div className="pp-banner-icon"><Layers aria-hidden="true" /></div><div><span className="pp-eyebrow">Sample workspace / read-only preview</span><h2>Your workspace, in focus.</h2><p>Explore the private module designs using sample files, snapshots and websites.</p></div><span className="pp-banner-tag"><LockKeyhole aria-hidden="true" />Sample content</span></div>
-    <div className="pp-module-bar" aria-label="Preview modules">{modules.map((item) => <Button key={item.id} label={item.name} icon={<item.icon />} variant={module === item.id ? "primary" : "ghost"} size="sm" onClick={() => setModule(item.id)} aria-pressed={module === item.id} data-testid={`preview-module-${item.id}`} />)}</div>
-    <div className="pp-module-caption"><div><h2>{current.name}</h2><p>{current.description}</p></div><span><ArrowRight aria-hidden="true" />Select items to explore</span></div>
+  return <section className={cn("@container flex min-w-0 flex-col gap-5 text-foreground", className)} data-testid="panel-preview" aria-label="Sample panel workspace">
+    <div className={cn(panel, "flex items-center gap-4 p-5 @max-md:items-start @max-md:gap-3 @max-md:p-4")}>
+      <div className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-border bg-secondary text-primary @max-md:size-9"><Layers className="size-5.5" aria-hidden="true" /></div>
+      <div className="min-w-0">
+        <div className="text-xs font-semibold text-primary">Sample workspace / read-only preview</div>
+        <h2 className="my-1.5 text-xl! @max-md:text-lg!">Your workspace, in focus.</h2>
+        <div className="text-sm text-muted-foreground">Explore the private module designs using sample files, snapshots and websites.</div>
+      </div>
+      <Badge variant="outline" className="ms-auto hidden text-muted-foreground @3xl:inline-flex"><LockKeyhole aria-hidden="true" />Sample content</Badge>
+    </div>
+    <div className="flex flex-wrap gap-2" role="group" aria-label="Preview modules">{modules.map((item) => <Button key={item.id} variant={module === item.id ? "default" : "ghost"} className="h-9 @max-md:min-w-0 @max-md:flex-1 pointer-coarse:h-11" onClick={() => setModule(item.id)} aria-pressed={module === item.id} data-testid={`preview-module-${item.id}`}><item.icon aria-hidden="true" />{item.name}</Button>)}</div>
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0"><h2 className="text-base!">{current.name}</h2><div className={cn("mt-1", muted)}>{current.description}</div></div>
+      <span className={cn("hidden shrink-0 items-center gap-1.5 @md:flex", muted)}><ArrowRight className="size-3.5 rtl:-scale-x-100" aria-hidden="true" />Select items to explore</span>
+    </div>
     {module === "files" ? <FileGallery /> : module === "backups" ? <BackupGallery /> : <WebsiteGallery />}
-    <p className="pp-boundary"><LockKeyhole aria-hidden="true" />This public tour uses sample content. Private workflows require local operator sign-in.</p>
+    <div className={cn("flex items-start gap-2", muted)}><LockKeyhole className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /><span>This public tour uses sample content. Private workflows require local operator sign-in.</span></div>
   </section>;
 }

@@ -57,7 +57,8 @@ export const pages: readonly Page[] = [
   { id: "files", path: "/websites/files", label: "Files", title: "Files", subtitle: "View and edit your website's files.", icon: Folder, testId: "nav-files", audience: "private", group: "main", parent: "websites", needs: websitesRead },
   // The old static sites' file screen, opened from Static sites (old) only.
   { id: "static-files", path: "/websites/static/files", label: "Static site files (old)", title: "Static site files (old)", subtitle: "Files of the websites made with the old static-file model.", icon: Folder, testId: "nav-static-files", audience: "private", group: "main", parent: "websites", pattern: /^\/websites\/static\/files$/ },
-  { id: "backups", path: "/websites/backups", label: "Backups", title: "Backups", subtitle: "Create, download and restore website backups.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },
+  // The old static sites' ZIP backups; each website's own backups are its Backups tab.
+  { id: "backups", path: "/websites/backups", label: "Static site backups (old)", title: "Static site backups (old)", subtitle: "ZIP backups of the websites made with the old static-file model.", icon: Archive, testId: "nav-backups", audience: "private", group: "main", parent: "websites" },
   { id: "activity", path: "/activity", label: "Activity", title: "Activity", subtitle: "Recent changes to website files, and how to recover them.", icon: History, testId: "nav-trail", audience: "private", group: "main" },
   // The signed-in person's own login: its password and authenticator app,
   // and for a customer the websites it manages. Admins and customers both.

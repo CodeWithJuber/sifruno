@@ -36,6 +36,12 @@ type fakeNative struct {
 	stateTimeLeft time.Duration
 	// abandons counts AbandonCreate calls.
 	abandons int
+	// trashed lists the accounts whose home Delete moved to the trash.
+	trashed []string
+	// planUsed, when set, adds IDs Plan must skip, as the native allocator
+	// adds the trash's owners, so a test can read a real trash beside the
+	// trash remover.
+	planUsed func() (map[int]bool, error)
 	// siteApplies counts ApplySites calls, failed ones included.
 	siteApplies int
 	// missingPath is a tenant path that is gone. ApplySites and ApplyWeb
@@ -88,6 +94,8 @@ type fakeNative struct {
 	limitsLog       []string
 	failLimits      int
 	failLimitsAfter int
+	// createdWith is the drop-in each UID had when Create made its user.
+	createdWith map[int]AccountLimits
 	// cachesRemoved lists the IDs whose LSCache store RemoveSiteCache took
 	// away; failure "cache-remove" makes it fail instead.
 	cachesRemoved []string
@@ -265,6 +273,15 @@ func (f *fakeNative) Plan(_ context.Context, name string) (int, int, error) {
 	for _, r := range f.users {
 		used[r.Account.UID] = true
 	}
+	if f.planUsed != nil {
+		more, err := f.planUsed()
+		if err != nil {
+			return 0, 0, err
+		}
+		for id := range more {
+			used[id] = true
+		}
+	}
 	uid := 20000
 	for used[uid] {
 		uid++
@@ -287,6 +304,11 @@ func (f *fakeNative) Create(ctx context.Context, r record, persist func(ownershi
 	owned := fakeOwned(r)
 	r.Ownership = owned
 	r.Account.State = "active"
+	// The drop-in the user starts under, as useradd makes it.
+	if f.createdWith == nil {
+		f.createdWith = map[int]AccountLimits{}
+	}
+	f.createdWith[r.Account.UID] = f.dropIns[r.Account.UID]
 	f.users[r.Account.Username] = r
 	if persist(owned) != nil {
 		return ownership{}, ErrRecovery
@@ -331,13 +353,17 @@ func (f *fakeNative) AbandonCreate(_ context.Context, r record, persist func(own
 	return nil
 }
 
-func (f *fakeNative) Delete(_ context.Context, r record) error {
+func (f *fakeNative) Delete(_ context.Context, r record, moved func() error) error {
 	actual, ok := f.users[r.Account.Username]
 	if !ok {
 		return nil // already gone: safe retry
 	}
 	if actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID || actual.Account.Home != r.Account.Home {
 		return ErrRecovery
+	}
+	// A home that is not the recorded one: refused, nothing removed.
+	if f.failure == "delete-refused" {
+		return atStep("home", deleteRefused(DeleteHome))
 	}
 	if f.failure == "busy" {
 		return errAccountBusy
@@ -346,6 +372,20 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 		return errNothingRemoved
 	}
 	delete(f.users, r.Account.Username)
+	// userdel ran, then the delete stopped: what is left is the journal's
+	// to finish.
+	if f.failure == "after-userdel" {
+		return atStep("home", ErrUnavailable)
+	}
+	// The home goes to the trash, which the store records; failure
+	// "after-move" stops the delete right after that.
+	if moved() != nil {
+		return ErrRecovery
+	}
+	f.trashed = append(f.trashed, r.Account.ID)
+	if f.failure == "after-move" {
+		return atStep("account files", ErrUnavailable)
+	}
 	// The native delete removes the site's TLS directory with the account.
 	if _, has := f.live[r.Account.Username]; has {
 		for _, s := range f.sites {

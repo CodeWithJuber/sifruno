@@ -81,7 +81,9 @@ try {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
-  page.on("console", (m) => { if (m.type() === "error" && !/\b(401|409|422)\b/.test(m.text())) errors.push(`console: ${m.text()}`); });
+  // The proof asks for refusals on purpose (the panel's 404 for
+  // /api/v1/phpmyadmin/, the fourth sign-in's 429); the browser logs each.
+  page.on("console", (m) => { if (m.type() === "error" && !/\b(401|404|409|422|429)\b/.test(m.text())) errors.push(`console: ${m.text()}`); });
   const signonURLs = [];
   ctx.on("request", (r) => { if (r.url().includes("/sifruno-signon.php?code=")) signonURLs.push(r.url()); });
 

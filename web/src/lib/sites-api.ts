@@ -56,7 +56,11 @@ export function validSession(v: unknown): v is OperatorSession {
 export class SiteApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
 }
-function message(status: number): string {
+// The API's error code tells a domain another website uses apart from a
+// changed revision; both answer 409.
+const domainTaken = "Another website already uses this domain. Choose a different domain; nothing was changed.";
+function message(status: number, code = ""): string {
+  if (status === 409 && code === "domain_taken") return domainTaken;
   if (status === 401) return "Operator authentication is required. Sign in again; your editor draft is kept.";
   if (status === 403) return "The session or request origin was rejected. Refresh your session and try again.";
   if (status === 404) return "This website, file or backup could not be found. Your editor draft is kept.";
@@ -86,7 +90,7 @@ export async function siteRequest<T>(
     const value: unknown = await response.json().catch(() => undefined);
     if (!response.ok && !(options.unauthenticatedSession && response.status === 401 && validSession(value) && !value.authenticated)) {
       const code = object(value) && text(value.error) && /^[a-z_]+$/.test(value.error) ? value.error : "request_failed";
-      throw new SiteApiError(response.status, code, message(response.status));
+      throw new SiteApiError(response.status, code, message(response.status, code));
     }
     if (!validate(value)) throw new SiteApiError(0, "invalid_response", "The response did not match the website data contract. No successful result was confirmed.");
     return value;

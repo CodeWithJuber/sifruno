@@ -19,6 +19,8 @@ type accountSpy struct {
 	created   hostaccounts.CreateInput
 	changed   hostaccounts.StateInput
 	abandoned hostaccounts.AbandonCreateInput
+	finished  hostaccounts.FinishDeleteInput
+	planned   hostaccounts.PlanInput
 }
 
 func (s *accountSpy) Capability(context.Context) (hostaccounts.Capability, error) {
@@ -41,10 +43,60 @@ func (s *accountSpy) SetState(_ context.Context, _ string, in hostaccounts.State
 	s.actor = actor
 	return hostaccounts.Account{}, s.err
 }
-func (s *accountSpy) SetPlan(_ context.Context, _ string, _ hostaccounts.PlanInput, actor string) (hostaccounts.Account, error) {
+func (s *accountSpy) SetPlan(_ context.Context, _ string, in hostaccounts.PlanInput, actor string) (hostaccounts.Account, error) {
 	s.calls++
 	s.actor = actor
+	s.planned = in
 	return hostaccounts.Account{}, s.err
+}
+
+// An admin changes a plan, with or without its limits: the limits are an
+// object of exactly the three keys, once each, as whole numbers; anything
+// else is refused before the broker is asked.
+func TestAccountPlanAndLimits(t *testing.T) {
+	f := websiteFixture(t)
+	s := &accountSpy{}
+	f.handler = New(Options{Operator: f.manager, Accounts: s, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	path := "/api/v1/accounts/" + strings.Repeat("a", 32) + "/plan"
+	cookie, csrf := websiteSignIn(t, f)
+	limits := `{"processes":200,"memory_mib":2048,"cpu_percent":150}`
+	w := websiteRequest(f.handler, "POST", path, `{"plan":"gold","limits":`+limits+`,"expected_revision":3,"reason":"Upgrade"}`, cookie, csrf)
+	want := hostaccounts.PlanInput{Plan: "gold", Limits: hostaccounts.AccountLimits{Processes: 200, MemoryMiB: 2048, CPUPercent: 150}, ExpectedRevision: 3, Reason: "Upgrade"}
+	if w.Code != 200 || s.planned != want || s.actor == "" {
+		t.Fatalf("plan with limits: %d %s %+v", w.Code, w.Body.String(), s.planned)
+	}
+	w = websiteRequest(f.handler, "POST", path, `{"plan":"silver","expected_revision":4,"reason":"Plan only"}`, cookie, csrf)
+	if w.Code != 200 || s.planned != (hostaccounts.PlanInput{Plan: "silver", ExpectedRevision: 4, Reason: "Plan only"}) {
+		t.Fatalf("plan only: %d %s %+v", w.Code, w.Body.String(), s.planned)
+	}
+	calls := s.calls
+	for _, l := range []string{
+		`{"processes":200,"memory_mib":2048}`,
+		`{"processes":200,"memory_mib":2048,"cpu_percent":150,"io":1}`,
+		`{"processes":200,"memory_mib":2048,"cpu_percent":150,"processes":300}`,
+		`{"Processes":200,"memory_mib":2048,"cpu_percent":150}`,
+		`{"processes":200,"Processes":300,"memory_mib":2048,"cpu_percent":150}`,
+		`{"processes":200.5,"memory_mib":2048,"cpu_percent":150}`,
+		`{"processes":2e2,"memory_mib":2048,"cpu_percent":150}`,
+		`{"processes":"200","memory_mib":2048,"cpu_percent":150}`,
+		`{"processes":null,"memory_mib":2048,"cpu_percent":150}`,
+		`{"processes":-200,"memory_mib":2048,"cpu_percent":150}`,
+		`[200,2048,150]`,
+		`null`,
+	} {
+		body := `{"plan":"gold","limits":` + l + `,"expected_revision":3,"reason":"Upgrade"}`
+		if w := websiteRequest(f.handler, "POST", path, body, cookie, csrf); w.Code != 400 {
+			t.Fatalf("%s: status %d %s", l, w.Code, w.Body.String())
+		}
+	}
+	for _, body := range []string{`{"plan":"gold","plan":"silver","expected_revision":3,"reason":"x"}`, `{"Plan":"gold","expected_revision":3,"reason":"x"}`, `{"plan":"gold","state":"active","expected_revision":3,"reason":"x"}`, `{"plan":7,"expected_revision":3,"reason":"x"}`} {
+		if w := websiteRequest(f.handler, "POST", path, body, cookie, csrf); w.Code != 400 {
+			t.Fatalf("%s: status %d", body, w.Code)
+		}
+	}
+	if s.calls != calls {
+		t.Fatal("an invalid plan request reached the broker")
+	}
 }
 func (s *accountSpy) Delete(_ context.Context, _ string, _ hostaccounts.DeleteInput, actor string) (hostaccounts.Account, error) {
 	s.calls++
@@ -56,6 +108,59 @@ func (s *accountSpy) AbandonCreate(_ context.Context, id string, in hostaccounts
 	s.actor = actor
 	s.abandoned = in
 	return hostaccounts.Account{ID: id, State: "recovery_required"}, s.err
+}
+
+func (s *accountSpy) FinishDelete(_ context.Context, id string, in hostaccounts.FinishDeleteInput, actor string) (hostaccounts.Account, error) {
+	s.calls++
+	s.actor = actor
+	s.finished = in
+	return hostaccounts.Account{ID: id, State: "recovery_required"}, s.err
+}
+
+// An admin finishes an unfinished delete with a reason only; a refusal says
+// why nothing was removed, and other broker answers map as for any account
+// change.
+func TestAccountFinishDelete(t *testing.T) {
+	f := websiteFixture(t)
+	s := &accountSpy{}
+	f.handler = New(Options{Operator: f.manager, Accounts: s, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	path := "/api/v1/accounts/" + strings.Repeat("a", 32) + "/finish-delete"
+	if w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, nil, ""); w.Code != 401 {
+		t.Fatalf("unauthenticated status %d", w.Code)
+	}
+	cookie, csrf := websiteSignIn(t, f)
+	for _, body := range []string{`{"reason":"Leftover","state":"active"}`, `{"reason":"Leftover","expected_revision":1}`, `{"Reason":"Leftover"}`, `{"reason":"a","reason":"b"}`, `null`} {
+		if w := websiteRequest(f.handler, "POST", path, body, cookie, csrf); w.Code != 400 {
+			t.Fatalf("%s: status %d", body, w.Code)
+		}
+	}
+	if w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, cookie, ""); w.Code != 403 {
+		t.Fatalf("without CSRF: %d", w.Code)
+	}
+	if s.calls != 0 {
+		t.Fatal("an invalid request reached the broker")
+	}
+	w := websiteRequest(f.handler, "POST", path, `{"reason":"Trash fixed by hand"}`, cookie, csrf)
+	if w.Code != 200 || s.finished.Reason != "Trash fixed by hand" || s.actor == "" {
+		t.Fatalf("finish: %d %s", w.Code, w.Body.String())
+	}
+	for _, tc := range []struct {
+		err  error
+		want int
+		says string
+	}{
+		{&hostaccounts.DeleteRefusedError{Reason: hostaccounts.DeleteTrash}, 409, "is not the broker's own"},
+		{&hostaccounts.DeleteRefusedError{Reason: hostaccounts.DeleteNoUnfinished}, 409, "no unfinished delete"},
+		{&hostaccounts.DeleteRefusedError{Reason: "something_new"}, 409, "could not prove"},
+		{hostaccounts.ErrNotFound, 404, ""},
+		{hostaccounts.ErrRecovery, 503, ""},
+	} {
+		s.err = tc.err
+		w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, cookie, csrf)
+		if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.says) {
+			t.Fatalf("%v: %d %s", tc.err, w.Code, w.Body.String())
+		}
+	}
 }
 
 // An admin abandons an unfinished create with a reason only; a refusal says

@@ -411,6 +411,17 @@ for path in /wp-content/plugins/akismet/_inc/akismet.css /wp-content/plugins/aki
 done
 echo "  probes: $(m "['probes']")"
 check "verify checked Akismet's closed folder and its open files, all passing" test "$(m "['verify']['probes_fail']")" = 0 -a "$(m "['verify']['probes_pass']")" -ge 2
+# D-0001: the stand-in's Apache read this site through the group alone
+# (0640 files, 0750 folders, group apache). The copy keeps those modes with
+# the site's own group, and this server's web server reads them through one
+# ACL entry each; the home and public_html keep GrantWebAccess's own.
+css="/home/$SHOP/public_html/wp-content/plugins/akismet/_inc/akismet.css"
+check "a moved 0640 file of group apache keeps its mode, has the site's group, and ${ols_user:-nobody} reads it through its ACL" bash -c "[ \"\$(stat -c '%a %G' $css)\" = '640 $SHOP' ] && getfacl -p $css 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r--' && getfacl -p $css 2>/dev/null | grep -qx 'mask::r--'"
+check "a moved 0750 folder of group apache keeps its mode, and ${ols_user:-nobody} reads and enters it through its ACL" bash -c "[ \"\$(stat -c '%a' /home/$SHOP/public_html/wp-content)\" = 750 ] && getfacl -p /home/$SHOP/public_html/wp-content 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r-x'"
+check "the home and public_html keep the web server's own ACL entries (--x, r-x)" bash -c "getfacl -p /home/$SHOP 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:--x' && getfacl -p /home/$SHOP/public_html 2>/dev/null | grep -qx 'user:${ols_user:-nobody}:r-x'"
+# D-0002: below the closed Akismet folder verify also asks for its first
+# subfolder, expecting 403.
+check "verify probed Akismet's _inc/ subfolder as closed (403)" test "$(m "[p['kind'] for p in d['job']['migration']['probes'] if p['path'] == '/wp-content/plugins/akismet/_inc/']")" = "['deny']"
 check "the scheduled job arrived in the site user's crontab" grep -q "wp-cron.php" "/var/spool/cron/$SHOP"
 page="$(curl -s -H "Host: $SHOP_DOMAIN" http://127.0.0.1/)"
 check "the preview (this server, the site's Host header) serves the site's title" grep -q "$TITLE" <<<"$page"
@@ -510,6 +521,21 @@ check "a request over IPv6 to port 80 is not answered" bash -c "! curl -s -o /de
 check "the site's own page is open (200)" test "$(new "$STAFF_DOMAIN" /)" = 200
 echo "  probes: $(m "['probes']"); verify: $(m "['verify']['verdict']")"
 check "verify checked /private/ (401) and /backups/ (403) on both sites, all passing" test "$(m "['verify']['probes_pass']")" = 2 -a "$(m "['verify']['probes_fail']")" = 0
+# D-0002: verify also asks for the password folder's first subfolder
+# (401), and checks each address-list folder against the status its rule
+# gives each side's client address: the stand-in's view of this server,
+# which its sshd reported to the plan, and the copy's 127.0.0.1.
+seen="$(m ".get('client_address')")"
+apache_saw="$(in_ctr "awk '/Sifruno-MigrationVerify/ {ip=\$1} END {print ip}' /var/log/httpd/access_log")"
+check "the job keeps the address the old server's sshd saw this server come from ($seen), the one its Apache saw verify come from ($apache_saw)" test -n "$seen" -a "$seen" = "$apache_saw"
+check "verify probed /private/sub/ (auth) and /lobby/ and /office/ by their address lists" test "$(m "[(p['path'], p['kind'], p.get('hosts')) for p in d['job']['migration']['probes'] if p['path'] in ('/private/sub/', '/lobby/', '/office/')]")" = "[('/lobby/', 'hosts', 'except'), ('/office/', 'hosts', 'only'), ('/private/sub/', 'auth', None)]"
+echo "  verify problems: $(m "['verify'].get('problems')")"
+sub_ok="$([ "$(new "$STAFF_DOMAIN" /private/sub/)" = 401 ] && echo yes || echo no)"
+lobby_ok="$([ "$(from 127.0.0.1 /lobby/)" = 200 ] && echo yes || echo no)"
+office_ok="$([ "$(from 127.0.0.1 /office/)" = 403 ] && echo yes || echo no)"
+check "verify allows cutover only if the copy answers /private/sub/ 401, /lobby/ 200 and /office/ 403 to 127.0.0.1 (copy: $sub_ok $lobby_ok $office_ok)" bash -c "[ '$sub_ok $lobby_ok $office_ok' = 'yes yes yes' ] || [ '$(m "['verify']['cutover_allowed']")' = False ]"
+check "a folder the copy answers against its address list is named in verify's plain problems" bash -c "[ '$lobby_ok' = yes ] || grep -qF '/lobby/' <<<\"\$1\"" _ "$(m "['verify'].get('problems')")"
+check "with the copy right, verify passes all five folder checks" bash -c "[ '$sub_ok $lobby_ok $office_ok' != 'yes yes yes' ] || [ '$(m "['verify']['probes_pass']") $(m "['verify']['probes_fail']")' = '5 0' ]"
 check "the key is removed after the move" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 
 echo

@@ -49,9 +49,11 @@
 /* Brand colours come from assets/design-tokens.json (via design-tokens.css).
    Teal leads on light surfaces and mint on dark ones, as the brand guide says;
    the mixes below only tint neutral surfaces, they add no new hues.
-   Chart lines: the second series is neutral. In the dark theme the first is
-   teal lifted with 22% mint, so the two lines differ by 3.4:1 and each
-   stands 3.3:1 or more against the card (mint and dark-muted were 1.2:1). */
+   Chart lines: in both themes the first series is teal lifted with 22% mint
+   and the second is neutral, ink on the light card and paper on the dark one.
+   The two lines differ by 3.4:1 or more and each stands 3.3:1 or more against
+   its card (teal and the slate mix were 1.06:1 apart in light, mint and
+   dark-muted 1.2:1 in dark). */
 :root {
   --brand-ink: var(--sifruno-ink); --brand-teal: var(--sifruno-teal); --brand-mint: var(--sifruno-mint);
   --background: var(--sifruno-paper); --foreground: var(--sifruno-ink); --card: var(--sifruno-white);
@@ -60,8 +62,8 @@
   --secondary: color-mix(in srgb, var(--sifruno-mint) 30%, var(--sifruno-white));
   --border: var(--sifruno-line); --input: color-mix(in srgb, var(--sifruno-muted) 75%, var(--sifruno-line));
   --destructive: #b33838; --radius: 6px;
-  --chart-primary: var(--primary);
-  --chart-memory: color-mix(in srgb, var(--sifruno-muted) 85%, var(--sifruno-line));
+  --chart-primary: color-mix(in srgb, var(--sifruno-mint) 22%, var(--sifruno-teal));
+  --chart-memory: var(--sifruno-ink);
   --sidebar: var(--sifruno-ink); --sidebar-foreground: var(--sifruno-paper);
   --sidebar-primary: var(--sifruno-mint); --sidebar-primary-foreground: var(--sifruno-ink);
   --sidebar-accent: color-mix(in srgb, var(--sifruno-mint) 14%, var(--sifruno-ink));
@@ -76,7 +78,6 @@
   --secondary: color-mix(in srgb, var(--sifruno-mint) 16%, var(--sifruno-dark-surface));
   --border: var(--sifruno-dark-line); --input: color-mix(in srgb, var(--sifruno-dark-muted) 55%, var(--sifruno-dark-line));
   --destructive: #ffaca9;
-  --chart-primary: color-mix(in srgb, var(--sifruno-mint) 22%, var(--sifruno-teal));
   --chart-memory: var(--sifruno-paper);
   --sidebar: color-mix(in srgb, var(--sifruno-ink) 70%, black);
 }

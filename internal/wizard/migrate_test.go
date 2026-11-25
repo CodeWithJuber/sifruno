@@ -57,16 +57,49 @@ func (f *fakeMigrationBroker) PlanMigration(_ context.Context, id string, in hos
 	f.order.add("plan " + in.Username)
 	return f.plan, f.planErr
 }
+
+// revision checks an expected revision as the broker does, and raises it
+// when the operation changes the account.
+func (f *fakeMigrationBroker) revision(id string, expected uint64, raise bool) error {
+	f.accounts.mu.Lock()
+	defer f.accounts.mu.Unlock()
+	for i := range f.accounts.accounts {
+		if f.accounts.accounts[i].ID == id {
+			if f.accounts.accounts[i].Revision != expected {
+				return hostaccounts.ErrConflict
+			}
+			if raise {
+				f.accounts.accounts[i].Revision++
+			}
+			return nil
+		}
+	}
+	return hostaccounts.ErrNotFound
+}
 func (f *fakeMigrationBroker) MigrateFiles(_ context.Context, id string, in hostaccounts.MigrateFilesInput, _ string) (hostaccounts.MigrateFilesResult, error) {
 	f.order.add(fmt.Sprintf("files %s rev=%d", id[28:], in.ExpectedRevision))
+	if f.filesErr != nil {
+		return hostaccounts.MigrateFilesResult{}, f.filesErr
+	}
 	res := f.filesResult
 	res.WordPress = true
-	return res, f.filesErr
+	// Protected folders go live as a journaled change of the account.
+	if err := f.revision(id, in.ExpectedRevision, len(res.Folders) > 0); err != nil {
+		return hostaccounts.MigrateFilesResult{}, err
+	}
+	res.Revision = in.ExpectedRevision
+	if len(res.Folders) > 0 {
+		res.Revision++
+	}
+	return res, nil
 }
 func (f *fakeMigrationBroker) MigrateDatabase(_ context.Context, id string, in hostaccounts.MigrateDatabaseInput, _ string) (hostaccounts.MigrateDatabaseResult, error) {
 	f.order.add("copy-db " + in.Database)
 	if f.dbErr != nil {
 		return hostaccounts.MigrateDatabaseResult{}, f.dbErr
+	}
+	if err := f.revision(id, in.ExpectedRevision, false); err != nil {
+		return hostaccounts.MigrateDatabaseResult{}, err
 	}
 	tables := f.tables
 	if tables == nil {

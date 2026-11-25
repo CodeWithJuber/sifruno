@@ -547,6 +547,11 @@ func (j *run) migrateFiles(ctx context.Context) (string, *stepError) {
 	if err != nil {
 		return "", j.migrationFailure(err)
 	}
+	// Protected folders going live raised the account's revision. Zero is
+	// no revision: a broker from before it answered one.
+	if res.Revision != 0 {
+		j.revision = res.Revision
+	}
 	j.migration.wordpress = res.WordPress
 	j.job.Migration.WordPress = res.WordPress
 	protected := ""

@@ -149,11 +149,14 @@ type MigrateFilesInput struct {
 // MigrateFilesResult says whether the copy holds a WordPress site
 // (wp-config.php in public_html or the home), which protected folders its
 // .htaccess files were converted to, now in the site's web server config,
-// and the URLs verify checks for them, open files among them.
+// and the URLs verify checks for them, open files among them. Revision is
+// the account's revision after the copy: protected folders going live
+// raise it, and the panel's next step for the account sends this one.
 type MigrateFilesResult struct {
 	WordPress bool              `json:"wordpress"`
 	Folders   []MigrationFolder `json:"folders"`
 	Probes    []MigrationProbe  `json:"probes"`
+	Revision  uint64            `json:"revision"`
 }
 
 // MigrateDatabaseInput copies one source database of the account into the

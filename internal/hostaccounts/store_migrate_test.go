@@ -232,6 +232,9 @@ func TestMigrateCopiesOnlyTheSameNamedAccount(t *testing.T) {
 	if err != nil || !got.WordPress || !slices.Equal(f.files, []string{"/home/fixtureacct -> fixtureacct"}) {
 		t.Fatalf("files: %+v %v %v", got, err, f.files)
 	}
+	if got.Revision != a.Revision {
+		t.Fatalf("a copy without protected folders answered revision %d, not %d", got.Revision, a.Revision)
+	}
 	if len(s.installing) != 0 {
 		t.Fatal("the account stayed busy")
 	}

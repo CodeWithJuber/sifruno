@@ -852,6 +852,15 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 			return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The files were copied, but the web server's access to the site's folders could not be set again, so the site may answer 403."}
 		}
 	}
+	// Read while the account is still busy for this copy, so the revision
+	// is the one the copy left and no other change's.
+	s.mu.Lock()
+	r, err = s.recordByID(id)
+	s.mu.Unlock()
+	if err != nil {
+		return MigrateFilesResult{}, err
+	}
+	result.Revision = r.Account.Revision
 	return result, nil
 }
 

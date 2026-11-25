@@ -15,11 +15,13 @@ REPO="$(cd "$HERE/../.." && pwd)"
 OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 RELEASE="${SIFRUNO_RELEASE:-}"
 
-if [ $# -ne 1 ] || [ "$1" != --destroy-vm ]; then
+if [ $# -ne 1 ] || { [ "$1" != --destroy-vm ] && [ "$1" != --existing-host ]; }; then
   cat >&2 <<'USAGE'
-usage: fresh-install-test.sh --destroy-vm
-  Deletes the dev VM's disks (vm.sh destroy) and builds a new VM, so the
-  flag is required. Builds the release first with
+usage: fresh-install-test.sh --destroy-vm | --existing-host
+  --destroy-vm deletes the dev VM's disks (vm.sh destroy) and builds a new
+  VM, so the flag is required. --existing-host installs on the host the
+  ports file names (VM_HOST, see vm.sh), which must be a new, throwaway
+  AlmaLinux 9 server: it is changed for good. Builds the release first with
   scripts/install/build-release.sh; set SIFRUNO_RELEASE to a tarball that
   has its .sha256 beside it to test that one instead.
 USAGE
@@ -36,6 +38,15 @@ if [ ! -f "$RELEASE" ] || [ ! -f "$RELEASE.sha256" ]; then
 fi
 
 vm() { "$HERE/vm.sh" "$@"; }
+MODE="$1"
+# new_vm makes the local VM again; an existing host is used as it is.
+new_vm() {
+  if [ "$MODE" = --existing-host ]; then
+    echo "# existing host, as the ports file names it"
+    return 0
+  fi
+  vm destroy && vm create && vm start
+}
 
 smoke() {
   vm ssh 'bash -s' <<'GUEST'
@@ -86,9 +97,7 @@ GUEST
 run() {
   echo "# Fresh install test $(date -u +%FT%TZ)" &&
     echo "# release sha256 $(cut -d' ' -f1 "$RELEASE.sha256"), source $(cd "$REPO" && git rev-parse --short HEAD 2>/dev/null || echo unknown)" &&
-    vm destroy &&
-    vm create &&
-    vm start &&
+    new_vm &&
     vm put "$RELEASE" /root/sifruno-linux-amd64.tar.gz &&
     vm put "$RELEASE.sha256" /root/sifruno-linux-amd64.tar.gz.sha256 &&
     vm put "$HERE/provision.sh" /root/provision.sh &&

@@ -52,6 +52,10 @@ running() {
 ssh_base() {
   # shellcheck disable=SC1091
   . "$DIR/ports"
+  # A ports file may name another host (VM_HOST=address, SSH_PORT=22): a
+  # throwaway cloud server used in place of the local VM. ssh, put, get and
+  # forward then reach it; create, start and stop stay QEMU-only.
+  VM_HOST="${VM_HOST:-127.0.0.1}"
   SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$DIR/known_hosts"
     -o ConnectTimeout=30 -o ServerAliveInterval=30 -o BatchMode=yes -o LogLevel=ERROR
     -i "$DIR/id_ed25519")
@@ -162,26 +166,26 @@ cmd_start() {
 
 cmd_ssh() {
   ssh_base
-  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" root@127.0.0.1 "$@"
+  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" "root@$VM_HOST" "$@"
 }
 
 cmd_put() {
   [ $# -eq 2 ] || { usage >&2; exit 2; }
   ssh_base
-  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "$1" "root@127.0.0.1:$2"
+  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "$1" "root@$VM_HOST:$2"
 }
 
 cmd_get() {
   [ $# -eq 2 ] || { usage >&2; exit 2; }
   ssh_base
-  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "root@127.0.0.1:$1" "$2"
+  exec scp -q "${SSH_OPTS[@]}" -P "$SSH_PORT" "root@$VM_HOST:$1" "$2"
 }
 
 cmd_forward() {
   [ $# -eq 1 ] || { usage >&2; exit 2; }
   case "$1" in ''|*[!0-9]*) usage >&2; exit 2 ;; esac
   ssh_base
-  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$1:127.0.0.1:$1" root@127.0.0.1
+  exec ssh "${SSH_OPTS[@]}" -p "$SSH_PORT" -N -o ExitOnForwardFailure=yes -L "127.0.0.1:$1:127.0.0.1:$1" "root@$VM_HOST"
 }
 
 cmd_status() {

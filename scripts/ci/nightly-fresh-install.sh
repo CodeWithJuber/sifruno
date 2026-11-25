@@ -552,7 +552,6 @@ mkfs.xfs -q "$home_dev"
 echo "UUID=$(blkid -s UUID -o value "$home_dev") /home xfs defaults,usrquota,grpquota 0 0" >>/etc/fstab
 systemctl daemon-reload
 mount /home
-restorecon -R /home
 mounted="$(findmnt -no FSTYPE,OPTIONS /home)"
 state="$(xfs_quota -x -c 'state -u' /home)"
 echo "/home: $mounted"

@@ -40,10 +40,7 @@ Do this before you run the installer. Sign in as root, not as a user whose home 
    mkfs.xfs /dev/vdb
    echo "UUID=$(blkid -s UUID -o value /dev/vdb) /home xfs defaults,usrquota,grpquota 0 0" >> /etc/fstab
    mount /home
-   restorecon -R /home
    ```
-
-   A new filesystem has no SELinux labels, so `restorecon` gives `/home` the one SSH sign-in and the web server are allowed to use. The installer refuses an unlabeled `/home`.
 
    If `/home` is already its own XFS filesystem without quota, add `usrquota,grpquota` to its line in `/etc/fstab`, then run `umount /home && mount /home`.
 

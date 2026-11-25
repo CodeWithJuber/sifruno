@@ -52,6 +52,8 @@ func run(ctx context.Context, opts Options, tune tuning) (Report, error) {
 		OldOrigin:        cfg.old.String(),
 		NewOrigin:        cfg.new.String(),
 		NewConnect:       cfg.newConnect,
+		OldClient:        clientText(cfg.oldClient),
+		NewClient:        clientText(cfg.newClient),
 		InsecureNewTLS:   cfg.insecureNewTLS,
 		PageLimit:        cfg.pageLimit,
 		AcceptedWarnings: cfg.acceptWarnings,
@@ -368,6 +370,10 @@ func (v *verifier) runProbes(ctx context.Context) []ProbeResult {
 			// and a protected location may stream something large.
 			was := v.fetch(ctx, &v.old, p.Path, bodyNone)
 			now := v.fetch(ctx, &v.new, p.Path, bodyNone)
+			if p.Kind == ProbeHosts {
+				results[i] = judgeHosts(p, was.resp, now.resp, v.cfg.oldClient, v.cfg.newClient)
+				return
+			}
 			results[i] = judgeProbe(p, was.resp, now.resp)
 		})
 	}

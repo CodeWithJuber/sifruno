@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -43,13 +44,36 @@ const (
 	// allow-list such as Akismet's): both sites must answer 200, so the
 	// converted rule closes no more than the old one did.
 	ProbeAllow ProbeKind = "allow"
+	// ProbeHosts is a folder open to some addresses only. Each site must
+	// answer the status the folder's rule (Hosts, Networks, Realm) gives the
+	// address that site sees verify's requests come from (Options.OldClient,
+	// NewClient): 403 for an address the list keeps out, else 401 behind a
+	// password, else 200.
+	ProbeHosts ProbeKind = "hosts"
 )
 
+// The address lists of a ProbeHosts folder, as internal/htaccess names
+// them: HostsOnly admits the listed networks only, HostsExcept every
+// address outside them.
+const (
+	HostsOnly   = "only"
+	HostsExcept = "except"
+)
+
+// maxProbeNetworks bounds one address list, as htaccess.MaxRuleNetworks
+// bounds a converted rule.
+const maxProbeNetworks = 64
+
 // Probe is one closed URL to check. A page crawl does not find these because
-// nothing links to them, so they are listed explicitly.
+// nothing links to them, so they are listed explicitly. Hosts, Networks
+// (canonical prefixes such as "192.0.2.0/24") and Realm are a ProbeHosts
+// folder's rule, and empty for every other kind.
 type Probe struct {
-	Path string    `json:"path"`
-	Kind ProbeKind `json:"kind"`
+	Path     string    `json:"path"`
+	Kind     ProbeKind `json:"kind"`
+	Hosts    string    `json:"hosts,omitempty"`
+	Networks []string  `json:"networks,omitempty"`
+	Realm    bool      `json:"realm,omitempty"`
 }
 
 // Options describes one verify run.
@@ -66,8 +90,15 @@ type Options struct {
 	PageLimit int
 	// Paths are compared in addition to the discovered pages.
 	Paths []string
-	// Probes are closed URLs whose status must be the same on both sites.
+	// Probes are closed URLs whose status must be the same on both sites,
+	// and ProbeHosts folders, whose status comes from their rule.
 	Probes []Probe
+	// OldClient and NewClient are the single IP address the old site, and
+	// the copy, sees verify's requests come from. Every ProbeHosts probe
+	// fails, keeping the gate closed, while either is empty or not one
+	// valid address.
+	OldClient string
+	NewClient string
 	// InsecureNewTLS skips certificate verification for the new site only. It is
 	// meant for a copy whose certificate is not installed yet and is reported as
 	// a warning.
@@ -87,6 +118,8 @@ type config struct {
 	pageLimit      int
 	paths          []string
 	probes         []Probe
+	oldClient      netip.Addr
+	newClient      netip.Addr
 	insecureNewTLS bool
 	acceptWarnings bool
 	tolerance      sizeTolerance
@@ -136,12 +169,16 @@ func (o Options) validate() (config, error) {
 	}
 	kinds := map[string]ProbeKind{}
 	for _, p := range o.Probes {
-		if p.Kind != ProbeAuth && p.Kind != ProbeDeny && p.Kind != ProbeAllow {
-			return config{}, fmt.Errorf("probe %q: kind must be %q, %q or %q", truncate(p.Path, 80), ProbeAuth, ProbeDeny, ProbeAllow)
+		if p.Kind != ProbeAuth && p.Kind != ProbeDeny && p.Kind != ProbeAllow && p.Kind != ProbeHosts {
+			return config{}, fmt.Errorf("probe %q: kind must be %q, %q, %q or %q", truncate(p.Path, 80), ProbeAuth, ProbeDeny, ProbeAllow, ProbeHosts)
 		}
 		target, e := cleanTarget(p.Path)
 		if e != nil {
 			return config{}, fmt.Errorf("probe path %q: %w", truncate(p.Path, 80), e)
+		}
+		networks, e := probeNetworks(p)
+		if e != nil {
+			return config{}, fmt.Errorf("probe %s: %w", target, e)
 		}
 		if previous, ok := kinds[target]; ok {
 			if previous != p.Kind {
@@ -150,8 +187,9 @@ func (o Options) validate() (config, error) {
 			continue
 		}
 		kinds[target] = p.Kind
-		c.probes = append(c.probes, Probe{Path: target, Kind: p.Kind})
+		c.probes = append(c.probes, Probe{Path: target, Kind: p.Kind, Hosts: p.Hosts, Networks: networks, Realm: p.Realm})
 	}
+	c.oldClient, c.newClient = parseClient(o.OldClient), parseClient(o.NewClient)
 	c.tolerance = sizeTolerance{percent: o.SizeTolerancePercent, floor: o.SizeToleranceBytes}
 	if c.tolerance.percent == 0 {
 		c.tolerance.percent = DefaultSizeTolerancePercent
@@ -198,6 +236,43 @@ func parseOrigin(label, raw string) (*url.URL, error) {
 		}
 	}
 	return &url.URL{Scheme: u.Scheme, Host: strings.ToLower(u.Host)}, nil
+}
+
+// probeNetworks checks a probe's address list: a ProbeHosts probe names
+// its kind and 1 to maxProbeNetworks canonical prefixes, any other probe
+// none of them.
+func probeNetworks(p Probe) ([]string, error) {
+	if p.Kind != ProbeHosts {
+		if p.Hosts != "" || len(p.Networks) > 0 || p.Realm {
+			return nil, errors.New("only a hosts probe has an address list or a realm")
+		}
+		return nil, nil
+	}
+	if p.Hosts != HostsOnly && p.Hosts != HostsExcept {
+		return nil, fmt.Errorf("hosts must be %q or %q", HostsOnly, HostsExcept)
+	}
+	if len(p.Networks) == 0 || len(p.Networks) > maxProbeNetworks {
+		return nil, fmt.Errorf("a hosts probe lists 1 to %d networks", maxProbeNetworks)
+	}
+	out := make([]string, 0, len(p.Networks))
+	for _, raw := range p.Networks {
+		prefix, err := netip.ParsePrefix(raw)
+		if err != nil || prefix != prefix.Masked() || prefix.Addr().Zone() != "" || prefix.Addr().Is4In6() {
+			return nil, fmt.Errorf("network %q is not a canonical address prefix", truncate(raw, 60))
+		}
+		out = append(out, prefix.String())
+	}
+	return out, nil
+}
+
+// parseClient reads a client address: one IP, without a zone, an IPv4
+// address not written as IPv6. Anything else is the zero Addr: unknown.
+func parseClient(raw string) netip.Addr {
+	a, err := netip.ParseAddr(raw)
+	if err != nil || a.Zone() != "" || a.Is4In6() {
+		return netip.Addr{}
+	}
+	return a
 }
 
 func parseConnect(raw string) (string, error) {

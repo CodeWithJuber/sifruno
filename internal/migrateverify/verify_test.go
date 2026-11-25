@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"strings"
 	"sync"
@@ -566,6 +567,124 @@ func TestProbeClassification(t *testing.T) {
 	}
 }
 
+// lobby is closed to one address and office open to that one only, as
+// the migration proof's staff site has them; the old server sees this
+// server as 203.0.113.5, the copy sees it as 127.0.0.1.
+var (
+	lobby  = Probe{Path: "/lobby/", Kind: ProbeHosts, Hosts: HostsExcept, Networks: []string{"127.0.0.2/32"}}
+	office = Probe{Path: "/office/", Kind: ProbeHosts, Hosts: HostsOnly, Networks: []string{"127.0.0.2/32"}}
+)
+
+func addressListSites() (old, copied site) {
+	old = baseSite()
+	old["/lobby/"] = page{ctype: htmlType, body: htmlPage("Lobby")}
+	old["/office/"] = page{status: http.StatusForbidden, ctype: htmlType, body: "forbidden"}
+	return old, old.clone()
+}
+
+// TestAddressListFoldersFollowTheirRule: each site must answer what the
+// folder's rule gives the address that site sees verify come from. The
+// statuses come from the rule, so a copy that closes an open folder, or
+// opens a closed one, keeps the gate closed, and so does an old site that
+// does not answer as its own rule says.
+func TestAddressListFoldersFollowTheirRule(t *testing.T) {
+	old, copied := addressListSites()
+	opts := Options{Old: serve(t, old, nil).URL, New: serve(t, copied, nil).URL, Probes: []Probe{lobby, office}, OldClient: "203.0.113.5", NewClient: "127.0.0.1"}
+	r := verify(t, opts)
+	if !r.CutoverAllowed || r.Counts.ProbesPass != 2 || r.OldClient != "203.0.113.5" || r.NewClient != "127.0.0.1" {
+		t.Fatalf("a copy that keeps both rules: %s %+v", r.Verdict, r.Probes)
+	}
+	for _, p := range r.Probes {
+		if p.Message != "" {
+			t.Errorf("a passing probe carries a message: %+v", p)
+		}
+	}
+	if p := r.Probes[0]; p.ExpectedStatus != 200 || p.ExpectedNewStatus != 200 || p.Code != CodeOK {
+		t.Fatalf("lobby %+v", p)
+	}
+	if p := r.Probes[1]; p.ExpectedStatus != 403 || p.ExpectedNewStatus != 403 || p.Code != CodeOK {
+		t.Fatalf("office %+v", p)
+	}
+
+	// The copy closes /lobby/ to an address its rule lets in.
+	copied["/lobby/"] = page{status: http.StatusForbidden, ctype: htmlType, body: "forbidden"}
+	opts.New = serve(t, copied, nil).URL
+	r = verify(t, opts)
+	p := r.Probes[0]
+	if r.CutoverAllowed || p.Code != CodeNewDiffers || p.Critical || p.NewStatus != 403 {
+		t.Fatalf("a copy closing /lobby/: %s %+v", r.Verdict, p)
+	}
+	if !strings.HasPrefix(p.Message, "/lobby/ is closed to some addresses. The copy answered 403 (closed) to this server, where its rule gives 200 (open).") || !strings.HasSuffix(p.Message, ", then accept.") {
+		t.Fatalf("message %q", p.Message)
+	}
+	if !strings.Contains(p.Reason, "127.0.0.1") || !strings.Contains(p.Reason, "127.0.0.2/32") {
+		t.Fatalf("technical reason %q", p.Reason)
+	}
+
+	// The copy opens /office/ to an address its rule keeps out: critical.
+	copied["/lobby/"] = old["/lobby/"]
+	copied["/office/"] = page{ctype: htmlType, body: htmlPage("Office")}
+	opts.New = serve(t, copied, nil).URL
+	r = verify(t, opts)
+	if p = r.Probes[1]; r.CutoverAllowed || p.Code != CodeNewOpen || !p.Critical || !strings.HasPrefix(r.Text(), "CRITICAL closed URL /office/ (hosts) new_open: ") {
+		t.Fatalf("a copy opening /office/: %+v\n%s", p, r.Text())
+	}
+
+	// The old site answers otherwise than its rule gives this server: the
+	// comparison proves nothing, so it fails.
+	copied["/office/"] = old["/office/"]
+	old["/lobby/"] = page{status: http.StatusForbidden, ctype: htmlType, body: "forbidden"}
+	opts.Old, opts.New = serve(t, old, nil).URL, serve(t, copied, nil).URL
+	r = verify(t, opts)
+	if p = r.Probes[0]; r.CutoverAllowed || p.Code != CodeOldUnexpectedStatus || !strings.Contains(p.Message, "Check /lobby/ from an address it allows, then accept.") {
+		t.Fatalf("an old site against its rule: %+v", p)
+	}
+}
+
+// TestAddressListFoldersNeedBothAddresses: without the address the old
+// server sees, or a single valid one, nothing can be expected of it and the
+// gate stays closed, whatever both sites answer.
+func TestAddressListFoldersNeedBothAddresses(t *testing.T) {
+	old, copied := addressListSites()
+	oldURL, newURL := serve(t, old, nil).URL, serve(t, copied, nil).URL
+	for _, clients := range [][2]string{{"", "127.0.0.1"}, {"203.0.113.5 198.51.100.7", "127.0.0.1"}, {"::ffff:203.0.113.5", "127.0.0.1"}, {"fe80::1%eth0", "127.0.0.1"}, {"203.0.113.0/24", "127.0.0.1"}, {"203.0.113.5", ""}} {
+		r := verify(t, Options{Old: oldURL, New: newURL, Probes: []Probe{lobby}, OldClient: clients[0], NewClient: clients[1]})
+		p := r.Probes[0]
+		if r.CutoverAllowed || p.Result != Fail || p.Code != CodeClientUnknown {
+			t.Fatalf("clients %q: %s %+v", clients, r.Verdict, p)
+		}
+		if !strings.HasPrefix(p.Message, "/lobby/ is closed to some addresses. ") || !strings.HasSuffix(p.Message, ", then accept.") {
+			t.Fatalf("message %q", p.Message)
+		}
+	}
+}
+
+func TestHostsStatusComesFromTheRule(t *testing.T) {
+	inside, outside := netip.MustParseAddr("192.0.2.7"), netip.MustParseAddr("198.51.100.7")
+	v6 := netip.MustParseAddr("2001:db8::7")
+	list := []string{"192.0.2.0/24", "2001:db8::/32"}
+	cases := []struct {
+		p      Probe
+		client netip.Addr
+		want   int
+	}{
+		{Probe{Hosts: HostsOnly, Networks: list}, inside, 200},
+		{Probe{Hosts: HostsOnly, Networks: list}, outside, 403},
+		{Probe{Hosts: HostsOnly, Networks: list}, v6, 200},
+		{Probe{Hosts: HostsOnly, Networks: list, Realm: true}, inside, 401},
+		{Probe{Hosts: HostsOnly, Networks: list, Realm: true}, outside, 403},
+		{Probe{Hosts: HostsExcept, Networks: list}, inside, 403},
+		{Probe{Hosts: HostsExcept, Networks: list}, outside, 200},
+		{Probe{Hosts: HostsExcept, Networks: list, Realm: true}, outside, 401},
+		{Probe{Hosts: HostsExcept, Networks: []string{"192.0.2.0/24"}}, v6, 200},
+	}
+	for _, c := range cases {
+		if got := hostsStatus(c.p, c.client); got != c.want {
+			t.Errorf("%s %v realm=%v for %s: %d, want %d", c.p.Hosts, c.p.Networks, c.p.Realm, c.client, got, c.want)
+		}
+	}
+}
+
 func TestClosedCrawledPageOpenOnNewIsCritical(t *testing.T) {
 	old := baseSite()
 	old["/"] = page{ctype: htmlType, body: htmlPage("Home", "/members/")}
@@ -724,6 +843,12 @@ func TestOptionValidation(t *testing.T) {
 		"bad probe kind":              {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x", Kind: "open"}}},
 		"conflicting probe kinds":     {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x", Kind: ProbeAuth}, {Path: "/x", Kind: ProbeDeny}}},
 		"probe with fragment":         {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x#y", Kind: ProbeAuth}}},
+		"hosts probe without a list":  {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x/", Kind: ProbeHosts, Hosts: HostsOnly}}},
+		"hosts probe without a kind":  {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x/", Kind: ProbeHosts, Networks: []string{"192.0.2.0/24"}}}},
+		"hosts probe with host bits":  {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x/", Kind: ProbeHosts, Hosts: HostsOnly, Networks: []string{"192.0.2.1/24"}}}},
+		"hosts probe with a name":     {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x/", Kind: ProbeHosts, Hosts: HostsOnly, Networks: []string{"office.example"}}}},
+		"deny probe with a list":      {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x/", Kind: ProbeDeny, Hosts: HostsOnly, Networks: []string{"192.0.2.0/24"}}}},
+		"auth probe with a realm":     {Old: "https://example.com", New: "https://new.example", Probes: []Probe{{Path: "/x/", Kind: ProbeAuth, Realm: true}}},
 		"bad connect":                 {Old: "https://example.com", New: "https://example.com", NewConnect: "203.0.113.5"},
 		"tolerance too wide":          {Old: "https://example.com", New: "https://new.example", SizeTolerancePercent: 30},
 	}

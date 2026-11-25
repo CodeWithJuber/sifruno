@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -261,7 +262,7 @@ func TestConvertedSiteMigratesWithItsProbes(t *testing.T) {
 		t.Fatalf("files step: %q", job.Steps[i].Message)
 	}
 	want := []migrateverify.Probe{{Path: "/members/", Kind: migrateverify.ProbeAuth}, {Path: "/wp-content/plugins/akismet/", Kind: migrateverify.ProbeDeny}, {Path: "/wp-content/plugins/akismet/_inc/akismet.css", Kind: migrateverify.ProbeAllow}}
-	if len(f.verify) != 1 || !slices.Equal(f.verify[0].Probes, want) || len(job.Migration.Converted) != 2 {
+	if len(f.verify) != 1 || !reflect.DeepEqual(f.verify[0].Probes, want) || len(job.Migration.Converted) != 2 {
 		t.Fatalf("verify %+v converted %+v", f.verify, job.Migration.Converted)
 	}
 }

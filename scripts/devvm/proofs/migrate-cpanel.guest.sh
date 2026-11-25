@@ -149,7 +149,9 @@ printf '%s' "$SHOP_PW" > "$WORK/shop.pw"
   echo "set -e"
   # cPanel's layout: public_html is the user's with the web server's group
   # (nobody there, apache here), 0750; inside it, folders are 0755 and files
-  # 0644, the user's own, so the web server reads them as anyone may.
+  # 0644, the user's own, so the web server reads them as anyone may. The
+  # shop site is the exception: a hardened site its web server reads through
+  # the group alone (D-0001, below).
   for u in "$SHOP" "$STAFF" "$TRIG" "$RACE" "$HARD" "$ODD"; do
     echo "useradd -m -d /home/$u $u; chmod 0711 /home/$u; install -d -o $u -g apache -m 0750 /home/$u/public_html"
   done
@@ -204,8 +206,8 @@ RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress
 HT
-chown -R $SHOP:$SHOP /home/$SHOP/public_html; chgrp apache /home/$SHOP/public_html
-find /home/$SHOP/public_html -mindepth 1 -type d -exec chmod 0755 {} +; find /home/$SHOP/public_html -type f -exec chmod 0644 {} +"
+chown -R $SHOP:apache /home/$SHOP/public_html
+find /home/$SHOP/public_html -type d -exec chmod 0750 {} +; find /home/$SHOP/public_html -type f -exec chmod 0640 {} +"
 in_ctr "echo '*/15 * * * * php /home/$SHOP/public_html/wp-cron.php >/dev/null 2>&1' | crontab -u $SHOP -"
 # staff: a password folder (the password file outside public_html, as
 # cPanel's Directory Privacy keeps it, with a subfolder and a PHP page in

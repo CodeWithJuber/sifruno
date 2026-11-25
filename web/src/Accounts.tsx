@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button } from "@astryxdesign/core/Button";
-import { Card } from "@astryxdesign/core/Card";
-import { Info, LockKeyhole, LogOut, Plus, RefreshCw, Search, UserRound, Users } from "lucide-react";
+import { CircleCheck, Info, LoaderCircle, LockKeyhole, LogOut, Plus, RefreshCw, Search, UserRound, Users } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { ProblemAlert } from "@/components/problem-alert";
+import type { Problem } from "@/components/problem-alert";
 import { dateLabel } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import {
@@ -11,7 +17,6 @@ import {
 import type { Account, AccountsCapability, AccountsSession } from "@/lib/accounts-api";
 import { AccountsWebPreviewError, PreviewRequestGate } from "@/lib/accounts-web-preview";
 import type { AccountsWebPreview } from "@/lib/accounts-web-preview";
-import "@/accounts.css";
 
 interface PendingStateChange { accountId: string; state: "active" | "suspended"; reason: string }
 const accountError = (error: unknown) => error instanceof AccountsApiError ? error.message : "The local account operation could not be confirmed. Your form values are kept.";
@@ -25,6 +30,36 @@ function capabilityCopy(capability: AccountsCapability, fresh: boolean): string 
   if (capability.reason === "linux_broker_unavailable") return "The local Linux account broker is unreachable. No account change can be confirmed. Refresh before retrying.";
   return "The Linux account broker's availability could not be confirmed. Check again before trying account changes.";
 }
+
+// An error as the panel shows it: what happened (the action that failed),
+// why (the message the page already had), what to do next, and the error's
+// code and status under "Technical details". The API client's messages stay
+// as they are; the next step follows from the status.
+function nextStep(status: number, code: string): string {
+  if (status === 401) return "Sign in again with the operator access key.";
+  if (status === 403) return "Reload the page, sign in again, then try again.";
+  if (status === 404) return "Use Refresh accounts and choose the account again.";
+  if (status === 409) return "Use Refresh accounts, review the account, then try again.";
+  if (status === 422) return "Check the username, domain and reason, then try again.";
+  if (status === 429) return "Wait a minute before signing in again.";
+  if (status === 503) return "Check that the Linux account broker is running, then use Refresh accounts.";
+  if (status === 0 && code === "invalid_response") return "Reload the page. If it happens again, the panel and the server may be different versions.";
+  if (status === 0) return "Check that Sifruno is running and this computer is online, then refresh.";
+  return "Use Refresh accounts and try again.";
+}
+function accountProblem(message: string, what: string, failure?: unknown, next?: string): Problem {
+  if (failure instanceof AccountsApiError || failure instanceof AccountsWebPreviewError) {
+    return { what, why: message, next: next ?? nextStep(failure.status, failure.code), technical: `${failure.code}${failure.status ? ` · status ${failure.status}` : ""}`, status: failure.status };
+  }
+  return { what, why: message, next: next ?? "Use Refresh accounts and try again.", technical: failure === undefined ? "Checked in this browser; nothing was sent to the server." : "The page could not read the failure.", status: 0 };
+}
+
+const panel = "rounded-lg border border-border bg-card";
+const control = "h-10! text-sm! pointer-coarse:h-12!";
+const rowControl = "h-9 pointer-coarse:h-11";
+const dialogClass = "fixed inset-0 m-auto max-h-[calc(100dvh-2rem)] w-[min(32rem,calc(100vw-1.75rem))] overflow-auto overscroll-contain rounded-xl border border-border bg-card p-5 text-foreground shadow-xl backdrop:overflow-hidden backdrop:overscroll-contain backdrop:bg-[rgb(8_14_22/58%)]";
+const stateTone: Record<Account["state"], "secondary" | "outline" | "destructive"> = { active: "secondary", suspended: "outline", recovery_required: "destructive" };
+const Busy = ({ when }: { when: boolean }) => when ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : null;
 
 export default function Accounts({ revision, active, onStatus }: { revision: number; active: boolean; onStatus: (value: Resource<unknown>) => void }) {
   const [session, setSession] = useState<AccountsSession>();
@@ -49,6 +84,11 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
   const createDialog = useRef<HTMLDialogElement>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const dialogReturnFocus = useRef<HTMLElement | null>(null);
+  // Each error message the page shows, with what failed and the codes behind
+  // it; say() files one and hands the message back for setError.
+  const problems = useRef(new Map<string, Problem>());
+  const say = useCallback((message: string, what: string, failure?: unknown, next?: string) => { problems.current.set(message, accountProblem(message, what, failure, next)); return message; }, []);
+  const problemFor = (message: string): Problem => problems.current.get(message) ?? { what: "The account action did not finish.", why: message, next: "Use Refresh accounts and try again.", technical: "", status: 0 };
 
   const [webPreview, setWebPreview] = useState<AccountsWebPreview>();
   const [previewError, setPreviewError] = useState<string>();
@@ -90,15 +130,15 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     return accounts.filter((account) => [account.username, account.domain, account.home, account.public_html, String(account.uid), String(account.gid), account.state].some((value) => value.toLowerCase().includes(term)));
   }, [accounts, query]);
 
-  const fail = useCallback((failure: unknown) => {
-    setError(accountError(failure));
+  const fail = useCallback((failure: unknown, what: string) => {
+    setError(say(accountError(failure), what, failure));
     setHasFreshList(false);
     if (failure instanceof AccountsApiError && failure.status === 401) {
       setSession({ authenticated: false });
       setCapability(undefined);
       setHasFreshCapability(false);
     }
-  }, []);
+  }, [say]);
 
   const reload = useCallback(async (live?: () => boolean) => {
     const isLive = () => live?.() !== false;
@@ -134,7 +174,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
       setHasFreshList(true);
       setLoadedAt(new Date());
     } catch (failure) {
-      if (isLive()) fail(failure);
+      if (isLive()) fail(failure, "The account list could not be loaded.");
     } finally {
       if (isLive()) setBusy(undefined);
     }
@@ -152,10 +192,10 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     if (!session?.authenticated) return;
     const timer = setTimeout(() => {
       setSession({ authenticated: false });
-      setError("Your local operator session expired. Sign in again; your creation draft is kept. Any state confirmation and its reason were cleared; refresh, review and enter a new reason.");
+      setError(say("Your local operator session expired. Sign in again; your creation draft is kept. Any state confirmation and its reason were cleared; refresh, review and enter a new reason.", "Your sign-in ended.", undefined, "Sign in again with the operator access key."));
     }, Math.max(0, Date.parse(session.expires_at) - Date.now()));
     return () => clearTimeout(timer);
-  }, [session]);
+  }, [session, say]);
   useEffect(() => {
     if (mutationContextValid) return;
     for (const ref of [createDialog, stateDialog]) if (ref.current?.open) ref.current.close();
@@ -207,7 +247,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
         setAccounts([]); setSelectedId(undefined);
       }
       setLoadedAt(new Date());
-    } catch (failure) { fail(failure); }
+    } catch (failure) { fail(failure, "You were not signed in."); }
     finally { setBusy(undefined); }
   }
 
@@ -217,9 +257,9 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     const cleanUsername = username.trim();
     const cleanDomain = domain.trim();
     const cleanReason = createReason.trim();
-    if (!/^[a-z][a-z0-9_]{2,31}$/.test(cleanUsername)) { setError("Username must be 3–32 characters: a lowercase letter followed by lowercase letters, numbers or underscores."); return; }
-    if (!validAccountDomain(cleanDomain)) { setError("Enter a lowercase DNS domain with at least two valid labels, no trailing dot, and no IP address."); return; }
-    if (!validAccountReason(cleanReason)) { setError("Reason must be 1–500 UTF-8 bytes after trimming, with no control characters."); return; }
+    if (!/^[a-z][a-z0-9_]{2,31}$/.test(cleanUsername)) { setError(say("Username must be 3–32 characters: a lowercase letter followed by lowercase letters, numbers or underscores.", "The Linux account was not created.", undefined, "Correct the username, then create the account.")); return; }
+    if (!validAccountDomain(cleanDomain)) { setError(say("Enter a lowercase DNS domain with at least two valid labels, no trailing dot, and no IP address.", "The Linux account was not created.", undefined, "Correct the domain, then create the account.")); return; }
+    if (!validAccountReason(cleanReason)) { setError(say("Reason must be 1–500 UTF-8 bytes after trimming, with no control characters.", "The Linux account was not created.", undefined, "Shorten or correct the reason, then create the account.")); return; }
     if (!cleanDomain || !cleanReason || !session?.authenticated || !capability?.available || recoveryBlocked) return;
     invalidatePreview();
     setBusy("Creating Linux account"); setError(undefined); setNotice(undefined);
@@ -228,17 +268,17 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
       setAccounts((items) => [...items.filter((item) => item.id !== account.id), account]);
       setSelectedId(account.id); setUsername(""); setDomain(""); setCreateReason(""); setCreateOpen(false);
       setNotice(`Created Linux account ${account.username}.`); setLoadedAt(new Date());
-    } catch (failure) { fail(failure); }
+    } catch (failure) { fail(failure, "The Linux account was not created."); }
     finally { setBusy(undefined); }
   }
 
   async function confirmStateChange(event: React.FormEvent) {
     event.preventDefault();
     if (!pending || !session?.authenticated || !canMutate || !pending.reason.trim() || busy) return;
-    if (!validAccountReason(pending.reason)) { setError("Reason must be 1–500 UTF-8 bytes after trimming, with no control characters."); return; }
-    if (recoveryBlocked) { setError("Account changes are disabled while an account requires recovery."); return; }
+    if (!validAccountReason(pending.reason)) { setError(say("Reason must be 1–500 UTF-8 bytes after trimming, with no control characters.", "The account state was not changed.", undefined, "Shorten or correct the reason, then confirm again.")); return; }
+    if (recoveryBlocked) { setError(say("Account changes are disabled while an account requires recovery.", "The account state was not changed.", undefined, "Resolve the account's recovery, then use Refresh accounts.")); return; }
     const current = accounts.find((account) => account.id === pending.accountId);
-    if (!current) { setError("This account is no longer in the current list. Refresh and review before trying again."); return; }
+    if (!current) { setError(say("This account is no longer in the current list. Refresh and review before trying again.", "The account state was not changed.", undefined, "Use Refresh accounts and choose the account again.")); return; }
     invalidatePreview();
     setBusy("Updating account state"); setError(undefined); setNotice(undefined);
     try {
@@ -246,9 +286,9 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
       setAccounts((items) => items.map((item) => item.id === account.id ? account : item));
       setPending(undefined); setNotice(`${account.username} is ${stateLabel(account.state)}.`); setLoadedAt(new Date());
     } catch (failure) {
-      fail(failure);
+      fail(failure, "The account state was not changed.");
       const detail = accountError(failure).replaceAll("Your form values are kept", "Your creation draft is kept").replaceAll("your form values are kept", "your creation draft is kept");
-      setError(`${detail} The state change could not be confirmed. The previous confirmation and its reason were cleared. Refresh and reconcile the account, then begin a new confirmation with a new reason.`);
+      setError(say(`${detail} The state change could not be confirmed. The previous confirmation and its reason were cleared. Refresh and reconcile the account, then begin a new confirmation with a new reason.`, "The account state was not changed.", failure));
     }
     finally { setBusy(undefined); }
   }
@@ -261,7 +301,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
       const signedOut = await logoutAccountsSession(session.csrf_token);
       if (signedOut.authenticated) throw new AccountsApiError(0, "invalid_response", "Local sign-out could not be confirmed.");
       setSession(signedOut); setCapability(undefined); setHasFreshCapability(false); setHasFreshList(false); setAccounts([]); setSelectedId(undefined);
-    } catch (failure) { fail(failure); }
+    } catch (failure) { fail(failure, "You were not signed out."); }
     finally { setBusy(undefined); }
   }
 
@@ -277,7 +317,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
       if (current()) setWebPreview(result);
     } catch (failure) {
       if (!current()) return;
-      const detail = failure instanceof AccountsWebPreviewError ? failure.message : "The preview could not be read. Retry after checking the local connection.";
+      const detail = say(failure instanceof AccountsWebPreviewError ? failure.message : "The preview could not be read. Retry after checking the local connection.", "The web configuration preview could not be read.", failure);
       setPreviewError(detail);
       if (failure instanceof AccountsWebPreviewError && failure.status === 401) {
         setSession({ authenticated: false }); setCapability(undefined); setHasFreshCapability(false); setHasFreshList(false);
@@ -288,94 +328,168 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
     } finally { if (current()) { previewBusyRef.current = false; setPreviewLoading(false); } }
   }
 
-  return <section className="accounts-view accounts-workspace" data-testid="accounts-view">
-    {error && !pending && !createOpen && <div className="account-message account-error" role="alert"><Info /><span>{error}</span></div>}
-    {notice && <div className="account-message" role="status"><Info /><span>{notice}</span></div>}
-    {!session ? <Card className="dashboard-card account-auth" padding={0}>
-      <p role="status">{busy || (error ? "Operator session could not be checked." : "Checking operator session…")}</p>
-      {error && <Button label="Retry operator session" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)} />}
-    </Card> : !authenticated ? <Card className="dashboard-card account-auth" padding={0}>
-      <div className="account-auth-heading"><LockKeyhole /><div><h2>Local operator sign-in</h2><p>Use the access key created by this server in its private state directory.</p></div></div>
-      <form onSubmit={login} data-testid="operator-login" autoComplete="off">
-        <label htmlFor="accounts-access-key">Operator access key</label>
-        <input id="accounts-access-key" type="password" value={accessKey} onChange={(event) => setAccessKey(event.target.value)} required autoComplete="off" spellCheck={false} disabled={Boolean(busy)} />
-        <Button label="Sign in locally" type="submit" variant="primary" isLoading={busy === "Signing in locally"} isDisabled={Boolean(busy) || !accessKey.trim()} />
-      </form>
-      <p className="account-help">The key is cleared after submission and is not saved in this browser. This is a local operator session.</p>
-    </Card> : <>
-      <div className="account-session"><span><LockKeyhole />Signed in locally · expires {session.authenticated ? dateLabel(session.expires_at) : ""}</span><Button label="Sign out locally" icon={<LogOut />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => void signOut()} /></div>
-      <div className="account-capability" role={capability?.available ? "status" : "alert"}>
-        <Info aria-hidden="true" />
-        <div><strong>Linux account identities and home directories.</strong><span> Web, DNS and mail setup is still in development.</span>
-          {capability && <p>{capabilityCopy(capability, hasFreshCapability)}</p>}
-        </div>
-        {capability && !capability.available && capability.reason !== ACCOUNT_RECOVERY_REQUIRED && <Button label="Check broker again" variant="ghost" size="sm" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => { invalidatePreview(); setRefreshAttempt((value) => value + 1); }} />}
+  return <div className="@container flex w-full max-w-[90rem] min-w-0 flex-col gap-4" data-testid="accounts-view">
+    {error && !pending && !createOpen && <ProblemAlert problem={problemFor(error)} testId="accounts-problem" />}
+    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="wrap-anywhere">{notice}</AlertTitle></Alert>}
+    {!session ? <section className={`${panel} max-w-xl p-5`} aria-label="Operator session">
+      <div role="status" className="text-sm text-foreground">{busy || (error ? "Operator session could not be checked." : "Checking operator session…")}</div>
+      {error && <Button variant="outline" className={`mt-3 ${rowControl}`} disabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)}><RefreshCw aria-hidden="true" />Retry operator session</Button>}
+    </section> : !authenticated ? <section className={`${panel} max-w-xl p-5`} aria-labelledby="accounts-sign-in-heading">
+      <div className="flex items-start gap-3.5">
+        <LockKeyhole className="size-6 shrink-0 text-primary" aria-hidden="true" />
+        <div className="min-w-0"><h2 id="accounts-sign-in-heading">Local operator sign-in</h2><div className="mt-1.5 text-sm text-muted-foreground wrap-anywhere">Use the access key created by this server in its private state directory.</div></div>
       </div>
-      <Card className="dashboard-card account-web-preview" padding={0}>
-        <div className="account-preview-heading"><div><h2>Inventory web configuration preview</h2><p>Broker snapshot for the full managed inventory, independent of selection or search.</p></div>
-          <span className="account-preview-trigger" ref={previewTriggerRef}><Button label={previewLoading ? "Reading web preview…" : "Preview web configuration"} variant="secondary" size="sm" isDisabled={!active || !authenticated || Boolean(busy) || previewLoading} isLoading={previewLoading} onClick={() => void requestWebPreview()} /></span>
+      <form onSubmit={login} data-testid="operator-login" autoComplete="off" className="mt-6 flex flex-col items-start gap-2.5">
+        <label htmlFor="accounts-access-key" className="text-sm font-medium text-foreground">Operator access key</label>
+        <Input id="accounts-access-key" type="password" value={accessKey} onChange={(event) => setAccessKey(event.target.value)} required autoComplete="off" spellCheck={false} disabled={Boolean(busy)} className={`${control} max-w-sm`} />
+        <Button type="submit" className={rowControl} disabled={Boolean(busy) || !accessKey.trim()}><Busy when={busy === "Signing in locally"} />Sign in locally</Button>
+      </form>
+      <div className="mt-5 text-xs text-muted-foreground">The key is cleared after submission and is not saved in this browser. This is a local operator session.</div>
+    </section> : <>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-muted-foreground">
+        <span className="flex min-w-0 items-center gap-2 wrap-anywhere"><LockKeyhole className="size-4 shrink-0" aria-hidden="true" />Signed in locally · expires {session.authenticated ? dateLabel(session.expires_at) : ""}</span>
+        <Button variant="ghost" size="sm" className="pointer-coarse:h-11" disabled={Boolean(busy)} onClick={() => void signOut()}><LogOut aria-hidden="true" />Sign out locally</Button>
+      </div>
+      <Alert role={capability?.available ? "status" : "alert"} className="text-start" data-testid="accounts-capability">
+        <Info aria-hidden="true" />
+        <AlertTitle className="text-sm! text-foreground">Linux account identities and home directories. <span className="font-normal text-muted-foreground">Web, DNS and mail setup is still in development.</span></AlertTitle>
+        <AlertDescription className="flex flex-col items-start gap-2 text-start">
+          {capability && <div className="text-sm text-foreground wrap-anywhere">{capabilityCopy(capability, hasFreshCapability)}</div>}
+          {capability && !capability.available && capability.reason !== ACCOUNT_RECOVERY_REQUIRED && <Button variant="outline" size="sm" className="pointer-coarse:h-11" disabled={Boolean(busy)} onClick={() => { invalidatePreview(); setRefreshAttempt((value) => value + 1); }}><RefreshCw aria-hidden="true" />Check broker again</Button>}
+        </AlertDescription>
+      </Alert>
+      <section className={`${panel} min-w-0 p-4`} aria-labelledby="accounts-preview-heading" data-testid="accounts-web-preview">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 basis-64"><h2 id="accounts-preview-heading" className="text-base!">Inventory web configuration preview</h2><div className="mt-1 text-sm text-muted-foreground">Broker snapshot for the full managed inventory, independent of selection or search.</div></div>
+          <span className="shrink-0" ref={previewTriggerRef}><Button variant="outline" size="sm" className="pointer-coarse:h-11" disabled={!active || !authenticated || Boolean(busy) || previewLoading} onClick={() => void requestWebPreview()}><Busy when={previewLoading} />{previewLoading ? "Reading web preview…" : "Preview web configuration"}</Button></span>
         </div>
-        <p className="account-preview-limit">Configuration preview only; no files applied or serving status checked. Existing broker verification may record recovery when native identity drift is detected.</p>
-        {previewOpen && <div className="account-preview-result" aria-live="polite" aria-busy={previewLoading}>
-          {previewLoading && <p role="status">Reading a verified broker snapshot…</p>}
-          {previewError && <p className="account-error" role="alert">{previewError}</p>}
-          {webPreview && <><p role="status">Preview received. It is a point-in-time broker snapshot, not a guarantee that the inventory remains unchanged.</p>
-            <dl className="account-preview-summary"><div><dt>Profile</dt><dd>{webPreview.profile}</dd></div><div><dt>Snapshot accounts</dt><dd>{webPreview.accounts} total · {webPreview.active_accounts} active · {webPreview.suspended_accounts} suspended</dd></div></dl>
-            <details><summary>Snapshot fingerprints</summary><dl className="account-preview-summary"><div><dt>Profile SHA-256</dt><dd><code>{webPreview.profile_sha256}</code></dd></div><div><dt>Snapshot SHA-256</dt><dd><code>{webPreview.snapshot_sha256}</code></dd></div><div><dt>Bundle SHA-256</dt><dd><code>{webPreview.bundle_sha256}</code></dd></div></dl></details>
-            <details><summary>Generated artifact metadata ({webPreview.files.length})</summary><ul className="account-preview-files">{webPreview.files.map((file) => <li key={file.path}><strong>{file.path}</strong><span>{file.bytes.toLocaleString()} bytes · mode {file.mode.toString(8).padStart(4, "0")}</span><code>{file.sha256}</code></li>)}</ul></details>
+        <div className="mt-3 text-xs text-muted-foreground">Configuration preview only; no files applied or serving status checked. Existing broker verification may record recovery when native identity drift is detected.</div>
+        {previewOpen && <div className="mt-3 flex flex-col items-start gap-3 border-t border-border pt-3 text-sm" aria-live="polite" aria-busy={previewLoading}>
+          {previewLoading && <div role="status" className="text-foreground">Reading a verified broker snapshot…</div>}
+          {previewError && <ProblemAlert problem={problemFor(previewError)} testId="accounts-preview-problem" />}
+          {webPreview && <>
+            <div role="status" className="text-foreground">Preview received. It is a point-in-time broker snapshot, not a guarantee that the inventory remains unchanged.</div>
+            <dl className="grid w-full gap-3 @xl:grid-cols-2">
+              <div className="flex min-w-0 flex-col gap-1"><dt className="text-xs text-muted-foreground">Profile</dt><dd className="wrap-anywhere text-foreground">{webPreview.profile}</dd></div>
+              <div className="flex min-w-0 flex-col gap-1"><dt className="text-xs text-muted-foreground">Snapshot accounts</dt><dd className="text-foreground">{webPreview.accounts} total · {webPreview.active_accounts} active · {webPreview.suspended_accounts} suspended</dd></div>
+            </dl>
+            <details className="w-full">
+              <summary className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">Snapshot fingerprints</summary>
+              <dl className="mt-2 grid gap-3">
+                <div className="flex min-w-0 flex-col gap-1"><dt className="text-xs text-muted-foreground">Profile SHA-256</dt><dd><code className="font-mono text-xs break-all text-foreground">{webPreview.profile_sha256}</code></dd></div>
+                <div className="flex min-w-0 flex-col gap-1"><dt className="text-xs text-muted-foreground">Snapshot SHA-256</dt><dd><code className="font-mono text-xs break-all text-foreground">{webPreview.snapshot_sha256}</code></dd></div>
+                <div className="flex min-w-0 flex-col gap-1"><dt className="text-xs text-muted-foreground">Bundle SHA-256</dt><dd><code className="font-mono text-xs break-all text-foreground">{webPreview.bundle_sha256}</code></dd></div>
+              </dl>
+            </details>
+            <details className="w-full">
+              <summary className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">Generated artifact metadata ({webPreview.files.length})</summary>
+              <ul className="m-0 mt-2 list-none p-0">{webPreview.files.map((file) => <li key={file.path} className="flex min-w-0 flex-col gap-1 border-t border-border py-2.5">
+                <strong className="font-medium wrap-anywhere text-foreground">{file.path}</strong>
+                <span className="text-xs text-muted-foreground">{file.bytes.toLocaleString()} bytes · mode {file.mode.toString(8).padStart(4, "0")}</span>
+                <code className="font-mono text-xs break-all text-muted-foreground">{file.sha256}</code>
+              </li>)}</ul>
+            </details>
           </>}
-          <Button label="Dismiss web preview" variant="ghost" size="sm" onClick={() => { previewDismissFocus.current = true; invalidatePreview(); }} />
+          <Button variant="ghost" size="sm" className="pointer-coarse:h-11" onClick={() => { previewDismissFocus.current = true; invalidatePreview(); }}>Dismiss web preview</Button>
         </div>}
-      </Card>
+      </section>
       {(capability?.available || capability?.reason === ACCOUNT_RECOVERY_REQUIRED) && <>
-        {recoveryBlocked && <div className="account-message account-recovery-notice" role="alert"><Info /><span>An account requires recovery. All account changes are disabled until recovery is resolved.</span></div>}
-        {capability.available && !hasFreshList && <div className="account-message account-refresh-notice" role="status"><Info /><span>The account list is not current. Refresh and review it before changing accounts.</span></div>}
-        <Card className="dashboard-card account-inventory-toolbar" padding={0}>
-          <div className="account-inventory-heading"><h2>Account inventory</h2><p>{hasFreshList ? <><strong>{accounts.length}</strong> {accounts.length === 1 ? "account" : "accounts"} · {stateCount("active")} active · {stateCount("suspended")} suspended{stateCount("recovery_required") > 0 && <> · {stateCount("recovery_required")} need recovery</>}</> : busy ? "Refreshing account inventory…" : accounts.length ? `${accounts.length} previously loaded accounts · refresh required` : "Account inventory unavailable · refresh required"}</p></div>
-          <div className="account-inventory-actions"><Button label="Refresh accounts" icon={<RefreshCw />} variant="ghost" size="sm" isDisabled={Boolean(busy)} onClick={() => { invalidatePreview(); setError(undefined); setRefreshAttempt((value) => value + 1); }} /><Button label="Create Linux account" icon={<Plus />} variant="primary" size="sm" isDisabled={!canMutate} onClick={() => { if (!canMutate) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }} /></div>
-        </Card>
-        <div className="account-layout">
-          <Card className="dashboard-card account-list" padding={0}>
-            <div className="card-heading"><h2>Accounts</h2>{hasFreshList && <span>{filtered.length}{query.trim() && <> of {accounts.length}</>}</span>}</div>
-            <label className="compact-search"><Search aria-hidden="true" /><input type="search" aria-label="Search accounts" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="User, domain, UID or home…" /></label>
-            <div className="account-list-items">{filtered.map((account) => <button key={account.id} type="button" className="account-list-item" aria-label={`Open Linux account ${account.username}`} aria-current={selectedId === account.id ? "true" : undefined} disabled={Boolean(busy)} onClick={() => setSelectedId(account.id)}><UserRound aria-hidden="true" /><span><strong>{account.username}</strong><small>{account.domain}</small><small>UID {account.uid} · GID {account.gid}</small></span><span className={`account-state account-state-${account.state}`}>{stateLabel(account.state)}</span></button>)}{!filtered.length && <div className="account-empty">{!hasFreshList ? <p>{busy ? "Loading account records…" : "Current account records are unavailable. Refresh to review."}</p> : accounts.length ? <><p>No matching accounts.</p><button type="button" className="account-text-action" onClick={() => setQuery("")}>Clear search</button></> : <p>No Linux accounts returned. Create an account after reviewing the broker prerequisites.</p>}</div>}</div>
-          </Card>
-          {selected ? <Card className="dashboard-card account-detail" padding={0} data-testid="account-details" data-account-id={selected.id} data-revision={selected.revision}>
-            <div className="card-heading"><div><span className="account-selected-label">Selected Linux account{!hasFreshList && " · refresh required"}</span><h2>{selected.username}</h2><p>{selected.domain}</p></div><span className={`account-state account-state-${selected.state}`}>{stateLabel(selected.state)}</span></div>
-            <dl><div><dt>UID</dt><dd>{selected.uid}</dd></div><div><dt>GID</dt><dd>{selected.gid}</dd></div><div><dt>Revision</dt><dd>{selected.revision}</dd></div><div><dt>Home</dt><dd>{selected.home}</dd></div><div><dt>Public HTML</dt><dd>{selected.public_html}</dd></div><div><dt>Updated</dt><dd>{dateLabel(selected.updated_at)}</dd></div></dl>
-            <div className="account-actions">{selected.state !== "recovery_required" && <Button label={selected.state === "active" ? "Suspend account" : "Activate account"} variant="secondary" size="sm" isDisabled={!canMutate} onClick={() => { if (!canMutate) return; rememberDialogTrigger(); setError(undefined); setPending({ accountId: selected.id, state: selected.state === "active" ? "suspended" : "active", reason: "" }); }} />}</div>
-            {selected.state === "recovery_required" && <p className="account-message" role="status">This account requires recovery. State changes are unavailable until recovery is resolved.</p>}
-          </Card> : <Card className="dashboard-card account-detail account-no-selection" padding={0}><Users aria-hidden="true" /><div><h2>{!hasFreshList ? "Account records unavailable" : accounts.length ? "Select an account" : "Your account workspace"}</h2><p>{!hasFreshList ? "Refresh the broker status and inventory before changing accounts." : "Review actual Linux identities and home directories here. Domain values are metadata; no DNS or web setup is provided."}</p></div></Card>}
+        {recoveryBlocked && <Alert variant="destructive" className="text-start" data-testid="accounts-recovery"><Info aria-hidden="true" /><AlertTitle className="wrap-anywhere">An account requires recovery. All account changes are disabled until recovery is resolved.</AlertTitle></Alert>}
+        {capability.available && !hasFreshList && <Alert role="status" className="text-start"><Info aria-hidden="true" /><AlertTitle className="wrap-anywhere">The account list is not current. Refresh and review it before changing accounts.</AlertTitle></Alert>}
+        <section className={`${panel} flex flex-wrap items-center justify-between gap-x-5 gap-y-3 p-4`} aria-labelledby="accounts-inventory-heading">
+          <div className="min-w-0">
+            <h2 id="accounts-inventory-heading" className="text-base!">Account inventory</h2>
+            <div className="mt-1 text-sm text-muted-foreground wrap-anywhere">{hasFreshList ? <><strong className="font-semibold text-foreground">{accounts.length}</strong> {accounts.length === 1 ? "account" : "accounts"} · {stateCount("active")} active · {stateCount("suspended")} suspended{stateCount("recovery_required") > 0 && <> · {stateCount("recovery_required")} need recovery</>}</> : busy ? "Refreshing account inventory…" : accounts.length ? `${accounts.length} previously loaded accounts · refresh required` : "Account inventory unavailable · refresh required"}</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" className={rowControl} disabled={Boolean(busy)} onClick={() => { invalidatePreview(); setError(undefined); setRefreshAttempt((value) => value + 1); }}><RefreshCw aria-hidden="true" />Refresh accounts</Button>
+            <Button className={rowControl} disabled={!canMutate} onClick={() => { if (!canMutate) return; rememberDialogTrigger(); setError(undefined); setCreateOpen(true); }}><Plus aria-hidden="true" />Create Linux account</Button>
+          </div>
+        </section>
+        <div className="grid min-w-0 items-start gap-4 @4xl:grid-cols-[minmax(16rem,20rem)_minmax(0,1fr)]">
+          <section className={`${panel} min-w-0`} aria-labelledby="accounts-list-heading">
+            <div className="flex items-baseline justify-between gap-3 p-4 pb-3"><h2 id="accounts-list-heading" className="text-sm!">Accounts</h2>{hasFreshList && <span className="text-sm text-muted-foreground">{filtered.length}{query.trim() && <> of {accounts.length}</>}</span>}</div>
+            <div className="relative mx-3 mb-3">
+              <Search className="pointer-events-none absolute top-1/2 inset-s-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input type="search" aria-label="Search accounts" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="User, domain, UID or home…" autoComplete="off" spellCheck={false} className={`${control} ps-9!`} />
+            </div>
+            <ul className="m-0 flex max-h-[30rem] list-none flex-col gap-0.5 overflow-y-auto overscroll-contain px-2 pb-2" aria-label="Linux accounts">
+              {filtered.map((account) => <li key={account.id}>
+                <button type="button" className="flex w-full min-w-0 items-start gap-2.5 rounded-md px-2.5 py-2.5 text-start text-sm text-foreground hover:bg-muted disabled:cursor-default disabled:hover:bg-transparent aria-[current=true]:bg-secondary aria-[current=true]:shadow-[inset_2px_0_var(--primary)] rtl:aria-[current=true]:shadow-[inset_-2px_0_var(--primary)] pointer-coarse:min-h-12" aria-label={`Open Linux account ${account.username}`} aria-current={selectedId === account.id ? "true" : undefined} disabled={Boolean(busy)} onClick={() => setSelectedId(account.id)}>
+                  <UserRound className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5"><span className="font-medium wrap-anywhere">{account.username}</span><span className="text-xs text-muted-foreground wrap-anywhere">{account.domain}</span><span className="text-xs text-muted-foreground">UID {account.uid} · GID {account.gid}</span></span>
+                  <Badge variant={stateTone[account.state]} className="shrink-0 capitalize">{stateLabel(account.state)}</Badge>
+                </button>
+              </li>)}
+            </ul>
+            {!filtered.length && <div className="flex flex-col items-start gap-2 px-4 pb-4 text-sm text-muted-foreground" data-testid="accounts-empty">{!hasFreshList ? <span>{busy ? "Loading account records…" : "Current account records are unavailable. Refresh to review."}</span> : accounts.length ? <><span>No matching accounts.</span><Button variant="link" className="h-auto p-0" onClick={() => setQuery("")}>Clear search</Button></> : <span>No Linux accounts returned. Create an account after reviewing the broker prerequisites.</span>}</div>}
+          </section>
+          {selected ? <section className={`${panel} min-w-0`} aria-labelledby="account-detail-heading" data-testid="account-details" data-account-id={selected.id} data-revision={selected.revision}>
+            <div className="flex flex-wrap items-start justify-between gap-3 p-4">
+              <div className="min-w-0">
+                <span className="text-xs text-muted-foreground">Selected Linux account{!hasFreshList && " · refresh required"}</span>
+                <h2 id="account-detail-heading" className="mt-0.5 wrap-anywhere">{selected.username}</h2>
+                <div className="mt-1 text-sm text-muted-foreground wrap-anywhere">{selected.domain}</div>
+              </div>
+              <Badge variant={stateTone[selected.state]} className="capitalize">{stateLabel(selected.state)}</Badge>
+            </div>
+            <dl className="grid gap-4 px-4 pb-4 grid-cols-2 @2xl:grid-cols-3">
+              {([["UID", selected.uid], ["GID", selected.gid], ["Revision", selected.revision], ["Home", selected.home], ["Public HTML", selected.public_html], ["Updated", dateLabel(selected.updated_at)]] as const).map(([term, value]) => <div key={term} className="flex min-w-0 flex-col gap-1"><dt className="text-xs text-muted-foreground">{term}</dt><dd className="text-sm wrap-anywhere text-foreground">{value}</dd></div>)}
+            </dl>
+            {selected.state !== "recovery_required" && <div className="border-t border-border p-4"><Button variant="outline" className={rowControl} disabled={!canMutate} onClick={() => { if (!canMutate) return; rememberDialogTrigger(); setError(undefined); setPending({ accountId: selected.id, state: selected.state === "active" ? "suspended" : "active", reason: "" }); }}>{selected.state === "active" ? "Suspend account" : "Activate account"}</Button></div>}
+            {selected.state === "recovery_required" && <div className="border-t border-border p-4 text-sm text-foreground" role="status">This account requires recovery. State changes are unavailable until recovery is resolved.</div>}
+          </section> : <Empty className={`${panel} items-start p-6 text-start`} data-testid="account-details-empty">
+            <EmptyHeader className="items-start text-start">
+              <EmptyMedia variant="icon"><Users aria-hidden="true" /></EmptyMedia>
+              <EmptyTitle>{!hasFreshList ? "Account records unavailable" : accounts.length ? "Select an account" : "Your account workspace"}</EmptyTitle>
+              <EmptyDescription className="text-start">{!hasFreshList ? "Refresh the broker status and inventory before changing accounts." : "Review actual Linux identities and home directories here. Domain values are metadata; no DNS or web setup is provided."}</EmptyDescription>
+            </EmptyHeader>
+          </Empty>}
         </div>
       </>}
     </>}
-    {busy && <p className="account-busy" role="status">{busy}…</p>}
-    <dialog ref={createDialog} className="account-create account-create-dialog" aria-labelledby="account-create-title" aria-describedby="account-create-description" onClose={() => setCreateOpen(false)} onCancel={(event) => { if (busy) event.preventDefault(); else setCreateOpen(false); }}>
-      <h2 id="account-create-title">Create Linux account</h2><p id="account-create-description">Creates an OS identity and home directory through the available local broker. Domain is reserved metadata; this does not set up a website, DNS or mail.</p>
-          <form onSubmit={create} data-testid="account-create-form">
-            <div className="account-create-fields">
-              <div><label htmlFor="account-username">Username</label><input id="account-username" value={username} onChange={(event) => setUsername(event.target.value)} required autoFocus aria-invalid={Boolean(username.trim()) && !usernameValid} maxLength={32} minLength={3} pattern="[a-z][a-z0-9_]{2,31}" autoCapitalize="none" autoComplete="off" spellCheck={false} disabled={Boolean(busy)} aria-describedby="account-username-help" /><p id="account-username-help" className="account-help">3–32 lowercase letters, numbers or underscores; starts with a letter.</p></div>
-              <div><label htmlFor="account-domain">Domain</label><input id="account-domain" value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.test" required maxLength={253} autoCapitalize="none" autoComplete="off" spellCheck={false} disabled={Boolean(busy)} aria-invalid={Boolean(domain.trim()) && !domainValid} aria-describedby="account-domain-help" /><p id="account-domain-help" className={`account-help ${Boolean(domain.trim()) && !domainValid ? "account-error" : ""}`}>{Boolean(domain.trim()) && !domainValid ? "Use lowercase DNS labels (2 or more), without a trailing dot or IP address." : "Reserved account metadata; this does not configure DNS or a website."}</p></div>
-            </div>
-            <div className="account-reason-field"><label htmlFor="account-create-reason">Reason</label><textarea id="account-create-reason" value={createReason} onChange={(event) => setCreateReason(event.target.value)} required maxLength={500} rows={2} disabled={Boolean(busy)} aria-invalid={Boolean(createReason.trim()) && !createReasonValid} aria-describedby="account-create-reason-help" /><p id="account-create-reason-help" className={`account-help ${Boolean(createReason.trim()) && !createReasonValid ? "account-error" : ""}`}>{createReasonBytes}/500 UTF-8 bytes · trimmed, without control characters.</p></div>
-            {error && <div className="account-message account-error" role="alert"><Info /><span>{error}</span></div>}
-            <div className="account-dialog-actions"><Button label="Cancel creation" variant="ghost" type="button" isDisabled={Boolean(busy)} onClick={() => setCreateOpen(false)} /><Button label="Create Linux account" type="submit" variant="primary" isLoading={busy === "Creating Linux account"} isDisabled={!canMutate || !usernameValid || !domainValid || !createReasonValid} /></div>
-          </form>
+    {busy && <div className="text-xs text-muted-foreground" role="status">{busy}…</div>}
+    <dialog ref={createDialog} className={dialogClass} aria-labelledby="account-create-title" aria-describedby="account-create-description" onClose={() => setCreateOpen(false)} onCancel={(event) => { if (busy) event.preventDefault(); else setCreateOpen(false); }}>
+      <h1 id="account-create-title" className="pb-2 text-lg! tracking-tight!">Create Linux account</h1>
+      <div id="account-create-description" className="mb-4 text-sm text-muted-foreground wrap-anywhere">Creates an OS identity and home directory through the available local broker. Domain is reserved metadata; this does not set up a website, DNS or mail.</div>
+      <form onSubmit={create} data-testid="account-create-form" className="flex flex-col gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor="account-username" className="text-sm font-medium text-foreground">Username</label>
+            <Input id="account-username" value={username} onChange={(event) => setUsername(event.target.value)} required autoFocus aria-invalid={Boolean(username.trim()) && !usernameValid} maxLength={32} minLength={3} pattern="[a-z][a-z0-9_]{2,31}" autoCapitalize="none" autoComplete="off" spellCheck={false} disabled={Boolean(busy)} aria-describedby="account-username-help" className={control} />
+            <div id="account-username-help" className="text-xs text-muted-foreground">3–32 lowercase letters, numbers or underscores; starts with a letter.</div>
+          </div>
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor="account-domain" className="text-sm font-medium text-foreground">Domain</label>
+            <Input id="account-domain" value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="example.test" required maxLength={253} autoCapitalize="none" autoComplete="off" spellCheck={false} disabled={Boolean(busy)} aria-invalid={Boolean(domain.trim()) && !domainValid} aria-describedby="account-domain-help" className={control} />
+            <div id="account-domain-help" className={`text-xs ${Boolean(domain.trim()) && !domainValid ? "text-destructive" : "text-muted-foreground"}`}>{Boolean(domain.trim()) && !domainValid ? "Use lowercase DNS labels (2 or more), without a trailing dot or IP address." : "Reserved account metadata; this does not configure DNS or a website."}</div>
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <label htmlFor="account-create-reason" className="text-sm font-medium text-foreground">Reason</label>
+          <Textarea id="account-create-reason" value={createReason} onChange={(event) => setCreateReason(event.target.value)} required maxLength={500} rows={2} disabled={Boolean(busy)} aria-invalid={Boolean(createReason.trim()) && !createReasonValid} aria-describedby="account-create-reason-help" className="text-sm!" />
+          <div id="account-create-reason-help" className={`text-xs ${Boolean(createReason.trim()) && !createReasonValid ? "text-destructive" : "text-muted-foreground"}`}>{createReasonBytes}/500 UTF-8 bytes · trimmed, without control characters.</div>
+        </div>
+        {error && <ProblemAlert problem={problemFor(error)} testId="account-create-problem" />}
+        <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="ghost" className={rowControl} disabled={Boolean(busy)} onClick={() => setCreateOpen(false)}>Cancel creation</Button><Button type="submit" className={rowControl} disabled={!canMutate || !usernameValid || !domainValid || !createReasonValid}><Busy when={busy === "Creating Linux account"} />Create Linux account</Button></div>
+      </form>
     </dialog>
-    <dialog ref={stateDialog} className="account-state-dialog" aria-labelledby="account-state-title" onClose={() => setPending(undefined)} onCancel={(event) => { if (busy) event.preventDefault(); else setPending(undefined); }}>
+    <dialog ref={stateDialog} className={dialogClass} aria-labelledby="account-state-title" onClose={() => setPending(undefined)} onCancel={(event) => { if (busy) event.preventDefault(); else setPending(undefined); }}>
       {pending && (() => {
         const account = accounts.find((item) => item.id === pending.accountId);
-        return <form onSubmit={confirmStateChange}>
-          <h2 id="account-state-title">{pending.state === "suspended" ? "Suspend this Linux account?" : "Activate this Linux account?"}</h2>
-          <p>{account ? <><strong>{account.username}</strong> · {account.domain} · current revision {account.revision}</> : "The selected account is no longer in the current list."}</p>
-          <p>{pending.state === "suspended" ? "This restricts new account access through PAM-aware login paths. Existing processes, websites, mail and databases are unaffected; this is not a full hosting suspension." : "This clears the PAM account expiration. The password remains locked and the shell remains nologin; this does not configure web, DNS or mail."}</p>
-          {error && <div className="account-message account-error" role="alert"><Info /><span>{error}</span></div>}
-          <label htmlFor="account-state-reason">Reason</label>
-          <textarea id="account-state-reason" value={pending.reason} onChange={(event) => setPending({ ...pending, reason: event.target.value })} required maxLength={500} rows={3} disabled={!canMutate} aria-invalid={Boolean(pending.reason.trim()) && !validAccountReason(pending.reason)} aria-describedby="account-state-reason-help" />
-          <p id="account-state-reason-help" className={`account-help ${Boolean(pending.reason.trim()) && !validAccountReason(pending.reason) ? "account-error" : ""}`}>{utf8Bytes(pending.reason)}/500 UTF-8 bytes · trimmed, without control characters.</p>
-          <div className="account-dialog-actions">{error && <Button label="Refresh accounts" type="button" variant="ghost" icon={<RefreshCw />} isDisabled={Boolean(busy)} onClick={() => { invalidatePreview(); setError(undefined); setRefreshAttempt((value) => value + 1); }} />}<Button label="Cancel" type="button" variant="ghost" isDisabled={Boolean(busy)} onClick={() => setPending(undefined)} /><Button label={`Confirm ${pending.state === "suspended" ? "suspension" : "activation"}`} type="submit" variant="primary" isLoading={busy === "Updating account state"} isDisabled={!canMutate || !validAccountReason(pending.reason) || !account} /></div>
+        return <form onSubmit={confirmStateChange} className="flex flex-col gap-3">
+          <h1 id="account-state-title" className="text-lg! tracking-tight!">{pending.state === "suspended" ? "Suspend this Linux account?" : "Activate this Linux account?"}</h1>
+          <div className="text-sm text-foreground wrap-anywhere">{account ? <><strong className="font-semibold">{account.username}</strong> · {account.domain} · current revision {account.revision}</> : "The selected account is no longer in the current list."}</div>
+          <div className="text-sm text-muted-foreground wrap-anywhere">{pending.state === "suspended" ? "This restricts new account access through PAM-aware login paths. Existing processes, websites, mail and databases are unaffected; this is not a full hosting suspension." : "This clears the PAM account expiration. The password remains locked and the shell remains nologin; this does not configure web, DNS or mail."}</div>
+          {error && <ProblemAlert problem={problemFor(error)} testId="account-state-problem" />}
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <label htmlFor="account-state-reason" className="text-sm font-medium text-foreground">Reason</label>
+            <Textarea id="account-state-reason" value={pending.reason} onChange={(event) => setPending({ ...pending, reason: event.target.value })} required maxLength={500} rows={3} disabled={!canMutate} aria-invalid={Boolean(pending.reason.trim()) && !validAccountReason(pending.reason)} aria-describedby="account-state-reason-help" className="text-sm!" />
+            <div id="account-state-reason-help" className={`text-xs ${Boolean(pending.reason.trim()) && !validAccountReason(pending.reason) ? "text-destructive" : "text-muted-foreground"}`}>{utf8Bytes(pending.reason)}/500 UTF-8 bytes · trimmed, without control characters.</div>
+          </div>
+          <div className="mt-2 flex flex-wrap justify-end gap-2">{error && <Button type="button" variant="ghost" className={rowControl} disabled={Boolean(busy)} onClick={() => { invalidatePreview(); setError(undefined); setRefreshAttempt((value) => value + 1); }}><RefreshCw aria-hidden="true" />Refresh accounts</Button>}<Button type="button" variant="ghost" className={rowControl} disabled={Boolean(busy)} onClick={() => setPending(undefined)}>Cancel</Button><Button type="submit" className={rowControl} disabled={!canMutate || !validAccountReason(pending.reason) || !account}><Busy when={busy === "Updating account state"} />{`Confirm ${pending.state === "suspended" ? "suspension" : "activation"}`}</Button></div>
         </form>;
       })()}
     </dialog>
-  </section>;
+  </div>;
 }

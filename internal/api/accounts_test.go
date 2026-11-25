@@ -19,6 +19,7 @@ type accountSpy struct {
 	created   hostaccounts.CreateInput
 	changed   hostaccounts.StateInput
 	abandoned hostaccounts.AbandonCreateInput
+	finished  hostaccounts.FinishDeleteInput
 }
 
 func (s *accountSpy) Capability(context.Context) (hostaccounts.Capability, error) {
@@ -56,6 +57,59 @@ func (s *accountSpy) AbandonCreate(_ context.Context, id string, in hostaccounts
 	s.actor = actor
 	s.abandoned = in
 	return hostaccounts.Account{ID: id, State: "recovery_required"}, s.err
+}
+
+func (s *accountSpy) FinishDelete(_ context.Context, id string, in hostaccounts.FinishDeleteInput, actor string) (hostaccounts.Account, error) {
+	s.calls++
+	s.actor = actor
+	s.finished = in
+	return hostaccounts.Account{ID: id, State: "recovery_required"}, s.err
+}
+
+// An admin finishes an unfinished delete with a reason only; a refusal says
+// why nothing was removed, and other broker answers map as for any account
+// change.
+func TestAccountFinishDelete(t *testing.T) {
+	f := websiteFixture(t)
+	s := &accountSpy{}
+	f.handler = New(Options{Operator: f.manager, Accounts: s, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	path := "/api/v1/accounts/" + strings.Repeat("a", 32) + "/finish-delete"
+	if w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, nil, ""); w.Code != 401 {
+		t.Fatalf("unauthenticated status %d", w.Code)
+	}
+	cookie, csrf := websiteSignIn(t, f)
+	for _, body := range []string{`{"reason":"Leftover","state":"active"}`, `{"reason":"Leftover","expected_revision":1}`, `{"Reason":"Leftover"}`, `{"reason":"a","reason":"b"}`, `null`} {
+		if w := websiteRequest(f.handler, "POST", path, body, cookie, csrf); w.Code != 400 {
+			t.Fatalf("%s: status %d", body, w.Code)
+		}
+	}
+	if w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, cookie, ""); w.Code != 403 {
+		t.Fatalf("without CSRF: %d", w.Code)
+	}
+	if s.calls != 0 {
+		t.Fatal("an invalid request reached the broker")
+	}
+	w := websiteRequest(f.handler, "POST", path, `{"reason":"Trash fixed by hand"}`, cookie, csrf)
+	if w.Code != 200 || s.finished.Reason != "Trash fixed by hand" || s.actor == "" {
+		t.Fatalf("finish: %d %s", w.Code, w.Body.String())
+	}
+	for _, tc := range []struct {
+		err  error
+		want int
+		says string
+	}{
+		{&hostaccounts.DeleteRefusedError{Reason: hostaccounts.DeleteTrash}, 409, "is not the broker's own"},
+		{&hostaccounts.DeleteRefusedError{Reason: hostaccounts.DeleteNoUnfinished}, 409, "no unfinished delete"},
+		{&hostaccounts.DeleteRefusedError{Reason: "something_new"}, 409, "could not prove"},
+		{hostaccounts.ErrNotFound, 404, ""},
+		{hostaccounts.ErrRecovery, 503, ""},
+	} {
+		s.err = tc.err
+		w := websiteRequest(f.handler, "POST", path, `{"reason":"Leftover"}`, cookie, csrf)
+		if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.says) {
+			t.Fatalf("%v: %d %s", tc.err, w.Code, w.Body.String())
+		}
+	}
 }
 
 // An admin abandons an unfinished create with a reason only; a refusal says

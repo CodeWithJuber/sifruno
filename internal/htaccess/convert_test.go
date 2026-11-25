@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -412,4 +413,55 @@ func FuzzNormalizeUserFile(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestRewriteIntoProtectedFolders: a rewrite whose result is a URL path is
+// checked again by OpenLiteSpeed in the target's context, so a site keeps
+// its converted folders; one whose result the request or a file path could
+// choose refuses the site, because OpenLiteSpeed would look it up by file
+// location and skip the folder's regex context.
+func TestRewriteIntoProtectedFolders(t *testing.T) {
+	closed := "Deny from all\n"
+	ok := map[string]string{
+		"wordpress":          wordpressBlock,
+		"url path":           "RewriteEngine On\nRewriteRule ^pub/(.*)$ /private/$1 [L]\n",
+		"relative url path":  "RewriteEngine On\nRewriteRule ^pub/(.*)$ private/$1 [L]\n",
+		"external redirect":  "RewriteEngine On\nRewriteRule ^(.*)$ https://example.com/$1 [R=301,L]\n",
+		"flag redirect":      "RewriteEngine On\nRewriteRule ^old/(.*)$ /$1 [R,L]\n",
+		"no substitution":    "RewriteEngine On\nRewriteRule \\.bak$ - [F,L]\n",
+		"base equals folder": "RewriteEngine On\nRewriteBase /\nRewriteRule . /index.php [L]\n",
+	}
+	for name, root := range ok {
+		t.Run("keeps "+name, func(t *testing.T) {
+			if got := ConvertSite(siteOf(map[string]string{".htaccess": root, "private/.htaccess": closed})); !got.Native || len(got.Rules) != 1 {
+				t.Fatalf("%+v", got)
+			}
+		})
+	}
+	refused := map[string]string{
+		"back-reference":      "RewriteEngine On\nRewriteRule ^go/(.*)$ /$1 [L]\n",
+		"bare back-reference": "RewriteEngine On\nRewriteRule ^go/(.*)$ $1 [L]\n",
+		"variable":            "RewriteEngine On\nRewriteRule ^go$ %{REQUEST_URI} [L]\n",
+		"server variable":     "RewriteEngine On\nRewriteRule ^go$ %{DOCUMENT_ROOT}/private/x [L]\n",
+		"file path":           "RewriteEngine On\nRewriteRule ^go$ /home/u/public_html/private/x [L]\n",
+		"relative home":       "RewriteEngine On\nRewriteRule ^go$ home/u/public_html/private/x [L]\n",
+		"variable in part":    "RewriteEngine On\nRewriteRule ^go/(.*)$ /ho$1/x [L]\n",
+		"rewrite base home":   "RewriteEngine On\nRewriteBase /home/u/public_html/\nRewriteRule ^go$ private/x [L]\n",
+	}
+	for name, root := range refused {
+		t.Run("refuses "+name, func(t *testing.T) {
+			got := ConvertSite(siteOf(map[string]string{".htaccess": root, "private/.htaccess": closed}))
+			rewrite := slices.ContainsFunc(got.Refused, func(r FileRefusal) bool {
+				return r.File == ".htaccess" && r.Line > 0 && strings.Contains(r.Reason, "rewrite rule")
+			})
+			if got.Native || !rewrite {
+				t.Fatalf("%+v", got)
+			}
+			// Without a converted folder the rule is not this check's concern.
+			alone := ConvertSite(siteOf(map[string]string{".htaccess": root}))
+			if slices.ContainsFunc(alone.Refused, func(r FileRefusal) bool { return strings.Contains(r.Reason, "rewrite rule") }) {
+				t.Fatalf("a site without folders: %+v", alone)
+			}
+		})
+	}
 }

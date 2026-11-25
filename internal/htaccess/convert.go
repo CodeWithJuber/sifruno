@@ -833,12 +833,97 @@ func ConvertSite(site SiteResult) SiteConversion {
 			}
 		}
 	}
+	if len(out.Rules) > 0 {
+		for _, f := range site.Files {
+			if f.RewriteToPath > 0 {
+				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: f.RewriteToPath, Reason: "a rewrite rule whose result the request itself or a file path can choose, which OpenLiteSpeed could serve without the protected folders' checks"})
+			}
+		}
+	}
 	sort.Slice(out.Rules, func(i, j int) bool { return out.Rules[i].Path < out.Rules[j].Path })
 	out.Native = len(out.Refused) == 0
 	if !out.Native {
 		out.Rules = []FolderRule{}
 	}
 	return out
+}
+
+// A rewrite into a protected folder. Apache checks access again for the
+// rewritten URL. OpenLiteSpeed 1.9.4 does too when the result is a URL
+// path: HttpReq::postRewriteProcess (src/http/httpreq.cpp) answers 1 when
+// the context changes, processContextRewrite then clears HSF_URI_PROCESSED,
+// and after the access check of the old context the request goes back to
+// HSPS_CONTEXT_MAP, where processContext tries the regex contexts first and
+// a changed context is checked again (src/http/httpsession.cpp). But when the
+// result names a file path, postRewriteProcess first looks it up by context
+// location (m_pVHost->matchLocation, the comment "if is rewriten to file
+// path, reverse lookup context from file path") and skips context
+// processing; ContextTree::add (src/http/contexttree.cpp) indexes plain
+// contexts by location from "/", and regex contexts not at all, so a result
+// such as /home/<user>/public_html/private/x is served under the "/" context
+// or a subfolder's, without the protected folder's regex context. In an
+// .htaccess Apache treats that substitution as a URL path (mod_rewrite's
+// per-directory rewriting), which finds nothing. Every location such a
+// lookup can reach for a site's files is under /home (olsweb.HomeRoot).
+//
+// rewriteToPath therefore returns the line of the first RewriteRule whose
+// substitution is an internal rewrite (not "-", not a URL with a scheme, no
+// R or redirect flag) that either starts, after an optional '/', with a
+// back-reference or a variable (the request could choose "home/..."), or
+// whose first path part is "home", or of a RewriteBase that does either,
+// and 0 when there is none. ConvertSite refuses a site with converted
+// folders when any file has one.
+func rewriteToPath(lines []Line) int {
+	for _, l := range lines {
+		if l.Kind != LineDirective {
+			continue
+		}
+		args := l.Node.Args
+		switch {
+		case strings.EqualFold(l.Node.Name, "RewriteBase") && len(args) > 0:
+			if pathLike(args[0]) {
+				return l.Num
+			}
+		case strings.EqualFold(l.Node.Name, "RewriteRule"):
+			if len(args) < 2 {
+				continue
+			}
+			flags := ""
+			if len(args) > 2 {
+				flags = args[2]
+			}
+			if internalRewrite(args[1], flags) && pathLike(args[1]) {
+				return l.Num
+			}
+		}
+	}
+	return 0
+}
+
+var schemeURL = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// internalRewrite reports a substitution that maps the request to another
+// resource on this site rather than answering it with a redirect.
+func internalRewrite(sub, flags string) bool {
+	if sub == "-" || schemeURL.MatchString(sub) {
+		return false
+	}
+	for _, flag := range strings.Split(strings.Trim(flags, "[]"), ",") {
+		name, _, _ := strings.Cut(strings.TrimSpace(flag), "=")
+		if strings.EqualFold(name, "R") || strings.EqualFold(name, "redirect") {
+			return false
+		}
+	}
+	return true
+}
+
+// pathLike reports a rewrite result that could start with /home/: one that
+// starts with a back-reference or variable, or whose first part is "home".
+func pathLike(sub string) bool {
+	s := strings.TrimPrefix(sub, "/")
+	first, _, _ := strings.Cut(s, "/")
+	first, _, _ = strings.Cut(first, "?")
+	return strings.HasPrefix(s, "$") || strings.HasPrefix(s, "%") || strings.ContainsAny(first, "$%") || strings.EqualFold(first, "home")
 }
 
 var causeReason = map[string]string{

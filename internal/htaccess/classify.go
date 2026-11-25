@@ -143,6 +143,10 @@ type FileResult struct {
 	// Conversion is the converter's answer for a file that is compat for
 	// access control alone (convert.go); nil for every other file.
 	Conversion *Conversion `json:"conversion,omitempty"`
+	// RewriteToPath is the line of the first rewrite rule or RewriteBase
+	// whose result OpenLiteSpeed could take as a file path (convert.go,
+	// rewriteToPath); 0 when there is none.
+	RewriteToPath int `json:"rewrite_to_path_line,omitempty"`
 }
 
 // ClassifyFile parses and classifies one .htaccess. name is recorded in each
@@ -198,6 +202,7 @@ func Classify(f *File, name, urlPath string) FileResult {
 	if convertible(r) {
 		r.Conversion = Convert(f, urlPath)
 	}
+	r.RewriteToPath = rewriteToPath(f.Lines)
 	return r
 }
 

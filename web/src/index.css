@@ -114,7 +114,7 @@ svg { flex-shrink: 0; }
 [data-slot="input"], [data-slot="native-select"] { height: 36px; border: 1px solid var(--input); border-radius: 6px; background: var(--card); font-size: 12px; }
 [data-slot="button"] { min-height: 30px; border-radius: 6px; }
 [data-slot="badge"] { border: 1px solid var(--border); border-radius: 4px; height: 23px; font-size: 10px; }
-[data-slot="alert"] { border: 1px solid var(--border); border-radius: 8px; background: var(--muted); padding: 16px; font-size: 12px; }
+[data-slot="alert"] { border: 1px solid var(--border); border-radius: 8px; background: var(--muted); padding: 16px; }
 [data-slot="alert-description"] { line-height: 1.7; }
 .section-heading h2 { font-size: 16px; }
 .obligation-detail { border-radius: 6px; }

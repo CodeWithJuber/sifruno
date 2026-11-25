@@ -119,7 +119,10 @@ echo
 echo "## 2. The cPanel stand-in (Podman, not cPanel)"
 podman pull -q "$IMAGE" >/dev/null 2>&1
 check "the stand-in's base image is the pinned digest" test "$(podman image inspect -f '{{.Digest}}' "$IMAGE" 2>/dev/null)" = "${IMAGE#*@}"
-podman run -d --name "$CTR" --hostname cpanel-standin "$IMAGE" sleep infinity >/dev/null
+# AUDIT_WRITE: EL9's sshd fails a public-key sign-in when it cannot write
+# the audit record ("linux_audit_write_entry failed"), and Podman's default
+# capabilities leave it out, so without it every key is refused.
+podman run -d --name "$CTR" --cap-add AUDIT_WRITE --hostname cpanel-standin "$IMAGE" sleep infinity >/dev/null
 CIP="$(podman inspect -f '{{.NetworkSettings.IPAddress}}' "$CTR")"
 echo "  stand-in address: ${CIP:-none}"
 in_ctr "dnf -y -q module enable php:8.3 >/dev/null 2>&1 || dnf -y -q module enable php:8.2 >/dev/null 2>&1; \
@@ -167,7 +170,9 @@ printf '%s' "$SHOP_PW" > "$WORK/shop.pw"
 podman cp "$WORK/standin-setup.sh" "$CTR:/root/standin-setup.sh"
 check "the stand-in's four accounts, sites and databases are made" in_ctr "bash /root/standin-setup.sh"
 in_ctr "rm -f /root/standin-setup.sh"
-wp() { in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- php /usr/local/bin/wp-cli.phar --no-color $*"; }
+# WP-CLI unpacks the WordPress archive in memory: PHP's default 128M runs out.
+WPRUN="php -d memory_limit=512M /usr/local/bin/wp-cli.phar --no-color"
+wp() { in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN $*"; }
 # WordPress 7.1.5, the current release on 2026-11-24, whose Akismet
 # .htaccess the converter's test pins.
 wp "core download --version=7.1.5 --quiet" >/dev/null 2>&1
@@ -178,10 +183,10 @@ AKISMET="/home/$SHOP/public_html/wp-content/plugins/akismet"
 check "the stand-in WordPress keeps the stock Akismet .htaccess (deny all, <FilesMatch>, both branches)" in_ctr "grep -q 'Require all denied' $AKISMET/.htaccess && grep -q 'Deny from all' $AKISMET/.htaccess && grep -q '<FilesMatch' $AKISMET/.htaccess"
 echo "  Akismet $(in_ctr "sed -n 's/^ \* Version: //p' $AKISMET/akismet.php" 2>/dev/null), .htaccess sha256 $(in_ctr "sha256sum $AKISMET/.htaccess" 2>/dev/null | cut -d' ' -f1) (the converter's test pins WordPress 7.1.5's: 63553e7f...)"
 podman cp "$WORK/shop.pw" "$CTR:/root/shop.pw"
-in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- php /usr/local/bin/wp-cli.phar --no-color config create --dbname=${SHOP}_wp --dbuser=${SHOP}_wpu --prompt=dbpass < /root/shop.pw && rm -f /root/shop.pw" >/dev/null 2>&1
+in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN config create --dbname=${SHOP}_wp --dbuser=${SHOP}_wpu --prompt=dbpass < /root/shop.pw && rm -f /root/shop.pw" >/dev/null 2>&1
 secret > "$WORK/admin.pw"
 podman cp "$WORK/admin.pw" "$CTR:/root/admin.pw"
-in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- php /usr/local/bin/wp-cli.phar --no-color core install --url=http://$SHOP_DOMAIN --title='$TITLE' --admin_user=standin --admin_email=standin@proof.test --skip-email --prompt=admin_password < /root/admin.pw && rm -f /root/admin.pw" >/dev/null 2>&1
+in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN core install --url=http://$SHOP_DOMAIN --title='$TITLE' --admin_user=standin --admin_email=standin@proof.test --skip-email --prompt=admin_password < /root/admin.pw && rm -f /root/admin.pw" >/dev/null 2>&1
 wp "post create --post_title='Moved with Sifruno' --post_status=publish" >/dev/null 2>&1
 # WordPress's own rewrite block, and a rewrite deny OpenLiteSpeed honours.
 in_ctr "cat > /home/$SHOP/public_html/.htaccess <<'HT'

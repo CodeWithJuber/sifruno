@@ -295,7 +295,16 @@ drive wordpress --id "$b_id" --revision "$b_rev" --title 'Limits proof' --admin-
   --db-name "${B_USER}_wp" --db-user "${B_USER}_wp" --db-password-file "$PANEL/db-password" \
   >"$WORK/install.out" 2>"$WORK/install.err" &
 install_pid=$!
-sleep 12
+# WP-CLI loads fork.php only once its own start-up is done, which takes a
+# while under emulation; fork.php then holds the step for 20 s, so look for
+# the loop until it shows, then give it a moment to fill the unit.
+loop_pid=""
+for _ in $(seq 1 150); do
+  loop_pid="$(pgrep -u "$b_uid" -f loop.py | head -1)"
+  [ -n "$loop_pid" ] || ! kill -0 "$install_pid" 2>/dev/null && break
+  sleep 1
+done
+sleep 3
 loop_pid="$(pgrep -u "$b_uid" -f loop.py | head -1)"
 loop_cgroup="$(cat "/proc/${loop_pid:-0}/cgroup" 2>/dev/null)"
 unit="$(sed -nE 's|^0::/user.slice/user-[0-9]+.slice/(sifruno-site-[0-9]+-[0-9a-f]{16}\.scope)$|\1|p' <<<"$loop_cgroup")"

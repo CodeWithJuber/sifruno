@@ -1263,8 +1263,12 @@ root step. The design, with the owner's choices recorded from Jev on
   converts, `migrate-files` puts the folders live before `cp` runs: each
   realm's user file is read from the root-only staging copy by handle,
   never following a link, must lie in the source home, and keeps only
-  `user:hash` lines whose hash both servers check alike (crypt hashes too:
-  Jev, 0.59); it is written root-owned to
+  `user:hash` lines whose hash OpenLiteSpeed checks against the password
+  alone: `$apr1$`, `{SHA}`, `$2y$` and `$2b$`. A crypt hash (DES, `$1$`,
+  `$5$`, `$6$`) refuses the copy and names the user whose password must be
+  set again, because OpenLiteSpeed 1.9.4 would also accept its stored text
+  as the password (owner's review over Jev's 0.59 for keeping them); it is
+  written root-owned to
   `/var/lib/sifruno-realms/<site>/realmN.htpasswd`, readable by the web
   server user alone through an ACL (Jev: root copy, 0.91, over reading the
   tenant's file). Then the folders are journaled as one `folders`

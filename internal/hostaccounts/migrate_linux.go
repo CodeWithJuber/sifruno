@@ -422,7 +422,7 @@ func readProtection(files *os.File, sourceHome, site string, rules []htaccess.Fo
 			why := err.Error()
 			var bad *htaccess.UserFileError
 			if errors.As(err, &bad) && bad.User != "" {
-				why += " (user " + bad.User + ": give this user a new password on the old server)"
+				why += ". Set this folder's password for " + bad.User + " again on the old server with a modern hash (bcrypt or apr1, as htpasswd -B or -m makes), or take the password off the folder there and set it again after the move"
 			}
 			return SiteProtection{}, &MigrationError{Step: "tier", Detail: installDetail([]byte("The password file of the protected folder " + f.Path + " cannot be used here: " + why + "."))}
 		}

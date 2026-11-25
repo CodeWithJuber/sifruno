@@ -396,6 +396,7 @@ func TestMigrateFilesRefusesWhatOpenLiteSpeedWouldOpen(t *testing.T) {
 		"user file missing":          {"public_html/index.php": "x", "public_html/staff/.htaccess": password},
 		"user file a link":           {"public_html/index.php": "x", "public_html/staff/.htaccess": password, ".htpasswds/p": "->/etc/shadow"},
 		"plain-text password":        {"public_html/index.php": "x", "public_html/staff/.htaccess": password, ".htpasswds/p": "bob:secret\n"},
+		"crypt password":             {"public_html/index.php": "x", "public_html/staff/.htaccess": password, ".htpasswds/p": "bob:$6$saltsalt$" + strings.Repeat("e", 86) + "\n"},
 		"satisfy any":                {"public_html/index.php": "x", "public_html/staff/.htaccess": "Deny from all\nSatisfy Any\n"},
 		"unknown directive":          {"public_html/index.php": "x", "public_html/staff/.htaccess": "Deny from all\nFoo bar\n"},
 		"home .htaccess":             {"public_html/index.php": "x", ".htaccess": "Deny from all\n"},
@@ -418,6 +419,27 @@ func TestMigrateFilesRefusesWhatOpenLiteSpeedWouldOpen(t *testing.T) {
 				t.Fatal("cp ran into the home")
 			}
 		})
+	}
+}
+
+// TestMigrateFilesNamesTheUserWithAnOldHash: a password folder whose user
+// file holds a crypt hash refuses the copy and says whose password to set
+// again, and how.
+func TestMigrateFilesNamesTheUserWithAnOldHash(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	rec := openedRecord(t, m)
+	f.home = map[string]string{
+		"public_html/index.php":       "x",
+		"public_html/staff/.htaccess": "AuthType Basic\nAuthName x\nAuthUserFile /home/fixtureacct/.htpasswds/p\nRequire valid-user\n",
+		".htpasswds/p":                "alice:$apr1$x1Y2z3$abcdefghijklmnopqrstuv\nbob:$1$saltsalt$" + strings.Repeat("c", 22) + "\n",
+	}
+	_, err := m.Files(context.Background(), rec, "/home/fixtureacct", engineRecord(filepath.Dir(m.e.dir)), 1, backupLeftover{Op: strings.Repeat("8", 32)}, noProtection(t))
+	var failed *MigrationError
+	if !errors.As(err, &failed) || failed.Step != "tier" || !strings.Contains(failed.Detail, "for bob again on the old server with a modern hash") || !strings.Contains(failed.Detail, "after the move") {
+		t.Fatalf("refusal: %v", err)
+	}
+	if slices.ContainsFunc(f.ran, func(c ranCommand) bool { return c.path == cpPath }) {
+		t.Fatal("cp ran into the home")
 	}
 }
 

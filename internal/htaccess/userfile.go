@@ -11,20 +11,34 @@ import (
 
 // A converted realm's users come from the AuthUserFile the old server named.
 // OpenLiteSpeed reads the same "user:hash" format (src/http/htpasswd.cpp,
-// PasswdFile::parseLine), but it checks some hashes differently from Apache
-// (src/http/userdir.cpp, UserDir::authenticate; src/http/authuser.cpp,
-// updatePasswdEncMethod): $apr1$, {SHA} and bcrypt are recognised by their
-// prefix, and anything else is compared first as plain text and then with
-// crypt(3). Apache on Linux has no plain-text passwords (apr_password_validate
-// hands any unrecognised hash to crypt), so a plain-text line would let its
-// literal text in on OpenLiteSpeed only. NormalizeUserFile therefore keeps a
-// line only when its hash has one of the shapes below, and writes the file
-// again with nothing but "user:hash" lines.
+// PasswdFile::parseLine) but checks hashes its own way. In v1.9.4 a user
+// starts as ENCRYPT_PLAIN (src/http/authuser.h:51), and when it is loaded
+// UserDir::getUser (src/http/userdir.cpp:195) calls
+// AuthUser::updatePasswdEncMethod (src/http/authuser.cpp:84), which
+// recognises three formats by their prefix:
 //
-// The owner chose (Jev, 2026-11-24, 0.59 over 0.41, confidence 0.18) to keep
-// crypt hashes (DES, $1$, $5$, $6$) as well, accepting that on OpenLiteSpeed
-// the stored hash text of such a user also signs in. bcrypt is kept only as
-// $2y$, the one prefix Apache checks itself rather than through crypt(3).
+//   - "$apr1$": ENCRYPT_APMD5, checked by verifyApMD5 (userdir.cpp:394),
+//     Apache's MD5 with the magic and salt hashed as Apache does;
+//   - "{SHA}" whose base64 decodes to 20 bytes: ENCRYPT_SHA, the stored
+//     digest compared with SHA-1 of the password (verifySHA, userdir.cpp:272);
+//   - "$2a$", "$2b$", "$2y$": ENCRYPT_BCRYPT, checked with
+//     _crypt_blowfish_rn and compared in constant time (verifyBcrypt,
+//     userdir.cpp:446).
+//
+// Every other hash stays ENCRYPT_PLAIN, and UserDir::authenticate
+// (userdir.cpp:459, the ENCRYPT_PLAIN case at 482) first compares the
+// password with the stored text itself and only then with crypt(3): for
+// DES, $1$, $5$ and $6$ crypt hashes, and for plain text, the stored text
+// signs in as the password. Apache never accepts that (apr_password_validate
+// hands an unrecognised hash to crypt). So NormalizeUserFile keeps a line only
+// when its hash is $apr1$, {SHA}, $2y$ or $2b$, and refuses the file
+// otherwise, naming the user whose password must be set again; $2a$ is left
+// out too, as the bcrypt prefix with a known flaw in old implementations.
+// It writes the file again with nothing but "user:hash" lines.
+//
+// Jev had picked keeping crypt hashes (with_crypt, 0.59 over 0.41,
+// confidence 0.18); the owner's review chose the strict list instead: a
+// protected folder must not accept the stored hash text as a password.
 
 // MaxUserFileBytes and MaxUserFileUsers bound a user file.
 const (
@@ -32,16 +46,17 @@ const (
 	MaxUserFileUsers = 1000
 )
 
+// hashShapes are the hashes OpenLiteSpeed checks against the password
+// alone (see above).
 var hashShapes = []*regexp.Regexp{
 	regexp.MustCompile(`^\$apr1\$[./0-9A-Za-z]{1,8}\$[./0-9A-Za-z]{22}$`),
 	regexp.MustCompile(`^\{SHA\}[A-Za-z0-9+/]{27}=$`),
-	regexp.MustCompile(`^\$2y\$[0-3][0-9]\$[./A-Za-z0-9]{53}$`),
-	// crypt(3): DES, MD5, SHA-256 and SHA-512 crypt.
-	regexp.MustCompile(`^[./0-9A-Za-z]{13}$`),
-	regexp.MustCompile(`^\$1\$[./0-9A-Za-z]{1,8}\$[./0-9A-Za-z]{22}$`),
-	regexp.MustCompile(`^\$5\$(rounds=[1-9][0-9]{3,8}\$)?[./0-9A-Za-z]{1,16}\$[./0-9A-Za-z]{43}$`),
-	regexp.MustCompile(`^\$6\$(rounds=[1-9][0-9]{3,8}\$)?[./0-9A-Za-z]{1,16}\$[./0-9A-Za-z]{86}$`),
+	regexp.MustCompile(`^\$2[by]\$(0[4-9]|[12][0-9]|3[01])\$[./A-Za-z0-9]{53}$`),
 }
+
+// weakHash recognises the crypt(3) formats OpenLiteSpeed would also let in
+// by their stored text, so a refusal can say what the hash is.
+var weakHash = regexp.MustCompile(`^(\$(1|5|6|2a)\$.*|[./0-9A-Za-z]{13})$`)
 
 // UserFileError says why a user file was refused; User names the line's user
 // when the line had one, so the owner knows whose password to reset.
@@ -95,8 +110,11 @@ func NormalizeUserFile(data []byte) ([]byte, []string, error) {
 				break
 			}
 		}
-		if !known {
-			return nil, nil, &UserFileError{Line: i + 1, User: user, Reason: "the password hash is not one this server checks the way Apache does"}
+		switch {
+		case !known && weakHash.MatchString(hash):
+			return nil, nil, &UserFileError{Line: i + 1, User: user, Reason: "the password of " + user + " is stored in an older format (crypt) for which this server's web server would also accept the stored text itself"}
+		case !known:
+			return nil, nil, &UserFileError{Line: i + 1, User: user, Reason: "the password of " + user + " is not stored in a format this server's web server checks safely"}
 		}
 		if len(users) >= MaxUserFileUsers {
 			return nil, nil, &UserFileError{Line: i + 1, Reason: "more than 1000 users"}

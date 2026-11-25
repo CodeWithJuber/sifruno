@@ -3,6 +3,7 @@ package htaccess
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -265,25 +266,39 @@ func TestNormalizeUserFile(t *testing.T) {
 	apr1 := "$apr1$x1Y2z3$abcdefghijklmnopqrstuv"
 	sha := "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g="
 	bcrypt := "$2y$05$" + strings.Repeat("a", 53)
-	des := "kF2EDBE2Ux8sQ"
-	sha512 := "$6$rounds=5000$saltsalt$" + strings.Repeat("b", 86)
-	in := "# users\n\nalice:" + apr1 + "\r\nbob:" + sha + "\ncarol:" + bcrypt + "\ndave:" + des + "\nerin:" + sha512 + "\n"
+	bcryptB := "$2b$12$" + strings.Repeat("b", 53)
+	in := "# users\n\nalice:" + apr1 + "\r\nbob:" + sha + "\ncarol:" + bcrypt + "\ndave:" + bcryptB + "\n"
 	out, users, err := NormalizeUserFile([]byte(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "alice:" + apr1 + "\nbob:" + sha + "\ncarol:" + bcrypt + "\ndave:" + des + "\nerin:" + sha512 + "\n"
-	if string(out) != want || !reflect.DeepEqual(users, []string{"alice", "bob", "carol", "dave", "erin"}) {
+	want := "alice:" + apr1 + "\nbob:" + sha + "\ncarol:" + bcrypt + "\ndave:" + bcryptB + "\n"
+	if string(out) != want || !reflect.DeepEqual(users, []string{"alice", "bob", "carol", "dave"}) {
 		t.Fatalf("%q %v", out, users)
+	}
+	// Formats OpenLiteSpeed 1.9.4 compares as plain text first: the stored
+	// text would sign in, so they refuse, naming the user.
+	for name, hash := range map[string]string{
+		"des crypt":    "kF2EDBE2Ux8sQ",
+		"md5 crypt":    "$1$saltsalt$" + strings.Repeat("c", 22),
+		"sha256 crypt": "$5$saltsalt$" + strings.Repeat("d", 43),
+		"sha512 crypt": "$6$rounds=5000$saltsalt$" + strings.Repeat("e", 86),
+		"bcrypt 2a":    "$2a$05$" + strings.Repeat("a", 53),
+	} {
+		_, _, err := NormalizeUserFile([]byte("alice:" + apr1 + "\nfrank:" + hash + "\n"))
+		var bad *UserFileError
+		if !errors.As(err, &bad) || bad.User != "frank" || bad.Line != 2 || !strings.Contains(bad.Reason, "older format") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 	bad := map[string]string{
 		"plain text":   "alice:secret\n",
+		"bcrypt cost":  "alice:$2y$03$" + strings.Repeat("a", 53) + "\n",
 		"third field":  "alice:" + apr1 + ":staff\n",
 		"space":        "alice: " + apr1 + "\n",
 		"twice":        "alice:" + apr1 + "\nalice:" + sha + "\n",
 		"user name":    "al ice:" + apr1 + "\n",
 		"no colon":     "alice\n",
-		"bcrypt 2a":    "alice:$2a$05$" + strings.Repeat("a", 53) + "\n",
 		"empty":        "# none\n",
 		"not text":     "alice:\xff\n",
 		"empty hash":   "alice:\n",

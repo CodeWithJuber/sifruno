@@ -1,0 +1,86 @@
+# Phase 1 new UI shell: the File Manager on shadcn/ui, Astryx removed, right-to-left shell (final Astryx slice)
+# 2026-11-25T08:49Z  local run without root: ./cmd/sifruno and web/dist built from 1386a8e, throwaway state on
+# 127.0.0.1 with --backup-scheduler, Chrome 158 (agent-browser 0.44.0) driven over CDP
+#
+# The browser answered /api/v1/services with 31 standard Ubuntu services taken from an earlier real answer, so
+# the host's own service names are not published; every other request reached the running panel. The static
+# sites are the throwaway state's samples on example.test. The tour ran as the public preview (the browser
+# added the meta tag cmd/panelpreview adds). Right-to-left: dir="rtl" set on <html> by the browser; the panel
+# has no right-to-left language yet. This run has no Linux account broker, so hosting-account websites answer
+# 503, as the notes at the end say.
+#
+# Astryx removal, compared before the final run: the UI of the File Manager commit and of the Astryx removal
+# commit served the same copied state side by side (the earlier one without --backup-scheduler), and the
+# browser read 26 computed properties of every element on 20 pages in light and dark (Home, Server's four
+# tabs, Security, API tokens, Settings, Activity, Account, Customers, Hosting accounts, Websites, New website,
+# Move a website here, Files, Static sites (old), its File Manager, its ZIP backups, and the public tour):
+#   light: 4,044 elements compared; dark: 4,044 elements compared
+#   the only property that differs is the font-family fallback list after Inter, which the panel loads
+#   16 elements of the ZIP backups page differ in content only: the earlier panel ran without the
+#   backup scheduler, so its schedule form says the runner is disabled
+#   pixel comparisons of 14 pages differ only in clock times
+# Without the small base layer the removal adds, colour-scheme, font smoothing, the line height of p, code
+# and pre, and the cursor on disabled controls differed; the layer keeps them as the screens were built.
+#
+note  signed in as admin: admin
+PASS  light 1440 /websites/static/files: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  light 390 /websites/static/files: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  dark 1440 /websites/static/files: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  dark 390 /websites/static/files: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  no Astryx component, attribute or style is left in the File Manager
+PASS  every File Manager test id is present (15 test ids)
+PASS  accessible names are unchanged (11 names)
+PASS  a search with no match says so
+PASS  a folder opens and the breadcrumb names it
+PASS  a binary file shows its details, not the editor
+PASS  Upload file: the dialog opens with focus in its file field (fm-upload-file)
+PASS  Escape closes it and focus returns to Upload file
+PASS  choosing a file fills its destination path
+PASS  Confirm upload saves the file (read back through the API)
+PASS  multiple upload lists both files before confirming
+PASS  Confirm multiple uploads saves each file
+PASS  Save file writes the draft (read back through the API)
+note  about.html changed through the API in another session: HTTP 200
+PASS  a save against a changed revision keeps the draft and asks for a comparison
+PASS  Replace file: the dialog opens with focus in its file field (fm-replace-file)
+PASS  Confirm replacement replaces the bytes
+PASS  Rename / move file: the dialog opens with focus in its path field (fm-rename-path)
+PASS  Rename / move moves the file and keeps its bytes
+PASS  Download file saves the file's bytes (notes.txt)
+PASS  Open saved file links to the saved file on the local preview (http://site-f09f06a8d77f9cac11c5253bbc1b62b1.localhost:18462/docs/notes.txt)
+PASS  Delete file: focus starts on the safe action (Cancel deletion)
+PASS  Escape closes it and focus returns to Delete file
+PASS  Confirm file deletion removes the file
+PASS  Tab reaches the folders, files, file actions and editor, each with a focus ring (13 stops)
+PASS  rtl 1440 /websites/static/files: mirrored, file content still left to right (page rtl, editor ltr)
+PASS  rtl 1440 /websites/static/files: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  rtl 390 /websites/static/files: mirrored, file content still left to right (page rtl, editor ltr)
+PASS  rtl 390 /websites/static/files: no horizontal scroll (scrollWidth 390, viewport 390)
+PASS  rtl 1440: the menu sits on the right edge and covers no content ({"sidebarLeft":1184,"sidebarRight":1440,"mainLeft":0,"mainRight":1184,"inner":1440})
+PASS  rtl 1440 /: no horizontal scroll (scrollWidth 1440, viewport 1440)
+PASS  ltr 1440: the menu stays on the left edge ({"sidebarLeft":0,"sidebarRight":256,"mainLeft":256,"mainRight":1440,"inner":1440})
+PASS  a direction set after load moves the menu to the right ({"sidebarLeft":1184,"sidebarRight":1440,"mainLeft":0,"mainRight":1184,"inner":1440})
+PASS  and back to the left when it is removed ({"sidebarLeft":0,"sidebarRight":256,"mainLeft":256,"mainRight":1440,"inner":1440})
+PASS  rtl 390: the phone menu opens from the right edge ({"left":98,"right":390,"inner":390})
+PASS  ltr 390: the phone menu opens from the left edge ({"left":0,"right":293,"inner":390})
+PASS  light 1440 /: no Astryx left, no horizontal scroll
+PASS  light 1440 /server: no Astryx left, no horizontal scroll
+PASS  light 1440 /server/storage: no Astryx left, no horizontal scroll
+PASS  light 1440 /server/network: no Astryx left, no horizontal scroll
+PASS  light 1440 /security: no Astryx left, no horizontal scroll
+PASS  light 1440 /customers: no Astryx left, no horizontal scroll
+PASS  light 1440 /customers/accounts: no Astryx left, no horizontal scroll
+PASS  light 1440 /websites/backups: no Astryx left, no horizontal scroll
+PASS  light 1440 /websites/static: no Astryx left, no horizontal scroll
+PASS  light 1440 /tour (public preview): no Astryx left, no horizontal scroll
+PASS  the menu and heading say Static site backups (old)
+PASS  Customers: alert titles are 14 px like their text ([["Your websites could not be loaded.","14px","14px"]])
+PASS  dark /: the two chart lines differ by 3:1 or more and each stands 3:1 on the card (lines 3.41:1, first 3.28:1, second 11.18:1 on the card)
+PASS  dark /server/network: the two chart lines differ by 3:1 or more and each stands 3:1 on the card (lines 3.41:1, first 3.28:1, second 11.18:1 on the card)
+PASS  a create with a domain in use says so in the dialog
+PASS  access-key session: the sidebar footer shows the whole sign-in line at 1440 (Signed in with the access key)
+PASS  no page errors or console errors
+note  expected console line: Failed to load resource: the server responded with a status of 422 (Unprocessable Entity) — reading a binary file as text; the page then shows its details
+note  expected console line: Failed to load resource: the server responded with a status of 409 (Conflict) — the refused save and the refused duplicate domain
+note  expected console line: Failed to load resource: the server responded with a status of 503 (Service Unavailable) — this run has no account broker, so hosting-account websites are unavailable
+56 passed, 0 failed

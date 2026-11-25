@@ -201,7 +201,7 @@ Run on 2026-11-25 without root and without the dev VM: the panel binary and UI o
 
 Screenshots are in [phase1-ui-astryx-1/](phase1-ui-astryx-1/): each screen at 1440 and 390 px in light and dark, the public-preview Home, the revoke confirmation, and the service list's unavailable state.
 
-What this run does not show: the dev VM (the readings are the runner host's, minus its service names), Security's own access-key form (the shell's sign-in comes first, so the page opens signed in), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left and covers the content there).
+What this run does not show: the dev VM (the readings are the runner host's, minus its service names), Security's own access-key form (the shell's sign-in comes first, so the page opens signed in), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar then still sat on the left and covered the content there, which [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) fixes).
 
 ## Phase 1: Hosting accounts and Backups on the design system
 
@@ -215,7 +215,7 @@ Backups ran on real data: two static sites, two ZIP backups made with the rebuil
 
 Screenshots are in [phase1-ui-astryx-2/](phase1-ui-astryx-2/): both pages at 1440 and 390 px in light and dark, Backups with no websites, the restore, remove and schedule confirmations, Hosting accounts with no broker, its web configuration preview, the create and suspend dialogs, an error on each page, and both pages right to left.
 
-What this run does not show: the dev VM, a real Linux account broker (no account was created or suspended; the create and suspend dialogs were opened, not confirmed), a confirmed restore, removal, download or ZIP upload, the pages' own access-key forms (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left).
+What this run does not show: the dev VM, a real Linux account broker (no account was created or suspended; the create and suspend dialogs were opened, not confirmed), a confirmed restore, removal, download or ZIP upload, the pages' own access-key forms (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar then still sat on the left, which [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) fixes).
 
 ## Phase 1: Static sites (old) and the Panel tour on the design system
 
@@ -227,4 +227,18 @@ Run on 2026-11-25 without root and without the dev VM: the panel binary and UI o
 
 Screenshots are in [phase1-ui-astryx-3/](phase1-ui-astryx-3/): both pages at 1440 and 390 px in light and dark, the ZIP backups pane, a binary file's details, the remove, import and refused-create dialogs, a search with no match, the tour's Backups, and right-to-left views.
 
-What this run does not show: the dev VM, the old File Manager's own screen (it stays on Astryx until Phase 2, as Jev chose, and was only opened by the handoff), a site that needs recovery (the run cannot cause one), the pages' own access-key form (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar still sits on the left and covers the content there).
+What this run does not show: the dev VM, the old File Manager's own screen (still on Astryx in this run and only opened by the handoff; [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) rebuilds it), a site that needs recovery (the run cannot cause one), the pages' own access-key form (the shell's sign-in comes first), and a right-to-left language (the browser set `dir="rtl"`; the shell's sidebar then still sat on the left and covered the content there, which [the final slice](#phase-1-the-file-manager-and-the-end-of-astryx) fixes).
+
+## Phase 1: the File Manager and the end of Astryx
+
+Run on 2026-11-25 without root and without the dev VM: the panel binary and UI of `1386a8e` with throwaway state on loopback, driven by Chrome 158 through agent-browser. The browser replaced only the service list's answer, with 31 standard Ubuntu services, so the host's own service names are not published; the static sites are samples on `example.test`.
+
+The old static sites' File Manager (`/websites/static/files`) is rebuilt on shadcn/ui, the last Astryx screen, and the `@astryxdesign` packages, their CSS and the `<Theme>` wrapper are gone (`rg -i astryx web/src web/package.json` finds nothing). Before the final run, the UI before and after the removal served the same state side by side: the computed styles of 4,044 elements on 20 pages, in light and dark, differ only in the font-family fallback list after the loaded Inter, because a small base layer keeps the colour scheme, font smoothing and text line height the screens were built with. The shell now puts its menu on the start side in a right-to-left page, at 1440 px and in the phone menu. The run also checks the slice's small fixes: a duplicate domain says so, alert titles match their text, the old ZIP backups page is named "Static site backups (old)", the dark charts' two lines differ by 3.41:1, and the sidebar footer shows the whole sign-in line.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| File Manager rebuilt on shadcn/ui and Astryx removed: no horizontal scroll at 1440 and 390 px in light and dark, test ids and accessible names, upload, multiple upload, save, a changed-revision conflict, replace, rename, download, the saved-file link, delete, dialog focus and Esc, keyboard focus, right-to-left page and shell, earlier screens without Astryx, the small fixes | [phase1-ui-astryx-final.txt](phase1-ui-astryx-final.txt) | 56 passed, 0 failed |
+
+Screenshots are in [phase1-ui-astryx-final/](phase1-ui-astryx-final/): the File Manager at 1440 and 390 px in light and dark, its binary-file, upload, multiple-upload, conflict, replace, rename and delete views, right to left at both widths with the phone menu, one light 1440 px shot of each earlier rebuilt screen (Home, Server, Storage, Network, Security, Customers, Hosting accounts, Static site backups (old), Static sites (old) and the Panel tour), the dark charts, the duplicate-domain dialog and the sidebar footer.
+
+What this run does not show: the dev VM, the File Manager's own access-key form and a site that needs recovery (as before), the native ZIP import's duplicate-domain message (that route keeps its own error code), and a right-to-left language (the browser set `dir="rtl"`).

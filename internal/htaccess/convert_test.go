@@ -327,6 +327,10 @@ func FuzzConvert(f *testing.F) {
 	f.Add([]byte("AuthType Basic\nAuthName x\nAuthUserFile /h\nRequire user a b\n"), "/p/")
 	f.Add([]byte("Deny from all\n<FilesMatch \"^(a|b(-c)?)\\.css$\">\nAllow from all\n</FilesMatch>\n"), "/w/")
 	f.Add([]byte("<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n"), "/z/")
+	f.Add([]byte("Order Allow,Deny\nAllow from 10.1 192.0.2.0/24\nDeny from 10.1.2.3\n"), "/o/")
+	f.Add([]byte("Order Deny,Allow\nDeny from all\nAllow from 2001:db8::/32 198.51.100.7\n"), "/o/")
+	f.Add([]byte("Allow from all\nDeny from 203.0.113.0/24\nRequire ip 10\n"), "/o/")
+	f.Add([]byte("Order Allow,Deny\nDeny from all\nOptions -Indexes\n"), "/o/")
 	f.Fuzz(func(t *testing.T, data []byte, urlPath string) {
 		if len(data) > 4096 {
 			return
@@ -392,6 +396,9 @@ func FuzzConvert(f *testing.F) {
 		if !rule.Open() && !closes {
 			t.Fatalf("closed rule from text without deny, order or require: %q", data)
 		}
+		// Never more open than Apache: an independent model of Apache's
+		// access check (oracle_test.go) is asked for sample clients.
+		checkOracle(t, data, rule)
 	})
 }
 

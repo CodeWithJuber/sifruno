@@ -330,7 +330,7 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
 
   return <div className="@container flex w-full max-w-[90rem] min-w-0 flex-col gap-4" data-testid="accounts-view">
     {error && !pending && !createOpen && <ProblemAlert problem={problemFor(error)} testId="accounts-problem" />}
-    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="wrap-anywhere">{notice}</AlertTitle></Alert>}
+    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="text-sm! wrap-anywhere">{notice}</AlertTitle></Alert>}
     {!session ? <section className={`${panel} max-w-xl p-5`} aria-label="Operator session">
       <div role="status" className="text-sm text-foreground">{busy || (error ? "Operator session could not be checked." : "Checking operator session…")}</div>
       {error && <Button variant="outline" className={`mt-3 ${rowControl}`} disabled={Boolean(busy)} onClick={() => setSessionAttempt((attempt) => attempt + 1)}><RefreshCw aria-hidden="true" />Retry operator session</Button>}
@@ -394,8 +394,8 @@ export default function Accounts({ revision, active, onStatus }: { revision: num
         </div>}
       </section>
       {(capability?.available || capability?.reason === ACCOUNT_RECOVERY_REQUIRED) && <>
-        {recoveryBlocked && <Alert variant="destructive" className="text-start" data-testid="accounts-recovery"><Info aria-hidden="true" /><AlertTitle className="wrap-anywhere">An account requires recovery. All account changes are disabled until recovery is resolved.</AlertTitle></Alert>}
-        {capability.available && !hasFreshList && <Alert role="status" className="text-start"><Info aria-hidden="true" /><AlertTitle className="wrap-anywhere">The account list is not current. Refresh and review it before changing accounts.</AlertTitle></Alert>}
+        {recoveryBlocked && <Alert variant="destructive" className="text-start" data-testid="accounts-recovery"><Info aria-hidden="true" /><AlertTitle className="text-sm! wrap-anywhere">An account requires recovery. All account changes are disabled until recovery is resolved.</AlertTitle></Alert>}
+        {capability.available && !hasFreshList && <Alert role="status" className="text-start"><Info aria-hidden="true" /><AlertTitle className="text-sm! wrap-anywhere">The account list is not current. Refresh and review it before changing accounts.</AlertTitle></Alert>}
         <section className={`${panel} flex flex-wrap items-center justify-between gap-x-5 gap-y-3 p-4`} aria-labelledby="accounts-inventory-heading">
           <div className="min-w-0">
             <h2 id="accounts-inventory-heading" className="text-base!">Account inventory</h2>

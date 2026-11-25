@@ -145,7 +145,7 @@ export default function BackupSchedule({ site, session, active, fresh: siteFresh
       <Button variant="ghost" size="sm" className="ms-auto pointer-coarse:h-11" disabled={parentBusy || saving || loading} onClick={onRefresh}><RefreshCw aria-hidden="true" />Refresh schedule<span className="sr-only"> and website records</span></Button>
     </div>
     {error && <ProblemAlert problem={problems.current.get(error) ?? { what: "The backup schedule did not update.", why: error, next: "Use Refresh backup records and try again.", technical: "", status: 0 }} testId="backup-schedule-problem" />}
-    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="wrap-anywhere">{notice}</AlertTitle></Alert>}
+    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="text-sm! wrap-anywhere">{notice}</AlertTitle></Alert>}
     {loading && status("Reading the actual backup schedule…")}
     {records ? <>
       <dl className="grid gap-4 grid-cols-2 @3xl:grid-cols-4">

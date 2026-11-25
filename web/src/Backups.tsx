@@ -398,7 +398,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
   return <div className="@container flex w-full max-w-[90rem] min-w-0 flex-col gap-4" data-testid="backups-page">
     <div className="flex items-start gap-2 text-sm text-muted-foreground"><Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" /><span>Native Sifruno ZIP snapshots of app-owned static site files only. These archives do not contain server, database, mail or cPanel backups.</span></div>
     {error && <ProblemAlert problem={problemFor(error)} testId="backup-handoff-error" />}
-    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="wrap-anywhere">{notice}</AlertTitle></Alert>}
+    {notice && <Alert role="status" className="text-start"><CircleCheck className="text-primary" aria-hidden="true" /><AlertTitle className="text-sm! wrap-anywhere">{notice}</AlertTitle></Alert>}
     {!session ? <section className={`${panel} max-w-xl p-5`} aria-label="Operator session"><div role="status" className="text-sm text-foreground">{busy || "Operator session could not be checked."}</div>{error && <Button variant="outline" className={`mt-3 ${rowControl}`} disabled={Boolean(busy)} onClick={refreshRecords}><RefreshCw aria-hidden="true" />Retry operator session</Button>}</section> : !authenticated ? <section className={`${panel} max-w-xl p-5`} aria-labelledby="backups-sign-in-heading">
       <div className="flex items-start gap-3.5">
         <LockKeyhole className="size-6 shrink-0 text-primary" aria-hidden="true" />
@@ -427,7 +427,7 @@ export default function Backups({ revision, active, onStatus, siteHandoff, onHan
       {selected ? <>
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm text-muted-foreground"><span className="flex min-w-0 items-center gap-2 wrap-anywhere"><Globe className="size-4 shrink-0" aria-hidden="true" />{selected.domain}</span><span>Current revision {selected.revision} · {selected.state.replaceAll("_", " ")}</span></div>
         {!fresh && !busy && <div className="text-sm text-foreground" role="status">Records need to be refreshed before another backup or restore.</div>}
-        {selected.state === "recovery_required" && <Alert variant="destructive" className="text-start"><TriangleAlert aria-hidden="true" /><AlertTitle className="wrap-anywhere">This website requires recovery. Backup creation and restore are disabled until its recovery is resolved.</AlertTitle></Alert>}
+        {selected.state === "recovery_required" && <Alert variant="destructive" className="text-start"><TriangleAlert aria-hidden="true" /><AlertTitle className="text-sm! wrap-anywhere">This website requires recovery. Backup creation and restore are disabled until its recovery is resolved.</AlertTitle></Alert>}
         <dl className="grid grid-cols-2 gap-3 @3xl:grid-cols-3">
           <div className={`${panel} flex min-w-0 flex-col gap-1.5 p-4`}><dt className="text-xs text-muted-foreground">Recorded snapshots</dt><dd className="text-2xl font-semibold tabular-nums text-foreground">{backups.length}</dd></div>
           <div className={`${panel} flex min-w-0 flex-col gap-1.5 p-4`}><dt className="text-xs text-muted-foreground">Archive storage</dt><dd className="text-2xl font-semibold tabular-nums wrap-anywhere text-foreground">{bytes(backups.reduce((sum, backup) => sum + backup.bytes, 0))}</dd></div>

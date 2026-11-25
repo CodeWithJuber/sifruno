@@ -103,6 +103,8 @@ It leaves both units running. The proofs start their own broker on the same sock
 scripts/devvm/vm.sh ssh 'systemctl disable --now sifruno sifruno-broker'
 ```
 
+`--existing-host` installs on the server a `ports` file names instead. Every night, `.github/workflows/nightly-install.yml` runs it that way on a throwaway Linode that `scripts/ci/nightly-fresh-install.sh` creates and always deletes. That test is off until the owner adds the repository secret the workflow names. The script also runs by hand with a Linode token in `SIFRUNO_NIGHTLY_LINODE_TOKEN`.
+
 ## Proofs
 
 Saved transcripts of these runs are in [docs/proofs](../../docs/proofs/README.md).

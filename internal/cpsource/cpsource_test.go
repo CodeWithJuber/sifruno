@@ -73,6 +73,34 @@ func TestCommandsTakeOnlyPlainNames(t *testing.T) {
 	}
 }
 
+// TestParseClientAddress: the source's SSH_CONNECTION gives the address it
+// sees this server come from, as one plain address, or nothing.
+func TestParseClientAddress(t *testing.T) {
+	if ClientAddressCommand() != `printf '%s\n' "$SSH_CONNECTION"` {
+		t.Fatalf("command %q", ClientAddressCommand())
+	}
+	for out, want := range map[string]string{
+		"203.0.113.5 51234 198.51.100.7 22\n":    "203.0.113.5",
+		"2001:db8::5 51234 2001:db8::7 22\n":     "2001:db8::5",
+		"2001:0db8::0005 51234 2001:db8::7 22\n": "2001:db8::5",
+	} {
+		if got, err := ParseClientAddress([]byte(out)); err != nil || got != want {
+			t.Errorf("%q: %q %v", out, got, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "\n", "203.0.113.5 51234 198.51.100.7 22", "203.0.113.5 51234 198.51.100.7 22\n\n",
+		"203.0.113.5 51234 198.51.100.7\n", "203.0.113.5 51234 198.51.100.7 22 x\n", "203.0.113.5  51234 198.51.100.7 22\n",
+		"203.0.113.0/24 51234 198.51.100.7 22\n", "source 51234 198.51.100.7 22\n", "::ffff:203.0.113.5 51234 198.51.100.7 22\n",
+		"fe80::5%eth0 51234 fe80::7%eth0 22\n", "203.0.113.5 0 198.51.100.7 22\n", "203.0.113.5 051234 198.51.100.7 22\n",
+		"203.0.113.5 51234 198.51.100.7 65536\n", "203.0.113.5\t51234 198.51.100.7 22\n",
+	} {
+		if got, err := ParseClientAddress([]byte(bad)); err == nil {
+			t.Errorf("%q read as %q", bad, got)
+		}
+	}
+}
+
 func TestParseSite(t *testing.T) {
 	out := `{"data":{"userdata":{"documentroot":"/home/shopone/public_html","servername":"shop.example.test","serveralias":"www.shop.example.test parked.example.test","user":"shopone","homedir":"/home/shopone","ip":"10.0.0.1","port":80}},"metadata":{"command":"domainuserdata","result":1}}`
 	site, err := ParseSite([]byte(out), "shopone", "shop.example.test")

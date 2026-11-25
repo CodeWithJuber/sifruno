@@ -141,3 +141,15 @@ What this run does not show:
 - **Renewal.** The renewal loop and its one-week wait after a refused install are unit tests (`internal/acme`); no certificate came near expiry here.
 - **The failure paths on the VM.** Undo after a failed step, a pre-existing database name, a slow step, a panel restart during a job and a skipped SSL step are unit tests (`internal/wizard`).
 - **More than one job.** Jobs run one at a time; the refusal of a second is a unit test.
+
+## Phase 1: create and delete recovery
+
+Run on 2026-11-25 with `scripts/devvm/proof.sh create-recovery` on a throwaway AlmaLinux 9.8 cloud server with a fresh Sifruno install (SELinux enforcing, shadow-utils 4.9-16.el9, hardware virtualization rather than QEMU emulation), from `3478a75`, whose broker and native code are `22ead56`'s. `brokerdrive`, acting as the panel's user, sent the typed requests.
+
+| Slice | Transcript | Result |
+| --- | --- | --- |
+| Create and delete recovery: groupadd and userdel wait on shadow-utils' lock and exit by themselves, with nothing killed, and the broker logs which step stopped; a useradd stopped after it made the home is finished at the next start; a create or delete the broker cannot finish holds up every account until the operator abandons the create or finishes the delete, and both refuse an account that is not stuck; a 200,000-file home's delete answers in 1 s, the trash drains it, and its UID is not given out meanwhile; the root-only Go tests of the same code | [phase1-create-recovery.txt](phase1-create-recovery.txt) | 81 passed, 0 failed |
+
+Two things the code assumed and this run shows: with `/etc/.pwd.lock` held, userdel waited about 15 s and exited with status 1 by itself, changing nothing; and a home holding a tmpfs mount was renamed into the trash with the mount inside it, and the remover left that folder and logged it by the account's ID.
+
+What this run does not show: the panel's screens for an account that needs recovery. The proof drives the broker directly.

@@ -1292,13 +1292,8 @@ func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
 			runShadow(t, "/usr/sbin/groupadd", "--gid", strconv.Itoa(r.Account.GID), "--", r.Account.Username)
 		}
 	}
-	t.Run("the user gone, its group left", func(t *testing.T) {
-		n := rootTestSystem(t)
-		r := rootTestDeletable(t, n)
-		stopAfterUserdel(t, r)
-		if err := n.Delete(t.Context(), r); err != nil {
-			t.Fatalf("the delete was not finished: %v", err)
-		}
+	finished := func(t *testing.T, n *linuxSystem, r record) {
+		t.Helper()
 		db, err := n.database()
 		if err != nil {
 			t.Fatal(err)
@@ -1311,8 +1306,73 @@ func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
 				t.Fatalf("%s is left: %v", path, err)
 			}
 		}
-		if err := n.Delete(t.Context(), r); err != nil {
+		// The home waits in the trash, as the account's ID, for the remover.
+		var st unix.Stat_t
+		if err := unix.Lstat(filepath.Join(n.opts.HomesDir, trashName, r.Account.ID), &st); err != nil || !homeIs(st, r) {
+			t.Fatalf("the home is not in the trash: %v", err)
+		}
+		if err := n.Delete(t.Context(), r, func() error { return nil }); err != nil {
 			t.Fatalf("a delete run again after it finished: %v", err)
+		}
+	}
+	t.Run("the user gone, its group left", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		stopAfterUserdel(t, r)
+		moved := 0
+		if err := n.Delete(t.Context(), r, func() error { moved++; return nil }); err != nil {
+			t.Fatalf("the delete was not finished: %v", err)
+		}
+		if moved != 1 {
+			t.Fatalf("the move into the trash was recorded %d times", moved)
+		}
+		finished(t, n, r)
+	})
+	t.Run("the home in the trash already", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		stopAfterUserdel(t, r)
+		homes, err := openDirectoryAt(unix.AT_FDCWD, n.opts.HomesDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer homes.Close()
+		trash, err := trashIn(homes, true, rootOwner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer trash.Close()
+		if err := detachHome(homes, trash, r); err != nil {
+			t.Fatal(err)
+		}
+		moved := 0
+		if err := n.Delete(t.Context(), r, func() error { moved++; return nil }); err != nil || moved != 0 {
+			t.Fatalf("a delete stopped after its move was not finished: %v (moved %d)", err, moved)
+		}
+		finished(t, n, r)
+	})
+	t.Run("a trash on another filesystem", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestDeletable(t, n)
+		stopAfterUserdel(t, r)
+		trash := filepath.Join(n.opts.HomesDir, trashName)
+		if os.Mkdir(trash, 0700) != nil {
+			t.Fatal("fixture")
+		}
+		if err := unix.Mount("tmpfs", trash, "tmpfs", 0, "mode=0700"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = unix.Unmount(trash, unix.MNT_DETACH) })
+		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.Is(err, ErrRecovery) {
+			t.Fatalf("a trash on another filesystem was used: %v", err)
+		}
+		for _, path := range []string{r.Account.PublicHTML, n.markerPath(r)} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("a refused delete removed %s: %v", path, err)
+			}
+		}
+		if _, err := exec.Command("/usr/bin/getent", "group", r.Account.Username).Output(); err != nil {
+			t.Fatal("a refused delete removed the group")
 		}
 	})
 	t.Run("a group that is not the account's", func(t *testing.T) {
@@ -1321,7 +1381,7 @@ func TestRootOnlyDeleteFinishesAfterUserdel(t *testing.T) {
 		runShadow(t, "/usr/sbin/userdel", "--", r.Account.Username)
 		_ = exec.Command("/usr/sbin/groupdel", "--", r.Account.Username).Run()
 		runShadow(t, "/usr/sbin/groupadd", "--gid", strconv.Itoa(freeTestID(t, r.Account.GID)), "--", r.Account.Username)
-		if err := n.Delete(t.Context(), r); !errors.Is(err, ErrRecovery) {
+		if err := n.Delete(t.Context(), r, func() error { t.Fatal("moved"); return nil }); !errors.Is(err, ErrRecovery) {
 			t.Fatalf("a group of another GID was taken for the account's: %v", err)
 		}
 		for _, path := range []string{r.Account.PublicHTML, n.markerPath(r)} {

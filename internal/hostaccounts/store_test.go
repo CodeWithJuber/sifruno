@@ -36,6 +36,12 @@ type fakeNative struct {
 	stateTimeLeft time.Duration
 	// abandons counts AbandonCreate calls.
 	abandons int
+	// trashed lists the accounts whose home Delete moved to the trash.
+	trashed []string
+	// planUsed, when set, adds IDs Plan must skip, as the native allocator
+	// adds the trash's owners, so a test can read a real trash beside the
+	// trash remover.
+	planUsed func() (map[int]bool, error)
 	// siteApplies counts ApplySites calls, failed ones included.
 	siteApplies int
 	// missingPath is a tenant path that is gone. ApplySites and ApplyWeb
@@ -265,6 +271,15 @@ func (f *fakeNative) Plan(_ context.Context, name string) (int, int, error) {
 	for _, r := range f.users {
 		used[r.Account.UID] = true
 	}
+	if f.planUsed != nil {
+		more, err := f.planUsed()
+		if err != nil {
+			return 0, 0, err
+		}
+		for id := range more {
+			used[id] = true
+		}
+	}
 	uid := 20000
 	for used[uid] {
 		uid++
@@ -331,7 +346,7 @@ func (f *fakeNative) AbandonCreate(_ context.Context, r record, persist func(own
 	return nil
 }
 
-func (f *fakeNative) Delete(_ context.Context, r record) error {
+func (f *fakeNative) Delete(_ context.Context, r record, moved func() error) error {
 	actual, ok := f.users[r.Account.Username]
 	if !ok {
 		return nil // already gone: safe retry
@@ -350,6 +365,15 @@ func (f *fakeNative) Delete(_ context.Context, r record) error {
 	// to finish.
 	if f.failure == "after-userdel" {
 		return atStep("home", ErrUnavailable)
+	}
+	// The home goes to the trash, which the store records; failure
+	// "after-move" stops the delete right after that.
+	if moved() != nil {
+		return ErrRecovery
+	}
+	f.trashed = append(f.trashed, r.Account.ID)
+	if f.failure == "after-move" {
+		return atStep("account files", ErrUnavailable)
 	}
 	// The native delete removes the site's TLS directory with the account.
 	if _, has := f.live[r.Account.Username]; has {

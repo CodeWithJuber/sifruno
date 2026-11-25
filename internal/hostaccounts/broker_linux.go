@@ -185,6 +185,12 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	}
 	defer s.close()
 	s.web = web
+	// Deleted homes wait in the trash; the remover empties it now, after
+	// each delete and every trashRetry while entries remain, outside the
+	// store lock, so no delete or other account waits for it.
+	remover := newTrashRemover(opts.HomesDir)
+	s.trashWake = remover.wake
+	go remover.run(ctx)
 	// Backups need no option: each operation checks restic's pin and its
 	// tools when it runs, and answers unavailable without them.
 	engine := newResticEngine(s.opts.StateDir)

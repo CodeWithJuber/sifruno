@@ -60,7 +60,8 @@ providers are unsupported. It never rewrites this policy. A disposable guest may
 declare the files-only qualification fixture; that is an explicit precondition,
 not zero-configuration AlmaLinux, production installer or vendor compatibility.
 The policy is rechecked before operations. The dedicated homes parent starts
-empty and subsequently contains only journal-reserved account directories.
+empty and subsequently contains only journal-reserved account directories
+and the broker's trash of deleted homes (`.sifruno-trash`, Deleted homes).
 
 Usernames are3–32ASCIIbytes, `[a-z][a-z0-9_]*`, with reserved service names refused;
 these are native foundation limits, not cPanel username rules. Domain must be a
@@ -233,7 +234,7 @@ or public_html. That concerns its own account only:
 - Everything else verifies only what root controls, before and after the
   intent: state changes (so the operator can suspend, suspend again and
   resume), SFTP keys, plan and delete. Delete checks the home's object and
-  owner, not its mode, and removes it without following links. Restart
+  owner, not its mode, and moves it into the trash (Deleted homes). Restart
   finishes their interrupted operations the same way, so a tenant cannot
   keep one pending.
 - Other accounts' web changes do not judge the changed account's vhost
@@ -376,6 +377,39 @@ either way; if a process outlived the last pass the answer is 503
 `unavailable`, and a suspend of the suspended account, with or without a
 site, ends its processes again. A suspend the next start finishes does not
 end them: suspend again.
+
+## Deleted homes
+
+A delete detaches the home instead of removing its files under the store
+lock, so it answers at once however many files the home holds, and no
+other account waits for it (Jev, `detach_then_delete` 0.99; forge D-0001).
+
+- Under the lock, after userdel, the broker renames the home by handle:
+  `renameat2` with `RENAME_NOREPLACE` from the held homes directory into
+  the held trash, `<homes>/.sifruno-trash/<account ID>`. Before and after
+  the move it checks the entry's identity (device, inode, the account's
+  UID and GID, a directory, read with `fstatat` and `AT_SYMLINK_NOFOLLOW`).
+  It journals `home_in_trash` on the pending record and ends the delete as
+  before. A home already gone from the homes directory, moved or removed
+  whole, counts as done.
+- The trash is root's own: the broker makes it through the homes handle,
+  root:root mode 0700, and refuses a link, another owner, another mode or
+  a folder on another filesystem, before it removes anything.
+- A remover empties the trash outside the store lock: when the broker
+  starts, after each delete, and every 10 minutes while entries remain. It
+  starts only from entries named as account IDs. It walks by directory
+  handles (`openat` with `O_NOFOLLOW|O_DIRECTORY`, `unlinkat`), holding a
+  few descriptors at any depth; each step up through `..` is checked
+  against the folder it came from, and a folder that moved stops it. It
+  never follows a link, checks its context before every entry, never
+  enters a folder on another device or mount (it leaves that entry and
+  logs it), and logs by account ID only. A removal stopped half way is
+  resumed by the next run.
+- Plan, the only allocator of UIDs and GIDs, skips every UID and GID that
+  owns a trash entry, so a deleted account's files never count against a
+  new account's XFS quota. A create checks its planned IDs are still free
+  rather than still the lowest, since the remover may free a lower one
+  meanwhile.
 
 ## Resource limits
 

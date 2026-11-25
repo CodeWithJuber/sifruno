@@ -134,6 +134,49 @@ func TestDeleteStoppedAfterUserdelFinishesAtStart(t *testing.T) {
 	}
 }
 
+// A delete stopped right after it moved the home into the trash has that
+// on its record, and the next start finishes it; a delete that ends records
+// the move too, and wakes the trash remover.
+func TestDeleteStoppedAfterTheMoveFinishesAtStart(t *testing.T) {
+	captureRecoveryLog(t)
+	s, f, opts := setupStore(t)
+	ctx := context.Background()
+	woken := 0
+	s.trashWake = func() { woken++ }
+	a := createFixture(t, s)
+	f.failure = "after-move"
+	if _, err := s.delete(ctx, a.ID, DeleteInput{ExpectedRevision: a.Revision, Reason: "Remove"}, "test operator"); err != ErrRecovery {
+		t.Fatal(err)
+	}
+	if r := recordFor(t, s, a.ID); !r.UserRemoval || !r.HomeInTrash || r.Pending == nil {
+		t.Fatalf("the move is not on the record: %+v", r)
+	}
+	if len(f.trashed) != 1 || woken != 0 {
+		t.Fatalf("trashed %v, woken %d", f.trashed, woken)
+	}
+	s.close()
+	f.failure = ""
+	reopened, err := openStore(ctx, opts, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.close()
+	if items, err := reopened.records(); err != nil || len(items) != 0 {
+		t.Fatalf("after the start: %+v %v", items, err)
+	}
+	if rows := historyOf(t, reopened, a.ID); rows[len(rows)-1].Status != "reconciled" {
+		t.Fatalf("journal %+v", rows)
+	}
+	b, err := reopened.create(ctx, CreateInput{Username: "secondacct", Domain: "second.test", Reason: "Next"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.trashWake = func() { woken++ }
+	if _, err := reopened.delete(ctx, b.ID, DeleteInput{ExpectedRevision: b.Revision, Reason: "Remove"}, "test operator"); err != nil || woken != 1 {
+		t.Fatalf("a delete that ends: %v, woken %d", err, woken)
+	}
+}
+
 // Only a pending delete may carry the flag that lets a start skip the
 // account's check: on any other record it is refused as damaged.
 func TestUserRemovalOnlyOnAPendingDelete(t *testing.T) {
@@ -141,12 +184,18 @@ func TestUserRemovalOnlyOnAPendingDelete(t *testing.T) {
 	s, _, _ := setupStore(t)
 	a := createFixture(t, s)
 	r := recordFor(t, s, a.ID)
-	r.UserRemoval = true
-	if s.save(r) != nil {
-		t.Fatal("fixture save")
-	}
-	if _, err := s.records(); err != ErrRecovery {
-		t.Fatalf("a settled record with the flag: %v", err)
+	for name, flag := range map[string]func(*record){
+		"user_removal":  func(r *record) { r.UserRemoval = true },
+		"home_in_trash": func(r *record) { r.HomeInTrash = true },
+	} {
+		flagged := r
+		flag(&flagged)
+		if s.save(flagged) != nil {
+			t.Fatal("fixture save")
+		}
+		if _, err := s.records(); err != ErrRecovery {
+			t.Fatalf("a settled record with %s: %v", name, err)
+		}
 	}
 }
 

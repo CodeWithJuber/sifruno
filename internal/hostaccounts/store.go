@@ -90,6 +90,10 @@ type record struct {
 	// first, which a user already gone would fail (finishDeleteAtStart).
 	// Only a pending delete carries it.
 	UserRemoval bool `json:"user_removal,omitempty"`
+	// HomeInTrash records that the delete moved the home into the trash
+	// (README, Delete), right after the move. A delete stopped between the
+	// two finds the home gone from the homes folder, which counts as moved.
+	HomeInTrash bool `json:"home_in_trash,omitempty"`
 }
 
 // maxRecordBytes bounds one stored record: the account, the SFTP keys, two
@@ -172,12 +176,14 @@ type nativeSystem interface {
 	// request, its answer goes to stdout. It returns nil only when the
 	// helper exited 0. Root opens nothing in the home.
 	RunFiles(ctx context.Context, r record, stdin io.Reader, stdout io.Writer) error
-	// Delete removes the managed system identity and owned home after
-	// ownership verification; it must be safe to retry after a crash. It
-	// ends the account's processes first. errAccountBusy: userdel still
-	// refused the user as busy, and nothing changed. errNothingRemoved: it
-	// stopped for another reason before userdel ran, and nothing changed.
-	Delete(context.Context, record) error
+	// Delete removes the managed system identity after ownership
+	// verification and moves its home into the trash, calling moved once
+	// the home is there; it must be safe to retry after a crash, and judges
+	// what is left by the journal alone. It ends the account's processes
+	// first. errAccountBusy: userdel still refused the user as busy, and
+	// nothing changed. errNothingRemoved: it stopped for another reason
+	// before userdel ran, and nothing changed.
+	Delete(ctx context.Context, r record, moved func() error) error
 	// EndProcesses ends every process that runs as the account's user, by
 	// signalling as that user, never as root. errAccountBusy: some were
 	// still running after its last pass. It changes no record.
@@ -248,6 +254,9 @@ type store struct {
 	// is compacted: historyCompactAt; 0 (tests only) turns compaction off
 	// to exercise the limits behind it.
 	compactAt uint64
+	// trashWake asks the trash remover to run (nil: none, as in tests);
+	// it never waits (wakeTrash).
+	trashWake func()
 }
 
 // auditBatch is how many accounts each refresh verifies in full (identity
@@ -444,7 +453,7 @@ func (s *store) records() ([]record, error) {
 			}
 			// A start finishes a flagged delete without verifying the account
 			// first; on any other record the flag would skip that check.
-			if r.UserRemoval && (r.Pending == nil || r.Pending.Action != "delete") {
+			if r.UserRemoval && (r.Pending == nil || r.Pending.Action != "delete") || r.HomeInTrash && !r.UserRemoval {
 				return ErrRecovery
 			}
 			step = "journal history"
@@ -1089,7 +1098,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 	// caller that gives up (or a slow site rewrite before it) does not leave
 	// a half-removed user for recovery.
 	removeCtx, cancel := webContext(ctx)
-	e = s.native.Delete(removeCtx, r)
+	e = s.native.Delete(removeCtx, r, s.homeMoved(&r))
 	cancel()
 	if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
 		// The native delete stopped before userdel changed anything and put
@@ -1128,7 +1137,25 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		return Account{}, ErrRecovery
 	}
 	s.removeUsageState(r.Account.ID)
+	s.wakeTrash()
 	return before, nil
+}
+
+// homeMoved is the delete's callback once the native delete moved the home
+// into the trash: it records that on r, durably.
+func (s *store) homeMoved(r *record) func() error {
+	return func() error {
+		r.HomeInTrash = true
+		return s.save(*r)
+	}
+}
+
+// wakeTrash asks the trash remover, which runs outside the lock, to empty
+// the trash now; it never waits for it.
+func (s *store) wakeTrash() {
+	if s.trashWake != nil {
+		s.trashWake()
+	}
 }
 
 // finishDeleteAtStart finishes the interrupted delete r, items[i], when the
@@ -1170,7 +1197,7 @@ func (s *store) finishDeleteAtStart(ctx context.Context, items []record, i int, 
 	// The removal runs on its own limit, as in delete: userdel killed by
 	// the start's shorter one would leave the user half removed.
 	removeCtx, cancel := webContext(ctx)
-	e := s.native.Delete(removeCtx, r)
+	e := s.native.Delete(removeCtx, r, s.homeMoved(&r))
 	cancel()
 	if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
 		// The user was still there and is as it was: the site goes back and

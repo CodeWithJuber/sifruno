@@ -41,6 +41,9 @@ TEXT
   fi
   rm -rf -- "$UNPACKED"
   install -d -o root -g root -m 0700 "$UNPACKED"
+  # As docs/installation.md says: minimal images (Linode's AlmaLinux 9)
+  # have no tar until it is installed.
+  command -v tar >/dev/null || dnf -y -q install tar
   tar -xzf "$RELEASE" -C "$UNPACKED"
   release_dir="$UNPACKED/sifruno-linux-amd64"
 fi

@@ -139,7 +139,16 @@ try {
   check("Customers opens the customer logins page at /customers", path(admin) === "/customers");
   check("the old hosting-accounts screen is a child of Customers", (await admin.getByTestId("nav-accounts").count()) === 1);
   await admin.getByTestId("login-username").fill(customer);
-  await admin.locator(`[data-testid=pick-website][data-domain="${siteA.domain}"]`).check();
+  // The picker lists the websites once they load; if they cannot be loaded
+  // the page shows why instead, which the transcript must carry.
+  const pick = admin.locator(`[data-testid=pick-website][data-domain="${siteA.domain}"]`);
+  const sitesProblem = admin.getByTestId("customer-sites-problem");
+  await pick.or(sitesProblem).first().waitFor({ timeout: 30000 }).catch(() => {});
+  if (await sitesProblem.count()) {
+    await admin.screenshot({ path: join(outDir, "1440-admin-websites-problem.png"), fullPage: true });
+    console.log(`  the page could not list the websites: ${(await sitesProblem.innerText()).replace(/\s+/g, " ")}`);
+  }
+  await pick.check();
   await admin.getByTestId("create-login-submit").click();
   await admin.getByTestId("setup-link-panel").waitFor();
   const link = await admin.getByTestId("setup-link-value").inputValue();

@@ -66,7 +66,9 @@ case "${1:-}" in
     # OpenLiteSpeed's graceful restart takes a few seconds.
     for _ in $(seq 1 30); do ss -ltn | grep -q '127.0.0.1:8090 ' && break; sleep 1; done
     echo "  listening on 8090: $(ss -ltnp | awk '$4 ~ /:8090$/ {print $4}' | paste -sd ' ')"
-    check "OpenLiteSpeed listens for phpMyAdmin on 127.0.0.1:8090 only" bash -c "[ \"\$(ss -ltn | awk '\$4 ~ /:8090\$/ {print \$4}' | paste -sd ' ')\" = 127.0.0.1:8090 ]"
+    # Each OpenLiteSpeed worker holds its own socket (SO_REUSEPORT), so the
+    # address can appear once per worker; what matters is that it is the only one.
+    check "OpenLiteSpeed listens for phpMyAdmin on 127.0.0.1:8090 only" bash -c "[ \"\$(ss -ltn | awk '\$4 ~ /:8090\$/ {print \$4}' | sort -u | paste -sd ' ')\" = 127.0.0.1:8090 ]"
     answer() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://127.0.0.1:8090$1"; }
     got="$(answer /)"
     echo "  GET / on the listener: $got"

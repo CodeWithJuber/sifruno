@@ -170,7 +170,10 @@ check "the account's revision did not move" listed "$id" "a[0]['revision'] == $r
 
 echo
 echo "## 6. One certificate from Pebble for every domain that points here"
-out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-test-probe-loopback --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is asked for and installed"
+# The answer is JSON on stdout; the certificate manager's log lines go to
+# stderr, shown here, so they never reach the JSON parse.
+out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-test-probe-loopback --acme-state "$WORK/acme" --acme-email admin@proof.test 2>"$WORK/secure.err")" || fail "the certificate is asked for and installed"
+sed 's/^/  /' "$WORK/secure.err"
 waiting="$(python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["waiting"]))' <<<"$out" 2>/dev/null)"
 names="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["account"]["certificate"]["names"])' <<<"$out" 2>/dev/null)"
 rev="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["account"]["revision"])' <<<"$out" 2>/dev/null || echo "$rev")"
@@ -217,7 +220,8 @@ rev="$(printf '%s' "$changed" | revision)"
 check "$SHOP no longer serves the site" bash -c "! curl -s -H 'Host: $SHOP' http://127.0.0.1/ | grep -q '$PROOF_TEXT'"
 check "the HTTPS listener no longer maps $SHOP" bash -c "! sed -n '/listener sifruno-https/,/^}/p' $LSWS/conf/sifruno.conf | grep -q ' $SHOP'"
 removed_rev="$rev"
-out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-test-probe-loopback --acme-state "$WORK/acme" --acme-email admin@proof.test 2>&1)" || fail "the certificate is brought up to date"
+out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-test-probe-loopback --acme-state "$WORK/acme" --acme-email admin@proof.test 2>"$WORK/secure.err")" || fail "the certificate is brought up to date"
+sed 's/^/  /' "$WORK/secure.err"
 rev="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["account"]["revision"])' <<<"$out" 2>/dev/null || echo "$rev")"
 # Only a name removed: no new order. The extra name is harmless, and the
 # renewal before the certificate expires drops it.

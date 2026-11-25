@@ -15,6 +15,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import https from "node:https";
 import { chromium } from "playwright";
 
 const [loopback, panelOrigin, pmaOrigin, stateDir, outDir, domain, vmsh, guestDir, chrome] = process.argv.slice(2);
@@ -57,6 +58,23 @@ function guestStep(args) {
 }
 
 const host = new URL(panelOrigin).hostname;
+// A request outside the browser that still reaches the panel's host name on
+// this machine (Playwright's request client ignores Chrome's host mapping)
+// and carries the browser context's cookies for that address.
+async function hostRequest(ctx, method, url, headers = {}, body) {
+  const u = new URL(url);
+  const cookies = (await ctx.cookies(url)).map((c) => `${c.name}=${c.value}`).join("; ");
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      method, hostname: u.hostname, port: u.port, path: u.pathname + u.search, servername: u.hostname, rejectUnauthorized: false,
+      lookup: (_name, options, cb) => (options && options.all ? cb(null, [{ address: "127.0.0.1", family: 4 }]) : cb(null, "127.0.0.1", 4)),
+      headers: { ...headers, ...(cookies ? { Cookie: cookies } : {}) },
+    }, (res) => { res.resume(); res.on("end", () => resolve({ status: () => res.statusCode, headers: () => res.headers })); });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
 const browser = await chromium.launch({ headless: true, args: [`--host-resolver-rules=MAP ${host} 127.0.0.1`], ...(chrome ? { executablePath: chrome } : {}) });
 try {
   // The certificate is the panel's self-signed one.
@@ -171,13 +189,13 @@ try {
     try { const r = await fetch(url, { credentials: "include" }); return `answered ${r.status}`; } catch (e) { return `blocked: ${e.name}`; }
   }, `${panelOrigin}/api/v1/session`);
   check("a fetch from a phpMyAdmin page to the panel's API gets nothing", fromTab.startsWith("blocked"), fromTab);
-  const withOrigin = await ctx.request.get(`${panelOrigin}/api/v1/session`, { headers: { Origin: pmaOrigin, "Sec-Fetch-Site": "same-site" } });
-  const without = await ctx.request.get(`${panelOrigin}/api/v1/session`);
+  const withOrigin = await hostRequest(ctx, "GET", `${panelOrigin}/api/v1/session`, { Origin: pmaOrigin, "Sec-Fetch-Site": "same-site" });
+  const without = await hostRequest(ctx, "GET", `${panelOrigin}/api/v1/session`);
   check("the panel refuses its API to a request from phpMyAdmin's origin, cookie and all (403)", withOrigin.status() === 403 && without.status() === 200, `${withOrigin.status()} / ${without.status()}`);
-  const post = await ctx.request.post(`${panelOrigin}/api/v1/websites/sites/${a.id}/databases/phpmyadmin`, { headers: { Origin: pmaOrigin, "Content-Type": "application/json" }, data: "{}" });
+  const post = await hostRequest(ctx, "POST", `${panelOrigin}/api/v1/websites/sites/${a.id}/databases/phpmyadmin`, { Origin: pmaOrigin, "Content-Type": "application/json" }, "{}");
   check("and refuses a change from there too", post.status() === 403, String(post.status()));
   check("there are no CORS headers on the panel's answer", !withOrigin.headers()["access-control-allow-origin"]);
-  const apiThere = await ctx.request.get(`${pmaOrigin}/api/v1/session`);
+  const apiThere = await hostRequest(ctx, "GET", `${pmaOrigin}/api/v1/session`);
   check("phpMyAdmin's origin answers 404 for the panel's API path", apiThere.status() === 404, String(apiThere.status()));
 
   console.log("## Browser: the same link again, and the admission cookie alone");

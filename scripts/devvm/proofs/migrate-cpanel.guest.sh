@@ -439,6 +439,11 @@ check "the copy answers 200 for /private/ with the password, and serves the page
 check "the copy answers 200 for /private/sub/ with the password" test "$(new "$STAFF_DOMAIN" /private/sub/ -u "staff:$HT_PW")" = 200
 check "the copy runs PHP in the password folder with the password" bash -c "curl -s -u 'staff:$HT_PW' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private/report.php | grep -qx 'Payroll from PHP'"
 check "the copy answers 403 for /backups/ and /backups/backup.sql" test "$(new "$STAFF_DOMAIN" /backups/)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403
+# Other spellings of the same paths must not reach the files.
+for path in //private/index.html /./private/index.html /x/../private/index.html /%70rivate/index.html /private%2Findex.html //backups/backup.sql /%62ackups/backup.sql /backups/./backup.sql; do
+  got="$(status --path-as-is -H "Host: $STAFF_DOMAIN" "http://127.0.0.1$path")"
+  check "the copy does not serve $path without the password ($got)" test "$got" != 200
+done
 check "the site's own page is open (200)" test "$(new "$STAFF_DOMAIN" /)" = 200
 echo "  probes: $(m "['probes']"); verify: $(m "['verify']['verdict']")"
 check "verify checked /private/ (401) and /backups/ (403) on both sites, all passing" test "$(m "['verify']['probes_pass']")" = 2 -a "$(m "['verify']['probes_fail']")" = 0

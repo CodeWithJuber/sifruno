@@ -21,7 +21,9 @@ Native execution requires preinstalled regular root-owned binaries at fixed
 paths: /usr/sbin/groupadd, useradd, usermod, userdel, nologin; /usr/bin/passwd,
 chage, kill (which runs only as an account's own user, see Processes),
 systemctl (`daemon-reload` and `list-units` of one slice, see Resource
-limits, and `kill` of a site run's own unit) and systemd-run (a site run's transient service, see WordPress).
+limits, and `kill` of a site run's own scope), systemd-run, setpriv and env
+(a site run's transient scope, its drop to the account's user and its
+environment, see WordPress).
 Arguments are fixed typed options and validated account identity. Subprocesses
 have fixed credential-free locale/PATH, no shell and bounded output. Commands
 have15second deadlines within the broker request's45second overall deadline;
@@ -740,24 +742,43 @@ database would not.
   what it does, not what it may touch.
 - The tenant controls code that WP-CLI loads (`wp-cli.yml` in public_html,
   `wp-config.php`, mu-plugins), so each step runs bounded, inside the
-  account's own slice. The broker runs `/usr/bin/systemd-run --quiet --wait
-  --pipe --collect --unit=sifruno-site-<uid>-<16 random hex>.service
-  --slice=user-<uid>.slice --uid=<uid> --gid=<uid>
-  --working-directory=<public_html> --property=TasksMax=<plan's processes>
-  --property=RuntimeMaxSec=<seconds left> --property=KillMode=control-group
-  --property=KillSignal=SIGKILL --setenv=...` and the program. systemd
-  starts it as a transient service under the account's user slice, so the
-  plan's task, memory and CPU limits cover it and every process it starts,
-  and drops to the user before it enters public_html (`execute.c` at
-  systemd v252). When the program ends, systemd kills whatever is left in
-  the unit, a process that called setsid too, and systemd-run returns the
-  program's exit status. At the step's time limit the broker runs
-  `systemctl kill --signal=SIGKILL` on that unit name, which must match
-  `sifruno-site-<5 digits>-<16 hex>.service`; RuntimeMaxSec stops it even
-  if the broker is gone. systemd expands `$NAME` and `${NAME}` in a
-  service's arguments, so the broker doubles every `$`, which systemd turns
-  back into one. Not yet run on the dev VM (account-limits proof, section
-  8).
+  account's own slice. The broker runs `/usr/bin/systemd-run --quiet --scope
+  --collect --unit=sifruno-site-<uid>-<16 random hex>.scope
+  --description='sifruno site step' --slice=user-<uid>.slice
+  --property=TasksMax=<plan's processes> --property=RuntimeMaxSec=<seconds
+  left> --property=KillMode=control-group --property=KillSignal=SIGKILL --
+  /usr/bin/setpriv --reuid=<uid> --regid=<uid> --clear-groups
+  --no-new-privs --inh-caps=-all --bounding-set=-all --pdeathsig=keep --
+  /usr/bin/env -i --chdir=<public_html> -- PATH=... HOME=... <program>
+  <arguments>`. systemd-run puts itself in a transient scope under the
+  account's user slice, so the plan's task, memory and CPU limits cover the
+  step and every process it starts, and then executes setpriv itself: the
+  program's input and output are the broker's own pipes, and its exit
+  status comes back directly (`start_transient_scope` in `src/run/run.c` at
+  systemd v252). A scope is started through PID 1's private socket; the
+  earlier `--wait --pipe` transient service needed the system bus, and from
+  the broker's service it failed with "Connection reset by peer".
+  systemd-run's own `--uid`, which would skip `setgroups`, is not used.
+  setpriv (util-linux 2.37) drops to the account's UID and GID with no
+  supplementary group, sets no_new_privs, empties the inheritable and
+  bounding capability sets, so the program holds no capability, and sets
+  the parent-death signal again after the drop cleared it. env (coreutils
+  8.32) clears the environment, sets the fixed one below and enters
+  public_html as the user, so root never follows a path in the home.
+  Nothing on the way expands `$` or `%`: an argument reaches the program as
+  the broker sent it. A program's path never holds `=`, which env would take
+  for a variable. env exits 125 when it cannot enter the folder, setpriv or
+  env 126 or 127 when they cannot run what follows; the broker reports
+  those as its own failure, not the program's. A scope does not end when
+  its first process does, so after every step (success, failure, time out
+  or cancel) the broker runs `systemctl kill --signal=SIGKILL` on the scope
+  name, which must match `sifruno-site-<5 digits>-<16 hex>.scope`, with its
+  own 15 second limit; that kills a process that called setsid too. When
+  nothing was left, systemd has usually unloaded the scope already and
+  answers "Unit <name> not loaded.", which counts as done, because systemd
+  never unloads a unit whose cgroup still holds a process; any other
+  failure fails the step. RuntimeMaxSec stops the scope even if the broker
+  is gone. Not yet run on the dev VM (account-limits proof, section 8).
 - Its environment is `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `USER` and
   `LOGNAME` (the account), `HOME=/var/lib/sifruno-site-home`,
   `WP_CLI_CACHE_DIR=/dev/null` and `WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1`.
@@ -833,9 +854,10 @@ an account's home. Root never opens a path inside the home for it.
 - Every operation runs `/usr/local/lib/sifruno/bin/sifruno-files`
   (`cmd/sifruno-files`, `internal/sitefiles`), which ships in the release
   beside the broker, as the account's user: the WordPress install's site
-  step (`systemd-run` transient service in `user-<uid>.slice`, the plan's
-  task limit, `NoNewPrivileges=yes`, the time left as `RuntimeMaxSec`),
-  started in the home instead of public_html, with no argument. Before each
+  step (`systemd-run` transient scope in `user-<uid>.slice`, the plan's
+  task limit, the time left as `RuntimeMaxSec`; setpriv's drop with
+  no_new_privs and no capability; killed by name after the run), started in
+  the home instead of public_html, with no argument. Before each
   run the broker checks the helper as it checks its other fixed tools: a
   regular root-owned file with one link in root-owned folders no one else
   may write, executable by the site user. It needs the web operation

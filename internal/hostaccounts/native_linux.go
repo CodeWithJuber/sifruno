@@ -29,10 +29,11 @@ const killPath = "/usr/bin/kill"
 
 // systemctl reloads systemd after an account's slice limits change
 // (limits_linux.go), with or without the web operation. systemd-run starts
-// what the broker runs as a site's user in that user's slice
-// (wordpress_linux.go); AlmaLinux 9's systemd package ships it as a regular
-// root-owned 0755 file.
-var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin, systemctl, systemdRun}
+// what the broker runs as a site's user in a scope in that user's slice,
+// setpriv drops it to the user and env starts it in its folder
+// (wordpress_linux.go); AlmaLinux 9's systemd, util-linux and coreutils
+// packages ship them as regular root-owned 0755 files.
+var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin, systemctl, systemdRun, setprivPath, envPath}
 
 type nativeUser struct {
 	Username         string

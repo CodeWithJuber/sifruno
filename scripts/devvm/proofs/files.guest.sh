@@ -116,13 +116,13 @@ if [ -n "$pid" ]; then
   echo "  pid $pid: user $(ps -o user= -p "$pid"), uid $(ps -o uid= -p "$pid" | tr -d ' '), groups $(ps -o supgrp= -p "$pid")"
   echo "  exe $(readlink "/proc/$pid/exe"), cwd $(readlink "/proc/$pid/cwd")"
   echo "  cgroup $cgroup"
-  echo "  $(awk '/^(NoNewPrivs|CapEff|Seccomp):/{printf "%s %s  ", $1, $2}' "/proc/$pid/status")"
-  echo "  unit: $(systemctl show "$unit" -p User -p Slice -p NoNewPrivileges -p TasksMax -p RuntimeMaxUSec -p Description 2>&1 | paste -sd ' ')"
+  echo "  $(awk '/^(NoNewPrivs|Cap[A-Za-z]+|Seccomp):/{printf "%s %s  ", $1, $2}' "/proc/$pid/status")"
+  echo "  unit: $(systemctl show "$unit" -p Slice -p TasksMax -p RuntimeMaxUSec -p KillMode -p KillSignal -p Description 2>&1 | paste -sd ' ')"
   check "it runs as $SITE_USER" test "$(ps -o user= -p "$pid" | tr -d ' ')" = "$SITE_USER"
   check "it runs from the release path" test "$(readlink "/proc/$pid/exe")" = "$HELPER"
   check "it starts in the home, $HOME_DIR" test "$(readlink "/proc/$pid/cwd")" = "$HOME_DIR"
-  check "it is in user-$uid.slice, in its own sifruno-site unit" bash -c "printf '%s' '$cgroup' | grep -Eq '/user.slice/user-$uid.slice/sifruno-site-$uid-[0-9a-f]{16}.service$'"
-  check "NoNewPrivs is set and it holds no capability" bash -c "grep -q '^NoNewPrivs:[[:space:]]*1' /proc/$pid/status && grep -q '^CapEff:[[:space:]]*0000000000000000' /proc/$pid/status"
+  check "it is in user-$uid.slice, in its own sifruno-site scope" bash -c "printf '%s' '$cgroup' | grep -Eq '/user.slice/user-$uid.slice/sifruno-site-$uid-[0-9a-f]{16}\\.scope$'"
+  check "NoNewPrivs is set and it holds no capability, not even in its bounding set" bash -c "grep -q '^NoNewPrivs:[[:space:]]*1' /proc/$pid/status && for c in CapInh CapPrm CapEff CapBnd CapAmb; do grep -q \"^\$c:[[:space:]]*0000000000000000\" /proc/$pid/status || exit 1; done"
 else
   fail "the helper was seen running"
 fi

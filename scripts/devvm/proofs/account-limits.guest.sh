@@ -298,14 +298,15 @@ install_pid=$!
 sleep 12
 loop_pid="$(pgrep -u "$b_uid" -f loop.py | head -1)"
 loop_cgroup="$(cat "/proc/${loop_pid:-0}/cgroup" 2>/dev/null)"
-unit="$(sed -nE 's|^0::/user.slice/user-[0-9]+.slice/(sifruno-site-[0-9]+-[0-9a-f]{16}.service)$|\1|p' <<<"$loop_cgroup")"
+unit="$(sed -nE 's|^0::/user.slice/user-[0-9]+.slice/(sifruno-site-[0-9]+-[0-9a-f]{16}\.scope)$|\1|p' <<<"$loop_cgroup")"
 echo "  loop process ${loop_pid:-none}: $loop_cgroup"
-check "the loop runs in a sifruno-site unit in user-$b_uid.slice" grep -qE "^0::/user.slice/user-$b_uid.slice/sifruno-site-$b_uid-[0-9a-f]{16}.service$" <<<"$loop_cgroup"
+check "the loop runs in a sifruno-site scope in user-$b_uid.slice" grep -qE "^0::/user.slice/user-$b_uid.slice/sifruno-site-$b_uid-[0-9a-f]{16}\.scope$" <<<"$loop_cgroup"
 php_pid="$(pgrep -u "$b_uid" -f wp-cli.phar | head -1)"
 check "the loop runs in a session of its own (setsid), not WP-CLI's" bash -c "[ -n '$loop_pid' ] && [ -n '$php_pid' ] && [ \"\$(ps -o sid= -p $loop_pid)\" != \"\$(ps -o sid= -p $php_pid)\" ]"
 unit_dir="$(slice_dir "$b_uid")/$unit"
 echo "  $unit: pids.current $(cat "$unit_dir/pids.current" 2>&1), pids.max $(cat "$unit_dir/pids.max" 2>&1); slice pids.current $(cat "$(slice_dir "$b_uid")/pids.current" 2>&1)"
-echo "  unit: TasksMax $(systemctl show -P TasksMax "$unit" 2>&1), RuntimeMaxUSec $(systemctl show -P RuntimeMaxUSec "$unit" 2>&1), KillMode $(systemctl show -P KillMode "$unit" 2>&1), User $(systemctl show -P User "$unit" 2>&1), WorkingDirectory $(systemctl show -P WorkingDirectory "$unit" 2>&1)"
+echo "  unit: TasksMax $(systemctl show -P TasksMax "$unit" 2>&1), RuntimeMaxUSec $(systemctl show -P RuntimeMaxUSec "$unit" 2>&1), KillMode $(systemctl show -P KillMode "$unit" 2>&1), KillSignal $(systemctl show -P KillSignal "$unit" 2>&1)"
+echo "  WP-CLI ${php_pid:-none}: user $(ps -o user= -p "${php_pid:-0}" 2>&1), cwd $(readlink "/proc/${php_pid:-0}/cwd" 2>&1), $(awk '/^(NoNewPrivs|Cap[A-Za-z]+):/{printf "%s %s  ", $1, $2}' "/proc/${php_pid:-0}/status" 2>&1)"
 check "the unit's task limit is B's plan, 100" test "$(systemctl show -P TasksMax "$unit")" = 100
 check "the loop is held at or under it" between "$(cat "$unit_dir/pids.current")" 20 100
 echo "  the broker's own tasks: $(systemctl show -P TasksCurrent sifruno-broker-proof)"
@@ -322,7 +323,10 @@ groups_line="$(grep '^Groups:' "/proc/${php_pid:-0}/status" 2>/dev/null)"
 echo "  WP-CLI's supplementary groups: ${groups_line:-none read}"
 check "WP-CLI has no supplementary group but the account's own" bash -c "[ -n '$groups_line' ] && for g in \$(cut -f2- <<<'$groups_line'); do [ \"\$g\" = $b_uid ] || exit 1; done"
 check "the unit's description is the fixed 'sifruno site step'" test "$(systemctl show -P Description "$unit" 2>/dev/null)" = "sifruno site step"
-check "the unit cannot gain privileges (NoNewPrivileges)" test "$(systemctl show -P NoNewPrivileges "$unit" 2>/dev/null)" = yes
+# setpriv sets no_new_privs and empties the capability sets before the step
+# runs, so WP-CLI and everything it starts can gain no privilege.
+check "WP-CLI cannot gain privileges (NoNewPrivs)" grep -qE '^NoNewPrivs:[[:space:]]*1$' "/proc/${php_pid:-0}/status"
+check "WP-CLI holds no capability, not even in its bounding set" bash -c "for c in CapInh CapPrm CapEff CapBnd CapAmb; do grep -qE \"^\$c:[[:space:]]*0{16}\$\" /proc/${php_pid:-0}/status || exit 1; done"
 wait "$install_pid"
 echo "  install answer: $(cat "$WORK/install.err" "$WORK/install.out" | tr '\n' ' ')"
 sleep 2

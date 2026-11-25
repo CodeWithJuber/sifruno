@@ -12,10 +12,10 @@ import (
 	"time"
 )
 
-// The file helper is one site step: the same transient unit in the
-// account's slice, with the plan's task limit, NoNewPrivileges and a fixed
-// description, started in the home, with no argument at all; the request
-// travels on stdin.
+// The file helper is one site step: the same transient scope in the
+// account's slice, with the plan's task limit, setpriv's drop with
+// no_new_privs and no capability, and a fixed description, started in the
+// home, with no argument at all; the request travels on stdin.
 func TestFilesHelperRunsAsASiteStepInTheHome(t *testing.T) {
 	r := record{Account: Account{UID: 20001, GID: 20001, Username: "alice", Home: "/home/alice", PublicHTML: "/home/alice/public_html", Limits: AccountLimits{Processes: 64, MemoryMiB: 512, CPUPercent: 50}}}
 	unit, err := siteUnit(20001)
@@ -24,25 +24,27 @@ func TestFilesHelperRunsAsASiteStepInTheHome(t *testing.T) {
 	}
 	got, err := siteRunArgsIn(r, unit, 2*time.Minute, r.Account.Home, FilesHelper, nil)
 	want := []string{
-		"--quiet", "--wait", "--pipe", "--collect",
+		"--quiet", "--scope", "--collect",
 		"--unit=" + unit,
 		"--description=sifruno site step",
 		"--slice=user-20001.slice",
-		"--uid=20001", "--gid=20001",
-		"--working-directory=/home/alice",
 		"--property=TasksMax=64",
 		"--property=RuntimeMaxSec=120",
 		"--property=KillMode=control-group",
 		"--property=KillSignal=SIGKILL",
-		"--property=NoNewPrivileges=yes",
-		"--setenv=PATH=/usr/bin:/bin",
-		"--setenv=LANG=C.UTF-8",
-		"--setenv=HOME=/var/lib/sifruno-site-home",
-		"--setenv=USER=alice",
-		"--setenv=LOGNAME=alice",
-		"--setenv=WP_CLI_CACHE_DIR=/dev/null",
-		"--setenv=WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1",
-		"--", "/usr/local/lib/sifruno/bin/sifruno-files",
+		"--", "/usr/bin/setpriv",
+		"--reuid=20001", "--regid=20001", "--clear-groups",
+		"--no-new-privs", "--inh-caps=-all", "--bounding-set=-all",
+		"--pdeathsig=keep",
+		"--", "/usr/bin/env", "-i", "--chdir=/home/alice", "--",
+		"PATH=/usr/bin:/bin",
+		"LANG=C.UTF-8",
+		"HOME=/var/lib/sifruno-site-home",
+		"USER=alice",
+		"LOGNAME=alice",
+		"WP_CLI_CACHE_DIR=/dev/null",
+		"WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1",
+		"/usr/local/lib/sifruno/bin/sifruno-files",
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("args: %v\n got %q\nwant %q", err, got, want)
@@ -54,7 +56,7 @@ func TestFilesHelperRunsAsASiteStepInTheHome(t *testing.T) {
 		}
 	}
 	// The WordPress steps keep starting in public_html.
-	if got, err := siteRunArgs(r, unit, time.Minute, "/usr/bin/true", nil); err != nil || !slices.Contains(got, "--working-directory=/home/alice/public_html") {
+	if got, err := siteRunArgs(r, unit, time.Minute, "/usr/bin/true", nil); err != nil || !slices.Contains(got, "--chdir=/home/alice/public_html") {
 		t.Fatalf("site steps: %v %q", err, got)
 	}
 }

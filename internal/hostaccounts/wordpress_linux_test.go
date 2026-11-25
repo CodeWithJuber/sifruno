@@ -13,44 +13,58 @@ import (
 	"time"
 )
 
-// A step the broker runs as a site's user is one transient service in the
-// account's own user slice, with the plan's task limit and the time left,
-// as that user in its public_html, and with every "$" doubled so systemd's
-// expansion gives back the argument as sent.
+// A step the broker runs as a site's user is one transient scope in the
+// account's own user slice, with the plan's task limit and the time left;
+// setpriv drops it to that user with no group, no_new_privs and no
+// capability, and env gives it a fixed environment and starts it in
+// public_html. Nothing on the way expands "$" or "%", so the arguments
+// arrive as sent.
 func TestSiteRunArgsBoundTheStepToTheAccountSlice(t *testing.T) {
 	r := record{Account: Account{UID: 20001, GID: 20001, Username: "alice", PublicHTML: "/home/alice/public_html", Limits: AccountLimits{Processes: 64, MemoryMiB: 512, CPUPercent: 50}}}
 	unit, e := siteUnit(20001)
-	if e != nil || !siteUnitPattern.MatchString(unit) || !strings.HasPrefix(unit, "sifruno-site-20001-") {
+	if e != nil || !siteUnitPattern.MatchString(unit) || !strings.HasPrefix(unit, "sifruno-site-20001-") || !strings.HasSuffix(unit, ".scope") {
 		t.Fatalf("unit %q: %v", unit, e)
 	}
 	if other, _ := siteUnit(20001); other == unit {
 		t.Fatal("two steps got the same unit name")
 	}
 	php := "/usr/local/lsws/lsphp83/bin/php"
-	got, e := siteRunArgs(r, unit, 90*time.Second+time.Millisecond, php, []string{"-r", "echo $HOME;", "--title=${HOME} costs $$5"})
+	title := "--title=Proof 100% $HOME %h %n ${HOME} costs $$5"
+	got, e := siteRunArgs(r, unit, 90*time.Second+time.Millisecond, php, []string{"-r", "echo $HOME;", title, "a=b", "--"})
 	want := []string{
-		"--quiet", "--wait", "--pipe", "--collect",
+		"--quiet", "--scope", "--collect",
 		"--unit=" + unit,
 		"--description=sifruno site step",
 		"--slice=user-20001.slice",
-		"--uid=20001", "--gid=20001",
-		"--working-directory=/home/alice/public_html",
 		"--property=TasksMax=64",
 		"--property=RuntimeMaxSec=91",
 		"--property=KillMode=control-group",
 		"--property=KillSignal=SIGKILL",
-		"--property=NoNewPrivileges=yes",
-		"--setenv=PATH=/usr/bin:/bin",
-		"--setenv=LANG=C.UTF-8",
-		"--setenv=HOME=/var/lib/sifruno-site-home",
-		"--setenv=USER=alice",
-		"--setenv=LOGNAME=alice",
-		"--setenv=WP_CLI_CACHE_DIR=/dev/null",
-		"--setenv=WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1",
-		"--", php, "-r", "echo $$HOME;", "--title=$${HOME} costs $$$$5",
+		"--", "/usr/bin/setpriv",
+		"--reuid=20001", "--regid=20001", "--clear-groups",
+		"--no-new-privs", "--inh-caps=-all", "--bounding-set=-all",
+		"--pdeathsig=keep",
+		"--", "/usr/bin/env", "-i", "--chdir=/home/alice/public_html", "--",
+		"PATH=/usr/bin:/bin",
+		"LANG=C.UTF-8",
+		"HOME=/var/lib/sifruno-site-home",
+		"USER=alice",
+		"LOGNAME=alice",
+		"WP_CLI_CACHE_DIR=/dev/null",
+		"WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1",
+		php, "-r", "echo $HOME;", title, "a=b", "--",
 	}
 	if e != nil || !slices.Equal(got, want) {
 		t.Fatalf("args: %v\n got %q\nwant %q", e, got, want)
+	}
+	// systemd-run's own --uid, --gid, --working-directory and --setenv are
+	// never used: the drop is setpriv's, and the user enters the folder.
+	for _, a := range got {
+		for _, option := range []string{"--uid", "--gid", "--working-directory", "--setenv", "--wait", "--pipe"} {
+			if strings.HasPrefix(a, option) {
+				t.Fatalf("systemd-run option %q", a)
+			}
+		}
 	}
 
 	// A plan change in flight counts as done, as for the slice drop-in.
@@ -100,6 +114,12 @@ func TestSiteRunArgsBoundTheStepToTheAccountSlice(t *testing.T) {
 			x.Account.Limits.Processes = 5
 			return x, unit, time.Minute, php
 		},
+		"a program env would take for a variable": func() (record, string, time.Duration, string) {
+			return r, unit, time.Minute, "/usr/bin/A=B"
+		},
+		"a service unit": func() (record, string, time.Duration, string) {
+			return r, strings.TrimSuffix(unit, ".scope") + ".service", time.Minute, php
+		},
 	}
 	for name, input := range refused {
 		x, u, left, path := input()
@@ -113,8 +133,8 @@ func TestSiteRunArgsBoundTheStepToTheAccountSlice(t *testing.T) {
 }
 
 // runAsSite starts nothing without a deadline, for the controller, or when
-// systemd-run is not the binary pinned at start; the broker kills only a
-// unit name of its own.
+// systemd-run, setpriv or env is not the binary pinned at start; the broker
+// kills only a scope name of its own.
 func TestRunAsSiteRefusesBeforeStartingAnything(t *testing.T) {
 	n := &linuxSystem{opts: BrokerOptions{ControllerUID: 20500}, tools: map[string]os.FileInfo{}}
 	r := record{Account: Account{UID: 20001, GID: 20001, Username: "alice", PublicHTML: "/home/alice/public_html"}}
@@ -126,14 +146,49 @@ func TestRunAsSiteRefusesBeforeStartingAnything(t *testing.T) {
 	if _, _, e := n.runAsSite(ctx, r, "/usr/bin/true", ""); !errors.Is(e, ErrUnavailable) {
 		t.Fatalf("systemd-run not pinned: %v", e)
 	}
+	// systemd-run alone pinned is not enough: setpriv and env must be too.
+	if info, err := trustedFile(systemdRun, false); err == nil {
+		pinned := &linuxSystem{opts: n.opts, tools: map[string]os.FileInfo{systemdRun: info}}
+		if _, _, e := pinned.runAsSite(ctx, r, "/usr/bin/true", ""); !errors.Is(e, ErrUnavailable) {
+			t.Fatalf("setpriv and env not pinned: %v", e)
+		}
+	}
 	controller := r
 	controller.Account.UID, controller.Account.GID = 20500, 20500
 	if _, _, e := n.runAsSite(ctx, controller, "/usr/bin/true", ""); !errors.Is(e, ErrUnavailable) {
 		t.Fatalf("the controller's UID: %v", e)
 	}
-	for _, unit := range []string{"", "sshd.service", "sifruno-site-20001-0123456789abcdef.scope", "sifruno-site-20001-0123456789abcdef.service --signal=SIGTERM"} {
+	for _, unit := range []string{"", "sshd.service", "user-20001.slice", "sifruno-site-20001-0123456789abcdef.service", "sifruno-site-20001-0123456789abcdef.scope --signal=SIGTERM"} {
 		if e := n.stopSiteUnit(ctx, unit); !errors.Is(e, ErrInvalid) {
 			t.Fatalf("kill of %q: %v", unit, e)
+		}
+	}
+}
+
+// After a step the broker kills its scope by name. The kill reaching the
+// scope, or systemd answering that it has already unloaded it (which it
+// does only once no process is left), means nothing of the step runs on;
+// any other answer, or one about another unit, does not.
+func TestSiteUnitGoneOnlyWhenKilledOrUnloaded(t *testing.T) {
+	unit := "sifruno-site-20001-0123456789abcdef.scope"
+	other := "sifruno-site-20001-fedcba9876543210.scope"
+	answers := []struct {
+		code int
+		out  string
+		gone bool
+	}{
+		{0, "", true},
+		{1, "Failed to kill unit " + unit + ": Unit " + unit + " not loaded.\n", true},
+		{1, "", false},
+		{1, "Failed to connect to bus: Connection refused\n", false},
+		{1, "Failed to kill unit " + unit + ": Access denied\n", false},
+		{1, "Failed to kill unit " + other + ": Unit " + other + " not loaded.\n", false},
+		{5, "Unit " + unit + " not loaded.\n", false},
+		{-1, "Unit " + unit + " not loaded.\n", false},
+	}
+	for _, a := range answers {
+		if got := siteUnitGone(unit, a.code, []byte(a.out)); got != a.gone {
+			t.Errorf("exit %d, %q: gone %v, want %v", a.code, a.out, got, a.gone)
 		}
 	}
 }

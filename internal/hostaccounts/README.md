@@ -146,6 +146,14 @@ preexisting public_html, a home that differs from that state in any way,
 changed OS identity/ownership/inodes and other ambiguous results remain blocked.
 No automatic useradd retry, deletion or cleanup of OS accounts is attempted.
 
+A delete removes the ownership marker last, so a delete that finds it gone
+and no user of the account left had finished everything before it, and
+running it again finishes the rest. A marker counts as gone only when its
+own name is missing from the real markers folder (`<state>/owners`, root's,
+mode 0700, under parents only root can write, read through a handle that is
+still that folder); a missing or odd folder, a link or another file there
+is a recovery answer, never a missing marker.
+
 A create that cannot be finished is the operator's to abandon
 (`POST /v1/accounts/{id}/abandon-create`, reason only; the panel serves it to
 signed-in admins, never to an API token). Only an account whose pending

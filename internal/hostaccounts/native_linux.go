@@ -694,22 +694,65 @@ func dirIdentity(path string, uid, gid int, mode os.FileMode) (fileIdentity, err
 	}
 	return fileIdentity{uint64(st.Dev), st.Ino}, nil
 }
+
+// errMarkerMissing is markerIdentity's answer when the markers folder is
+// there, a real directory of root's with mode 0700 under parents only root
+// can write, and holds no entry with the marker's name. Every other failure,
+// a missing or odd markers folder included, is ErrRecovery: only this one
+// says the marker is gone.
+var errMarkerMissing = errors.New("ownership marker missing")
+
+// markerIdentity answers the identity of the ownership marker at path when
+// it is the broker's: a regular file of root's, mode 0600, one link, holding
+// exactly tag and a newline. errMarkerMissing: its folder is the markers
+// folder and has no entry with its name.
 func markerIdentity(path, tag string) (fileIdentity, error) {
-	info, e := os.Lstat(path)
-	if e != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+	dir := filepath.Dir(path)
+	if authority(filepath.Dir(dir)) != nil {
 		return fileIdentity{}, ErrRecovery
 	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != 0 || st.Nlink != 1 || info.Size() > 128 {
-		return fileIdentity{}, ErrRecovery
-	}
-	f, e := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	return markerIn(dir, filepath.Base(path), tag, 0)
+}
+
+// markerIn is markerIdentity below the markers folder's parents: dir must be
+// a directory of owner's (root's; a test's own user), not a link, with the
+// permission bits 0700 Create gives it, and it is read through a handle. A name it does not hold is
+// errMarkerMissing only while the folder held is still the one at dir and
+// not removed, so a folder replaced or removed meanwhile never reads as a
+// missing marker.
+func markerIn(dir, name, tag string, owner uint32) (fileIdentity, error) {
+	folder, e := openDirectoryAt(unix.AT_FDCWD, dir)
 	if e != nil {
 		return fileIdentity{}, ErrRecovery
 	}
+	defer folder.Close()
+	fd := int(folder.Fd())
+	var held unix.Stat_t
+	if unix.Fstat(fd, &held) != nil || held.Mode&unix.S_IFMT != unix.S_IFDIR || held.Uid != owner || held.Mode&0777 != 0700 {
+		return fileIdentity{}, ErrRecovery
+	}
+	var st unix.Stat_t
+	switch e := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); {
+	case errors.Is(e, unix.ENOENT):
+		var now, again unix.Stat_t
+		if unix.Lstat(dir, &now) != nil || now.Dev != held.Dev || now.Ino != held.Ino || unix.Fstat(fd, &again) != nil || again.Nlink == 0 {
+			return fileIdentity{}, ErrRecovery
+		}
+		return fileIdentity{}, errMarkerMissing
+	case e != nil:
+		return fileIdentity{}, ErrRecovery
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07777 != 0600 || st.Uid != owner || st.Nlink != 1 || st.Size > 128 {
+		return fileIdentity{}, ErrRecovery
+	}
+	opened, e := unix.Openat(fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if e != nil {
+		return fileIdentity{}, ErrRecovery
+	}
+	f := os.NewFile(uintptr(opened), name)
 	defer f.Close()
-	opened, e := f.Stat()
-	if e != nil || !os.SameFile(info, opened) {
+	var same unix.Stat_t
+	if unix.Fstat(opened, &same) != nil || same.Dev != st.Dev || same.Ino != st.Ino {
 		return fileIdentity{}, ErrRecovery
 	}
 	b, e := io.ReadAll(io.LimitReader(f, 129))
@@ -922,12 +965,12 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 // The account's processes end before userdel (removeUser); the store takes
 // a live site out of the config before it calls Delete.
 func (n *linuxSystem) Delete(ctx context.Context, r record) error {
+	// Only a marker missing from the real markers folder (errMarkerMissing)
+	// lets a delete go on without it; an odd or missing folder, or another
+	// marker, stops it.
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
-	if e == nil && marker != r.Ownership.Marker {
+	if e != nil && !errors.Is(e, errMarkerMissing) || e == nil && marker != r.Ownership.Marker {
 		return atStep("marker", ErrRecovery)
-	}
-	if e != nil && !errors.Is(e, os.ErrNotExist) {
-		return atStep("marker", ErrUnavailable)
 	}
 	// A missing marker with a still-present user is not owned deletable
 	// state; a missing marker with everything already gone is a completed

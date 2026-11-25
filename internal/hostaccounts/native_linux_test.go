@@ -328,6 +328,65 @@ func TestRemoveRegularOnlyTakesTheExpectedFile(t *testing.T) {
 	}
 }
 
+// A missing ownership marker reads as missing only when its own name is
+// absent from a real markers folder; everything else, a missing or odd
+// folder included, is a recovery answer, so a delete never takes a marker
+// it cannot see for one that is gone. The owner is the test's own user here;
+// the broker's is root.
+func TestMarkerMissingOnlyInTheRealFolder(t *testing.T) {
+	uid := uint32(os.Getuid())
+	base := t.TempDir()
+	owners := filepath.Join(base, "owners")
+	if os.Mkdir(owners, 0700) != nil || os.Chmod(owners, 0700) != nil {
+		t.Fatal("fixture")
+	}
+	const tag = "sifruno-managed-0123456789abcdef0123456789abcdef"
+	if _, err := markerIn(owners, "gone", tag, uid); !errors.Is(err, errMarkerMissing) {
+		t.Fatalf("a name the folder does not hold: %v", err)
+	}
+	marker := filepath.Join(owners, "kept")
+	if os.WriteFile(marker, []byte(tag+"\n"), 0600) != nil {
+		t.Fatal("fixture")
+	}
+	id, err := markerIn(owners, "kept", tag, uid)
+	var st syscall.Stat_t
+	if err != nil || syscall.Lstat(marker, &st) != nil || id != (fileIdentity{uint64(st.Dev), st.Ino}) {
+		t.Fatalf("the marker: %+v %v", id, err)
+	}
+	if _, err := markerIn(owners, "kept", "sifruno-managed-other", uid); err != ErrRecovery {
+		t.Fatalf("another tag: %v", err)
+	}
+	if os.Symlink(marker, filepath.Join(owners, "link")) != nil || os.Symlink(filepath.Join(base, "nowhere"), filepath.Join(owners, "dangling")) != nil || os.Mkdir(filepath.Join(owners, "folder"), 0700) != nil {
+		t.Fatal("fixture")
+	}
+	for _, name := range []string{"link", "dangling", "folder"} {
+		if _, err := markerIn(owners, name, tag, uid); err != ErrRecovery {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := markerIn(owners, "kept", tag, uid+1); err != ErrRecovery {
+		t.Fatalf("a folder of another owner: %v", err)
+	}
+	linked := filepath.Join(base, "linked-owners")
+	if os.Symlink(owners, linked) != nil {
+		t.Fatal("fixture")
+	}
+	wide := filepath.Join(base, "wide")
+	if os.Mkdir(wide, 0755) != nil || os.Chmod(wide, 0755) != nil {
+		t.Fatal("fixture")
+	}
+	for name, dir := range map[string]string{"no folder": filepath.Join(base, "missing"), "a link to the folder": linked, "mode 0755": wide, "a file": marker} {
+		if _, err := markerIn(dir, "gone", tag, uid); err != ErrRecovery {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	// Parents a user can write are not the broker's state: a recovery
+	// answer, never a missing marker.
+	if _, err := markerIdentity(filepath.Join(owners, "gone"), tag); err != ErrRecovery {
+		t.Fatalf("under parents that are not root's: %v", err)
+	}
+}
+
 // Without the installer's root-owned 0711 key directory there is no SFTP key
 // surface: the broker reports unavailable and writes nothing. The successful
 // path needs root and is exercised by the root-only test below on the dev VM.

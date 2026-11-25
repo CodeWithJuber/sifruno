@@ -25,20 +25,22 @@ var sourceID = strings.Repeat("c", 32)
 // fakeMigrationBroker is the broker's migration surface with a cPanel
 // account behind it.
 type fakeMigrationBroker struct {
-	mu        sync.Mutex
-	order     *journal
-	plan      hostaccounts.MigrationPlan
-	planErr   error
-	filesErr  error
-	dbErr     error
-	tables    []hostaccounts.MigrationTable
-	pinned    bool
-	finished  int
-	cron      []hostaccounts.CronJob
-	accounts  *fakeAccounts
-	removedOK bool
-	finishErr error
-	detail    string
+	mu       sync.Mutex
+	order    *journal
+	plan     hostaccounts.MigrationPlan
+	planErr  error
+	filesErr error
+	// filesResult is what MigrateFiles answers besides WordPress.
+	filesResult hostaccounts.MigrateFilesResult
+	dbErr       error
+	tables      []hostaccounts.MigrationTable
+	pinned      bool
+	finished    int
+	cron        []hostaccounts.CronJob
+	accounts    *fakeAccounts
+	removedOK   bool
+	finishErr   error
+	detail      string
 }
 
 func (f *fakeMigrationBroker) GetMigration(_ context.Context, id string) (hostaccounts.Migration, error) {
@@ -57,7 +59,9 @@ func (f *fakeMigrationBroker) PlanMigration(_ context.Context, id string, in hos
 }
 func (f *fakeMigrationBroker) MigrateFiles(_ context.Context, id string, in hostaccounts.MigrateFilesInput, _ string) (hostaccounts.MigrateFilesResult, error) {
 	f.order.add(fmt.Sprintf("files %s rev=%d", id[28:], in.ExpectedRevision))
-	return hostaccounts.MigrateFilesResult{WordPress: true}, f.filesErr
+	res := f.filesResult
+	res.WordPress = true
+	return res, f.filesErr
 }
 func (f *fakeMigrationBroker) MigrateDatabase(_ context.Context, id string, in hostaccounts.MigrateDatabaseInput, _ string) (hostaccounts.MigrateDatabaseResult, error) {
 	f.order.add("copy-db " + in.Database)
@@ -199,11 +203,42 @@ func TestReadyNamesWWWOnlyWhenTheOldSiteHadIt(t *testing.T) {
 	}
 }
 
+// TestConvertedSiteMigratesWithItsProbes: a site whose access rules were
+// converted is Native; the copy's conversion replaces the plan's, and verify
+// gets its 403, 401 and 200 probes.
+func TestConvertedSiteMigratesWithItsProbes(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.plan.Converted = []hostaccounts.MigrationFolder{{File: "wp-content/plugins/akismet/.htaccess", Path: "/wp-content/plugins/akismet/", Rule: "closed to everyone (403)"}}
+	f.broker.plan.Probes = []hostaccounts.MigrationProbe{{Path: "/wp-content/plugins/akismet/", Kind: "deny"}}
+	f.broker.filesResult = hostaccounts.MigrateFilesResult{
+		Folders: []hostaccounts.MigrationFolder{
+			{File: "members/.htaccess", Path: "/members/", Rule: "password"},
+			{File: "wp-content/plugins/akismet/.htaccess", Path: "/wp-content/plugins/akismet/", Rule: "closed to everyone (403)"},
+		},
+		Probes: []hostaccounts.MigrationProbe{{Path: "/members/", Kind: "auth"}, {Path: "/wp-content/plugins/akismet/", Kind: "deny"}, {Path: "/wp-content/plugins/akismet/_inc/akismet.css", Kind: "allow"}},
+	}
+	job := f.migrate(t)
+	if job.State != StateSucceeded {
+		t.Fatalf("job: %+v %+v", job.State, job.Error)
+	}
+	if !strings.Contains(job.Steps[0].Message, "/wp-content/plugins/akismet/ (closed to everyone (403))") {
+		t.Fatalf("source step: %q", job.Steps[0].Message)
+	}
+	if i := slices.IndexFunc(job.Steps, func(s Step) bool { return s.Name == StepFiles }); !strings.Contains(job.Steps[i].Message, "/members/ (password)") {
+		t.Fatalf("files step: %q", job.Steps[i].Message)
+	}
+	want := []migrateverify.Probe{{Path: "/members/", Kind: migrateverify.ProbeAuth}, {Path: "/wp-content/plugins/akismet/", Kind: migrateverify.ProbeDeny}, {Path: "/wp-content/plugins/akismet/_inc/akismet.css", Kind: migrateverify.ProbeAllow}}
+	if len(f.verify) != 1 || !slices.Equal(f.verify[0].Probes, want) || len(job.Migration.Converted) != 2 {
+		t.Fatalf("verify %+v converted %+v", f.verify, job.Migration.Converted)
+	}
+}
+
 func TestCompatSiteIsRefusedBeforeAnythingIsMade(t *testing.T) {
 	f := newMigrationFixture(t)
 	f.broker.plan.Tier, f.broker.plan.TierCauses = "compat", []string{"access_control"}
+	f.broker.plan.TierRefusals = []string{"staff/.htaccess line 2: Satisfy Any"}
 	job := f.migrate(t)
-	if job.State != StateFailed || job.Error.Step != StepSource || !strings.Contains(job.Error.Why, "password-protected folders") || !strings.Contains(job.Error.Next, "Apache tier") {
+	if job.State != StateFailed || job.Error.Step != StepSource || !strings.Contains(job.Error.Why, "password-protected folders") || !strings.Contains(job.Error.Next, "Apache tier") || !strings.Contains(job.Error.Technical, "staff/.htaccess line 2") {
 		t.Fatalf("job: %+v %+v", job.State, job.Error)
 	}
 	for _, call := range f.order.all {

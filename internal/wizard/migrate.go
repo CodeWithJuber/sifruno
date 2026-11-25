@@ -78,7 +78,12 @@ type Migration struct {
 	// Notes are what a person must check; each keeps the gate closed until
 	// it is accepted.
 	Notes []string `json:"notes"`
-	// Probes are the closed URLs the .htaccess scan found, for verify.
+	// Converted lists the .htaccess files whose access rules were converted
+	// into the site's web server config, and what each became: the plan's,
+	// then the copy's.
+	Converted []hostaccounts.MigrationFolder `json:"converted"`
+	// Probes are the URLs of the converted rules verify checks: 403, 401,
+	// and 200 for files a closed folder leaves open.
 	Probes   []migrateverify.Probe `json:"probes"`
 	Verify   *VerifySummary        `json:"verify,omitempty"`
 	Gate     string                `json:"gate"`
@@ -99,6 +104,7 @@ func (m *Migration) clone() *Migration {
 	c.Tables = slices.Clone(m.Tables)
 	c.Notes = slices.Clone(m.Notes)
 	c.Probes = slices.Clone(m.Probes)
+	c.Converted = slices.Clone(m.Converted)
 	c.DNS = slices.Clone(m.DNS)
 	c.Activity = slices.Clone(m.Activity)
 	if m.Verify != nil {
@@ -390,7 +396,7 @@ func migrationStepText(step string) (why, next string) {
 
 // tierCauses says in plain words why a site is not Native.
 var tierCauses = map[string]string{
-	"access_control":       "password-protected folders or deny rules",
+	"access_control":       "password-protected folders or deny rules this server cannot convert yet",
 	"unknown":              "directives this panel does not know",
 	"malformed":            "lines it cannot read",
 	"unreadable_file":      "files it could not read",
@@ -436,7 +442,7 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		return "", &stepError{
 			why:       "The site's .htaccess files have " + strings.Join(causes, ", ") + ". This server's web server, OpenLiteSpeed, ignores those rules, so a protected folder would open to everyone. Nothing was created here.",
 			next:      "Leave this website on the old server for now: it needs the Apache tier, which this server does not offer yet. Websites whose .htaccess has only rewrite rules can move now.",
-			technical: "tier " + plan.Tier + "; causes " + strings.Join(plan.TierCauses, ",")}
+			technical: clip("tier " + plan.Tier + "; causes " + strings.Join(plan.TierCauses, ",") + "; " + strings.Join(plan.TierRefusals, " | "))}
 	}
 	for _, u := range plan.Users {
 		if u.Hash == "" {
@@ -468,12 +474,33 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		}
 		mr.cronJobs = append(mr.cronJobs, job)
 	}
-	for _, p := range plan.Probes {
-		if len(m.Probes) < migrateverify.MaxProbes {
-			m.Probes = append(m.Probes, migrateverify.Probe{Path: p.Path, Kind: migrateverify.ProbeKind(p.Kind)})
+	m.Probes = probesOf(plan.Probes)
+	m.Converted = slices.Clone(plan.Converted)
+	converted := ""
+	if len(plan.Converted) > 0 {
+		converted = fmt.Sprintf(" %d .htaccess file(s) with access rules are converted into the web server's config: %s.", len(plan.Converted), folderPaths(plan.Converted))
+	}
+	return fmt.Sprintf("Found %s: %d database(s), %d scheduled job(s), PHP %s (%s), .htaccess rules OpenLiteSpeed acts on.%s", plan.Domain, len(plan.Databases), len(plan.Cron), php, plan.PHPSource, converted), nil
+}
+
+func probesOf(in []hostaccounts.MigrationProbe) []migrateverify.Probe {
+	out := []migrateverify.Probe{}
+	for _, p := range in {
+		if len(out) < migrateverify.MaxProbes {
+			out = append(out, migrateverify.Probe{Path: p.Path, Kind: migrateverify.ProbeKind(p.Kind)})
 		}
 	}
-	return fmt.Sprintf("Found %s: %d database(s), %d scheduled job(s), PHP %s (%s), .htaccess rules OpenLiteSpeed acts on.", plan.Domain, len(plan.Databases), len(plan.Cron), php, plan.PHPSource), nil
+	return out
+}
+
+// folderPaths names converted folders and what they became, for a step
+// message.
+func folderPaths(folders []hostaccounts.MigrationFolder) string {
+	parts := make([]string, 0, len(folders))
+	for _, f := range folders {
+		parts = append(parts, f.Path+" ("+f.Rule+")")
+	}
+	return clip(strings.Join(parts, "; "))
 }
 
 func (j *run) migrateAccount(ctx context.Context) (string, *stepError) {
@@ -522,10 +549,19 @@ func (j *run) migrateFiles(ctx context.Context) (string, *stepError) {
 	}
 	j.migration.wordpress = res.WordPress
 	j.job.Migration.WordPress = res.WordPress
-	if res.WordPress {
-		return "Copied the home folder with public_html. It is a WordPress site.", nil
+	protected := ""
+	// The copy's conversion is the one in force; it replaces the plan's.
+	if res.Probes != nil {
+		j.job.Migration.Probes = probesOf(res.Probes)
+		j.job.Migration.Converted = slices.Clone(res.Folders)
 	}
-	return "Copied the home folder with public_html. Mail, logs and the old server's settings stayed there.", nil
+	if len(res.Folders) > 0 {
+		protected = " Protected folders went into the web server's config before the files did: " + folderPaths(res.Folders) + "."
+	}
+	if res.WordPress {
+		return "Copied the home folder with public_html. It is a WordPress site." + protected, nil
+	}
+	return "Copied the home folder with public_html. Mail, logs and the old server's settings stayed there." + protected, nil
 }
 
 func (j *run) migrateDatabases(ctx context.Context) (string, *stepError) {

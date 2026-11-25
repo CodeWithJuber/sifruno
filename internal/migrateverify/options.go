@@ -39,6 +39,10 @@ const (
 	ProbeAuth ProbeKind = "auth"
 	// ProbeDeny is a deny rule: the old site must answer 403.
 	ProbeDeny ProbeKind = "deny"
+	// ProbeAllow is a file a closed folder leaves open to everyone (an
+	// allow-list such as Akismet's): both sites must answer 200, so the
+	// converted rule closes no more than the old one did.
+	ProbeAllow ProbeKind = "allow"
 )
 
 // Probe is one closed URL to check. A page crawl does not find these because
@@ -132,8 +136,8 @@ func (o Options) validate() (config, error) {
 	}
 	kinds := map[string]ProbeKind{}
 	for _, p := range o.Probes {
-		if p.Kind != ProbeAuth && p.Kind != ProbeDeny {
-			return config{}, fmt.Errorf("probe %q: kind must be %q or %q", truncate(p.Path, 80), ProbeAuth, ProbeDeny)
+		if p.Kind != ProbeAuth && p.Kind != ProbeDeny && p.Kind != ProbeAllow {
+			return config{}, fmt.Errorf("probe %q: kind must be %q, %q or %q", truncate(p.Path, 80), ProbeAuth, ProbeDeny, ProbeAllow)
 		}
 		target, e := cleanTarget(p.Path)
 		if e != nil {

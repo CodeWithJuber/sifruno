@@ -112,8 +112,11 @@ func orNone(s string) string {
 }
 
 func expectedStatus(kind ProbeKind) int {
-	if kind == ProbeAuth {
+	switch kind {
+	case ProbeAuth:
 		return 401
+	case ProbeAllow:
+		return 200
 	}
 	return 403
 }
@@ -128,6 +131,15 @@ func judgeProbe(p Probe, was, now Response) ProbeResult {
 		r.Code, r.Reason = CodeRequestFailed, "old site request failed: "+was.Error
 	case now.Error != "":
 		r.Code, r.Reason = CodeRequestFailed, "new site request failed: "+now.Error
+	case p.Kind == ProbeAllow && was.Status != 200:
+		r.Code = CodeOldUnexpectedStatus
+		r.Reason = fmt.Sprintf("old site answered %d, expected 200 for a file its rules leave open", was.Status)
+	case p.Kind == ProbeAllow && now.Status != 200:
+		r.Code = CodeNewDiffers
+		r.Reason = fmt.Sprintf("status 200 → %d: the copy closes a file the old site leaves open", now.Status)
+	case p.Kind == ProbeAllow:
+		r.Result, r.Code = Pass, CodeOK
+		r.Reason = "both sites answer 200"
 	case isClosed(was.Status) && isOpen(now.Status):
 		r.Code, r.Critical = CodeNewOpen, true
 		r.Reason = fmt.Sprintf("closed on the old site (%d) but open on the new site (%d)", was.Status, now.Status)

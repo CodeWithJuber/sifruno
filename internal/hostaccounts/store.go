@@ -1424,7 +1424,10 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	// The account's limits are in place before its user exists, so nothing
 	// it runs ever starts without them. A failure refuses the create before
 	// anything is journaled: the drop-in names only this unused UID, and the
-	// next create of it, or the broker's next start, rewrites it.
+	// next create of it, or the broker's next start, rewrites it. The same
+	// write replaces a drop-in a deleted account left for this UID (its
+	// removal failed), so the new account never runs under the old one's
+	// limits (TestLeftoverDropInNeverReachesTheNextAccount).
 	if s.native.ApplyLimits(rootCtx, uid, DefaultLimits) != nil {
 		return Account{}, ErrUnavailable
 	}

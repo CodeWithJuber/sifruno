@@ -94,6 +94,8 @@ type fakeNative struct {
 	limitsLog       []string
 	failLimits      int
 	failLimitsAfter int
+	// createdWith is the drop-in each UID had when Create made its user.
+	createdWith map[int]AccountLimits
 	// cachesRemoved lists the IDs whose LSCache store RemoveSiteCache took
 	// away; failure "cache-remove" makes it fail instead.
 	cachesRemoved []string
@@ -302,6 +304,11 @@ func (f *fakeNative) Create(ctx context.Context, r record, persist func(ownershi
 	owned := fakeOwned(r)
 	r.Ownership = owned
 	r.Account.State = "active"
+	// The drop-in the user starts under, as useradd makes it.
+	if f.createdWith == nil {
+		f.createdWith = map[int]AccountLimits{}
+	}
+	f.createdWith[r.Account.UID] = f.dropIns[r.Account.UID]
 	f.users[r.Account.Username] = r
 	if persist(owned) != nil {
 		return ownership{}, ErrRecovery

@@ -16,6 +16,21 @@ What these runs do not show:
 - **Speed on real hardware.** Without KVM, timings are upper bounds, not the plan's "2 minutes" gate: about 19 s per account create, 24 s to list 107 accounts, 259 s from account creation to a live WordPress site. An earlier run on a busier host needed more than two minutes for WordPress's first page after a restart.
 - **Broker operations that do not exist yet.** In Proof 1 the script, not the broker, gives the web server access to the home (an ACL) and sets the XFS quota.
 
+## Pace
+
+The plan's Phase 0 gate asks how many slices run on a real VM each week, so that dates come from that count. The count below is of slices whose first passing transcript is on this page, by the day it was saved. A slice proven again later (on the real server) counts once, on its first day.
+
+| Day | Slices first proven on a dev VM or real server | Which |
+| --- | --- | --- |
+| 2026-11-22 | 3 | The three Phase 0 proofs |
+| 2026-11-23 | 5 | Panel shell, admin sign-in, panel over HTTPS, the broker's web operation, the broker's WordPress install |
+| 2026-11-24 | 5 | Installer sshd checks, one-command fresh install, upgrade install, site actions, the New website wizard with SSL |
+| 2026-11-25 | 12 | Account limits, backups with restore drill, file manager, scheduled jobs/logs/usage, tenant isolation, admin and customer login, other domains and redirects, WHMCS module, phpMyAdmin, migration v1, the .htaccess watcher, create and delete recovery |
+
+That is 25 slices in 4 days. Four UI slices on 2026-11-25 (Home/Server/Security, Hosting accounts/Backups, Static sites/tour, File Manager) ran the real panel in a browser without a VM and are not counted.
+
+What this count does not show: a whole week (the work so far spans 4 days), and the line-by-line human review the plan requires for the broker, login, permissions, credentials and migration code. On 2026-11-25, 158 commits were marked for that review.
+
 ## Phase 1: panel shell
 
 Run on 2026-11-23 with `scripts/devvm/proof.sh panel-shell` on a fresh dev VM (AlmaLinux 9.9, SELinux enforcing, QEMU software emulation). The panel ran inside the guest with throwaway state; headless Chrome on the host drove it through a loopback port forward.

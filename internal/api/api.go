@@ -271,7 +271,7 @@ func build(o Options) (http.Handler, *routeMux) {
 			http.Error(w, "Origin not allowed", http.StatusForbidden)
 			return
 		}
-		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" && !crossSiteNavigation(r) {
 			http.Error(w, "Cross-site access denied", http.StatusForbidden)
 			return
 		}
@@ -429,4 +429,21 @@ func remoteAdmitted(w http.ResponseWriter, r *http.Request, op *operator.Manager
 		return customerAdmitted(w, r, mux, p)
 	}
 	return ok
+}
+
+// crossSiteNavigation is a person opening a panel page from a link on
+// another site (a chat, an email, WHMCS's client area): a top-level GET or
+// HEAD navigation to a document outside the API. It only loads the page;
+// the page's own API calls are same-origin, so every other cross-site
+// request (API calls even as a page, posts, frames, subresources and
+// fetches) is still refused.
+func crossSiteNavigation(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if r.Header.Get("Sec-Fetch-Mode") != "navigate" || r.Header.Get("Sec-Fetch-Dest") != "document" {
+		return false
+	}
+	p := r.URL.Path
+	return !strings.HasPrefix(p, "/api/") && !strings.HasPrefix(p, "/json-api") && !strings.HasPrefix(p, "/execute")
 }

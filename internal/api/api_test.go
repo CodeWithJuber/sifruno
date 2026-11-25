@@ -95,6 +95,44 @@ func TestLoopbackHostOriginAndMutationGuards(t *testing.T) {
 		t.Fatal("cross-site request allowed")
 	}
 }
+
+// A person who opens the panel from a link on another site (a chat, an
+// email, WHMCS's client area) makes a cross-site top-level navigation: it
+// loads the page. Every other cross-site request stays refused.
+func TestCrossSiteNavigationOpensThePageOnly(t *testing.T) {
+	h := testHandler(t)
+	try := func(method, path, mode, dest string) int {
+		r := httptest.NewRequest(method, "http://localhost:8080"+path, nil)
+		r.Header.Set("Sec-Fetch-Site", "cross-site")
+		if mode != "" {
+			r.Header.Set("Sec-Fetch-Mode", mode)
+		}
+		if dest != "" {
+			r.Header.Set("Sec-Fetch-Dest", dest)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	for _, c := range []struct{ method, path string }{{"GET", "/"}, {"GET", "/websites"}, {"HEAD", "/"}} {
+		if code := try(c.method, c.path, "navigate", "document"); code != 200 {
+			t.Fatalf("a link from another site to %s %s answered %d", c.method, c.path, code)
+		}
+	}
+	for _, c := range []struct{ method, path, mode, dest string }{
+		{"GET", "/api/v1/status", "navigate", "document"}, // an API answer, even as a page
+		{"POST", "/", "navigate", "document"},             // a form post from another site
+		{"GET", "/", "navigate", "iframe"},                // framed by another site
+		{"GET", "/", "navigate", ""},                      // no destination given
+		{"GET", "/", "no-cors", "script"},                 // a subresource
+		{"GET", "/", "cors", "empty"},                     // a fetch
+		{"GET", "/json-api/version", "navigate", "document"},
+	} {
+		if code := try(c.method, c.path, c.mode, c.dest); code != 403 {
+			t.Fatalf("cross-site %s %s (mode %q, dest %q) answered %d, not 403", c.method, c.path, c.mode, c.dest, code)
+		}
+	}
+}
 func TestBudgetCorruptionReturnsUnavailable(t *testing.T) {
 	b, o, _ := config.Load()
 	dir := filepath.Join(realTempDir(t), "budget")

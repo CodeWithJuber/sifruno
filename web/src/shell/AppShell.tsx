@@ -368,7 +368,7 @@ function PanelSidebar({ direction, page, publicPreview, role, status, theme, onT
     <SidebarFooter className="border-t border-sidebar-border px-3 py-3">
       {session && <div className="flex items-center gap-2 border-b border-sidebar-border px-1 pb-2.5 text-xs" data-testid="signed-in-as">
         <UserRound className="size-4 shrink-0 text-sidebar-muted-foreground" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate">{session.view_as ? <>Viewing as <strong className="font-medium">{session.view_as}</strong></> : session.username ? <>Signed in as <strong className="font-medium">{session.username}</strong></> : "Signed in with the access key"}</span>
+        <span className="min-w-0 flex-1 wrap-anywhere">{session.view_as ? <>Viewing as <strong className="font-medium">{session.view_as}</strong></> : session.username ? <>Signed in as <strong className="font-medium">{session.username}</strong></> : "Signed in with the access key"}</span>
         <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-sidebar-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground" onClick={onSignOut}><LogOut aria-hidden="true" />Sign out</Button>
       </div>}
       {role === "admin" && <div className="flex items-center gap-2.5 px-1 text-xs" role="status">

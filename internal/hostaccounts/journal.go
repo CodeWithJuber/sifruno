@@ -100,7 +100,7 @@ func historyRoom(r record, rows uint64, operator bool) bool {
 
 func (s *store) appendEvent(r record, e operationEvent) (record, error) {
 	if historyLength(r) >= MaxHistoryRows {
-		return r, ErrRecovery
+		return r, recovery(e.Action, r, "journal "+e.Status+" row: history full", ErrConflict)
 	}
 	r.HistorySequence++
 	e.Sequence = r.HistorySequence
@@ -113,6 +113,7 @@ func (s *store) appendEvent(r record, e operationEvent) (record, error) {
 	// account. What tenants and the panel can send stays inside the bound
 	// (TestLargestRecordFits); the broker's own paths are the operator's.
 	if len(state) > maxRecordBytes {
+		logRecovery(e.Action, r, "journal "+e.Status+" row: record too large", ErrInvalid)
 		return r, ErrInvalid
 	}
 	err := s.db.Update(func(tx *bolt.Tx) error {
@@ -127,16 +128,21 @@ func (s *store) appendEvent(r record, e operationEvent) (record, error) {
 		return tx.Bucket(accountBucket).Put([]byte(r.Account.ID), state)
 	})
 	if err != nil {
-		return r, ErrRecovery
+		return r, recovery(e.Action, r, "journal "+e.Status+" row", err)
 	}
 	return r, nil
 }
 func (s *store) beginOperation(r record, before *Account) (record, error) {
-	if r.Pending == nil || !historyRoom(r, operationRows, true) {
+	if r.Pending == nil {
+		return r, ErrConflict
+	}
+	if !historyRoom(r, operationRows, true) {
+		logRecovery(r.Pending.Action, r, "journal intent: history full", ErrConflict)
 		return r, ErrConflict
 	}
 	id, e := randomID()
 	if e != nil {
+		logRecovery(r.Pending.Action, r, "journal intent: operation ID", e)
 		return r, e
 	}
 	r.Pending.OperationID = id
@@ -173,7 +179,7 @@ func (s *store) operationIntent(r record, p pending) (operationEvent, error) {
 func (s *store) resultEvent(r record, p pending, status string) (record, error) {
 	intent, e := s.operationIntent(r, p)
 	if e != nil {
-		return r, e
+		return r, recovery(p.Action, r, "journal "+status+" row: find its intent", e)
 	}
 	after := r.Account
 	if status == "recovery_required" {

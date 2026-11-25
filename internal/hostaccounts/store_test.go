@@ -1,15 +1,18 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sifruno/internal/olsweb"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -274,6 +277,10 @@ func (f *fakeNative) Create(ctx context.Context, r record, persist func(ownershi
 	// The native create's commands refuse to start once their context ended.
 	if f.failure == "before" || ctx.Err() != nil {
 		return ownership{}, ErrUnavailable
+	}
+	// useradd stopped at its limit, as the native create names it.
+	if f.failure == "useradd-stopped" {
+		return ownership{}, atStep("useradd", &commandError{program: "useradd", status: -1, stopped: true})
 	}
 	owned := fakeOwned(r)
 	r.Ownership = owned
@@ -593,6 +600,111 @@ func TestInterruptedCreateRetainsIdentity(t *testing.T) {
 		})
 	}
 }
+
+// captureRecoveryLog sends the recovery log to a buffer for one test.
+func captureRecoveryLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	recoveryLogMu.Lock()
+	previous := recoveryLog
+	recoveryLog = &buf
+	recoveryLogMu.Unlock()
+	t.Cleanup(func() {
+		recoveryLogMu.Lock()
+		recoveryLog = previous
+		recoveryLogMu.Unlock()
+	})
+	return &buf
+}
+
+// Every recovery says why in one line: the create that needed it, the
+// change it then refuses, and the start that could not finish it.
+func TestRecoveryLogNamesTheReason(t *testing.T) {
+	logged := captureRecoveryLog(t)
+	s, f, opts := setupStore(t)
+	f.failure = "useradd-stopped"
+	if _, e := s.create(context.Background(), CreateInput{"pendingacct", "pending.test", "", "Interrupted synthetic create"}, "test operator"); e != ErrRecovery {
+		t.Fatal(e)
+	}
+	items, e := s.list(context.Background())
+	if e != nil || len(items) != 1 {
+		t.Fatal(items, e)
+	}
+	id := items[0].ID
+	want := `sifruno broker: recovery: operation=create account=` + id + ` user=pendingacct step="useradd" error="useradd was stopped at its time limit"` + "\n"
+	if logged.String() != want {
+		t.Fatalf("the failed create logged %q, want %q", logged.String(), want)
+	}
+	logged.Reset()
+	if _, e := s.create(context.Background(), CreateInput{"anotheracct", "another.test", "", "Blocked by recovery"}, "test operator"); e != ErrRecovery {
+		t.Fatal(e)
+	}
+	want = `sifruno broker: recovery: operation=create account=` + id + ` user=pendingacct step="unfinished, so this change is refused" error="an unfinished operation holds up every change"` + "\n"
+	if logged.String() != want {
+		t.Fatalf("the refused create logged %q, want %q", logged.String(), want)
+	}
+	logged.Reset()
+	s.close()
+	reopened, e := openStore(context.Background(), opts, f)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer reopened.close()
+	want = `sifruno broker: recovery: operation=create account=` + id + ` user=pendingacct step="finish at start" error="differs from what the broker recorded"` + "\n"
+	if logged.String() != want {
+		t.Fatalf("the start logged %q, want %q", logged.String(), want)
+	}
+}
+
+// The error class never carries an error's own text, which may name a path
+// in a tenant's home.
+func TestRecoveryErrorClassNamesNoPath(t *testing.T) {
+	for err, want := range map[error]string{
+		&os.PathError{Op: "open", Path: "/home/tenant/private-name", Err: syscall.EACCES}:                        "permission denied",
+		atStep("home", fmt.Errorf("wrapped %w", &os.PathError{Op: "x", Path: "/home/t/p", Err: syscall.ENOENT})): "no such file or directory",
+		&commandError{program: "groupadd", status: 10}:                                                           "groupadd exited with status 10",
+		&commandError{program: "useradd", status: -1, stopped: true}:                                             "useradd was stopped at its time limit",
+		&commandError{program: "usermod", status: -1}:                                                            "usermod did not run",
+		errors.New("/home/tenant/private-name"):                                                                  "unexpected error",
+		ErrDeleteBusy:                                                                                            "conflict",
+		nil:                                                                                                      "none",
+	} {
+		if got := errorClass(err); got != want || strings.Contains(got, "/home") {
+			t.Errorf("%v: %q, want %q", err, got, want)
+		}
+	}
+	if !errors.Is(&commandError{program: "useradd"}, ErrUnavailable) || !errors.Is(atStep("useradd", ErrRecovery), ErrRecovery) {
+		t.Fatal("a command error is not an unavailable answer, or a step hides its error")
+	}
+}
+
+// Every recovery_required row is journaled through recoveryRequired, which
+// logs why: no store file writes one by itself.
+func TestEveryRecoveryRequiredRowIsLogged(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") || file == "recovery_log.go" {
+			continue
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			if strings.Contains(line, "resultEvent(") && strings.Contains(line, `"recovery_required"`) {
+				if file == "store.go" && strings.Contains(line, `if _, e = s.resultEvent(r, *r.Pending, "recovery_required"); e != nil {`) {
+					// The conflict refresh records, logged just before.
+					continue
+				}
+				t.Errorf("%s:%d journals recovery_required without its reason: %s", file, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
 func TestInterruptedStateAndExternalConflict(t *testing.T) {
 	s, f, opts := setupStore(t)
 	a := createFixture(t, s)

@@ -70,7 +70,7 @@ func (s *store) cronSets(id string) (map[string][]CronJob, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, ErrRecovery
+		return nil, recovery("cron", record{Account: Account{ID: id}}, "stored jobs", err)
 	}
 	return sets, nil
 }
@@ -105,7 +105,7 @@ func (s *store) cronJobs(id, digest string) ([]CronJob, error) {
 	}
 	jobs, ok := sets[digest]
 	if !ok || len(jobs) == 0 || !validStoredCronJobs(jobs) || cronDigest(jobs) != digest {
-		return nil, ErrRecovery
+		return nil, recovery("cron", record{Account: Account{ID: id}}, "stored jobs", ErrInvalid)
 	}
 	return jobs, nil
 }
@@ -233,7 +233,7 @@ func (s *store) setCron(ctx context.Context, id string, in CronInput, actor stri
 		return cronResult(r.Account, current), nil
 	}
 	if r.Account.Revision == ^uint64(0) {
-		return CronResult{}, ErrRecovery
+		return CronResult{}, recovery("cron", r, "revision at its limit", ErrConflict)
 	}
 	// Two history rows, with room left as historyRoom leaves it for the
 	// operations a tenant can reach.
@@ -299,7 +299,12 @@ func (s *store) reconcileCron(ctx context.Context, r record) error {
 	}
 	current := r
 	current.Pending = nil
-	if s.native.VerifyAccount(ctx, current) != nil || s.native.SetCron(ctx, r, renderCrontab(jobs)) != nil {
+	err = s.native.VerifyAccount(ctx, current)
+	if err == nil {
+		err = s.native.SetCron(ctx, r, renderCrontab(jobs))
+	}
+	if err != nil {
+		logRecovery(r.Pending.Action, r, "finish at start", err)
 		return nil
 	}
 	operation := *r.Pending

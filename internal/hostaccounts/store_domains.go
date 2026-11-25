@@ -20,7 +20,7 @@ func (s *store) siteDomains(ctx context.Context, id string) (SiteDomainsResult, 
 	if s.healthy() != nil {
 		return SiteDomainsResult{}, ErrUnavailable
 	}
-	if s.refresh(ctx, false) != nil {
+	if s.refreshed(ctx) != nil {
 		return SiteDomainsResult{}, ErrRecovery
 	}
 	items, err := s.records()
@@ -33,7 +33,7 @@ func (s *store) siteDomains(ctx context.Context, id string) (SiteDomainsResult, 
 		}
 		d, ok := decodeSiteDomains(r.Domains)
 		if !ok {
-			return SiteDomainsResult{}, ErrRecovery
+			return SiteDomainsResult{}, recovery("domains", r, "stored domains", ErrInvalid)
 		}
 		a := withWeb(r)
 		if r.Pending != nil {
@@ -106,7 +106,7 @@ func (s *store) setSiteDomains(ctx context.Context, id string, in SiteDomainsInp
 		return SiteDomainsResult{Account: withWeb(r), Domains: want}, nil
 	}
 	if r.Account.Revision == ^uint64(0) {
-		return SiteDomainsResult{}, ErrRecovery
+		return SiteDomainsResult{}, recovery("domains", r, "revision at its limit", ErrConflict)
 	}
 	// Two history rows, with room left as historyRoom leaves it for the
 	// operations a tenant can reach, so the result can always be journaled.
@@ -147,7 +147,7 @@ func (s *store) setSiteDomains(ctx context.Context, id string, in SiteDomainsInp
 		}
 		return SiteDomainsResult{}, ErrWebRejected
 	case e != nil:
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		s.recoveryRequired(r, *r.Pending, "site list", e)
 		return SiteDomainsResult{}, ErrRecovery
 	}
 	r.Domains, r.DomainsNext = encoded, ""
@@ -179,6 +179,7 @@ func (s *store) finishDomains(ctx context.Context, items []record, r record) err
 		}
 		return nil
 	case e != nil:
+		logRecovery(operation.Action, r, "finish at start", e)
 		return nil
 	}
 	r.Domains, r.DomainsNext = r.DomainsNext, ""

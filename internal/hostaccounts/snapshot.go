@@ -86,7 +86,7 @@ func (s *store) snapshotRecords(ctx context.Context) ([]record, error) {
 	}
 	for _, item := range items {
 		if item.Pending != nil {
-			return nil, ErrRecovery
+			return nil, recovery(item.Pending.Action, item, "unfinished, so no snapshot is taken", errHoldsEveryChange)
 		}
 	}
 	return items, snapshotContextError(ctx)
@@ -164,13 +164,13 @@ func (l *guardedSnapshot) verify(ctx context.Context) error {
 		return err
 	}
 	if len(items) != len(l.baseline) {
-		return ErrRecovery
+		return recovery("snapshot", record{}, "accounts added or removed during the snapshot", ErrConflict)
 	}
 	for i, item := range items {
 		// records() has deterministic bbolt key order. Compare the entire private
 		// identity, ownership and journal sequence, not just public revisions.
 		if item != l.baseline[i] {
-			return ErrRecovery
+			return recovery("snapshot", item, "account changed during the snapshot", ErrConflict)
 		}
 	}
 	return nil

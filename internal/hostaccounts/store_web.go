@@ -67,7 +67,7 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 		return WebResult{}, ErrConflict
 	}
 	if r.Account.Revision == ^uint64(0) {
-		return WebResult{}, ErrRecovery
+		return WebResult{}, recovery("web", r, "revision at its limit", ErrConflict)
 	}
 	// Two history rows, with room left as historyRoom leaves it for the
 	// operations a tenant can reach, so the result can always be journaled.
@@ -107,7 +107,7 @@ func (s *store) setWeb(ctx context.Context, id string, in WebInput, actor string
 		}
 		return WebResult{}, ErrWebRejected
 	case e != nil:
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		s.recoveryRequired(r, *r.Pending, "apply", e)
 		return WebResult{}, ErrRecovery
 	}
 	r.Web, r.WebNext = want, WebState{}

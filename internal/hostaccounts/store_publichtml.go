@@ -76,8 +76,8 @@ func (s *store) adoptPublicHTML(ctx context.Context, id string, in AdoptInput, a
 	}
 	current := r
 	current.Pending = nil
-	if s.native.VerifyAccount(ctx, current) != nil {
-		return Account{}, ErrRecovery
+	if e := s.native.VerifyAccount(ctx, current); e != nil {
+		return Account{}, recovery("adopt", r, "check of what only root changes", e)
 	}
 	public, err := s.native.AdoptPublicHTML(ctx, r)
 	if err != nil {
@@ -141,7 +141,7 @@ func (s *store) adoptReady(ctx context.Context, id string) ([]record, error) {
 	if ctx.Err() != nil || s.healthy() != nil {
 		return nil, ErrUnavailable
 	}
-	if s.refresh(ctx, false) != nil {
+	if s.refreshed(ctx) != nil {
 		return nil, ErrRecovery
 	}
 	items, err := s.records()
@@ -150,7 +150,7 @@ func (s *store) adoptReady(ctx context.Context, id string) ([]record, error) {
 	}
 	for _, r := range items {
 		if r.Pending != nil && !(r.Account.ID == id && r.Pending.Action == "conflict") {
-			return nil, ErrRecovery
+			return nil, recovery(r.Pending.Action, r, "unfinished, so this change is refused", errHoldsEveryChange)
 		}
 	}
 	return s.compactHistories(items), nil
@@ -161,7 +161,7 @@ func (s *store) adoptReady(ctx context.Context, id string) ([]record, error) {
 func (s *store) finishAdopt(r record) error {
 	public, ok := parsePublicTarget(r.Pending.Target)
 	if !ok {
-		return ErrRecovery
+		return recovery(r.Pending.Action, r, "finish at start: the journaled folder", ErrInvalid)
 	}
 	operation := *r.Pending
 	r.Ownership.Public = public

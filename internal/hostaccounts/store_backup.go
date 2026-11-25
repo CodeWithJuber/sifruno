@@ -288,7 +288,7 @@ func (s *store) backupReady(ctx context.Context, id string) (record, []string, e
 	if ctx.Err() != nil || s.healthy() != nil {
 		return record{}, nil, ErrUnavailable
 	}
-	if s.refresh(ctx, false) != nil {
+	if s.refreshed(ctx) != nil {
 		return record{}, nil, ErrRecovery
 	}
 	items, err := s.records()
@@ -304,7 +304,7 @@ func (s *store) backupReady(ctx context.Context, id string) (record, []string, e
 			continue
 		}
 		if r.Pending != nil || r.Account.State == "recovery_required" {
-			return record{}, nil, ErrRecovery
+			return record{}, nil, recovery("backup", r, "the account's unfinished operation", errHoldsEveryChange)
 		}
 		return r, names, nil
 	}

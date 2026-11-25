@@ -63,7 +63,7 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 		return CertificateResult{}, ErrCertificateRejected
 	}
 	if r.Account.Revision == ^uint64(0) {
-		return CertificateResult{}, ErrRecovery
+		return CertificateResult{}, recovery("certificate", r, "revision at its limit", ErrConflict)
 	}
 	// Two history rows, with room left as historyRoom leaves it for the
 	// operations a tenant can reach, so the result can always be journaled.
@@ -108,7 +108,7 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 		s.discardStagedCertificate(r)
 		return CertificateResult{}, ErrWebRejected
 	case e != nil:
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		s.recoveryRequired(r, *r.Pending, "install", e)
 		return CertificateResult{}, ErrRecovery
 	}
 	r.TLS, r.TLSNext = next, CertificateState{}

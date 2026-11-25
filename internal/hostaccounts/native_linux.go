@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -271,10 +272,14 @@ func (n *linuxSystem) command(ctx context.Context, path string, args ...string) 
 func (n *linuxSystem) commandWithin(ctx context.Context, limit time.Duration, path string, args ...string) ([]byte, error) {
 	out, code, e := n.run(ctx, limit, path, false, args...)
 	if e != nil || code != 0 {
-		return nil, ErrUnavailable
+		return nil, &commandError{program: filepath.Base(path), status: code, stopped: errors.Is(e, errCommandStopped)}
 	}
 	return out, nil
 }
+
+// errCommandStopped is a fixed utility that its time limit, or its
+// operation's context, ended before it did.
+var errCommandStopped = fmt.Errorf("%w: command stopped at its time limit", ErrUnavailable)
 
 // commandStatus is command for a program whose non-zero exit is an answer,
 // not a failure (openlitespeed -t); its output is stdout and stderr together.
@@ -315,7 +320,7 @@ func (n *linuxSystem) run(ctx context.Context, limit time.Duration, path string,
 	}
 	runErr := cmd.Run()
 	if ctx.Err() != nil {
-		return nil, -1, ErrUnavailable
+		return nil, -1, errCommandStopped
 	}
 	var exit *exec.ExitError
 	if runErr != nil && !errors.As(runErr, &exit) {
@@ -600,22 +605,22 @@ func (n *linuxSystem) admission(ctx context.Context, r record) error {
 func (n *linuxSystem) Create(ctx context.Context, r record, persist func(ownership) error) (ownership, error) {
 	uid, gid, e := n.Plan(ctx, r.Account.Username)
 	if e != nil || uid != r.Account.UID || gid != r.Account.GID {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("plan", ErrRecovery)
 	}
 	owners := filepath.Join(n.opts.StateDir, "owners")
 	if e = os.Mkdir(owners, 0700); e != nil && !errors.Is(e, os.ErrExist) {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("owners folder", ErrUnavailable)
 	}
 	if authority(owners) != nil {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("owners folder", ErrUnavailable)
 	}
 	if info, err := os.Lstat(owners); err != nil || info.Mode().Perm() != 0700 {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("owners folder", ErrUnavailable)
 	}
 	marker := n.markerPath(r)
 	f, e := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0600)
 	if e != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	_, e = f.Write([]byte(r.Tag + "\n"))
 	if e == nil {
@@ -623,25 +628,25 @@ func (n *linuxSystem) Create(ctx context.Context, r record, persist func(ownersh
 	}
 	closed := f.Close()
 	if e != nil || closed != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	r.Ownership.Marker, e = markerIdentity(marker, r.Tag)
 	if e != nil || persist(r.Ownership) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	skel := filepath.Join(n.opts.StateDir, "empty-skel")
 	if e = os.Mkdir(skel, 0700); e != nil && !errors.Is(e, os.ErrExist) {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("skeleton", ErrUnavailable)
 	}
 	entries, e := os.ReadDir(skel)
 	if e != nil || len(entries) != 0 || authority(skel) != nil {
-		return ownership{}, ErrUnavailable
+		return ownership{}, atStep("skeleton", ErrUnavailable)
 	}
 	if _, e = n.command(ctx, "/usr/sbin/groupadd", "--gid", strconv.Itoa(r.Account.GID), "--", r.Account.Username); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("groupadd", e)
 	}
 	if _, e = n.command(ctx, "/usr/sbin/useradd", useraddArgs(r, skel)...); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("useradd", e)
 	}
 	return n.RecoverCreate(ctx, r, persist)
 }
@@ -757,84 +762,84 @@ func useraddLeftHome(parent, home unix.Stat_t, empty bool) bool {
 
 func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(ownership) error) (ownership, error) {
 	if _, e := n.identity(r); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("passwd and group", e)
 	}
 	check := targetRecord(r, "active")
 	if e := n.admission(ctx, check); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("password lock and expiry", e)
 	}
 	mark, e := markerIdentity(n.markerPath(r), r.Tag)
 	if e != nil || mark != r.Ownership.Marker {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("marker", ErrRecovery)
 	}
 	if authority(n.opts.HomesDir) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("homes folder", ErrRecovery)
 	}
 	parent, e := openDirectoryAt(unix.AT_FDCWD, n.opts.HomesDir)
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("homes folder", e)
 	}
 	defer parent.Close()
 	home, e := openDirectoryAt(int(parent.Fd()), r.Account.Username)
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("home", e)
 	}
 	defer home.Close()
 	id, adopt, e := createdHome(parent, home, r)
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("home", e)
 	}
 	if r.Ownership.Home.Ino != 0 && r.Ownership.Home != id {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("home", ErrRecovery)
 	}
 	r.Ownership.Home = id
 	if persist(r.Ownership) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("record", ErrRecovery)
 	}
 	// useradd stopped before its chown: the home becomes the account's
 	// through the handle whose identity was just recorded. The chmod below
 	// is the one every create makes.
 	if adopt && home.Chown(r.Account.UID, r.Account.GID) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("home", ErrRecovery)
 	}
 	if home.Chmod(0750) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("home", ErrRecovery)
 	}
 	if r.Ownership.Public.Ino == 0 {
 		if unix.Mkdirat(int(home.Fd()), "public_html", 0750) != nil {
-			return ownership{}, ErrRecovery
+			return ownership{}, atStep("public_html", ErrRecovery)
 		}
 	}
 	pub, e := openDirectoryAt(int(home.Fd()), "public_html")
 	if e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("public_html", e)
 	}
 	defer pub.Close()
 	info, e := pub.Stat()
 	if e != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.IsDir() || !((st.Uid == 0 && st.Gid == 0) || (int(st.Uid) == r.Account.UID && int(st.Gid) == r.Account.GID)) {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	publicID := fileIdentity{uint64(st.Dev), st.Ino}
 	if r.Ownership.Public.Ino != 0 && r.Ownership.Public != publicID {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	if r.Ownership.Public.Ino == 0 && (st.Uid != 0 || st.Gid != 0) {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	r.Ownership.Public = publicID
 	if persist(r.Ownership) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("record", ErrRecovery)
 	}
 	if pub.Chmod(0750) != nil || pub.Chown(r.Account.UID, r.Account.GID) != nil {
-		return ownership{}, ErrRecovery
+		return ownership{}, atStep("public_html", ErrRecovery)
 	}
 	final := targetRecord(r, "active")
 	if e = n.Verify(ctx, final); e != nil {
-		return ownership{}, e
+		return ownership{}, atStep("verify", e)
 	}
 	return r.Ownership, nil
 }
@@ -848,18 +853,18 @@ func (n *linuxSystem) RecoverCreate(ctx context.Context, r record, persist func(
 // account on every request.
 func (n *linuxSystem) VerifyAccountIdentity(r record) error {
 	if authority(n.opts.HomesDir) != nil {
-		return ErrRecovery
+		return atStep("homes folder", ErrRecovery)
 	}
 	if _, e := n.identity(r); e != nil {
-		return e
+		return atStep("passwd and group", e)
 	}
 	home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
 	if e != nil || home != r.Ownership.Home {
-		return ErrRecovery
+		return atStep("home", ErrRecovery)
 	}
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
 	if e != nil || marker != r.Ownership.Marker {
-		return ErrRecovery
+		return atStep("marker", ErrRecovery)
 	}
 	return nil
 }
@@ -869,11 +874,11 @@ func (n *linuxSystem) VerifyAccountIdentity(r record) error {
 // not a link, owned by the account, mode 0750. It only reads.
 func (n *linuxSystem) VerifySiteFiles(r record) error {
 	if _, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0750); e != nil {
-		return ErrRecovery
+		return atStep("home mode", ErrRecovery)
 	}
 	pub, e := dirIdentity(r.Account.PublicHTML, r.Account.UID, r.Account.GID, 0750)
 	if e != nil || pub != r.Ownership.Public {
-		return ErrRecovery
+		return atStep("public_html", ErrRecovery)
 	}
 	return nil
 }
@@ -895,7 +900,7 @@ func (n *linuxSystem) VerifyAccount(ctx context.Context, r record) error {
 	if e := n.VerifyAccountIdentity(r); e != nil {
 		return e
 	}
-	return n.admission(ctx, r)
+	return atStep("password lock and expiry", n.admission(ctx, r))
 }
 
 // Verify is VerifyAccount with VerifySiteFiles, for an operation that writes
@@ -904,7 +909,7 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 	if e := n.VerifyIdentity(r); e != nil {
 		return e
 	}
-	return n.admission(ctx, r)
+	return atStep("password lock and expiry", n.admission(ctx, r))
 }
 
 // Delete removes the managed identity. Every destructive step is gated on
@@ -919,59 +924,59 @@ func (n *linuxSystem) Verify(ctx context.Context, r record) error {
 func (n *linuxSystem) Delete(ctx context.Context, r record) error {
 	marker, e := markerIdentity(n.markerPath(r), r.Tag)
 	if e == nil && marker != r.Ownership.Marker {
-		return ErrRecovery
+		return atStep("marker", ErrRecovery)
 	}
 	if e != nil && !errors.Is(e, os.ErrNotExist) {
-		return ErrUnavailable
+		return atStep("marker", ErrUnavailable)
 	}
 	// A missing marker with a still-present user is not owned deletable
 	// state; a missing marker with everything already gone is a completed
 	// delete (safe retry).
 	users, e := systemUsers()
 	if e != nil {
-		return e
+		return atStep("passwd", e)
 	}
 	present := false
 	for _, u := range users {
 		if u.Username == r.Account.Username {
 			if u.UID != r.Account.UID || u.GID != r.Account.GID || u.Home != r.Account.Home {
-				return ErrRecovery
+				return atStep("passwd", ErrRecovery)
 			}
 			present = true
 		} else if u.UID == r.Account.UID {
-			return ErrRecovery
+			return atStep("passwd", ErrRecovery)
 		}
 	}
 	if present && marker != r.Ownership.Marker {
-		return ErrRecovery
+		return atStep("marker", ErrRecovery)
 	}
 	if present {
 		if e = n.removeUser(ctx, r); e != nil {
-			return e
+			return atStep("remove user", e)
 		}
 	}
 	if info, e := os.Lstat(r.Account.Home); e == nil {
 		if !info.IsDir() || r.Account.Home != filepath.Join(n.opts.HomesDir, r.Account.Username) {
-			return ErrRecovery
+			return atStep("home", ErrRecovery)
 		}
 		// The recorded object and its owner, which only root can change; not
 		// its mode, which the account may have changed. RemoveAll does not
 		// follow links inside it.
 		home, e := dirIdentity(r.Account.Home, r.Account.UID, r.Account.GID, 0)
 		if e != nil || home != r.Ownership.Home {
-			return ErrRecovery
+			return atStep("home", ErrRecovery)
 		}
 		if e = os.RemoveAll(r.Account.Home); e != nil {
-			return ErrUnavailable
+			return atStep("home", ErrUnavailable)
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
-		return ErrUnavailable
+		return atStep("home", ErrUnavailable)
 	}
 	if e = n.removeAccountFiles(r); e != nil {
-		return e
+		return atStep("account files", e)
 	}
 	if e = os.Remove(n.markerPath(r)); e != nil && !errors.Is(e, os.ErrNotExist) {
-		return ErrUnavailable
+		return atStep("marker", ErrUnavailable)
 	}
 	return nil
 }
@@ -1022,7 +1027,10 @@ func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
 		end: func(ctx context.Context) error { return n.EndProcesses(ctx, r) },
 		userdel: func(ctx context.Context) (int, error) {
 			_, code, e := n.commandStatus(ctx, commandLimit("/usr/sbin/userdel"), "/usr/sbin/userdel", "--", r.Account.Username)
-			return code, e
+			if e != nil {
+				return code, &commandError{program: "userdel", status: -1, stopped: errors.Is(e, errCommandStopped)}
+			}
+			return code, nil
 		},
 		putBack: func(ctx context.Context) error {
 			// When the lock step itself failed (the shadow file busy, say),
@@ -1106,7 +1114,7 @@ func (u userRemoval) remove(ctx context.Context, budget time.Duration) (stopped,
 		case code == 0:
 			return nil, nil
 		case code != userdelBusy:
-			return nil, ErrUnavailable
+			return nil, &commandError{program: "userdel", status: code}
 		}
 	}
 	return errAccountBusy, nil

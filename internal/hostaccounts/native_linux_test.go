@@ -652,7 +652,7 @@ func TestUserRemovalPutsBackWhateverStopsItBeforeUserdel(t *testing.T) {
 		{"the put-back failed", t.Context(), removalSteps{codes: []int{8}, putBackErr: ErrRecovery}, ErrRecovery, []string{"lock", "end", "userdel", "end", "userdel", "end", "userdel", "put back"}},
 	} {
 		err := c.steps.removal().run(c.ctx, time.Hour)
-		if err != c.want || !reflect.DeepEqual(c.steps.calls, c.calls) {
+		if !errors.Is(err, c.want) || !reflect.DeepEqual(c.steps.calls, c.calls) {
 			t.Errorf("%s: %v after %q, want %v after %q", c.name, err, c.steps.calls, c.want, c.calls)
 		}
 		if len(c.calls) > 0 && c.calls[len(c.calls)-1] == "put back" && (!c.steps.backLive || c.steps.backLeft <= putBackTimeout-time.Second || c.steps.backLeft > putBackTimeout) {

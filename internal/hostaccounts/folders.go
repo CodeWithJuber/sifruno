@@ -296,7 +296,7 @@ func (s *store) setSiteFolders(ctx context.Context, id string, p SiteProtection,
 		_ = s.native.RemoveSiteRealms(applyCtx, siteName(id))
 		return ErrWebRejected
 	case e != nil:
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		s.recoveryRequired(r, *r.Pending, "site list", e)
 		return ErrRecovery
 	}
 	r.Folders, r.FoldersNext = encoded, ""
@@ -330,6 +330,7 @@ func (s *store) finishFolders(ctx context.Context, items []record, r record) err
 		s.removeSiteRealms(ctx, r.Account.ID)
 		return nil
 	case e != nil:
+		logRecovery(operation.Action, r, "finish at start", e)
 		return nil
 	}
 	r.Folders, r.FoldersNext = r.FoldersNext, ""

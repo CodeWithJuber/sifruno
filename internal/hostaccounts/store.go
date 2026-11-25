@@ -357,12 +357,20 @@ func (s *store) healthy() error {
 }
 func (s *store) records() ([]record, error) {
 	out := []record{}
+	// failed and step say which stored account and which check refused it,
+	// for the recovery log.
+	var failed record
+	step := "accounts bucket"
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(accountBucket)
 		if b == nil {
 			return ErrRecovery
 		}
 		return b.ForEach(func(key, value []byte) error {
+			failed, step = record{}, "stored account"
+			if idPattern.Match(key) {
+				failed.Account.ID = string(key)
+			}
 			if len(out) >= MaxAccounts || value == nil || len(value) > maxRecordBytes {
 				return ErrRecovery
 			}
@@ -370,6 +378,7 @@ func (s *store) records() ([]record, error) {
 			if json.Unmarshal(value, &r) != nil || r.Version != 1 || !idPattern.MatchString(r.Account.ID) || string(key) != r.Account.ID || !validUsername(r.Account.Username) || !validDomain(r.Account.Domain) || r.Account.UID < firstAccountID || r.Account.UID > lastAccountID || r.Account.GID != r.Account.UID || r.Account.Revision == 0 || r.Tag != "sifruno-managed-"+r.Account.ID || r.Account.Home != filepath.Join(s.opts.HomesDir, r.Account.Username) || r.Account.PublicHTML != filepath.Join(r.Account.Home, "public_html") || r.Account.CreatedAt.IsZero() || r.Account.UpdatedAt.IsZero() || (r.Account.State != "active" && r.Account.State != "suspended" && r.Account.State != "recovery_required") {
 				return ErrRecovery
 			}
+			failed = r
 			if r.Pending != nil {
 				validAction := r.Pending.Action == "create" || r.Pending.Action == "state" || r.Pending.Action == "conflict" || r.Pending.Action == "plan" || r.Pending.Action == "delete" || r.Pending.Action == "ssh_keys" || r.Pending.Action == "web" || r.Pending.Action == "certificate" || r.Pending.Action == "adopt" || r.Pending.Action == "cron" || r.Pending.Action == "domains" || r.Pending.Action == "folders"
 				validTarget := false
@@ -422,6 +431,7 @@ func (s *store) records() ([]record, error) {
 			if !validStoredFolders(r.Account.ID, r.Folders) || (r.FoldersNext != "" && (r.Pending == nil || r.Pending.Action != "folders")) {
 				return ErrRecovery
 			}
+			step = "journal history"
 			if verifyHistory(tx, r) != nil {
 				return ErrRecovery
 			}
@@ -430,21 +440,21 @@ func (s *store) records() ([]record, error) {
 		})
 	})
 	if err != nil {
-		return nil, ErrRecovery
+		return nil, recovery("read", failed, step, err)
 	}
 	return out, nil
 }
 func (s *store) save(r record) error {
 	b, err := json.Marshal(r)
 	if err != nil {
-		return ErrRecovery
+		return recovery("save", r, "stored account", err)
 	}
 	// As appendEvent: records() would refuse it, and with it every account.
 	if len(b) > maxRecordBytes {
 		return ErrInvalid
 	}
-	if s.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(accountBucket).Put([]byte(r.Account.ID), b) }) != nil {
-		return ErrRecovery
+	if err = s.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(accountBucket).Put([]byte(r.Account.ID), b) }); err != nil {
+		return recovery("save", r, "stored account", err)
 	}
 	return nil
 }
@@ -453,14 +463,14 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 	if err != nil {
 		return err
 	}
-	if s.native.GuardHomes(items) != nil {
-		return ErrRecovery
+	if e := s.native.GuardHomes(items); e != nil {
+		return recovery("read", record{}, "homes folder holds only the accounts' homes", e)
 	}
 	seenNames, seenDomains, seenUID := map[string]bool{}, map[string]bool{}, map[int]bool{}
 	audited, last := s.nextAudit(items)
 	for i, r := range items {
 		if seenNames[r.Account.Username] || seenDomains[r.Account.Domain] || seenUID[r.Account.UID] {
-			return ErrRecovery
+			return recovery("read", r, "one username, domain and UID per account", ErrConflict)
 		}
 		seenNames[r.Account.Username] = true
 		seenDomains[r.Account.Domain] = true
@@ -475,6 +485,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 			if r.Pending.Action == "create" {
 				owned, e := s.native.RecoverCreate(ctx, r, func(owned ownership) error { r.Ownership = owned; return s.save(r) })
 				if e != nil {
+					logRecovery("create", r, "finish at start", e)
 					continue
 				}
 				r.Ownership = owned
@@ -495,6 +506,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					}
 					continue
 				case e != nil:
+					logRecovery(operation.Action, r, "finish at start", e)
 					continue
 				}
 				r.Web, r.WebNext = r.WebNext, WebState{}
@@ -525,6 +537,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					s.discardStagedCertificate(r)
 					continue
 				case e != nil:
+					logRecovery(operation.Action, r, "finish at start", e)
 					continue
 				}
 				r.TLS, r.TLSNext = r.TLSNext, CertificateState{}
@@ -545,7 +558,12 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				// is checked: the tenant's own folders cannot hold it pending.
 				current := r
 				current.Pending = nil
-				if s.native.VerifyAccount(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, splitSSHKeys(r.SSHKeysNext)) != nil {
+				e := s.native.VerifyAccount(ctx, current)
+				if e == nil {
+					e = s.native.SetSSHKeys(ctx, r, splitSSHKeys(r.SSHKeysNext))
+				}
+				if e != nil {
+					logRecovery(r.Pending.Action, r, "finish at start", e)
 					continue
 				}
 				operation := *r.Pending
@@ -592,7 +610,8 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				// limits and keeps the account's.
 				current := r
 				current.Pending = nil
-				if s.native.VerifyAccount(ctx, current) != nil {
+				if e := s.native.VerifyAccount(ctx, current); e != nil {
+					logRecovery(r.Pending.Action, r, "finish at start", e)
 					continue
 				}
 				operation := *r.Pending
@@ -604,6 +623,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					}
 					continue
 				case e != nil:
+					logRecovery(operation.Action, r, "finish at start", e)
 					continue
 				}
 				r.Account.Plan = operation.Target
@@ -619,7 +639,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					return ErrRecovery
 				}
 				continue
-			} else if s.native.VerifyAccount(ctx, targetRecord(r, r.Pending.Target)) != nil {
+			} else if e := s.native.VerifyAccount(ctx, targetRecord(r, r.Pending.Target)); e != nil {
 				// A state change whose account verifies in its old state
 				// changed nothing: the broker stopped before the account
 				// changed, or after a rejected site list put it back and
@@ -634,7 +654,9 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
 						return ErrRecovery
 					}
+					continue
 				}
+				logRecovery(r.Pending.Action, r, "finish at start", e)
 				continue
 			}
 			if r.Pending.Action == "delete" {
@@ -648,6 +670,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 						}
 						continue
 					case e != nil:
+						logRecovery(operation.Action, r, "finish at start: site list", e)
 						continue
 					}
 				}
@@ -667,14 +690,19 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 					if errors.Is(e, errAccountBusy) || errors.Is(e, errNothingRemoved) {
 						live := append([]record(nil), items...)
 						live[i].Pending = nil
-						if r.Web.enabled() && s.applySites(ctx, live, "") != nil {
-							continue
+						if r.Web.enabled() {
+							if back := s.applySites(ctx, live, ""); back != nil {
+								logRecovery(operation.Action, r, "finish at start: site list back", back)
+								continue
+							}
 						}
 						r.Pending = nil
 						if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
 							return ErrRecovery
 						}
+						continue
 					}
+					logRecovery(operation.Action, r, "finish at start", e)
 					continue
 				}
 				s.removeLimits(ctx, r.Account.UID)
@@ -739,6 +767,7 @@ func (s *store) refresh(ctx context.Context, reconcile bool) error {
 				return ErrUnavailable
 			}
 			before := r.Account
+			logRecovery("conflict", r, "check of what only root changes", e)
 			r.Pending = &pending{Action: "conflict", Target: r.Account.State, Actor: "broker-reconcile", Reason: "Managed operating system identity changed"}
 			r, e = s.beginOperation(r, &before)
 			if e != nil {
@@ -804,7 +833,7 @@ func (s *store) sshKeys(ctx context.Context, id string) (SSHKeysResult, error) {
 	if s.healthy() != nil {
 		return SSHKeysResult{}, ErrUnavailable
 	}
-	if s.refresh(ctx, false) != nil {
+	if s.refreshed(ctx) != nil {
 		return SSHKeysResult{}, ErrRecovery
 	}
 	items, err := s.records()
@@ -817,7 +846,7 @@ func (s *store) sshKeys(ctx context.Context, id string) (SSHKeysResult, error) {
 		}
 		_, keys, ok := normalizeSSHKeys(splitSSHKeys(r.SSHKeys))
 		if !ok {
-			return SSHKeysResult{}, ErrRecovery
+			return SSHKeysResult{}, recovery("ssh_keys", r, "stored keys", ErrInvalid)
 		}
 		a := r.Account
 		if r.Pending != nil {
@@ -868,7 +897,7 @@ func (s *store) setSSHKeys(ctx context.Context, id string, in SSHKeysInput, acto
 		return SSHKeysResult{Account: r.Account, Keys: keys}, nil
 	}
 	if r.Account.Revision == ^uint64(0) {
-		return SSHKeysResult{}, ErrRecovery
+		return SSHKeysResult{}, recovery("ssh_keys", r, "revision at its limit", ErrConflict)
 	}
 	// Two history rows, with room left as historyRoom leaves it for the
 	// operations a tenant can reach, so the result can always be journaled.
@@ -894,8 +923,12 @@ func (s *store) setSSHKeys(ctx context.Context, id string, in SSHKeysInput, acto
 	// The key file is outside the home, so this checks only what root
 	// controls: a tenant who changed its own folders can still get keys to
 	// put them right, and cannot leave this operation pending.
-	if s.native.VerifyAccount(ctx, current) != nil || s.native.SetSSHKeys(ctx, r, canonical) != nil {
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+	e = s.native.VerifyAccount(ctx, current)
+	if e == nil {
+		e = s.native.SetSSHKeys(ctx, r, canonical)
+	}
+	if e != nil {
+		s.recoveryRequired(r, *r.Pending, "key file", e)
 		return SSHKeysResult{}, ErrRecovery
 	}
 	r.SSHKeys, r.SSHKeysNext = joinSSHKeys(canonical), ""
@@ -914,10 +947,11 @@ func (s *store) setSSHKeys(ctx context.Context, id string, in SSHKeysInput, acto
 // history rows are retained under the history bucket for audit; the account
 // inventory no longer lists the identity.
 func (s *store) purge(id string) error {
+	gone := record{Account: Account{ID: id}}
 	if !idPattern.MatchString(id) {
-		return ErrRecovery
+		return recovery("delete", record{}, "remove the record", ErrInvalid)
 	}
-	if s.db.Update(func(tx *bolt.Tx) error {
+	if err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(accountBucket)
 		if b == nil {
 			return ErrRecovery
@@ -928,8 +962,8 @@ func (s *store) purge(id string) error {
 			}
 		}
 		return b.Delete([]byte(id))
-	}) != nil {
-		return ErrRecovery
+	}); err != nil {
+		return recovery("delete", gone, "remove the record", err)
 	}
 	return nil
 }
@@ -975,7 +1009,7 @@ func (s *store) setPlan(ctx context.Context, id string, in PlanInput, actor stri
 		return r.Account, nil
 	}
 	if r.Account.Revision == ^uint64(0) {
-		return Account{}, ErrRecovery
+		return Account{}, recovery("plan", r, "revision at its limit", ErrConflict)
 	}
 	// New limits reach a live site's PHP through the site list, which needs
 	// the web operation, and would restart PHP under a running WordPress
@@ -1022,7 +1056,7 @@ func (s *store) setPlan(ctx context.Context, id string, in PlanInput, actor stri
 		}
 		return Account{}, ErrUnavailable
 	case e != nil:
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		s.recoveryRequired(r, *r.Pending, "limits", e)
 		return Account{}, ErrRecovery
 	}
 	r.Account.Plan = in.Plan
@@ -1101,7 +1135,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 			}
 			return Account{}, ErrWebRejected
 		case e != nil:
-			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+			s.recoveryRequired(r, *r.Pending, "site list without the account", e)
 			return Account{}, ErrRecovery
 		}
 	}
@@ -1120,9 +1154,11 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		// delete ends rejected, the account unchanged: what the tenant does
 		// holds up this delete only. If the site cannot go back, the delete
 		// stays pending.
-		if r.Web.enabled() && s.applySites(ctx, items, "") != nil {
-			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
-			return Account{}, ErrRecovery
+		if r.Web.enabled() {
+			if back := s.applySites(ctx, items, ""); back != nil {
+				s.recoveryRequired(r, *r.Pending, "site list back", back)
+				return Account{}, ErrRecovery
+			}
 		}
 		operation := *r.Pending
 		r.Pending = nil
@@ -1135,7 +1171,7 @@ func (s *store) delete(ctx context.Context, id string, in DeleteInput, actor str
 		return Account{}, ErrDeleteStopped
 	}
 	if e != nil {
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		s.recoveryRequired(r, *r.Pending, "remove", e)
 		return Account{}, ErrRecovery
 	}
 	s.removeLimits(ctx, r.Account.UID)
@@ -1217,7 +1253,7 @@ func (s *store) list(ctx context.Context) ([]Account, error) {
 	if s.healthy() != nil {
 		return nil, ErrUnavailable
 	}
-	if s.refresh(ctx, false) != nil {
+	if s.refreshed(ctx) != nil {
 		return nil, ErrRecovery
 	}
 	items, err := s.records()
@@ -1265,7 +1301,7 @@ func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 	if s.healthy() != nil {
 		return nil, ErrUnavailable
 	}
-	if s.refresh(ctx, false) != nil {
+	if s.refreshed(ctx) != nil {
 		return nil, ErrRecovery
 	}
 	items, e := s.records()
@@ -1274,7 +1310,7 @@ func (s *store) mutationReady(ctx context.Context) ([]record, error) {
 	}
 	for _, r := range items {
 		if r.Pending != nil {
-			return nil, ErrRecovery
+			return nil, recovery(r.Pending.Action, r, "unfinished, so this change is refused", errHoldsEveryChange)
 		}
 	}
 	// Every account is settled: a long history is compacted before the
@@ -1319,12 +1355,13 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	if err != nil {
 		return Account{}, err
 	}
+	planned := record{Account: Account{Username: in.Username, UID: uid, GID: gid}}
 	if uid < firstAccountID || uid > lastAccountID || gid != uid || uid == int(s.opts.ControllerUID) {
-		return Account{}, ErrRecovery
+		return Account{}, recovery("create", planned, "plan: an ID outside the account range", ErrInvalid)
 	}
 	for _, r := range items {
 		if r.Account.UID == uid || r.Account.GID == gid {
-			return Account{}, ErrRecovery
+			return Account{}, recovery("create", planned, "plan: an ID another account has", ErrConflict)
 		}
 	}
 	// The slow root steps (the slice limits, which may reload systemd, then
@@ -1355,7 +1392,7 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	}
 	owned, err := s.native.Create(rootCtx, r, func(owned ownership) error { r.Ownership = owned; return s.save(r) })
 	if err != nil {
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+		s.recoveryRequired(r, *r.Pending, "", err)
 		return Account{}, ErrRecovery
 	}
 	r.Ownership = owned
@@ -1363,8 +1400,8 @@ func (s *store) create(ctx context.Context, in CreateInput, actor string) (Accou
 	r.Account.UpdatedAt = time.Now().UTC()
 	r.Actor, r.Reason = actor, in.Reason
 	operation := *r.Pending
-	if s.native.Verify(rootCtx, r) != nil {
-		_, _ = s.resultEvent(r, operation, "recovery_required")
+	if e := s.native.Verify(rootCtx, r); e != nil {
+		s.recoveryRequired(r, operation, "verify", e)
 		return Account{}, ErrRecovery
 	}
 	r.Pending = nil
@@ -1413,7 +1450,7 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 		return withWeb(r), nil
 	}
 	if r.Account.Revision == ^uint64(0) {
-		return Account{}, ErrRecovery
+		return Account{}, recovery("state", r, "revision at its limit", ErrConflict)
 	}
 	// A live site changes with its account, which needs the web operation:
 	// refused here, before anything is journaled.
@@ -1431,15 +1468,15 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 	// state the next start cannot finish.
 	stateCtx, cancel := webContext(ctx)
 	defer cancel()
-	if s.native.SetState(stateCtx, r, in.State) != nil {
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+	if e := s.native.SetState(stateCtx, r, in.State); e != nil {
+		s.recoveryRequired(r, *r.Pending, "state change", e)
 		return Account{}, ErrRecovery
 	}
 	// Only what root controls: the tenant's own folders cannot make a
 	// suspend of its account, or any state change, stay pending.
 	next := targetRecord(r, in.State)
-	if s.native.VerifyAccount(stateCtx, next) != nil {
-		_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+	if e := s.native.VerifyAccount(stateCtx, next); e != nil {
+		s.recoveryRequired(r, *r.Pending, "verify the new state", e)
 		return Account{}, ErrRecovery
 	}
 	// A live site follows its account: suspended, OpenLiteSpeed refuses every
@@ -1453,8 +1490,8 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 		live[index] = r
 		switch e := s.applySites(ctx, live, id); {
 		case errors.Is(e, ErrWebRejected):
-			if s.undoState(ctx, r) != nil {
-				_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+			if undo := s.undoState(ctx, r); undo != nil {
+				s.recoveryRequired(r, *r.Pending, "put the state back", undo)
 				return Account{}, ErrRecovery
 			}
 			operation := *r.Pending
@@ -1464,7 +1501,7 @@ func (s *store) setState(ctx context.Context, id string, in StateInput, actor st
 			}
 			return Account{}, ErrWebRejected
 		case e != nil:
-			_, _ = s.resultEvent(r, *r.Pending, "recovery_required")
+			s.recoveryRequired(r, *r.Pending, "site list", e)
 			return Account{}, ErrRecovery
 		}
 	}

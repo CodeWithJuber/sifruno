@@ -146,6 +146,18 @@ changed OS identity/ownership/inodes and other ambiguous results remain blocked.
 No automatic useradd retry, deletion or cleanup of OS accounts is attempted.
 Manual recovery tooling is outside this slice.
 
+The broker says why, in one line on its standard error (journald keeps it for
+the broker's unit), whenever an operation journals recovery_required, a start
+cannot finish an interrupted operation, a check finds what only root changes
+changed, or a request is answered 503 recovery, including a change refused
+because another account's operation is unfinished:
+
+    sifruno broker: recovery: operation=create account=<id> user=<name> step="useradd" error="useradd was stopped at its time limit"
+
+The step and the error class are fixed words, a fixed program's exit status or
+an errno's name; a line never carries an error's own text, a path in a
+tenant's home, file content, a key or a password.
+
 Active means no account-expiry restriction, while passwords stay locked and shell
 stays nologin. Suspended sets account expiry to1970-01-02. It restricts PAM-aware
 account admission, a live site stops serving (see Websites), and the account's

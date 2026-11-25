@@ -1,6 +1,9 @@
 package hostaccounts
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // installWordPress installs WordPress into an account's live site with
 // WP-CLI, as the account's user. The checks run under the broker lock; the
@@ -19,7 +22,11 @@ func (s *store) installWordPress(ctx context.Context, id string, in WordPressInp
 	defer s.endInstall(id)
 	installCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wordpressTimeout)
 	defer cancel()
-	return s.native.InstallWordPress(installCtx, r, in)
+	result, err := s.native.InstallWordPress(installCtx, r, in)
+	if errors.Is(err, ErrRecovery) {
+		logRecovery("wordpress", r, "install", err)
+	}
+	return result, err
 }
 
 // beginSiteRun checks, under the broker lock, that a program may run as the

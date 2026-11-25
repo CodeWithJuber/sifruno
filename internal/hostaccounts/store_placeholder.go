@@ -1,6 +1,9 @@
 package hostaccounts
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // installPlaceholder puts the placeholder page into an account's live site,
 // as the account's user, if its public_html is empty. It runs like the
@@ -19,6 +22,9 @@ func (s *store) installPlaceholder(ctx context.Context, id string, in Placeholde
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), placeholderTimeout)
 	defer cancel()
 	written, err := s.native.InstallPlaceholder(runCtx, r)
+	if errors.Is(err, ErrRecovery) {
+		logRecovery("placeholder", r, "install", err)
+	}
 	if err != nil {
 		return PlaceholderResult{}, err
 	}

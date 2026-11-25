@@ -339,7 +339,11 @@ func (s *store) siteLog(ctx context.Context, id, kind string) (LogTail, error) {
 	if _, err := s.usageTargets(id); err != nil {
 		return LogTail{}, err
 	}
-	return s.native.TailLog(ctx, siteName(id), kind)
+	tail, err := s.native.TailLog(ctx, siteName(id), kind)
+	if errors.Is(err, ErrRecovery) {
+		logRecovery("log", record{Account: Account{ID: id}}, "read the "+kind+" log", err)
+	}
+	return tail, err
 }
 
 type usageTarget struct {

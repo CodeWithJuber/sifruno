@@ -863,10 +863,11 @@ func rootTestSystem(t *testing.T) *linuxSystem {
 	return n
 }
 
-// rootTestAccount makes the passwd and group entries a create's useradd
-// writes, for a free ID, without a home (useradd -M), with the broker's tag
-// and a recorded ownership marker, and removes them afterwards.
-func rootTestAccount(t *testing.T, n *linuxSystem) record {
+// rootTestAccount makes, for a free ID, the private group a create's
+// groupadd writes, with withUser the user its useradd writes without a home
+// (useradd -M) with the broker's tag, and a recorded ownership marker, and
+// removes them afterwards.
+func rootTestAccount(t *testing.T, n *linuxSystem, withUser bool) record {
 	t.Helper()
 	users, err := systemUsers()
 	if err != nil {
@@ -908,7 +909,9 @@ func rootTestAccount(t *testing.T, n *linuxSystem) record {
 	}
 	shadow("/usr/sbin/groupadd", "--gid", strconv.Itoa(id), "--", name)
 	t.Cleanup(func() { _ = exec.Command("/usr/sbin/groupdel", "--", name).Run() })
-	shadow("/usr/sbin/useradd", "--uid", strconv.Itoa(id), "--gid", strconv.Itoa(id), "--no-user-group", "--groups", "", "--no-create-home", "--home-dir", home, "--shell", nologin, "--comment", r.Tag, "--password", "!", "--expiredate", "", "--", name)
+	if withUser {
+		shadow("/usr/sbin/useradd", "--uid", strconv.Itoa(id), "--gid", strconv.Itoa(id), "--no-user-group", "--groups", "", "--no-create-home", "--home-dir", home, "--shell", nologin, "--comment", r.Tag, "--password", "!", "--expiredate", "", "--", name)
+	}
 	t.Cleanup(func() {
 		_ = exec.Command("/usr/sbin/userdel", "--", name).Run()
 		_ = os.Remove(filepath.Join(mailSpoolDir, name))
@@ -938,7 +941,7 @@ func TestRootOnlyRecoverCreateAdoptsUseraddHome(t *testing.T) {
 		t.Skip("needs root: makes a user and root-owned homes")
 	}
 	n := rootTestSystem(t)
-	r := rootTestAccount(t, n)
+	r := rootTestAccount(t, n, true)
 	elsewhere := filepath.Join(filepath.Dir(n.opts.HomesDir), "elsewhere")
 	if os.Mkdir(elsewhere, 0) != nil || os.Chmod(elsewhere, 0) != nil {
 		t.Fatal("fixture")
@@ -1004,4 +1007,152 @@ func TestRootOnlyRecoverCreateAdoptsUseraddHome(t *testing.T) {
 	if err := n.Verify(t.Context(), targetRecord(finished, "active")); err != nil {
 		t.Fatalf("the finished account does not verify: %v", err)
 	}
+}
+
+// An abandon takes only the user and group a create made: each refused case
+// differs from them in one way.
+func TestAbandonTakesOnlyTheCreatesUserAndGroup(t *testing.T) {
+	r := record{Account: Account{Username: "fixtureacct", UID: 20000, GID: 20000, Home: "/home/fixtureacct"}, Tag: "sifruno-managed-x"}
+	user := nativeUser{"fixtureacct", 20000, 20000, "/home/fixtureacct", nologin, "sifruno-managed-x"}
+	group := nativeGroup{"fixtureacct", 20000, ""}
+	other := nativeUser{"other", 20001, 20001, "/home/other", nologin, "x"}
+	otherGroup := nativeGroup{"other", 20001, ""}
+	check := func(name string, users []nativeUser, groups []nativeGroup, wantUser, wantGroup bool, refused string) {
+		t.Helper()
+		db := indexAccounts(users, groups)
+		u, ue := createdUser(db, r)
+		g, ge := createdGroup(db, r)
+		var why *AbandonRefusedError
+		got := ""
+		switch {
+		case errors.As(ue, &why), errors.As(ge, &why):
+			got = why.Reason
+		}
+		if got != refused || refused == "" && (u != wantUser || g != wantGroup) {
+			t.Errorf("%s: user %v %v, group %v %v; want %v %v refused %q", name, u, ue, g, ge, wantUser, wantGroup, refused)
+		}
+	}
+	check("both", []nativeUser{user, other}, []nativeGroup{group, otherGroup}, true, true, "")
+	check("group only", []nativeUser{other}, []nativeGroup{group, otherGroup}, false, true, "")
+	check("neither", []nativeUser{other}, []nativeGroup{otherGroup}, false, false, "")
+	changed := func(f func(*nativeUser)) []nativeUser { u := user; f(&u); return []nativeUser{u} }
+	for name, users := range map[string][]nativeUser{
+		"another tag":   changed(func(u *nativeUser) { u.Tag = "sifruno-managed-y" }),
+		"another UID":   changed(func(u *nativeUser) { u.UID = 20002 }),
+		"another GID":   changed(func(u *nativeUser) { u.GID = 20002 }),
+		"another home":  changed(func(u *nativeUser) { u.Home = "/home/elsewhere" }),
+		"a shell":       changed(func(u *nativeUser) { u.Shell = "/bin/bash" }),
+		"UID shared":    {user, {"alias", 20000, 20001, "/home/alias", nologin, "x"}},
+		"name only":     {{"fixtureacct", 30000, 30000, "/home/fixtureacct", nologin, "sifruno-managed-x"}},
+		"UID only":      {{"someone", 20000, 30000, "/home/someone", nologin, "x"}},
+		"name repeated": {user, user},
+	} {
+		check(name, users, []nativeGroup{group}, false, false, AbandonUser)
+	}
+	for name, groups := range map[string][]nativeGroup{
+		"another GID":       {{"fixtureacct", 20002, ""}},
+		"a member":          {{"fixtureacct", 20000, "other"}},
+		"GID shared":        {group, {"alias", 20000, ""}},
+		"GID only":          {{"someone", 20000, ""}},
+		"member elsewhere":  {group, {"wheel", 10, "fixtureacct"}},
+		"another's primary": {group},
+	} {
+		users := []nativeUser{other}
+		if name == "another's primary" {
+			users = []nativeUser{{"other", 20001, 20000, "/home/other", nologin, "x"}}
+		}
+		check(name, users, groups, false, false, AbandonGroup)
+	}
+}
+
+// Root-only: abandon removes what a create made, from the state a useradd
+// stopped after making the home leaves, from a finished home with its empty
+// public_html, and from a group groupadd made before useradd never ran; it
+// refuses a home that holds something else and removes nothing. Run on the
+// dev VM with: go test -c ./internal/hostaccounts && sudo
+// ./hostaccounts.test -test.run RootOnly
+func TestRootOnlyAbandonCreate(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: makes users, groups and root-owned homes")
+	}
+	gone := func(t *testing.T, n *linuxSystem, r record) {
+		t.Helper()
+		db, err := n.database()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(db.usersByName[r.Account.Username]) != 0 || len(db.groupsByName[r.Account.Username]) != 0 || len(db.usersByUID[r.Account.UID]) != 0 || len(db.groupsByGID[r.Account.GID]) != 0 {
+			t.Fatal("a user or group of the create is left")
+		}
+		for _, path := range []string{r.Account.Home, n.markerPath(r), filepath.Join(n.mailDir, r.Account.Username)} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s is left: %v", path, err)
+			}
+		}
+	}
+	keep := func(ownership) error { return nil }
+
+	t.Run("useradd stopped after the home", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestAccount(t, n, true)
+		if os.Mkdir(r.Account.Home, 0) != nil || os.Chmod(r.Account.Home, 0) != nil {
+			t.Fatal("fixture")
+		}
+		var recorded ownership
+		if err := n.AbandonCreate(t.Context(), r, func(o ownership) error { recorded = o; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if recorded.Home.Ino == 0 {
+			t.Fatal("the home's identity was not recorded before it was removed")
+		}
+		gone(t, n, r)
+	})
+	t.Run("a finished home with its public_html", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestAccount(t, n, true)
+		if os.Mkdir(r.Account.Home, 0) != nil || os.Chmod(r.Account.Home, 0) != nil {
+			t.Fatal("fixture")
+		}
+		owned, err := n.RecoverCreate(t.Context(), r, keep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Ownership = owned
+		if err := n.AbandonCreate(t.Context(), r, keep); err != nil {
+			t.Fatal(err)
+		}
+		gone(t, n, r)
+	})
+	t.Run("group only", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestAccount(t, n, false)
+		if err := n.AbandonCreate(t.Context(), r, keep); err != nil {
+			t.Fatal(err)
+		}
+		gone(t, n, r)
+	})
+	t.Run("a home with something else in it", func(t *testing.T) {
+		n := rootTestSystem(t)
+		r := rootTestAccount(t, n, true)
+		if os.Mkdir(r.Account.Home, 0700) != nil || os.WriteFile(filepath.Join(r.Account.Home, "planted"), nil, 0600) != nil || os.Chown(r.Account.Home, r.Account.UID, r.Account.GID) != nil {
+			t.Fatal("fixture")
+		}
+		persisted := false
+		var why *AbandonRefusedError
+		if err := n.AbandonCreate(t.Context(), r, func(ownership) error { persisted = true; return nil }); !errors.As(err, &why) || why.Reason != AbandonHomeNotEmpty {
+			t.Fatalf("abandoned: %v", err)
+		}
+		db, err := n.database()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if persisted || len(db.usersByName[r.Account.Username]) != 1 || len(db.groupsByName[r.Account.Username]) != 1 {
+			t.Fatal("a refused abandon removed or recorded something")
+		}
+		for _, path := range []string{filepath.Join(r.Account.Home, "planted"), n.markerPath(r)} {
+			if _, err := os.Lstat(path); err != nil {
+				t.Fatalf("%s: %v", path, err)
+			}
+		}
+	})
 }

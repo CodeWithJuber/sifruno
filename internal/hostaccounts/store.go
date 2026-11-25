@@ -98,6 +98,11 @@ type nativeSystem interface {
 	Plan(context.Context, string) (int, int, error)
 	Create(context.Context, record, func(ownership) error) (ownership, error)
 	RecoverCreate(context.Context, record, func(ownership) error) (ownership, error)
+	// AbandonCreate removes what an unfinished create made and nothing else,
+	// checking all of it first: *AbandonRefusedError when something is not
+	// provably the create's own, nothing removed. What is already gone counts
+	// as removed, so it can run again after one stopped half way.
+	AbandonCreate(context.Context, record, func(ownership) error) error
 	// VerifyAccountIdentity checks, from files alone, what only root can
 	// change: the passwd and group identity, the home directory object and
 	// its owner, and the ownership marker. VerifyAccount adds the

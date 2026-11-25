@@ -189,6 +189,63 @@ func (s *store) resultEvent(r record, p pending, status string) (record, error) 
 	return s.appendEvent(r, event)
 }
 
+// abandonedStatus ends a create the operator abandoned (endAbandonedCreate).
+const abandonedStatus = "abandoned"
+
+// endAbandonedCreate ends the unfinished create p of r, whose leftovers
+// AbandonCreate removed. In one transaction it appends the create's last
+// row, status abandoned, with the operator's actor and reason and the
+// account as the record left it, and removes the record and its cron sets
+// as purge does. The rows stay for audit; replay reads only the histories
+// of records that exist, so it never reads them again. The record removed
+// is the one read, unchanged. A crash leaves the create unfinished, or
+// ended and its record gone: never one without the other.
+func (s *store) endAbandonedCreate(r record, p pending, actor, reason string) error {
+	intent, e := s.operationIntent(r, p)
+	if e != nil || intent.Action != "create" || p.Action != "create" {
+		return recovery("abandon_create", r, "find the create's intent", ErrRecovery)
+	}
+	if historyLength(r) >= MaxHistoryRows {
+		return recovery("abandon_create", r, "journal abandoned row: history full", ErrConflict)
+	}
+	row := operationEvent{Version: 1, Sequence: r.HistorySequence + 1, OperationID: p.OperationID, AccountID: r.Account.ID, Action: p.Action, Status: abandonedStatus, Actor: actor, Reason: reason, Before: intent.Before, After: r.Account, RecordedAt: time.Now().UTC()}
+	raw, e := json.Marshal(row)
+	if e != nil {
+		return recovery("abandon_create", r, "journal abandoned row", e)
+	}
+	e = s.db.Update(func(tx *bolt.Tx) error {
+		accounts, history := tx.Bucket(accountBucket), tx.Bucket(historyBucket)
+		if accounts == nil || history == nil {
+			return ErrRecovery
+		}
+		var stored record
+		if v := accounts.Get([]byte(r.Account.ID)); v == nil || json.Unmarshal(v, &stored) != nil || stored.Pending == nil || *stored.Pending != p {
+			return ErrRecovery
+		}
+		stored.Pending, r.Pending = nil, nil
+		if stored != r {
+			return ErrRecovery
+		}
+		key := eventKey(r.Account.ID, row.Sequence)
+		if history.Get(key) != nil {
+			return ErrRecovery
+		}
+		if err := history.Put(key, raw); err != nil {
+			return err
+		}
+		if c := tx.Bucket(cronBucket); c != nil {
+			if err := c.Delete([]byte(r.Account.ID)); err != nil {
+				return err
+			}
+		}
+		return accounts.Delete([]byte(r.Account.ID))
+	})
+	if e != nil {
+		return recovery("abandon_create", r, "journal abandoned row and remove the record", e)
+	}
+	return nil
+}
+
 // compactHistories compacts the history of every settled account that holds
 // s.compactAt rows or more, and answers the records as they are afterwards.
 // The caller holds mu and has refreshed: no operation of any account is

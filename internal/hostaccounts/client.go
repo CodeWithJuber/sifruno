@@ -124,6 +124,22 @@ func (c *client) Delete(ctx context.Context, id string, in DeleteInput, actor st
 	return out, err
 }
 
+// AbandonCreate asks the broker to remove what an unfinished create made
+// and end it. A 409 abandon_refused answer comes back as an
+// *AbandonRefusedError naming why: nothing was removed. It runs userdel and
+// may wait on the account's processes, so it has the slow limit.
+func (c *client) AbandonCreate(ctx context.Context, id string, in AbandonCreateInput, actor string) (Account, error) {
+	if !idPattern.MatchString(id) || !validAbandon(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	var out Account
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/abandon-create", struct {
+		Input AbandonCreateInput `json:"input"`
+		Actor string             `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
 // AdoptPublicHTML asks the broker to record the account's current
 // public_html as its site folder. A 409 conflict answer means the folder is
 // missing, a link, or not the account's, or the revision moved; 503
@@ -415,6 +431,7 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			Step      string `json:"step"`
 			Detail    string `json:"detail"`
 			Installed bool   `json:"wordpress_installed"`
+			Reason    string `json:"reason"`
 		}
 		if json.Unmarshal(b, &failure) != nil {
 			return ErrUnavailable
@@ -444,6 +461,11 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			return &BackupError{Step: backupDetail([]byte(failure.Step)), Detail: backupDetail([]byte(failure.Detail))}
 		case "migration_failed":
 			return &MigrationError{Step: installDetail([]byte(failure.Step)), Detail: installDetail([]byte(failure.Detail))}
+		case "abandon_refused":
+			if !abandonReasonPattern.MatchString(failure.Reason) {
+				return ErrUnavailable
+			}
+			return &AbandonRefusedError{Reason: failure.Reason}
 		default:
 			return ErrUnavailable
 		}

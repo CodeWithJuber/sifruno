@@ -18,7 +18,8 @@ ownership/mode, root parent authority and root server peer credentials. No remot
 network listener, passwords, free-form commands, deletion or rollback API exists.
 
 Native execution requires preinstalled regular root-owned binaries at fixed
-paths: /usr/sbin/groupadd, useradd, usermod, userdel, nologin; /usr/bin/passwd,
+paths: /usr/sbin/groupadd, useradd, usermod, userdel, groupdel (abandoning a
+create, below), nologin; /usr/bin/passwd,
 chage, kill (which runs only as an account's own user, see Processes),
 systemctl (`daemon-reload` and `list-units` of one slice, see Resource
 limits, and `kill` of a site run's own scope), systemd-run, setpriv and env
@@ -27,7 +28,7 @@ environment, see WordPress).
 Arguments are fixed typed options and validated account identity. Subprocesses
 have fixed credential-free locale/PATH, no shell and bounded output. A command
 that changes no account file (passwd, chage, a systemctl listing, xfs_quota)
-has a 15-second deadline. groupadd, useradd, usermod and userdel write
+has a 15-second deadline. groupadd, useradd, usermod, userdel and groupdel write
 /etc/passwd, group, shadow and gshadow; killed mid-way they leave half an
 account (on a loaded host useradd was killed after it had written passwd and
 group and made the home, which shadow-utils makes root's with mode 0 before it
@@ -144,7 +145,31 @@ handle and finishes the create as usual. Group-only/no-user outcomes, uncaptured
 preexisting public_html, a home that differs from that state in any way,
 changed OS identity/ownership/inodes and other ambiguous results remain blocked.
 No automatic useradd retry, deletion or cleanup of OS accounts is attempted.
-Manual recovery tooling is outside this slice.
+
+A create that cannot be finished is the operator's to abandon
+(`POST /v1/accounts/{id}/abandon-create`, reason only; the panel serves it to
+signed-in admins, never to an API token). Only an account whose pending
+operation is a create can be abandoned. The broker checks everything first
+and removes nothing when anything is not provably the create's own: the
+ownership marker must be the recorded one whenever a user, group, home or
+mail spool is there; a user with the account's name or UID must be the only
+one, with the journaled UID, GID, tag, home and nologin shell; a group with
+its name or GID must be its private group alone; the home, directly in the
+homes directory and not a link, must be the recorded one or one useradd made
+for the journaled user (as above), and hold nothing but the empty public_html
+the broker made; the mail spool must be a regular file of the account's or
+root's. A refusal answers 409 `abandon_refused` with its reason
+(`no_unfinished_create`, `marker`, `user`, `group`, `home`, `home_not_empty`,
+`mail_spool`, `processes`), and the recovery log names it. Otherwise the
+broker records the home's identity, then removes as a delete does: the user
+(its processes ended first), the group if userdel left it (groupdel, also
+for a group whose useradd never ran), the home, the spool, the slice
+drop-in, and the marker last. In one bbolt transaction it then journals the
+create's last row (status `abandoned`, with the operator's actor and reason)
+and removes the record, so every other account can change again. Replay reads
+only the histories of records that exist, so it never reads that row; the
+rows stay for audit. A run stopped half way leaves the create unfinished, and
+running it again treats what is already gone as removed.
 
 The broker says why, in one line on its standard error (journald keeps it for
 the broker's unit), whenever an operation journals recovery_required, a start

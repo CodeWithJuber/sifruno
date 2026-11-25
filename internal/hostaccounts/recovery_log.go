@@ -84,12 +84,15 @@ func (s *store) refreshed(ctx context.Context) error {
 // never prints an error's own text, which may name a tenant's path.
 func errorClass(err error) string {
 	var command *commandError
+	var refused *AbandonRefusedError
 	var errno syscall.Errno
 	switch {
 	case err == nil:
 		return "none"
 	case errors.As(err, &command):
 		return command.class()
+	case errors.As(err, &refused) && abandonReasonPattern.MatchString(refused.Reason):
+		return "refused: " + refused.Reason
 	case errors.Is(err, errHoldsEveryChange):
 		return errHoldsEveryChange.Error()
 	case errors.Is(err, errAccountBusy):

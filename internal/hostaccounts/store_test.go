@@ -34,6 +34,8 @@ type fakeNative struct {
 	refuseState string
 	// stateTimeLeft is how long the context of the last SetState had left.
 	stateTimeLeft time.Duration
+	// abandons counts AbandonCreate calls.
+	abandons int
 	// siteApplies counts ApplySites calls, failed ones included.
 	siteApplies int
 	// missingPath is a tenant path that is gone. ApplySites and ApplyWeb
@@ -304,6 +306,31 @@ func (f *fakeNative) RecoverCreate(ctx context.Context, r record, persist func(o
 	}
 	return actual.Ownership, nil
 }
+
+// AbandonCreate removes the fake's user of an unfinished create, if it has
+// one. Failure "abandon-refused" refuses it, removing nothing, as a home
+// with something in it; "abandon-half" removes the user and stops before
+// the rest, as a run cut short does.
+func (f *fakeNative) AbandonCreate(_ context.Context, r record, persist func(ownership) error) error {
+	f.abandons++
+	actual, ok := f.users[r.Account.Username]
+	if ok && (actual.Tag != r.Tag || actual.Account.UID != r.Account.UID || actual.Account.GID != r.Account.GID) {
+		return abandonRefused(AbandonUser)
+	}
+	switch f.failure {
+	case "abandon-refused":
+		return abandonRefused(AbandonHomeNotEmpty)
+	case "abandon-half":
+		delete(f.users, r.Account.Username)
+		return atStep("home", ErrUnavailable)
+	}
+	if ok && persist(actual.Ownership) != nil {
+		return ErrRecovery
+	}
+	delete(f.users, r.Account.Username)
+	return nil
+}
+
 func (f *fakeNative) Delete(_ context.Context, r record) error {
 	actual, ok := f.users[r.Account.Username]
 	if !ok {
@@ -654,6 +681,180 @@ func TestRecoveryLogNamesTheReason(t *testing.T) {
 	if logged.String() != want {
 		t.Fatalf("the start logged %q, want %q", logged.String(), want)
 	}
+}
+
+// pendingCreate makes a create that the fake's user outlived and that ended
+// recovery_required, and answers its account.
+func pendingCreate(t *testing.T, s *store, f *fakeNative) Account {
+	t.Helper()
+	f.failure = "after"
+	if _, e := s.create(context.Background(), CreateInput{"pendingacct", "pending.test", "", "Interrupted synthetic create"}, "test operator"); e != ErrRecovery {
+		t.Fatal(e)
+	}
+	f.failure = ""
+	items, e := s.list(context.Background())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, a := range items {
+		if a.Username == "pendingacct" && a.State == "recovery_required" {
+			return a
+		}
+	}
+	t.Fatal("no unfinished create", items)
+	return Account{}
+}
+
+// historyOf is an account's journal rows, kept after its record is gone.
+func historyOf(t *testing.T, s *store, id string) []operationEvent {
+	t.Helper()
+	var rows []operationEvent
+	if e := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(historyBucket).Cursor()
+		for k, v := c.Seek([]byte(id + "/")); k != nil && strings.HasPrefix(string(k), id+"/"); k, v = c.Next() {
+			var row operationEvent
+			if e := json.Unmarshal(v, &row); e != nil {
+				return e
+			}
+			rows = append(rows, row)
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	return rows
+}
+
+// An unfinished create holds up every account until the operator abandons
+// it: its user and slice drop-in go, the journal ends it, and every account
+// changes again. An account that is not an unfinished create is refused.
+func TestAbandonCreateUnblocksEveryAccount(t *testing.T) {
+	logged := captureRecoveryLog(t)
+	s, f, opts := setupStore(t)
+	ctx := context.Background()
+	settled := createFixture(t, s)
+	pending := pendingCreate(t, s, f)
+	if _, ok := f.dropIns[pending.UID]; !ok {
+		t.Fatal("fixture: the create wrote no drop-in")
+	}
+	if _, e := s.setState(ctx, settled.ID, StateInput{"suspended", settled.Revision, "Held up"}, "test operator"); e != ErrRecovery {
+		t.Fatalf("another account changed while a create was unfinished: %v", e)
+	}
+
+	var refused *AbandonRefusedError
+	if _, e := s.abandonCreate(ctx, settled.ID, AbandonCreateInput{"Not a create"}, "test operator"); !errors.As(e, &refused) || refused.Reason != AbandonNoCreate {
+		t.Fatalf("an active account was abandoned: %v", e)
+	}
+	if !strings.Contains(logged.String(), `operation=abandon_create account=`+settled.ID+` user=fixtureacct step="check" error="refused: no_unfinished_create"`) {
+		t.Fatalf("the refusal was not logged: %q", logged.String())
+	}
+	if _, e := s.abandonCreate(ctx, strings.Repeat("0", 32), AbandonCreateInput{"No such account"}, "test operator"); e != ErrNotFound {
+		t.Fatal(e)
+	}
+	if _, e := s.abandonCreate(ctx, pending.ID, AbandonCreateInput{" "}, "test operator"); e != ErrInvalid {
+		t.Fatal(e)
+	}
+	if f.abandons != 0 {
+		t.Fatal("a refused abandon reached the native step")
+	}
+
+	a, e := s.abandonCreate(ctx, pending.ID, AbandonCreateInput{"Leftover of a killed useradd"}, "root operator")
+	if e != nil || a.ID != pending.ID {
+		t.Fatal(a, e)
+	}
+	if _, ok := f.users["pendingacct"]; ok {
+		t.Fatal("the create's user is left")
+	}
+	if _, ok := f.dropIns[pending.UID]; ok {
+		t.Fatal("the create's slice drop-in is left")
+	}
+	items, e := s.list(ctx)
+	if e != nil || len(items) != 1 || items[0].ID != settled.ID {
+		t.Fatal(items, e)
+	}
+	rows := historyOf(t, s, pending.ID)
+	if len(rows) != 3 || rows[0].Status != "intended" || rows[1].Status != "recovery_required" || rows[2].Status != "abandoned" || rows[2].Action != "create" || rows[2].OperationID != rows[0].OperationID || rows[2].Actor != "root operator" || rows[2].Reason != "Leftover of a killed useradd" || rows[2].Sequence != 3 {
+		t.Fatalf("journal %+v", rows)
+	}
+
+	if _, e := s.setState(ctx, settled.ID, StateInput{"suspended", settled.Revision, "Free again"}, "test operator"); e != nil {
+		t.Fatalf("the other account is still held up: %v", e)
+	}
+	if _, e := s.create(ctx, CreateInput{"pendingacct", "pending.test", "", "The name is free again"}, "test operator"); e != nil {
+		t.Fatalf("the abandoned name cannot be created again: %v", e)
+	}
+	s.close()
+	reopened, e := openStore(ctx, opts, f)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer reopened.close()
+	if items, e = reopened.list(ctx); e != nil || len(items) != 2 {
+		t.Fatal(items, e)
+	}
+}
+
+// A refused abandon changes nothing; one cut short leaves the create
+// unfinished, and the next run finishes it.
+func TestAbandonCreateRefusedOrCutShort(t *testing.T) {
+	s, f, _ := setupStore(t)
+	ctx := context.Background()
+	pending := pendingCreate(t, s, f)
+	sequence := func() uint64 {
+		items, e := s.records()
+		if e != nil || len(items) != 1 {
+			t.Fatal(items, e)
+		}
+		return items[0].HistorySequence
+	}
+	before := sequence()
+	f.failure = "abandon-refused"
+	var refused *AbandonRefusedError
+	if _, e := s.abandonCreate(ctx, pending.ID, AbandonCreateInput{"Try"}, "test operator"); !errors.As(e, &refused) || refused.Reason != AbandonHomeNotEmpty {
+		t.Fatal(e)
+	}
+	if _, ok := f.users["pendingacct"]; !ok || sequence() != before {
+		t.Fatal("a refused abandon removed or journaled something")
+	}
+	f.failure = "abandon-half"
+	if _, e := s.abandonCreate(ctx, pending.ID, AbandonCreateInput{"Cut short"}, "test operator"); e != ErrRecovery {
+		t.Fatal(e)
+	}
+	if sequence() != before {
+		t.Fatal("a run cut short ended the create")
+	}
+	f.failure = ""
+	if _, e := s.abandonCreate(ctx, pending.ID, AbandonCreateInput{"Again"}, "test operator"); e != nil {
+		t.Fatal(e)
+	}
+	if items, e := s.records(); e != nil || len(items) != 0 {
+		t.Fatal(items, e)
+	}
+}
+
+// The broker answers a refusal with its reason, which the client reads
+// back as an *AbandonRefusedError.
+func TestAbandonCreateRefusalIsAnswered(t *testing.T) {
+	s, f, _ := setupStore(t)
+	pending := pendingCreate(t, s, f)
+	f.failure = "abandon-refused"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://unix/v1/accounts/"+pending.ID+"/abandon-create", strings.NewReader(`{"input":{"reason":"Leftover"},"actor":"operator"}`))
+	r.Header.Set("Content-Type", "application/json")
+	handler(s).ServeHTTP(w, r)
+	if w.Code != 409 || strings.TrimSpace(w.Body.String()) != `{"error":"abandon_refused","reason":"home_not_empty"}` {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	for _, body := range []string{`{"input":{"reason":"x","expected_revision":1},"actor":"operator"}`, `{"input":{},"actor":"operator"}`} {
+		w = httptest.NewRecorder()
+		r = httptest.NewRequest("POST", "http://unix/v1/accounts/"+pending.ID+"/abandon-create", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		handler(s).ServeHTTP(w, r)
+		if w.Code != 400 && w.Code != 422 {
+			t.Fatalf("%s: %d %s", body, w.Code, w.Body.String())
+		}
+	}
+	var _ CreateRecoveryService = NewClient("").(*client)
 }
 
 // The error class never carries an error's own text, which may name a path

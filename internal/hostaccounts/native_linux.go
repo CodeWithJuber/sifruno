@@ -34,7 +34,7 @@ const killPath = "/usr/bin/kill"
 // setpriv drops it to the user and env starts it in its folder
 // (wordpress_linux.go); AlmaLinux 9's systemd, util-linux and coreutils
 // packages ship them as regular root-owned 0755 files.
-var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin, systemctl, systemdRun, setprivPath, envPath}
+var fixedUtilities = []string{"/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/usermod", "/usr/sbin/userdel", groupdelPath, "/usr/bin/passwd", "/usr/bin/chage", killPath, nologin, systemctl, systemdRun, setprivPath, envPath}
 
 type nativeUser struct {
 	Username         string
@@ -249,7 +249,7 @@ const commandTimeout = 15 * time.Second
 // are never cut short at commandTimeout: each runs until the context of the
 // operation that started it ends (every caller gives it one after the
 // intent is journaled, webContext), and at most accountWriteTimeout.
-var accountFileWriters = map[string]bool{"/usr/sbin/groupadd": true, "/usr/sbin/useradd": true, "/usr/sbin/usermod": true, "/usr/sbin/userdel": true}
+var accountFileWriters = map[string]bool{"/usr/sbin/groupadd": true, "/usr/sbin/useradd": true, "/usr/sbin/usermod": true, "/usr/sbin/userdel": true, groupdelPath: true}
 
 // accountWriteTimeout only caps an account file writer whose context has no
 // earlier end; the operation's own context is what bounds it.
@@ -1024,14 +1024,8 @@ func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
 			_, e := n.command(ctx, "/usr/sbin/usermod", "--expiredate", "1970-01-02", "--lock", "--", r.Account.Username)
 			return e
 		},
-		end: func(ctx context.Context) error { return n.EndProcesses(ctx, r) },
-		userdel: func(ctx context.Context) (int, error) {
-			_, code, e := n.commandStatus(ctx, commandLimit("/usr/sbin/userdel"), "/usr/sbin/userdel", "--", r.Account.Username)
-			if e != nil {
-				return code, &commandError{program: "userdel", status: -1, stopped: errors.Is(e, errCommandStopped)}
-			}
-			return code, nil
-		},
+		end:     func(ctx context.Context) error { return n.EndProcesses(ctx, r) },
+		userdel: func(ctx context.Context) (int, error) { return n.userdel(ctx, r) },
 		putBack: func(ctx context.Context) error {
 			// When the lock step itself failed (the shadow file busy, say),
 			// the account is often unchanged, and a usermod now could fail the
@@ -1048,6 +1042,15 @@ func (n *linuxSystem) removeUser(ctx context.Context, r record) error {
 			return n.VerifyAccount(ctx, r)
 		},
 	}.run(ctx, processBudget)
+}
+
+// userdel runs userdel for the account's user and answers its exit status.
+func (n *linuxSystem) userdel(ctx context.Context, r record) (int, error) {
+	_, code, e := n.commandStatus(ctx, commandLimit("/usr/sbin/userdel"), "/usr/sbin/userdel", "--", r.Account.Username)
+	if e != nil {
+		return code, &commandError{program: "userdel", status: -1, stopped: errors.Is(e, errCommandStopped)}
+	}
+	return code, nil
 }
 
 // userRemoval is the steps of removeUser, kept apart so their order, the

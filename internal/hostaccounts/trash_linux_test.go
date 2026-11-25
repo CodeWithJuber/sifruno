@@ -295,13 +295,14 @@ func TestTrashRemoverStopsAndResumes(t *testing.T) {
 	}
 }
 
-// A folder on another device or mount is never entered: the entry stays,
-// logged by its account ID only, and the remover tries again later. Other
+// A folder on another device or mount is never entered: it and the folders
+// above it stay, everything else in the entry goes, and the entry is left,
+// logged by its account ID only, for the remover to try again later. Other
 // entries are removed, and one not named as an account ID is left alone.
 func TestTrashRemoverSkipsAMount(t *testing.T) {
 	logged := captureRecoveryLog(t)
 	dir, id, _ := trashWithTree(t, 3, 2)
-	mounted := filepath.Join(dir, trashName, id, "tenant-secret-name")
+	mounted := filepath.Join(dir, trashName, id, "d", "d", "tenant-secret-name")
 	if os.Mkdir(mounted, 0700) != nil || os.WriteFile(filepath.Join(mounted, "inside"), nil, 0600) != nil {
 		t.Fatal("fixture")
 	}
@@ -325,6 +326,12 @@ func TestTrashRemoverSkipsAMount(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(mounted, "inside")); err != nil {
 		t.Fatal("the remover entered a folder on another device")
+	}
+	for path, want := range map[string]string{filepath.Join(dir, trashName, id): "d", filepath.Join(dir, trashName, id, "d"): "d", filepath.Join(dir, trashName, id, "d", "d"): "tenant-secret-name"} {
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) != 1 || entries[0].Name() != want {
+			t.Fatalf("%s holds %v, want only %s: %v", path, entries, want, err)
+		}
 	}
 	names := trashEntries(t, dir)
 	if len(names) != 2 || !strings.Contains(strings.Join(names, " "), id) || !strings.Contains(strings.Join(names, " "), "not-an-id") {

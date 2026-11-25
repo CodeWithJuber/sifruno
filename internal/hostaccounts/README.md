@@ -420,9 +420,10 @@ other account waits for it (Jev, `detach_then_delete` 0.99; forge D-0001).
   few descriptors at any depth; each step up through `..` is checked
   against the folder it came from, and a folder that moved stops it. It
   never follows a link, checks its context before every entry, never
-  enters a folder on another device or mount (it leaves that entry and
-  logs it), and logs by account ID only. A removal stopped half way is
-  resumed by the next run.
+  enters a folder on another device or mount (that folder and those above
+  it stay, the rest of the entry goes, and the entry is left and logged),
+  and logs by account ID only. A removal stopped half way is resumed by
+  the next run.
 - Plan, the only allocator of UIDs and GIDs, skips every UID and GID that
   owns a trash entry, so a deleted account's files never count against a
   new account's XFS quota. A create checks its planned IDs are still free

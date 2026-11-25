@@ -343,12 +343,14 @@ func (t *trashRemover) removeEntry(ctx context.Context, trash int, name string) 
 	}
 }
 
-// trashFrame is a folder the walk entered: its name in its parent and its
-// identity. The walk keeps one per level (memory grows with depth, open
+// trashFrame is a folder the walk entered: its name in its parent, its
+// identity, and whether it keeps a folder on another device or mount (kept)
+// and so stays. The walk keeps one per level (memory grows with depth, open
 // descriptors do not).
 type trashFrame struct {
 	name     string
 	dev, ino uint64
+	kept     bool
 }
 
 // removeTree empties and removes the folder name in the folder trash holds,
@@ -358,8 +360,10 @@ type trashFrame struct {
 // entry by name, never follows a link, and steps up through "..", checked
 // against the identity of the folder it came from. A folder that moved
 // meanwhile stops it (errTrashChanged); the entry stays for the next run.
-// ctx is checked before every entry, and a removal stopped by it is resumed
-// by the next run from what is left.
+// A folder on another device or mount is never entered: it and the folders
+// above it stay, everything else goes, and the entry is left
+// (errOtherDevice). ctx is checked before every entry, and a removal
+// stopped by it is resumed by the next run from what is left.
 func (t *trashRemover) removeTree(ctx context.Context, trash int, name string, top entryStat) error {
 	cur, e := t.enter(trash, name, top)
 	if e != nil {
@@ -370,7 +374,10 @@ func (t *trashRemover) removeTree(ctx context.Context, trash int, name string, t
 			unix.Close(cur)
 		}
 	}()
-	path := []trashFrame{{name, top.dev, top.ino}}
+	path := []trashFrame{{name, top.dev, top.ino, false}}
+	// kept holds the identities of the folders that stay: those on another
+	// device or mount and the folders above them, so a read again skips them.
+	kept := map[[2]uint64]bool{}
 	buf := make([]byte, 8192)
 	for {
 		n, e := unix.Getdents(cur, buf)
@@ -398,8 +405,13 @@ func (t *trashRemover) removeTree(ctx context.Context, trash int, name string, t
 					}
 					continue
 				}
+				if kept[[2]uint64{st.dev, st.ino}] {
+					continue
+				}
 				if st.dev != top.dev || st.mntKnown && top.mntKnown && st.mnt != top.mnt {
-					return errOtherDevice
+					kept[[2]uint64{st.dev, st.ino}] = true
+					path[len(path)-1].kept = true
+					continue
 				}
 				next, e := t.enter(cur, child, st)
 				if e != nil {
@@ -407,7 +419,7 @@ func (t *trashRemover) removeTree(ctx context.Context, trash int, name string, t
 				}
 				unix.Close(cur)
 				cur = next
-				path = append(path, trashFrame{child, st.dev, st.ino})
+				path = append(path, trashFrame{child, st.dev, st.ino, false})
 				break
 			}
 			continue
@@ -417,6 +429,9 @@ func (t *trashRemover) removeTree(ctx context.Context, trash int, name string, t
 		if len(path) == 1 {
 			unix.Close(cur)
 			cur = -1
+			if done.kept {
+				return errOtherDevice
+			}
 			return removeEmptied(trash, done)
 		}
 		up, e := unix.Openat(cur, "..", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
@@ -431,6 +446,11 @@ func (t *trashRemover) removeTree(ctx context.Context, trash int, name string, t
 		unix.Close(cur)
 		cur = up
 		path = path[:len(path)-1]
+		if done.kept {
+			kept[[2]uint64{done.dev, done.ino}] = true
+			path[len(path)-1].kept = true
+			continue
+		}
 		if e := removeEmptied(cur, done); e != nil && !errors.Is(e, unix.ENOTEMPTY) {
 			return e
 		}

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -154,6 +155,32 @@ func NewManager(issuer Issuer, installer Installer, sites Sites, stateDir string
 		return nil, err
 	}
 	return m, nil
+}
+
+// Alongside returns a manager for other certificates, such as the panel's
+// own, over m's issuer: the same certificate authority account, and one
+// attempt at a time across both managers. Its records are kept in stateDir
+// (made 0700), which must not be m's.
+func (m *Manager) Alongside(installer Installer, sites Sites, stateDir string) (*Manager, error) {
+	dir, err := filepath.Abs(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if dir == filepath.Dir(m.records.path) {
+		return nil, errors.New("acme: a manager alongside another needs its own state directory")
+	}
+	n, err := NewManager(m.issuer, installer, sites, dir)
+	if err != nil {
+		return nil, err
+	}
+	n.busy = m.busy
+	return n, nil
+}
+
+// Reaches says whether domain reaches this server's HTTP-01 challenge path
+// now, as an alias is probed; true when the issuer cannot tell.
+func (m *Manager) Reaches(ctx context.Context, domain string) bool {
+	return m.reaches(ctx, domain)
 }
 
 // Secure gets a certificate for domain and installs it on the account at

@@ -427,7 +427,7 @@ func (s *store) openMigration(ctx context.Context, in MigrationOpenInput, actor 
 	}
 	// The folder comes first, then the record; a folder no record names
 	// (a broker stopped between the two) is removed by the next sweep.
-	m := migrationRecord{ID: id, Host: in.Host, Port: in.Port, HostKeys: keys, Actor: actor, Reason: in.Reason, CreatedAt: now}
+	m := migrationRecord{ID: id, Host: in.Host, Port: in.Port, HostKeys: keys, Via: in.Via, Actor: actor, Reason: in.Reason, CreatedAt: now}
 	public, err := s.migrate.Open(id)
 	if err != nil {
 		_ = s.migrate.Forget(id)
@@ -507,8 +507,29 @@ func (s *store) remote(ctx context.Context, m migrationRecord, command string, s
 	return stdout.b, nil
 }
 
-func (s *store) sourceAccounts(ctx context.Context, m migrationRecord) ([]cpsource.Account, error) {
-	out, err := s.remote(ctx, m, cpsource.ListAccountsCommand(), nil, "cpanel_tool")
+// cpanelAnswer is one cPanel answer: for an SSH migration whmapi1 or uapi
+// run over SSH, for a WHM migration the panel's copy of WHM's own answer
+// (D-0005), read by the same parsers. A WHM migration never runs a cPanel
+// tool over SSH, and an SSH migration takes no answers from the panel.
+func (s *store) cpanelAnswer(ctx context.Context, m migrationRecord, answers *CPanelAnswers, pick func(*CPanelAnswers) json.RawMessage, command string) ([]byte, error) {
+	if m.Via != ViaWHM {
+		if answers != nil {
+			return nil, ErrInvalid
+		}
+		return s.remote(ctx, m, command, nil, "cpanel_tool")
+	}
+	if answers == nil {
+		return nil, ErrInvalid
+	}
+	raw := pick(answers)
+	if len(raw) == 0 || len(raw) > cpsource.MaxOutput {
+		return nil, &MigrationError{Step: "whm_output", Detail: "The panel sent no WHM answer for a step of the copy."}
+	}
+	return raw, nil
+}
+
+func (s *store) sourceAccounts(ctx context.Context, m migrationRecord, answers *CPanelAnswers) ([]cpsource.Account, error) {
+	out, err := s.cpanelAnswer(ctx, m, answers, func(a *CPanelAnswers) json.RawMessage { return a.Accounts }, cpsource.ListAccountsCommand())
 	if err != nil {
 		return nil, err
 	}
@@ -529,13 +550,14 @@ func (s *store) migrationAccounts(ctx context.Context, id string) ([]cpsource.Ac
 	}
 	work, cancel := backupContext(ctx, migrateRemoteTimeout)
 	defer cancel()
-	return s.sourceAccounts(work, m)
+	// A WHM migration's accounts are listed by the panel through WHM.
+	return s.sourceAccounts(work, m, nil)
 }
 
 // sourceSite reads the source account's main site: its home must end in
 // its name and its document root be the home's public_html.
-func (s *store) sourceSite(ctx context.Context, m migrationRecord, user, domain string) (cpsource.Account, cpsource.Site, error) {
-	accounts, err := s.sourceAccounts(ctx, m)
+func (s *store) sourceSite(ctx context.Context, m migrationRecord, user, domain string, answers *CPanelAnswers) (cpsource.Account, cpsource.Site, error) {
+	accounts, err := s.sourceAccounts(ctx, m, answers)
 	if err != nil {
 		return cpsource.Account{}, cpsource.Site{}, err
 	}
@@ -554,7 +576,7 @@ func (s *store) sourceSite(ctx context.Context, m migrationRecord, user, domain 
 	if err != nil {
 		return cpsource.Account{}, cpsource.Site{}, ErrInvalid
 	}
-	out, err := s.remote(ctx, m, command, nil, "cpanel_tool")
+	out, err := s.cpanelAnswer(ctx, m, answers, func(a *CPanelAnswers) json.RawMessage { return a.Site }, command)
 	if err != nil {
 		return cpsource.Account{}, cpsource.Site{}, err
 	}
@@ -586,14 +608,14 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	}
 	work, cancel := backupContext(ctx, 10*time.Minute)
 	defer cancel()
-	account, site, err := s.sourceSite(work, m, in.Username, "")
+	account, site, err := s.sourceSite(work, m, in.Username, "", in.CPanel)
 	if err != nil {
 		return MigrationPlan{}, err
 	}
 	plan := MigrationPlan{Username: account.User, Domain: account.Domain, Aliases: site.Aliases, WWW: site.WWW, DiskUsedMiB: account.DiskUsedMiB, DiskLimitMiB: account.DiskLimitMiB,
 		Databases: []cpsource.Database{}, Users: []cpsource.DatabaseUser{}, GrantsSkipped: []string{}, Cron: []cpsource.CronLine{}, CronSkipped: []string{}, Probes: []MigrationProbe{}, TierCauses: []string{},
 		Converted: []MigrationFolder{}, TierRefusals: []string{}}
-	out, err := s.remote(work, m, cpsource.VhostPHPCommand(), nil, "cpanel_tool")
+	out, err := s.cpanelAnswer(work, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.PHP }, cpsource.VhostPHPCommand())
 	if err != nil {
 		return MigrationPlan{}, err
 	}
@@ -601,7 +623,7 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 		return MigrationPlan{}, &MigrationError{Step: "cpanel_output", Detail: "The old server's PHP version for the site could not be read (whmapi1 php_get_vhost_versions)."}
 	}
 	plan.ClientAddress = s.sourceClient(work, m)
-	if err = s.planDatabases(work, m, &plan); err != nil {
+	if err = s.planDatabases(work, m, &plan, in.CPanel); err != nil {
 		return MigrationPlan{}, err
 	}
 	if err = s.planCron(work, m, &plan); err != nil {
@@ -629,9 +651,9 @@ func (s *store) sourceClient(ctx context.Context, m migrationRecord) string {
 	return address
 }
 
-func (s *store) planDatabases(ctx context.Context, m migrationRecord, plan *MigrationPlan) error {
+func (s *store) planDatabases(ctx context.Context, m migrationRecord, plan *MigrationPlan, answers *CPanelAnswers) error {
 	command, _ := cpsource.DatabasesCommand(plan.Username)
-	out, err := s.remote(ctx, m, command, nil, "cpanel_tool")
+	out, err := s.cpanelAnswer(ctx, m, answers, func(a *CPanelAnswers) json.RawMessage { return a.Databases }, command)
 	if err != nil {
 		return err
 	}
@@ -640,7 +662,7 @@ func (s *store) planDatabases(ctx context.Context, m migrationRecord, plan *Migr
 		return unreadable(err, "databases (uapi Mysql list_databases)")
 	}
 	command, _ = cpsource.DatabaseUsersCommand(plan.Username)
-	if out, err = s.remote(ctx, m, command, nil, "cpanel_tool"); err != nil {
+	if out, err = s.cpanelAnswer(ctx, m, answers, func(a *CPanelAnswers) json.RawMessage { return a.DatabaseUsers }, command); err != nil {
 		return err
 	}
 	users, err := cpsource.ParseDatabaseUsers(out, plan.Username)
@@ -825,7 +847,7 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 	defer s.endInstall(id)
 	work, cancel := backupContext(ctx, backupTimeout)
 	defer cancel()
-	account, site, err := s.lockedSourceSite(work, m, r.Account.Username, r.Account.Domain)
+	account, site, err := s.lockedSourceSite(work, m, r.Account.Username, r.Account.Domain, in.CPanel)
 	if err != nil {
 		return MigrateFilesResult{}, err
 	}
@@ -905,8 +927,8 @@ func (s *store) lockedMigration(id string) (migrationRecord, error) {
 
 // lockedSourceSite reads the source without holding migrateMu, like every
 // remote read: a migration's folder removed meanwhile only makes it fail.
-func (s *store) lockedSourceSite(ctx context.Context, m migrationRecord, user, domain string) (cpsource.Account, cpsource.Site, error) {
-	return s.sourceSite(ctx, m, user, domain)
+func (s *store) lockedSourceSite(ctx context.Context, m migrationRecord, user, domain string, answers *CPanelAnswers) (cpsource.Account, cpsource.Site, error) {
+	return s.sourceSite(ctx, m, user, domain, answers)
 }
 
 // migrateDatabase copies one database of the source account of the
@@ -935,7 +957,7 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 	if err != nil {
 		return MigrateDatabaseResult{}, ErrInvalid
 	}
-	out, err := s.remote(work, m, command, nil, "cpanel_tool")
+	out, err := s.cpanelAnswer(work, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.Databases }, command)
 	if err != nil {
 		return MigrateDatabaseResult{}, err
 	}

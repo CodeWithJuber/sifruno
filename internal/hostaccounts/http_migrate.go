@@ -58,7 +58,7 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 	}
 	if r.URL.Path == "/v1/migrations" {
 		var in body[MigrationOpenInput]
-		if r.Method != "POST" || decodeBody(w, r, &in, []string{"host", "port", "reason"}) != nil {
+		if r.Method != "POST" || decodeBody(w, r, &in, []string{"host", "port", "via", "reason"}) != nil {
 			writeError(w, ErrInvalid)
 			return
 		}
@@ -89,7 +89,7 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 		}
 		if m[2] == "migrate-files" {
 			var in body[MigrateFilesInput]
-			if decodeBody(w, r, &in, []string{"migration", "expected_revision", "reason"}) != nil {
+			if decodeBodyWithin(w, r, &in, []string{"migration", "expected_revision", "cpanel", "reason"}, maxCPanelRequest) != nil {
 				writeError(w, ErrInvalid)
 				return
 			}
@@ -98,7 +98,7 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 			return
 		}
 		var in body[MigrateDatabaseInput]
-		if decodeBody(w, r, &in, []string{"migration", "database", "expected_revision", "reason"}) != nil {
+		if decodeBodyWithin(w, r, &in, []string{"migration", "database", "expected_revision", "cpanel", "reason"}, maxCPanelRequest) != nil {
 			writeError(w, ErrInvalid)
 			return
 		}
@@ -134,7 +134,7 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 		answerMigration(w, result, err)
 	case action == "/plan" && r.Method == "POST":
 		var in body[MigrationPlanInput]
-		if decodeBody(w, r, &in, []string{"username", "reason"}) != nil {
+		if decodeBodyWithin(w, r, &in, []string{"username", "cpanel", "reason"}, maxCPanelRequest) != nil {
 			writeError(w, ErrInvalid)
 			return
 		}

@@ -2,8 +2,10 @@ package hostaccounts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -541,5 +543,101 @@ func TestMigrationFailuresAreNamed(t *testing.T) {
 	var failed *MigrationError
 	if _, err := s.planMigration(context.Background(), m.ID, MigrationPlanInput{Username: "someone", Reason: "Move a website here"}, "test operator"); !errors.As(err, &failed) || failed.Step != "account_missing" || failed.Output != "" {
 		t.Fatalf("an account the old server does not have: %+v %v", failed, err)
+	}
+}
+
+// fixtureAnswers are WHM's answers for fixtureacct, as the panel relays
+// them: the same documents whmapi1 and uapi print over SSH.
+func fixtureAnswers(f *fakeMigrate) *CPanelAnswers {
+	return &CPanelAnswers{
+		Accounts:      json.RawMessage(f.answers[cpsource.ListAccountsCommand()]),
+		Site:          json.RawMessage(f.answers["/usr/local/cpanel/bin/whmapi1 --output=json domainuserdata domain=fixture.test"]),
+		PHP:           json.RawMessage(f.answers[cpsource.VhostPHPCommand()]),
+		Databases:     json.RawMessage(f.answers["/usr/local/cpanel/bin/uapi --output=json --user=fixtureacct Mysql list_databases"]),
+		DatabaseUsers: json.RawMessage(f.answers["/usr/local/cpanel/bin/uapi --output=json --user=fixtureacct Mysql list_users"]),
+	}
+}
+
+// A migration connected with the old server's WHM login takes what the
+// copy asks of cPanel from the panel, which read it through WHM's API, and
+// never runs whmapi1 or uapi over SSH, where a broken or hijacked cPanel
+// on the old server refuses (D-0005). rsync, the dump and SQL still run
+// over SSH. An SSH migration takes no answers from the panel.
+func TestWHMMigrationTakesCPanelAnswersFromThePanel(t *testing.T) {
+	s, f, _ := migrateStore(t)
+	ctx := context.Background()
+	opened, err := s.openMigration(ctx, MigrationOpenInput{Host: "source.example.test", Port: 22, Via: ViaWHM, Reason: "Move a website here"}, "test operator")
+	if err != nil || opened.Via != ViaWHM {
+		t.Fatalf("open: %+v %v", opened, err)
+	}
+	if _, err = s.openMigration(ctx, MigrationOpenInput{Host: "source.example.test", Port: 22, Via: "ftp", Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another way in: %v", err)
+	}
+	m, err := s.pinMigrationHostKey(ctx, opened.ID, MigrationPinInput{Fingerprint: opened.HostKeys[0].Fingerprint, Reason: "Fingerprint checked"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	answers := fixtureAnswers(f)
+	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a plan without WHM's answers: %v", err)
+	}
+	if _, err = s.migrationAccounts(ctx, m.ID); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("the broker listed a WHM migration's accounts: %v", err)
+	}
+	plan, err := s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", CPanel: answers, Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Domain != "fixture.test" || plan.PHPSource != "ea-php82" || len(plan.Databases) != 1 || len(plan.Users) != 1 || plan.Users[0].Hash == "" || len(plan.Cron) != 1 {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	a := createFixture(t, s)
+	if _, err = s.migrateFiles(ctx, a.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: a.Revision, Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a copy without WHM's answers: %v", err)
+	}
+	if _, err = s.migrateFiles(ctx, a.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: a.Revision, CPanel: answers, Reason: "Move a website here"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.migrateDatabase(ctx, a.ID, MigrateDatabaseInput{Migration: m.ID, Database: "fixtureacct_wp", ExpectedRevision: a.Revision, CPanel: answers, Reason: "Move a website here"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.commands {
+		if strings.Contains(c, "/usr/local/cpanel/") {
+			t.Fatalf("a cPanel tool ran over SSH for a WHM migration: %s", c)
+		}
+	}
+	// An answer that is not WHM's documented JSON is named as such.
+	bad := *answers
+	bad.Accounts = json.RawMessage(`"LD_Preload detect"`)
+	var failed *MigrationError
+	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", CPanel: &bad, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "cpanel_output" {
+		t.Fatalf("an answer that is not JSON: %v", err)
+	}
+	ssh := pinnedMigration(t, s)
+	if _, err = s.planMigration(ctx, ssh.ID, MigrationPlanInput{Username: "fixtureacct", CPanel: answers, Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an SSH migration took the panel's answers: %v", err)
+	}
+
+	// Over the broker's HTTP: via and cpanel are accepted keys, and a
+	// failure carries the old server's output apart from the broker's words.
+	h := handler(s)
+	call := func(method, path string, payload any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(payload)
+		req := httptest.NewRequest(method, "http://unix"+path, strings.NewReader(string(raw)))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	rec := call("POST", "/v1/migrations", map[string]any{"actor": "test operator", "input": map[string]any{"host": "source.example.test", "port": 22, "via": "whm", "reason": "x"}})
+	var viaHTTP Migration
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &viaHTTP) != nil || viaHTTP.Via != ViaWHM {
+		t.Fatalf("open over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	rec = call("POST", "/v1/migrations/"+m.ID+"/plan", map[string]any{"actor": "test operator", "input": map[string]any{"username": "fixtureacct", "cpanel": answers, "reason": "x"}})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"domain":"fixture.test"`) {
+		t.Fatalf("plan over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	f.fails = map[string]fakeFailure{"/usr/bin/crontab -l -u fixtureacct": {"crontab: LD_Preload detect", 3}}
+	rec = call("POST", "/v1/migrations/"+m.ID+"/plan", map[string]any{"actor": "test operator", "input": map[string]any{"username": "fixtureacct", "cpanel": answers, "reason": "x"}})
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), `"step":"source"`) || !strings.Contains(rec.Body.String(), `"output":"crontab: LD_Preload detect"`) {
+		t.Fatalf("a failure over HTTP: %d %s", rec.Code, rec.Body)
 	}
 }

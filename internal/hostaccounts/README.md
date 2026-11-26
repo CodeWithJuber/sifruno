@@ -1504,6 +1504,21 @@ root step. The design, with the owner's choices recorded from Jev on
   `StrictHostKeyChecking=yes`, only the migration's key and known_hosts
   under the alias `sifruno-migration-source`, no agent, no password
   prompt, no forwarding, as root.
+- With the old server's WHM login (D-0005), `POST /v1/migrations` carries
+  `via: "whm"`, and the record keeps it. The panel, as itself and never as
+  root, holds the WHM login in memory for that connection only, adds the
+  broker's public key line through WHM's API, and fetches over HTTPS what
+  the copy asks of cPanel: WHM API 1 `listaccts` for the account,
+  `domainuserdata`, `php_get_vhost_versions` for its virtual host, and
+  UAPI `Mysql list_databases` and `list_users` through `uapi_cpanel`. Plan,
+  `migrate-files` and `migrate-database` carry them as `cpanel` (at most 1
+  MiB a request) and the broker reads them with the same `cpsource`
+  parsers and checks as the same answers over SSH: they are the old
+  server's word either way. For such a migration the broker runs no
+  `whmapi1` or `uapi` over SSH (a hijacked or broken cPanel refuses there;
+  rsync, the dump, `crontab -l` and SQL are not cPanel's tools and still
+  run over SSH), refuses a step without `cpanel`, and does not list
+  accounts itself; an SSH migration refuses `cpanel`.
 - `GET /v1/migrations/{id}/accounts` lists the source's accounts;
   `POST /v1/migrations/{id}/plan` (`username`, `reason`) reads one: its
   domain, home and document root (which must be `<home>/public_html`), PHP

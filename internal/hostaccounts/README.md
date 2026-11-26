@@ -576,8 +576,11 @@ broker.
   lsws` restarts OpenLiteSpeed gracefully (its unit reloads with
   `lswsctrl restart`). The broker never edits `httpd_config.conf`: the
   installer adds `include /usr/local/lsws/conf/sifruno.conf` and
-  server-level `namespace 1` once, and the package's stock `module cache`
-  block if the file has none. New files take their SELinux label from
+  server-level `namespace 1` once, the package's stock `module cache`
+  block if the file has none, and removes the package's sample site
+  (`virtualHost Example` and its `listener Default` on 8088), so
+  `openlitespeed -t` no longer prints that vhost's two ownership warnings.
+  New files take their SELinux label from
   the directory they are written in.
 - Page cache (LSCache): each live site's `vhconf.conf` has its own
   `module cache` block with `ls_enabled 1` and its own store,

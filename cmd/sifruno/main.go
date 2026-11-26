@@ -356,6 +356,8 @@ func run() error {
 		access.SetPublicAddress(publicAddress(hosts[0], *httpsListen))
 		kind := "operator-provided"
 		switch {
+		case panelIssued != nil && !panelIssued.NotAfter().IsZero():
+			kind = "self-signed, for an IP address only; " + strings.Join(names, ", ") + " uses its Let's Encrypt certificate: see the line that starts \"Panel certificate:\""
 		case panelIssued != nil:
 			kind = "self-signed, for an IP address, and for " + strings.Join(names, ", ") + " until Let's Encrypt's is in place: see the line that starts \"Panel certificate:\""
 		case cert.SelfSigned:

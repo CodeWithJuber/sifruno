@@ -96,7 +96,15 @@ type certificatesFake struct {
 	mu        sync.Mutex
 	refreshed []acme.Site
 	waiting   map[string][]string
+	copied    map[string]time.Time
 	done      chan struct{}
+}
+
+func (c *certificatesFake) CopiedUntil(id string) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	until, ok := c.copied[id]
+	return until, ok
 }
 
 func (c *certificatesFake) Refresh(_ context.Context, s acme.Site) error {
@@ -353,6 +361,36 @@ func TestWebsiteRedirects(t *testing.T) {
 }
 
 // Without the domains operation the routes say so, and change nothing.
+// The site's page says where its certificate came from while it is the one
+// copied from the old server when the site moved here, and nothing once
+// another is installed.
+func TestWebsiteSaysTheCertificateWasCopied(t *testing.T) {
+	f, broker, certs, site, _ := domainsFixture(t)
+	cookie, _ := websiteSignIn(t, f)
+	read := func() WebsiteDetail {
+		t.Helper()
+		return decodeDetail(t, websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+site.AccountID, nil, cookie, ""))
+	}
+	until := time.Unix(1803311049, 0)
+	broker.change(site.AccountID, func(a *hostaccounts.Account) {
+		a.Certificate = hostaccounts.CertificateState{NotAfter: until.Unix(), Fingerprint: strings.Repeat("ab", 32), Names: "example.com,mail.example.com,www.example.com"}
+	})
+	if got := read(); got.HTTPS.Source != "" {
+		t.Fatalf("a certificate the panel does not know as copied: %+v", got.HTTPS)
+	}
+	certs.mu.Lock()
+	certs.copied = map[string]time.Time{site.AccountID: until}
+	certs.mu.Unlock()
+	if got := read(); got.HTTPS != (WebsiteHTTPS{On: true, NotAfter: "2027-02-22T15:44:09Z", Source: "copied"}) {
+		t.Fatalf("copied: %+v", got.HTTPS)
+	}
+	// Another certificate is installed since: it is not the copied one.
+	broker.change(site.AccountID, func(a *hostaccounts.Account) { a.Certificate.NotAfter = until.Unix() + 86400 })
+	if got := read(); got.HTTPS.Source != "" {
+		t.Fatalf("another certificate: %+v", got.HTTPS)
+	}
+}
+
 func TestWebsiteDomainsNeedTheOperation(t *testing.T) {
 	f, _, broker, _, site := actionsFixture(t)
 	cookie, csrf := websiteSignIn(t, f)

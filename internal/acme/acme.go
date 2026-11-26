@@ -284,6 +284,28 @@ func (m *Manager) Refresh(ctx context.Context, s Site) error {
 	return m.renew(ctx, s, due(notAfter, time.Time{}, m.now()), byRefresh)
 }
 
+// Copied records that the certificate installed on the account is the one
+// copied from its old server when the site moved here, valid until
+// notAfter. The renewal loop replaces it before it runs out, as any other,
+// but asks for the new one only once domain reaches this server.
+func (m *Manager) Copied(accountID, domain string, notAfter time.Time) {
+	if accountID == "" || domain == "" || notAfter.IsZero() {
+		return
+	}
+	m.records.copied(accountID, domain, notAfter)
+	m.logf("acme: %s (account %s): certificate copied from the old server, valid until %s; the panel replaces it before then, once the domain points here", domain, accountID, notAfter.UTC().Format(time.DateOnly))
+}
+
+// CopiedUntil answers the expiry of the certificate copied from the
+// account's old server while the panel knows it as the one installed.
+func (m *Manager) CopiedUntil(accountID string) (time.Time, bool) {
+	r, ok := m.records.get(accountID)
+	if !ok || !r.Copied {
+		return time.Time{}, false
+	}
+	return r.NotAfter, true
+}
+
 // Waiting names the site's aliases its last certificate request left out
 // because they did not reach this server: their DNS does not point here
 // yet.
@@ -413,7 +435,8 @@ func mayChange(s Site) bool {
 
 // Run renews certificates until ctx ends: once 2 minutes after start, then
 // every 12 hours, sooner when a site that has no certificate is due to be
-// tried again, and within the hour while a live site waits for its first.
+// tried again, and within the hour while a live site waits for its first
+// or for its domain to replace a copied certificate that is due.
 func (m *Manager) Run(ctx context.Context) {
 	timer := time.NewTimer(firstCheck)
 	defer timer.Stop()
@@ -432,7 +455,9 @@ func (m *Manager) Run(ctx context.Context) {
 // was not tried in the last 6 hours. A live site the panel has not tried and
 // the broker reports no certificate for gets its first certificate once its
 // domain reaches this server, for at most firstOrders sites per check; one
-// that is not live is left alone, since the broker would refuse it.
+// that is not live is left alone, since the broker would refuse it. A
+// certificate copied from a moved site's old server (Copied) is due as any
+// other, and replaced once the site's domain reaches this server.
 func (m *Manager) check(ctx context.Context) time.Duration {
 	sites, err := m.sites.Sites(ctx)
 	if err != nil {
@@ -455,7 +480,9 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 		}
 	}
 	now := m.now()
-	first, firstWaiting := 0, false
+	// soon: a site waits for its domain to reach this server, or over
+	// firstOrders, so the next check comes within the hour.
+	first, soon := 0, false
 	notHere := map[string]string{}
 	for _, s := range sites {
 		if ctx.Err() != nil {
@@ -469,13 +496,13 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 			switch {
 			case !s.Live:
 			case first == firstOrders:
-				firstWaiting = true
+				soon = true
 				// Not probed this time: what was logged for it stands.
 				if domain, ok := m.notHere[s.AccountID]; ok {
 					notHere[s.AccountID] = domain
 				}
 			case !m.reaches(ctx, s.Domain):
-				firstWaiting = true
+				soon = true
 				notHere[s.AccountID] = s.Domain
 				if m.notHere[s.AccountID] != s.Domain {
 					m.logf("acme: %s (account %s): no certificate yet: the domain does not reach this server on port 80, usually because its DNS points elsewhere; the panel looks again every hour and asks for one once it does", s.Domain, s.AccountID)
@@ -496,6 +523,18 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 		// due: an alias whose DNS now points here is a name it should
 		// carry. One removed waits for the renewal (renew).
 		expiring := due(notAfter, retryAt, now)
+		// The certificate copied from a moved site's old server is replaced
+		// only once the site's domain reaches this server: an order before
+		// that fails validation and counts against the authority's limits.
+		// Until then the site is looked at again within the hour.
+		if expiring && r.Copied && (s.NotAfter.IsZero() || s.NotAfter.Equal(r.NotAfter)) && !m.reaches(ctx, s.Domain) {
+			soon = true
+			notHere[s.AccountID] = s.Domain
+			if m.notHere[s.AccountID] != s.Domain {
+				m.logf("acme: %s (account %s): the certificate copied from the old server runs out on %s; the domain does not reach this server on port 80 yet, so the panel looks again every hour and asks for a new certificate once it does", s.Domain, s.AccountID, r.NotAfter.UTC().Format(time.DateOnly))
+			}
+			continue
+		}
 		if expiring || (!now.Before(retryAt) && mayChange(s)) {
 			// secure logs the outcome; the error is already in the record.
 			_ = m.renew(ctx, s, expiring, byLoop)
@@ -503,7 +542,7 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 	}
 	m.notHere = notHere
 	wait := m.nextWait()
-	if firstWaiting {
+	if soon {
 		wait = min(wait, firstLookEvery)
 	}
 	return wait

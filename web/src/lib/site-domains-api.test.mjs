@@ -270,3 +270,17 @@ test("a refused switch says what happened, why and what next; a 409 says the web
   });
   assert.equal(posted, false);
 });
+
+test("a certificate copied from the old server says so, with its date", () => {
+  const copied = api.parseSiteDomains(detail({ https: { on: true, not_after: "2027-02-22T15:44:09Z", source: "copied" } }));
+  assert.deepEqual(copied.https, { on: true, not_after: "2027-02-22T15:44:09Z", source: "copied" });
+  const said = api.certificateOrigin(copied, "en-GB");
+  assert.equal(said, "Copied from the old server when the website moved here, valid until 22 Feb 2027. The panel replaces it with a Let's Encrypt certificate before then, once example.com points at this server.");
+  // Any other certificate, or none, has no such line.
+  assert.equal(api.certificateOrigin(api.parseSiteDomains(detail()), "en-GB"), undefined);
+  assert.equal(api.parseSiteDomains(detail()).https.source, undefined);
+  assert.equal(api.certificateOrigin(api.parseSiteDomains(detail({ https: { on: false, not_after: "", source: "copied" } })), "en-GB"), undefined);
+  for (const source of ["", "lets_encrypt", 1, null]) {
+    assert.equal(api.parseSiteDomains(detail({ https: { on: true, not_after: "2027-02-22T15:44:09Z", source } })), undefined, JSON.stringify(source));
+  }
+});

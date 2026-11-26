@@ -34,6 +34,10 @@ type record struct {
 	// Waiting are the site's aliases its last look left out of the
 	// certificate because they did not reach this server.
 	Waiting []string `json:"waiting,omitempty"`
+	// Copied says the installed certificate, valid until NotAfter, is the
+	// one copied from the site's old server when it moved here; the next
+	// certificate the panel installs clears it.
+	Copied bool `json:"copied,omitempty"`
 }
 
 type recordsData struct {
@@ -167,7 +171,18 @@ func (r *records) failed(accountID string, err error) {
 }
 
 func (r *records) installed(accountID string, notAfter time.Time) {
-	r.change(accountID, func(x *record) { x.NotAfter, x.LastResult = notAfter.UTC(), "installed" })
+	r.change(accountID, func(x *record) { x.NotAfter, x.LastResult, x.Copied = notAfter.UTC(), "installed", false })
+}
+
+// copied records a certificate copied from the site's old server, valid
+// until notAfter, as the one installed for domain.
+func (r *records) copied(accountID, domain string, notAfter time.Time) {
+	r.change(accountID, func(x *record) {
+		if x.Domain != domain {
+			x.Waiting = nil
+		}
+		x.Domain, x.NotAfter, x.LastResult, x.Copied = domain, notAfter.UTC(), "copied", true
+	})
 }
 
 func (r *records) forget(accountID string) {

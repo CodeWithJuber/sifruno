@@ -14,7 +14,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { addDomain, addRedirect, aliasHttps, alwaysHttps, alwaysHttpsOutcome, checkDomain, checkRedirectFrom, checkRedirectTo, exampleOtherDomain, getSiteDomains, maxAliases, maxPathLength, maxRedirects, maxTargetLength, normalizeDomain, redirectKind, removeDomain, removeRedirect, setAlwaysHttps, SiteDomainsApiError, statusLabel } from "@/lib/site-domains-api";
+import { addDomain, addRedirect, aliasHttps, alwaysHttps, alwaysHttpsOutcome, certificateOrigin, checkDomain, checkRedirectFrom, checkRedirectTo, exampleOtherDomain, getSiteDomains, maxAliases, maxPathLength, maxRedirects, maxTargetLength, normalizeDomain, redirectKind, removeDomain, removeRedirect, setAlwaysHttps, SiteDomainsApiError, statusLabel } from "@/lib/site-domains-api";
 import type { AliasHttps, SiteDomains as Domains, WebsiteRedirect } from "@/lib/site-domains-api";
 import { useShell } from "@/shell/context";
 // The busy ring a working button shows, as on the wizard's screens.
@@ -463,6 +463,7 @@ export function SiteDomains({ accountId }: { accountId: string }) {
           <span className="min-w-0 flex-1 font-medium wrap-anywhere text-foreground">{site.domain}</span>
           <Badge variant="outline">Main domain</Badge>
           <HttpsBadge https={site.https.on ? "main-on" : "main-off"} testId="domain-https" />
+          {certificateOrigin(site) && <span className="basis-full text-sm text-muted-foreground" data-testid="domain-certificate-origin">{certificateOrigin(site)}</span>}
         </li>
         {site.aliases.map((alias) => {
           const said = aliasHttps(alias.https);

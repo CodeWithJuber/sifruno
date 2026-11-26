@@ -221,7 +221,7 @@ func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...st
 		t.Fatalf("website keys %q", keys)
 	}
 	var https map[string]any
-	if err := json.Unmarshal(item["https"], &https); err != nil || len(https) != 2 {
+	if err := json.Unmarshal(item["https"], &https); err != nil || len(https) != 2 && !(len(https) == 3 && https["source"] == "copied") {
 		t.Fatalf("https %s", item["https"])
 	}
 	if _, ok := https["on"].(bool); !ok {

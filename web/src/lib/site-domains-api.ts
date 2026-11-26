@@ -23,7 +23,9 @@ export interface SiteDomains {
   state: string;
   // The hosting account's revision: a change sends it back.
   revision: number;
-  https: { on: boolean; not_after: string };
+  // source "copied": the certificate in force is the one copied from the
+  // old server when the website moved here.
+  https: { on: boolean; not_after: string; source?: "copied" };
   // Always use HTTPS: true unless the site's owner turned it off. It sends
   // plain http to https only while a valid certificate is in force.
   always_https: boolean;
@@ -155,6 +157,17 @@ export function aliasHttps(https: AliasHttps): { label: string; detail: string; 
   }
 }
 
+// Where the certificate in force came from, when the page has more to say
+// than its date: one copied from the old server when the website moved
+// here, until the panel replaces it.
+export function certificateOrigin(site: Pick<SiteDomains, "domain" | "https">, locale?: string): string | undefined {
+  if (!site.https.on || site.https.source !== "copied" || !site.https.not_after) return undefined;
+  const until = new Date(site.https.not_after);
+  if (Number.isNaN(until.getTime())) return undefined;
+  const date = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(until);
+  return `Copied from the old server when the website moved here, valid until ${date}. The panel replaces it with a Let's Encrypt certificate before then, once ${site.domain} points at this server.`;
+}
+
 export const statusLabel = (status: 301 | 302) => status === 301 ? "301, moved for good" : "302, moved for now";
 
 // What "Always use HTTPS" can do now. ready: the switch works, and while it
@@ -225,7 +238,7 @@ export function parseSiteDomains(v: unknown): SiteDomains | undefined {
   if (!object(v) || !validAccountId(v.account_id) || !text(v.domain) || !validDomain(v.domain) || !text(v.username) || !text(v.state) || !/^[a-z_]{1,40}$/.test(v.state)) return undefined;
   if (!Number.isSafeInteger(v.revision) || (v.revision as number) < 1) return undefined;
   const https = v.https;
-  if (!object(https) || typeof https.on !== "boolean" || !text(https.not_after)) return undefined;
+  if (!object(https) || typeof https.on !== "boolean" || !text(https.not_after) || !(https.source === undefined || https.source === "copied")) return undefined;
   const aliases = parseAliases(v.aliases);
   const redirects = parseRedirects(v.redirects);
   const count = v.redirect_count;
@@ -233,7 +246,7 @@ export function parseSiteDomains(v: unknown): SiteDomains | undefined {
   if (typeof v.always_https !== "boolean") return undefined;
   return {
     account_id: v.account_id, domain: v.domain, username: v.username, state: v.state, revision: v.revision as number,
-    https: { on: https.on, not_after: https.not_after }, always_https: v.always_https, aliases, redirect_count: count as number, redirects,
+    https: { on: https.on, not_after: https.not_after, ...(https.source === "copied" ? { source: "copied" as const } : {}) }, always_https: v.always_https, aliases, redirect_count: count as number, redirects,
   };
 }
 

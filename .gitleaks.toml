@@ -22,4 +22,10 @@ regexes = [
   '''^\s*add\s+lsapi:sifruno-[0-9a-z-]+\s''',
   # Prose in lab/hostwebruntime-serving-host/README.md.
   '''keys, duplicate/foreign markers''',
+  # The fake WHM API token in internal/whmsource/whmtest and
+  # web/src/lib/wordpress-api.test.mjs: the letters A to Z then the digits 0 to 5.
+  '''ABCDEFGHIJKLMNOPQRSTUVWXYZ012345''',
+  # The fake WHM SSH key ID in internal/whmsource/whmsource_test.go: the hex
+  # digits 0 to f, twice.
+  '''0123456789abcdef0123456789abcdef''',
 ]

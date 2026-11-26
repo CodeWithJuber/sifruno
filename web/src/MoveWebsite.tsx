@@ -204,7 +204,13 @@ export function MoveWebsite() {
     setTouched(true);
     if (addressProblem || secretProblem || sshPortProblem) return;
     setCertificate(undefined);
-    connectWithWHM("");
+    connectWithWHM(login.tls_fingerprint);
+  };
+  // The confirmed certificate stays pinned for this address: Try again and
+  // Connect reuse it, and changing the address forgets it.
+  const trust = (fingerprint: string) => {
+    setLogin((l) => ({ ...l, tls_fingerprint: fingerprint })); setCertificate(undefined);
+    connectWithWHM(fingerprint);
   };
   const connect = (event: FormEvent) => {
     event.preventDefault();
@@ -238,7 +244,8 @@ export function MoveWebsite() {
     if (!source) return;
     void run("The migration key was not removed.", async () => {
       const result = await cancelSource(source.id);
-      setEnded(result.removed_from_source ? `Stopped. The key for this move is gone from the old server, and this server deleted it. ${result.detail}` : `Stopped. This server deleted the migration key. ${result.detail}`);
+      // detail says how the key went: proved over SSH, or through WHM.
+      setEnded(result.removed_from_source ? `Stopped. ${result.detail || "The old server no longer accepts the migration key."} This server deleted its own copy of the key.` : `Stopped. This server deleted the migration key. ${result.detail}`);
       setSource(undefined); setAccounts(undefined); setStage("connect");
     });
   };
@@ -267,7 +274,7 @@ export function MoveWebsite() {
           <Field data-invalid={touched && Boolean(addressProblem)}>
             <FieldLabel htmlFor="move-whm-address">WHM address</FieldLabel>
             <FieldDescription id="move-whm-address-help">Such as https://server1.example.com:2087. The port is 2087 unless you give another.</FieldDescription>
-            <Input id="move-whm-address" name="whm-address" className={control} value={login.address} onChange={(e) => setField("address", e.target.value)} inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next" required
+            <Input id="move-whm-address" name="whm-address" className={control} value={login.address} onChange={(e) => setLogin((l) => ({ ...l, address: e.target.value, tls_fingerprint: "" }))} inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next" required
               aria-invalid={touched && Boolean(addressProblem)} aria-describedby={touched && addressProblem ? "move-whm-address-help move-whm-address-error" : "move-whm-address-help"} data-testid="move-whm-address" />
             {touched && addressProblem && <FieldError id="move-whm-address-error">{addressProblem}</FieldError>}
           </Field>
@@ -314,7 +321,7 @@ export function MoveWebsite() {
             </div>
             <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">Next step:</span> Compare it with WHM's certificate on the old server (in WHM: Service Configuration, Manage Service SSL Certificates). Trust it only if it is the same.</p>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" className={control} disabled={Boolean(busy)} onClick={() => connectWithWHM(certificate.fingerprint)} data-testid="move-certificate-trust"><ShieldCheck aria-hidden="true" />Trust this certificate</Button>
+              <Button type="button" className={control} disabled={Boolean(busy)} onClick={() => trust(certificate.fingerprint)} data-testid="move-certificate-trust"><ShieldCheck aria-hidden="true" />Trust this certificate</Button>
               <Button type="button" variant="outline" className={control} disabled={Boolean(busy)} onClick={() => setCertificate(undefined)}>Cancel</Button>
             </div>
           </AlertDescription>

@@ -77,7 +77,7 @@ func TestSessionManagementOpenAPIContract(t *testing.T) {
 		})
 	}
 	item := spec.Components.Schemas["OperatorManagedSession"]
-	if item.AdditionalProperties || len(item.Required) != 4 || len(item.Properties) != 4 {
+	if item.AdditionalProperties || len(item.Required) != 5 || len(item.Properties) != 5 || item.Properties["kept_signed_in"]["type"] != "boolean" {
 		t.Fatal("session metadata fields not exact")
 	}
 	id := item.Properties["id"]
@@ -86,7 +86,7 @@ func TestSessionManagementOpenAPIContract(t *testing.T) {
 	}
 	inventory := spec.Components.Schemas["OperatorSessionInventory"]
 	items := inventory.Properties["items"]
-	if inventory.AdditionalProperties || len(inventory.Required) != 3 || len(inventory.Properties) != 3 || items["minItems"] != float64(1) || items["maxItems"] != float64(128) {
+	if inventory.AdditionalProperties || len(inventory.Required) != 4 || len(inventory.Properties) != 4 || inventory.Properties["idle_seconds"] == nil || inventory.Properties["kept_idle_seconds"] == nil || items["minItems"] != float64(1) || items["maxItems"] != float64(128) {
 		t.Fatal("inventory bounds not discoverable")
 	}
 	count := spec.Components.Schemas["OperatorSessionRevocation"].Properties["revoked_count"]
@@ -97,7 +97,7 @@ func TestSessionManagementOpenAPIContract(t *testing.T) {
 	c, _ := websiteSignIn(t, f)
 	result := websiteRequest(f.handler, "GET", "/api/v1/session/sessions", nil, c, "")
 	var actual map[string]json.RawMessage
-	if result.Code != 200 || json.Unmarshal(result.Body.Bytes(), &actual) != nil || len(actual) != 3 || actual["items"] == nil || actual["$schema"] != nil {
+	if result.Code != 200 || json.Unmarshal(result.Body.Bytes(), &actual) != nil || len(actual) != 4 || actual["items"] == nil || actual["idle_seconds"] == nil || actual["kept_idle_seconds"] == nil || actual["$schema"] != nil {
 		t.Fatal("documentation changed native response")
 	}
 }

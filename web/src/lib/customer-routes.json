@@ -100,6 +100,7 @@
   "POST /api/v1/websites/migrations/{id}/ready": "adminOnly",
   "POST /api/v1/websites/migrations/{id}/verify": "adminOnly",
   "POST /api/v1/websites/php": "adminOnly",
+  "POST /api/v1/websites/sites/{account_id}/always-https": "ownWebsite",
   "POST /api/v1/websites/sites/{account_id}/backups": "adminOnly",
   "POST /api/v1/websites/sites/{account_id}/backups/drill": "adminOnly",
   "POST /api/v1/websites/sites/{account_id}/backups/restore": "adminOnly",

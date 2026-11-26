@@ -61,10 +61,11 @@ const wizardUnavailable = "Website creation is not set up on this server"
 
 // wizardFields are each POST's keys under /api/v1/websites, exactly as the
 // contract spells them and in its order: the wizard's request, and the site
-// page's three changes by action. A key is text unless it is whole.
+// page's changes by action. A key is text unless it is whole or a flag.
 type wizardField struct {
 	name  string
 	whole bool // a whole number, as a revision is
+	flag  bool // true or false, as a switch is
 }
 
 var wizardFields = map[string][]wizardField{
@@ -79,6 +80,7 @@ var wizardFields = map[string][]wizardField{
 	"domain-remove":   {{name: "domain"}, {name: "expected_revision", whole: true}},
 	"redirect-add":    {{name: "from"}, {name: "to"}, {name: "status", whole: true}, {name: "expected_revision", whole: true}},
 	"redirect-remove": {{name: "from"}, {name: "expected_revision", whole: true}},
+	"always-https":    {{name: "always_https", flag: true}, {name: "expected_revision", whole: true}},
 	// Move a website here (migrations.go).
 	"migration-source":        {{name: "host"}, {name: "port", whole: true}},
 	"migration-host-key":      {{name: "fingerprint"}},
@@ -211,7 +213,8 @@ func prepareWizardJSON(w http.ResponseWriter, r *http.Request) bool {
 
 // prepareStrictJSON bounds and checks a POST body before Huma decodes it:
 // JSON content type, at most 4 KiB, one object holding only the request's
-// own fields, each once, each a string or, for a revision, a whole number.
+// own fields, each once, each a string or, for a revision, a whole number,
+// or for a switch, true or false.
 // Go's decoder would accept a key in another case, so keys are compared
 // exactly. Nothing from the body is echoed back.
 func prepareStrictJSON(w http.ResponseWriter, r *http.Request, fields []wizardField) bool {
@@ -222,10 +225,10 @@ func prepareStrictJSON(w http.ResponseWriter, r *http.Request, fields []wizardFi
 // for a body that carries a file's text.
 func prepareStrictJSONWithin(w http.ResponseWriter, r *http.Request, fields []wizardField, limit int64) bool {
 	names := make([]string, len(fields))
-	whole := map[string]bool{}
+	whole, flag := map[string]bool{}, map[string]bool{}
 	for i, f := range fields {
 		names[i] = f.name
-		whole[f.name] = f.whole
+		whole[f.name], flag[f.name] = f.whole, f.flag
 	}
 	ct, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || ct != "application/json" || (params["charset"] != "" && !strings.EqualFold(params["charset"], "utf-8")) {
@@ -285,6 +288,13 @@ func prepareStrictJSONWithin(w http.ResponseWriter, r *http.Request, fields []wi
 			return false
 		}
 		v := bytes.TrimSpace(value)
+		if flag[key] {
+			if string(v) != "true" && string(v) != "false" {
+				operator.WriteError(w, 422, "invalid_request", key+" must be true or false.")
+				return false
+			}
+			continue
+		}
 		if whole[key] && !wholeNumber.Match(v) {
 			operator.WriteError(w, 422, "invalid_request", key+" must be a whole number.")
 			return false

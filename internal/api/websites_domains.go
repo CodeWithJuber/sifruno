@@ -14,10 +14,11 @@ import (
 	"sifruno/internal/olsweb"
 )
 
-// A website's other domains (aliases, which serve the same site) and its
-// redirects. The account broker records and renders them; the panel checks
-// the request, names the reason in plain words, and after a domain change
-// asks for a certificate that covers the new set.
+// A website's other domains (aliases, which serve the same site), its
+// redirects and its "Always use HTTPS". The account broker records and
+// renders them; the panel checks the request, names the reason in plain
+// words, and after a domain change asks for a certificate that covers the
+// new set.
 
 // SiteCertificates gets the websites' certificates; nil in Options when
 // they are not set up. *acme.Manager is the real one.
@@ -70,6 +71,18 @@ type websiteRedirectRemoveInput struct {
 	Body      websiteRedirectRemoveBody
 }
 
+// websiteAlwaysHTTPSBody turns the site's "Always use HTTPS" on or off. The
+// setting is a pointer so a body that leaves it out is refused, not read
+// as off.
+type websiteAlwaysHTTPSBody struct {
+	AlwaysHTTPS      *bool  `json:"always_https" doc:"true: while the site is live with a certificate that has not expired, plain http for each domain the certificate covers answers 301 to the same address on https. false: plain http serves the site too. Kept with or without a certificate."`
+	ExpectedRevision uint64 `json:"expected_revision" minimum:"1" doc:"The revision the site entry had."`
+}
+type websiteAlwaysHTTPSInput struct {
+	AccountID string `path:"account_id"`
+	Body      websiteAlwaysHTTPSBody
+}
+
 const (
 	certificateRefreshLimit = 10 * time.Minute // issue (3 minutes) and install (up to 6)
 
@@ -81,6 +94,10 @@ const (
 	redirectTargetForm = "The address must start with http:// or https://, then a domain name, and may go on with a path. It can use letters, digits and - . _ ~ / ? & = + , : ; @ only, at most 256 characters: no spaces, quotes, #, $ or %. For example https://example.com/new-page."
 	redirectDomainTo   = "A whole domain is redirected with each visitor's path kept, so give only the address of the other domain, such as https://example.com, with no path after it."
 	redirectLoop       = "This redirect would send visitors in a loop: to the same address, or to a domain that is redirected too. Choose another address."
+
+	alwaysHTTPSNotSetUp  = "This server's account service cannot change Always use HTTPS. Update and restart the account service, then try again."
+	alwaysHTTPSNotActive = "Only a live website can change Always use HTTPS. Resume the website first."
+	alwaysHTTPSForm      = "always_https must be true or false."
 )
 
 // websiteAliases is the list entry's view of an account's aliases, each with
@@ -144,8 +161,9 @@ func apiRedirect(r hostaccounts.SiteRedirect) WebsiteRedirect {
 	return WebsiteRedirect{From: from, To: r.Target, Status: r.Status}
 }
 
-// registerWebsiteDomains adds the site page's domain and redirect changes,
-// under /api/v1/websites/ with the same admission as its other changes.
+// registerWebsiteDomains adds the site page's domain and redirect changes
+// and its Always use HTTPS switch, under /api/v1/websites/ with the same
+// admission as its other changes.
 func registerWebsiteDomains(a huma.API, o Options) {
 	change := func(id, action string) huma.Operation {
 		return huma.Operation{OperationID: id, Method: "POST", Path: "/api/v1/websites/sites/{account_id}/" + action, MaxBodyBytes: 4096, BodyReadTimeout: 5 * time.Second, SkipValidateBody: true, SkipValidateParams: true}
@@ -219,6 +237,41 @@ func registerWebsiteDomains(a huma.API, o Options) {
 			return nil, huma.Error409Conflict("This website has no redirect from "+from+". Reload the page to see its redirects.", errors.New("redirect not found"))
 		}
 		return applyDomains(ctx, o, t, next, "Redirect from "+from+" removed on the website's page", from, false)
+	})
+	huma.Register(a, change("set-website-always-https", "always-https"), func(ctx context.Context, in *websiteAlwaysHTTPSInput) (*websiteOutput, error) {
+		site, account, err := findWebsite(ctx, o, in.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		service, ok := o.Accounts.(hostaccounts.AlwaysHTTPSService)
+		switch {
+		case site.State == partlyDeleted:
+			return nil, huma.Error409Conflict(websitePartly)
+		case !ok:
+			return nil, huma.Error503ServiceUnavailable(alwaysHTTPSNotSetUp)
+		case in.Body.AlwaysHTTPS == nil:
+			return nil, huma.Error422UnprocessableEntity(alwaysHTTPSForm)
+		case in.Body.ExpectedRevision == 0:
+			return nil, huma.Error422UnprocessableEntity(websiteNoRevision)
+		case in.Body.ExpectedRevision != account.Revision:
+			return nil, huma.Error409Conflict(websiteStale)
+		case account.State == "recovery_required":
+			return nil, huma.Error503ServiceUnavailable(websiteRecovery)
+		case account.State != "active":
+			return nil, huma.Error409Conflict(alwaysHTTPSNotActive)
+		}
+		reason := "Always use HTTPS: off, set on the website's page"
+		if *in.Body.AlwaysHTTPS {
+			reason = "Always use HTTPS: on, set on the website's page"
+		}
+		changeCtx, cancel := context.WithTimeout(ctx, websiteChangeLimit)
+		defer cancel()
+		changed, err := service.SetAlwaysHTTPS(changeCtx, account.ID, hostaccounts.AlwaysHTTPSInput{AlwaysHTTPS: in.Body.AlwaysHTTPS, ExpectedRevision: account.Revision, Reason: reason}, siteActor(ctx))
+		if err != nil {
+			return nil, websiteChangeError(err, "The web server's configuration test failed with this change, so nothing changed. Ask whoever runs this server to check the web server.")
+		}
+		site.Revision, site.AlwaysHTTPS = changed.Revision, !changed.PlainHTTP
+		return &websiteOutput{Body: WebsiteDetail{Website: site, PHPVersions: installedPHP(), Redirects: websiteRedirects(ctx, o, site)}}, nil
 	})
 }
 

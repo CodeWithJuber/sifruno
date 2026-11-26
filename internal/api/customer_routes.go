@@ -17,9 +17,9 @@ import (
 // TestCustomerRouteTableCoversEveryRoute fails when a route is added
 // without a decision, or an entry names a route that does not exist.
 //
-// A customer may list and open its websites, change their domains and
-// redirects, databases (phpMyAdmin included), files and scheduled jobs, read
-// their logs and usage, and see their backups. It may not create, suspend,
+// A customer may list and open its websites, change their domains,
+// redirects and Always use HTTPS, databases (phpMyAdmin included), files and
+// scheduled jobs, read their logs and usage, and see their backups. It may not create, suspend,
 // resume or delete a website, change its PHP version, folder, plan or
 // limits, take or restore a backup, set up backup storage, see the server,
 // use API tokens, see other customers, run the New website wizard, move a
@@ -87,6 +87,7 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/websites/sites/{account_id}/domain-remove":                   ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/redirect-add":                    ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/redirect-remove":                 ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/always-https":                    ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/php":                             adminOnly,
 	"POST /api/v1/websites/sites/{account_id}/state":                           adminOnly,
 	"POST /api/v1/websites/sites/{account_id}/folder":                          adminOnly,

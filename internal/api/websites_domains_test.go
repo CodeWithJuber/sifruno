@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -70,6 +71,25 @@ func (b *domainsBroker) SetSiteDomains(_ context.Context, id string, in hostacco
 	}
 	b.sets[id] = set
 	return hostaccounts.SiteDomainsResult{Account: a, Domains: set}, nil
+}
+
+// SetAlwaysHTTPS turns the account's PlainHTTP over as the broker does: an
+// unchanged setting changes nothing, a change moves the revision.
+func (b *domainsBroker) SetAlwaysHTTPS(_ context.Context, id string, in hostaccounts.AlwaysHTTPSInput, actor string) (hostaccounts.Account, error) {
+	if in.AlwaysHTTPS == nil {
+		return hostaccounts.Account{}, hostaccounts.ErrInvalid
+	}
+	call := fmt.Sprintf("https %s always=%v rev=%d reason=%q actor=%s", id, *in.AlwaysHTTPS, in.ExpectedRevision, in.Reason, actor)
+	accounts, _ := b.List(context.Background())
+	for _, a := range accounts {
+		if a.ID == id && a.Revision == in.ExpectedRevision && a.PlainHTTP == !*in.AlwaysHTTPS && b.changeErr == nil {
+			b.sitesBroker.mu.Lock()
+			b.changes = append(b.changes, call)
+			b.sitesBroker.mu.Unlock()
+			return a, nil
+		}
+	}
+	return b.changed(call, id, in.ExpectedRevision, func(a *hostaccounts.Account) { a.PlainHTTP = !*in.AlwaysHTTPS })
 }
 
 type certificatesFake struct {
@@ -343,6 +363,116 @@ func TestWebsiteDomainsNeedTheOperation(t *testing.T) {
 	// Without a session nothing is read.
 	w = websiteRequest(f.handler, "POST", sitePath(site, "domain-add"), map[string]any{"domain": "www.example.com", "expected_revision": site.Revision}, nil, "")
 	if w.Code != 401 {
+		t.Fatalf("no session: %d", w.Code)
+	}
+}
+
+// "Always use HTTPS" on the site's page: on by default, turned off and on
+// again through the account service, and refused before the broker is
+// asked when the request or the site is not right.
+func TestWebsiteAlwaysHTTPS(t *testing.T) {
+	f, broker, _, site, _ := domainsFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	set := func(body any) *httptest.ResponseRecorder {
+		t.Helper()
+		return websiteRequest(f.handler, "POST", sitePath(site, "always-https"), body, cookie, csrf)
+	}
+	read := decodeDetail(t, websiteRequest(f.handler, "GET", "/api/v1/websites/sites/"+site.AccountID, nil, cookie, ""))
+	if !read.AlwaysHTTPS || read.HTTPS.On {
+		t.Fatalf("a new site without a certificate: %+v", read.Website)
+	}
+
+	// Off, then on again; each is the broker's change, at the page's revision.
+	got := decodeDetail(t, set(map[string]any{"always_https": false, "expected_revision": site.Revision}))
+	if got.AlwaysHTTPS || got.Revision != site.Revision+1 || got.AccountID != site.AccountID {
+		t.Fatalf("after turning it off %+v", got.Website)
+	}
+	want := fmt.Sprintf(`https %s always=false rev=%d reason="Always use HTTPS: off, set on the website's page" actor=local-operator`, site.AccountID, site.Revision)
+	if !slices.Equal(broker.changes, []string{want}) {
+		t.Fatalf("broker changes %q", broker.changes)
+	}
+	sites := decodeSites(t, websiteRequest(f.handler, "GET", "/api/v1/websites/sites", nil, cookie, "").Body.Bytes())
+	if i := slices.IndexFunc(sites, func(s Website) bool { return s.AccountID == site.AccountID }); i < 0 || sites[i].AlwaysHTTPS {
+		t.Fatalf("listed %+v", sites)
+	}
+	site = got.Website
+	// It is kept without a certificate too; the page says when it applies.
+	got = decodeDetail(t, set(map[string]any{"always_https": true, "expected_revision": site.Revision}))
+	if !got.AlwaysHTTPS || got.Revision != site.Revision+1 {
+		t.Fatalf("after turning it on %+v", got.Website)
+	}
+	if last := broker.changes[len(broker.changes)-1]; !strings.Contains(last, `always=true`) || !strings.Contains(last, `reason="Always use HTTPS: on, set on the website's page"`) {
+		t.Fatalf("broker change %q", last)
+	}
+	site = got.Website
+	// An unchanged setting is the broker's to answer: nothing moves.
+	got = decodeDetail(t, set(map[string]any{"always_https": true, "expected_revision": site.Revision}))
+	if !got.AlwaysHTTPS || got.Revision != site.Revision {
+		t.Fatalf("unchanged %+v", got.Website)
+	}
+
+	// Refused by the panel, before the broker is asked.
+	before := len(broker.changes)
+	only := "The request has a field this form does not use. Send only always_https and expected_revision."
+	for name, tc := range map[string]struct {
+		body   string
+		code   int
+		detail string
+	}{
+		"text, not true or false": {`{"always_https":"false","expected_revision":REV}`, 422, alwaysHTTPSForm},
+		"a number":                {`{"always_https":0,"expected_revision":REV}`, 422, alwaysHTTPSForm},
+		"null":                    {`{"always_https":null,"expected_revision":REV}`, 422, alwaysHTTPSForm},
+		"left out":                {`{"expected_revision":REV}`, 422, alwaysHTTPSForm},
+		"another key":             {`{"always_https":false,"expected_revision":REV,"reason":"x"}`, 422, only},
+		"a key in another case":   {`{"Always_HTTPS":false,"expected_revision":REV}`, 422, only},
+		"a key twice":             {`{"always_https":false,"always_https":true,"expected_revision":REV}`, 422, "The request has the field always_https more than once."},
+		"no revision":             {`{"always_https":false,"expected_revision":0}`, 422, websiteNoRevision},
+		"a stale page":            {`{"always_https":false,"expected_revision":1}`, 409, websiteStale},
+	} {
+		w := set(strings.ReplaceAll(tc.body, "REV", fmt.Sprint(site.Revision)))
+		if w.Code != tc.code || problemDetail(t, w) != tc.detail {
+			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	if len(broker.changes) != before {
+		t.Fatalf("a refusal reached the broker: %q", broker.changes[before:])
+	}
+
+	// A suspended site keeps its setting; one waiting for a check says so.
+	broker.change(site.AccountID, func(a *hostaccounts.Account) { a.State = "suspended" })
+	if w := set(map[string]any{"always_https": false, "expected_revision": site.Revision}); w.Code != 409 || problemDetail(t, w) != alwaysHTTPSNotActive {
+		t.Fatalf("suspended: %d %s", w.Code, w.Body.String())
+	}
+	broker.change(site.AccountID, func(a *hostaccounts.Account) { a.State = "recovery_required" })
+	if w := set(map[string]any{"always_https": false, "expected_revision": site.Revision}); w.Code != 503 || problemDetail(t, w) != websiteRecovery {
+		t.Fatalf("recovery required: %d %s", w.Code, w.Body.String())
+	}
+	if len(broker.changes) != before {
+		t.Fatalf("a refusal reached the broker: %q", broker.changes[before:])
+	}
+	// The broker's config test is the judge: a refusal is a plain error.
+	broker.change(site.AccountID, func(a *hostaccounts.Account) { a.State = "active" })
+	broker.changeErr = hostaccounts.ErrWebRejected
+	w := set(map[string]any{"always_https": false, "expected_revision": site.Revision})
+	if w.Code != 422 || !strings.HasPrefix(problemDetail(t, w), "The web server's configuration test failed with this change, so nothing changed.") || !strings.HasPrefix(problemTechnical(t, w), "account service: ") {
+		t.Fatalf("rejected: %d %s", w.Code, w.Body.String())
+	}
+	broker.changeErr = hostaccounts.ErrConflict
+	if w := set(map[string]any{"always_https": false, "expected_revision": site.Revision}); w.Code != 409 || problemDetail(t, w) != websiteBusy {
+		t.Fatalf("busy: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Without the operation the route says so, and changes nothing.
+func TestWebsiteAlwaysHTTPSNeedsTheOperation(t *testing.T) {
+	f, _, broker, _, site := actionsFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	w := websiteRequest(f.handler, "POST", sitePath(site, "always-https"), map[string]any{"always_https": false, "expected_revision": site.Revision}, cookie, csrf)
+	if w.Code != 503 || problemDetail(t, w) != alwaysHTTPSNotSetUp || len(broker.changes) != 0 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	// Without a session nothing is read.
+	if w := websiteRequest(f.handler, "POST", sitePath(site, "always-https"), map[string]any{"always_https": false, "expected_revision": site.Revision}, nil, ""); w.Code != 401 {
 		t.Fatalf("no session: %d", w.Code)
 	}
 }

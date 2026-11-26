@@ -30,8 +30,8 @@ func migrateRoute(path string) bool {
 	return path == "/v1/migrations" || path == "/v1/migrations/stale" || migrationPath.MatchString(path) || migrateCopyPath.MatchString(path)
 }
 
-// answerMigration writes the result, or 422 migration_failed with the step
-// and the end of its output, or the usual error.
+// answerMigration writes the result, or 422 migration_failed with the step,
+// the broker's words and the end of the error output, or the usual error.
 func answerMigration(w http.ResponseWriter, result any, err error) {
 	var failed *MigrationError
 	if errors.As(err, &failed) {
@@ -40,7 +40,8 @@ func answerMigration(w http.ResponseWriter, result any, err error) {
 			Error  string `json:"error"`
 			Step   string `json:"step"`
 			Detail string `json:"detail"`
-		}{"migration_failed", failed.Step, failed.Detail})
+			Output string `json:"output"`
+		}{"migration_failed", failed.Step, failed.Detail, failed.Output})
 		return
 	}
 	if err != nil {

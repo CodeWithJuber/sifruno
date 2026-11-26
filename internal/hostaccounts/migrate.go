@@ -1,6 +1,7 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -43,21 +44,55 @@ const (
 // says which step.
 var ErrMigrationFailed = errors.New("migration step failed")
 
-// MigrationError names the failed step and the end of what it printed
-// (printable ASCII, at most 512 bytes).
+// MigrationError names the failed step. Detail is the broker's own words
+// (it may name an account, a database or a file); Output is the end of
+// what the program or the old server printed on its error output
+// (printable ASCII, at most 512 bytes), which the panel shows only under
+// Technical details.
 type MigrationError struct {
 	Step   string `json:"step"`
 	Detail string `json:"detail"`
+	Output string `json:"output"`
 }
 
 func (e *MigrationError) Error() string        { return "migration " + e.Step + " failed" }
 func (e *MigrationError) Is(target error) bool { return target == ErrMigrationFailed }
 
-// The steps a MigrationError can name. The panel explains each one.
-var migrationSteps = []string{"connect", "host_key", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
+// The steps a MigrationError can name. The panel explains each one (D-0006):
+// SSH that did not reach the old server (unreachable), was refused the
+// migration key (key_refused) or met another host key (host_key_changed),
+// or failed otherwise (connect); a cPanel tool on the old server that
+// failed (cpanel_tool) or printed what is not its documented JSON
+// (cpanel_output); an account the old server does not have
+// (account_missing); and the copy's own steps.
+var migrationSteps = []string{"unreachable", "key_refused", "host_key_changed", "connect", "host_key", "cpanel_tool", "cpanel_output", "account_missing", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
 
 func migrationFailed(step string, out []byte) error {
-	return &MigrationError{Step: step, Detail: installDetail(out)}
+	return &MigrationError{Step: step, Output: installDetail(out)}
+}
+
+// sshFailures are ssh's own messages (OpenSSH, run with LANG=C.UTF-8) for
+// each way a sign-in fails, checked in this order.
+var sshFailures = []struct {
+	step  string
+	marks []string
+}{
+	{"host_key_changed", []string{"Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED", "host key is known for"}},
+	{"key_refused", []string{"Permission denied"}},
+	{"unreachable", []string{"Connection refused", "Connection timed out", "Operation timed out", "No route to host", "Network is unreachable", "Could not resolve hostname", "Name or service not known", "Connection closed by", "Connection reset", "kex_exchange_identification", "banner exchange"}},
+}
+
+// sshFailure names how an SSH sign-in to the old server failed, from what
+// ssh printed; fallback is the step when ssh said nothing this knows.
+func sshFailure(fallback string, out []byte) error {
+	for _, f := range sshFailures {
+		for _, mark := range f.marks {
+			if bytes.Contains(out, []byte(mark)) {
+				return migrationFailed(f.step, out)
+			}
+		}
+	}
+	return migrationFailed(fallback, out)
 }
 
 // MigrationOpenInput names the source server. Host is a lowercase DNS name

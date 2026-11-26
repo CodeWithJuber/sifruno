@@ -488,32 +488,33 @@ func (s *store) pinMigrationHostKey(ctx context.Context, id string, in Migration
 }
 
 // remote runs one fixed command on the source and reads exit 255, ssh's
-// own failure, as a connection that did not happen. A failure's detail is
-// the command's error output only: what it printed on standard output so
-// far can hold credentials, such as the password hashes SHOW CREATE USER
-// prints.
-func (s *store) remote(ctx context.Context, m migrationRecord, command string, stdin io.Reader) ([]byte, error) {
+// own failure, as a sign-in that did not happen; any other failing exit is
+// the step failed names (cpanel_tool for whmapi1 and uapi). A failure's
+// output is the command's error output only: what it printed on standard
+// output so far can hold credentials, such as the password hashes SHOW
+// CREATE USER prints.
+func (s *store) remote(ctx context.Context, m migrationRecord, command string, stdin io.Reader, failed string) ([]byte, error) {
 	stdout := &limitBuffer{max: cpsource.MaxOutput}
 	out, code, err := s.migrate.Remote(ctx, m, command, stdin, stdout, migrateRemoteTimeout)
 	switch {
 	case err != nil:
 		return nil, err
 	case code == 255:
-		return nil, migrationFailed("connect", out)
+		return nil, sshFailure("connect", out)
 	case code != 0:
-		return nil, migrationFailed("source", out)
+		return nil, migrationFailed(failed, out)
 	}
 	return stdout.b, nil
 }
 
 func (s *store) sourceAccounts(ctx context.Context, m migrationRecord) ([]cpsource.Account, error) {
-	out, err := s.remote(ctx, m, cpsource.ListAccountsCommand(), nil)
+	out, err := s.remote(ctx, m, cpsource.ListAccountsCommand(), nil, "cpanel_tool")
 	if err != nil {
 		return nil, err
 	}
 	items, err := cpsource.ParseAccounts(out)
 	if err != nil {
-		return nil, &MigrationError{Step: "source", Detail: "The old server's list of accounts could not be read (whmapi1 listaccts)."}
+		return nil, &MigrationError{Step: "cpanel_output", Detail: "The old server's list of accounts could not be read (whmapi1 listaccts)."}
 	}
 	return items, nil
 }
@@ -540,7 +541,7 @@ func (s *store) sourceSite(ctx context.Context, m migrationRecord, user, domain 
 	}
 	i := slices.IndexFunc(accounts, func(a cpsource.Account) bool { return a.User == user })
 	if i < 0 {
-		return cpsource.Account{}, cpsource.Site{}, &MigrationError{Step: "source", Detail: "The old server has no account named " + user + "."}
+		return cpsource.Account{}, cpsource.Site{}, &MigrationError{Step: "account_missing", Detail: "The old server has no account named " + user + "."}
 	}
 	account := accounts[i]
 	if account.Problem != "" {
@@ -553,7 +554,7 @@ func (s *store) sourceSite(ctx context.Context, m migrationRecord, user, domain 
 	if err != nil {
 		return cpsource.Account{}, cpsource.Site{}, ErrInvalid
 	}
-	out, err := s.remote(ctx, m, command, nil)
+	out, err := s.remote(ctx, m, command, nil, "cpanel_tool")
 	if err != nil {
 		return cpsource.Account{}, cpsource.Site{}, err
 	}
@@ -562,7 +563,7 @@ func (s *store) sourceSite(ctx context.Context, m migrationRecord, user, domain 
 	case errors.Is(err, cpsource.ErrNotPublicHTML):
 		return cpsource.Account{}, cpsource.Site{}, &MigrationError{Step: "source", Detail: "The site's files are not in the account's public_html folder. This version moves only sites kept in public_html."}
 	case err != nil:
-		return cpsource.Account{}, cpsource.Site{}, &MigrationError{Step: "source", Detail: "The old server's details of the site could not be read (whmapi1 domainuserdata)."}
+		return cpsource.Account{}, cpsource.Site{}, &MigrationError{Step: "cpanel_output", Detail: "The old server's details of the site could not be read (whmapi1 domainuserdata)."}
 	}
 	return account, site, nil
 }
@@ -592,12 +593,12 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	plan := MigrationPlan{Username: account.User, Domain: account.Domain, Aliases: site.Aliases, WWW: site.WWW, DiskUsedMiB: account.DiskUsedMiB, DiskLimitMiB: account.DiskLimitMiB,
 		Databases: []cpsource.Database{}, Users: []cpsource.DatabaseUser{}, GrantsSkipped: []string{}, Cron: []cpsource.CronLine{}, CronSkipped: []string{}, Probes: []MigrationProbe{}, TierCauses: []string{},
 		Converted: []MigrationFolder{}, TierRefusals: []string{}}
-	out, err := s.remote(work, m, cpsource.VhostPHPCommand(), nil)
+	out, err := s.remote(work, m, cpsource.VhostPHPCommand(), nil, "cpanel_tool")
 	if err != nil {
 		return MigrationPlan{}, err
 	}
 	if plan.PHPSource, err = cpsource.ParseVhostPHP(out, account.User, account.Domain); err != nil {
-		return MigrationPlan{}, &MigrationError{Step: "source", Detail: "The old server's PHP version for the site could not be read (whmapi1 php_get_vhost_versions)."}
+		return MigrationPlan{}, &MigrationError{Step: "cpanel_output", Detail: "The old server's PHP version for the site could not be read (whmapi1 php_get_vhost_versions)."}
 	}
 	plan.ClientAddress = s.sourceClient(work, m)
 	if err = s.planDatabases(work, m, &plan); err != nil {
@@ -617,7 +618,7 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 // plan: without it verify fails each folder open to some addresses only,
 // so the cutover gate stays closed until a person checks them (D-0002).
 func (s *store) sourceClient(ctx context.Context, m migrationRecord) string {
-	out, err := s.remote(ctx, m, cpsource.ClientAddressCommand(), nil)
+	out, err := s.remote(ctx, m, cpsource.ClientAddressCommand(), nil, "source")
 	if err != nil {
 		return ""
 	}
@@ -630,7 +631,7 @@ func (s *store) sourceClient(ctx context.Context, m migrationRecord) string {
 
 func (s *store) planDatabases(ctx context.Context, m migrationRecord, plan *MigrationPlan) error {
 	command, _ := cpsource.DatabasesCommand(plan.Username)
-	out, err := s.remote(ctx, m, command, nil)
+	out, err := s.remote(ctx, m, command, nil, "cpanel_tool")
 	if err != nil {
 		return err
 	}
@@ -639,7 +640,7 @@ func (s *store) planDatabases(ctx context.Context, m migrationRecord, plan *Migr
 		return unreadable(err, "databases (uapi Mysql list_databases)")
 	}
 	command, _ = cpsource.DatabaseUsersCommand(plan.Username)
-	if out, err = s.remote(ctx, m, command, nil); err != nil {
+	if out, err = s.remote(ctx, m, command, nil, "cpanel_tool"); err != nil {
 		return err
 	}
 	users, err := cpsource.ParseDatabaseUsers(out, plan.Username)
@@ -663,12 +664,12 @@ func (s *store) planDatabases(ctx context.Context, m migrationRecord, plan *Migr
 	if err != nil {
 		return ErrInvalid
 	}
-	if out, err = s.remote(ctx, m, cpsource.SQLCommand(), strings.NewReader(sql)); err != nil {
+	if out, err = s.remote(ctx, m, cpsource.SQLCommand(), strings.NewReader(sql), "database"); err != nil {
 		return err
 	}
 	items, skipped, err := cpsource.ParseUsers(out, users, names)
 	if err != nil {
-		return &MigrationError{Step: "source", Detail: "The old server's database users and grants could not be read."}
+		return &MigrationError{Step: "database", Detail: "The old server's database users and grants could not be read."}
 	}
 	plan.Users, plan.GrantsSkipped = items, append(plan.GrantsSkipped, skipped...)
 	return nil
@@ -678,7 +679,7 @@ func unreadable(err error, what string) error {
 	if errors.Is(err, cpsource.ErrUnprefixed) {
 		return &MigrationError{Step: "source", Detail: installDetail([]byte(err.Error())) + ". Rename it on the old server to start with the account's name and _ first."}
 	}
-	return &MigrationError{Step: "source", Detail: "The old server's " + what + " could not be read."}
+	return &MigrationError{Step: "cpanel_output", Detail: "The old server's " + what + " could not be read."}
 }
 
 func (s *store) planCron(ctx context.Context, m migrationRecord, plan *MigrationPlan) error {
@@ -689,7 +690,7 @@ func (s *store) planCron(ctx context.Context, m migrationRecord, plan *Migration
 	case err != nil:
 		return err
 	case code == 255:
-		return migrationFailed("connect", out)
+		return sshFailure("connect", out)
 	case code == 1 && bytes.Contains(out, []byte("no crontab for")):
 		return nil
 	case code != 0:
@@ -934,7 +935,7 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 	if err != nil {
 		return MigrateDatabaseResult{}, ErrInvalid
 	}
-	out, err := s.remote(work, m, command, nil)
+	out, err := s.remote(work, m, command, nil, "cpanel_tool")
 	if err != nil {
 		return MigrateDatabaseResult{}, err
 	}

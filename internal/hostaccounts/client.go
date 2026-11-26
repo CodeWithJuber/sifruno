@@ -446,6 +446,7 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 			Error     string `json:"error"`
 			Step      string `json:"step"`
 			Detail    string `json:"detail"`
+			Output    string `json:"output"`
 			Installed bool   `json:"wordpress_installed"`
 			Reason    string `json:"reason"`
 		}
@@ -476,7 +477,7 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 		case "backup_failed":
 			return &BackupError{Step: backupDetail([]byte(failure.Step)), Detail: backupDetail([]byte(failure.Detail))}
 		case "migration_failed":
-			return &MigrationError{Step: installDetail([]byte(failure.Step)), Detail: installDetail([]byte(failure.Detail))}
+			return &MigrationError{Step: installDetail([]byte(failure.Step)), Detail: installDetail([]byte(failure.Detail)), Output: installDetail([]byte(failure.Output))}
 		case "abandon_refused":
 			if !abandonReasonPattern.MatchString(failure.Reason) {
 				return ErrUnavailable

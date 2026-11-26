@@ -18,11 +18,13 @@ import (
 // fakeMigrate is the migration engine with a cPanel server behind it: it
 // answers the fixed commands with the documented shapes.
 type fakeMigrate struct {
-	mu        sync.Mutex
-	folders   map[string]bool
-	pinned    map[string]string
-	commands  []string
-	answers   map[string]string
+	mu       sync.Mutex
+	folders  map[string]bool
+	pinned   map[string]string
+	commands []string
+	answers  map[string]string
+	// fails answers a command with this error output and exit code.
+	fails     map[string]fakeFailure
 	site      htaccess.SiteResult
 	homeFile  bool
 	removed   bool // the source's line is gone: the next sign-in is refused
@@ -75,6 +77,9 @@ func (f *fakeMigrate) Remote(_ context.Context, m migrationRecord, command strin
 	if remove, _ := cpsource.RemoveKeyCommand(m.ID); command == remove {
 		f.removed = true
 		return nil, 0, nil
+	}
+	if fail, ok := f.fails[command]; ok {
+		return []byte(fail.out), fail.code, nil
 	}
 	answer, ok := f.answers[command]
 	if !ok {
@@ -242,7 +247,7 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 		t.Fatalf("a home .htaccess: %+v", plan)
 	}
 	var failed *MigrationError
-	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "someone", Reason: "Move a website here"}, "test operator"); !errors.As(err, &failed) || failed.Step != "source" {
+	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "someone", Reason: "Move a website here"}, "test operator"); !errors.As(err, &failed) || failed.Step != "account_missing" {
 		t.Fatalf("an account the source does not have: %v", err)
 	}
 }
@@ -279,7 +284,7 @@ func TestMigrateCopiesOnlyTheSameNamedAccount(t *testing.T) {
 	// Another account here is not the source's fixtureacct.
 	other := createFixtureNamed(t, s, "otheracct", "fixture.test.example")
 	var failed *MigrationError
-	if _, err = s.migrateFiles(ctx, other.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: other.Revision, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "source" {
+	if _, err = s.migrateFiles(ctx, other.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: other.Revision, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "account_missing" {
 		t.Fatalf("a differently named account: %v", err)
 	}
 }
@@ -487,5 +492,54 @@ func TestMigrationInputsAreChecked(t *testing.T) {
 	}
 	if _, ok := migrateRsh("/var/lib/with space", 22); ok {
 		t.Fatal("a folder with a space went into rsync's ssh command")
+	}
+}
+
+type fakeFailure struct {
+	out  string
+	code int
+}
+
+// TestMigrationFailuresAreNamed: every way the old server fails gets its
+// own step, so the panel can say what happened and what to do (D-0006),
+// and what the old server printed travels apart from the broker's words:
+// the panel shows it only under Technical details.
+func TestMigrationFailuresAreNamed(t *testing.T) {
+	preload := "2026/01/02 03:04:05 LD_Preload detected, refusing to run 2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369."
+	for _, c := range []struct {
+		name, out, step, detail string
+		code                    int
+		answer                  string
+	}{
+		{name: "a cPanel tool that refuses to run", out: preload, code: 3, step: "cpanel_tool"},
+		{name: "a cPanel tool that prints no JSON", answer: "LD_Preload detected, refusing to run", step: "cpanel_output", detail: "whmapi1 listaccts"},
+		{name: "the key refused", out: "root@203.0.113.9: Permission denied (publickey).", code: 255, step: "key_refused"},
+		{name: "another host key", out: "Host key verification failed.", code: 255, step: "host_key_changed"},
+		{name: "no answer", out: "ssh: connect to host 203.0.113.9 port 22: Connection timed out", code: 255, step: "unreachable"},
+		{name: "an ssh failure ssh does not name", out: "ssh: something else", code: 255, step: "connect"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f, _ := migrateStore(t)
+			m := pinnedMigration(t, s)
+			if c.answer != "" {
+				f.answers[cpsource.ListAccountsCommand()] = c.answer
+			} else {
+				f.fails = map[string]fakeFailure{cpsource.ListAccountsCommand(): {c.out, c.code}}
+			}
+			_, err := s.migrationAccounts(context.Background(), m.ID)
+			var failed *MigrationError
+			if !errors.As(err, &failed) || failed.Step != c.step || !strings.Contains(failed.Detail, c.detail) {
+				t.Fatalf("%+v %v", failed, err)
+			}
+			if c.out != "" && (failed.Output != installDetail([]byte(c.out)) || strings.Contains(failed.Detail, c.out)) {
+				t.Fatalf("the old server's output is not kept apart: %+v", failed)
+			}
+		})
+	}
+	s, _, _ := migrateStore(t)
+	m := pinnedMigration(t, s)
+	var failed *MigrationError
+	if _, err := s.planMigration(context.Background(), m.ID, MigrationPlanInput{Username: "someone", Reason: "Move a website here"}, "test operator"); !errors.As(err, &failed) || failed.Step != "account_missing" || failed.Output != "" {
+		t.Fatalf("an account the old server does not have: %+v %v", failed, err)
 	}
 }

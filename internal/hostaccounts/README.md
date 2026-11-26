@@ -1628,11 +1628,17 @@ root step. The design, with the owner's choices recorded from Jev on
 - Locks: `migrateMu` guards the records only; no source command runs
   under it, so a plan waiting for `backupMu` behind a long backup never
   holds up the admin's finish.
-- A failed step answers 422 `migration_failed` with the step (`connect`,
+- A failed step answers 422 `migration_failed` with the step, the
+  broker's own words (`detail`) and, apart from them, the end of the error
+  output only (`output`): what a source command printed on standard output
+  can hold password hashes. The panel shows `output` under Technical
+  details only and explains each step (D-0006): `unreachable`,
+  `key_refused` and `host_key_changed` are read from ssh's own message
+  (`connect` when it names none), `cpanel_tool` is whmapi1 or uapi exiting
+  with an error, `cpanel_output` is their answer not in its documented
+  JSON, `account_missing` an account the old server does not have; then
   `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `reload`,
-  `database`, `dump`, `import`, `compare`, `remove_key`) and the end of its error
-  output only: what a source command printed on standard output can hold
-  password hashes.
+  `database`, `dump`, `import`, `compare` and `remove_key`.
   Copies run one at a time with backups (they share the staging root and
   the temporary users), and their root-side leftovers go through the
   backup leftover list.

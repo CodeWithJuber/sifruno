@@ -144,11 +144,8 @@ func (m *migrator) Scan(ctx context.Context, host string, port int) ([]byte, err
 	}
 	stdout := &boundedBuffer{max: 8 << 10}
 	out, code, err := m.e.run(ctx, backupCommand{path: sshKeyscanPath, args: migrateKeyscanArgs(host, port), env: m.env(), dir: "/", stdout: stdout, limit: migrateScanTimeout})
-	if err != nil {
-		return nil, migrationFailed("connect", out)
-	}
-	if code != 0 || len(stdout.b) == 0 {
-		return nil, &MigrationError{Step: "connect", Detail: "The old server did not answer on its SSH port. " + installDetail(out)}
+	if err != nil || code != 0 || len(stdout.b) == 0 {
+		return nil, &MigrationError{Step: "unreachable", Detail: "The old server did not answer on its SSH port.", Output: installDetail(out)}
 	}
 	return stdout.b, nil
 }
@@ -187,7 +184,7 @@ func (m *migrator) remoteSQL(ctx context.Context, rec migrationRecord, sql strin
 	case err != nil:
 		return nil, err
 	case code == 255:
-		return nil, migrationFailed("connect", out)
+		return nil, sshFailure("connect", out)
 	case code != 0:
 		// Error output only: standard output may hold what was read so far.
 		return nil, migrationFailed("database", out)
@@ -217,7 +214,7 @@ func (m *migrator) rsync(ctx context.Context, rec migrationRecord, args func(rsh
 // unreadable explains rsync's exit 23 on a copy whose sender runs as the
 // account: something in the old home is not the account's to read.
 func unreadableByAccount(step string, out []byte) error {
-	return &MigrationError{Step: step, Detail: "Some files or folders in the old home cannot be read by the account itself, so they were not copied and the copy stopped. Sifruno reads the home as the account, never as root. Give them to the account, or remove them, on the old server. " + installDetail(out)}
+	return &MigrationError{Step: step, Detail: "Some files or folders in the old home cannot be read by the account itself, so they were not copied and the copy stopped. Sifruno reads the home as the account, never as root. Give them to the account, or remove them, on the old server.", Output: installDetail(out)}
 }
 
 // validSourceHome is a home folder the source named: a plain absolute path
@@ -247,7 +244,7 @@ func (m *migrator) Preflight(ctx context.Context, rec migrationRecord, home stri
 		return htaccess.SiteResult{}, false, unreadableByAccount("fetch", out)
 	}
 	if code != 0 && code != 24 {
-		return htaccess.SiteResult{}, false, migrationFailed("fetch", out)
+		return htaccess.SiteResult{}, false, sshFailure("fetch", out)
 	}
 	files, err := openDirectoryAt(int(stage.Fd()), "htaccess")
 	if err != nil {
@@ -346,7 +343,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 		return MigrateFilesResult{}, unreadableByAccount("fetch", out)
 	}
 	if code != 0 && code != 24 {
-		return MigrateFilesResult{}, migrationFailed("fetch", out)
+		return MigrateFilesResult{}, sshFailure("fetch", out)
 	}
 	files, err := openDirectoryAt(int(stage.Fd()), "files")
 	if err != nil {
@@ -429,7 +426,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	}
 	// The old server's modes come back: the group bits staging added go.
 	if out, err := m.e.stagedModes(ctx, stage, r); err != nil {
-		return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The files were copied, but some kept a group read bit the old server did not give them. " + installDetail(out)}
+		return MigrateFilesResult{}, &MigrationError{Step: "copy", Detail: "The files were copied, but some kept a group read bit the old server did not give them.", Output: installDetail(out)}
 	}
 	return result, nil
 }
@@ -794,7 +791,7 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 	case err != nil:
 		return MigrateDatabaseResult{}, err
 	case code == 255:
-		return MigrateDatabaseResult{}, migrationFailed("connect", out)
+		return MigrateDatabaseResult{}, sshFailure("connect", out)
 	case code != 0 || syncErr != nil:
 		return MigrateDatabaseResult{}, migrationFailed("dump", out)
 	}

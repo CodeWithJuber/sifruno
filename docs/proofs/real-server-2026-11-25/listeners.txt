@@ -1,0 +1,831 @@
+# Public listeners after install: MariaDB, OpenLiteSpeed's WebAdmin console and its sample site, 2026-11-26
+#
+# Goal: after install only 22, 80, 443 and the panel's two HTTPS ports (8443, 8444) accept connections from
+# outside. MariaDB (3306) and the WebAdmin console (7080) listen on 127.0.0.1; the package's sample site on
+# 8088 is gone.
+#
+# Servers: three new Linodes g6-standard-2 (de-fra-2) that scripts/ci/nightly-fresh-install.sh made with
+# SIFRUNO_NIGHTLY_KEEP=1 and the owner's admin key added: AlmaLinux 9.8, SELinux Enforcing,
+# openlitespeed-1.9.4-3.el9, mariadb-server-10.11.18. All three are deleted at the end (Part 12).
+#
+# Commits: 286c195 (the change), 1710d6a (the step after phpMyAdmin's, found in Part 10), 669dccc (a printed
+# rollback line), 3cd4927 (a failure path from an independent review). Each release was built with
+# scripts/install/build-release.sh from that commit. The runner is the machine that ran the probes and Chrome.
+#
+# Server 1 got: the branch head 59e703b fresh (Part 1), by-hand tests of OpenLiteSpeed (Part 2), the branch
+# head again with --panel-host (Part 3), 286c195 as an upgrade (Part 4), the wizard and phpMyAdmin (Parts 5-6),
+# the rollback steps back to the branch head's listeners (Part 7; the programs stayed those of 286c195, whose
+# Go code is the branch head's) and 3cd4927 as an upgrade (Parts 8-9). Servers 2 and 3 got fresh installs.
+#
+# What was not run: an upgrade from a release older than the branch head; MariaDB with a bind-address set by an
+# administrator in another option file (the warning path); a stop of OpenLiteSpeed that takes longer than 60 s
+# (the pkill path); an OpenLiteSpeed package update after the change; the Pebble wizard proof; IPv6 probes from
+# outside (the Linodes' IPv6 address was not probed; ss shows no IPv6 listener on 3306, 7080 or 8088 after).
+#
+# Edits to the captured output: the servers' addresses are written SERVER_IP, SERVER2_IP and SERVER3_IP, the
+# temporary phpMyAdmin user's name ends in <hex>, scratch folders are SCRATCH/, and trailing spaces are removed.
+
+# Part 1. Server 1 (Linode 111993682): a fresh install of the branch head, 59e703b
+# scripts/ci/nightly-fresh-install.sh with SIFRUNO_NIGHTLY_KEEP=1 made the Linode and ran fresh-install-test.sh:
+== 2026-11-26T15:05:43Z Linode 111993682 created
+== 2026-11-26T15:06:12Z Firewall 233384247 is on Linode 111993682
+  - OpenLiteSpeed: Sifruno's include and namespace isolation added (backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1510)
+  - OpenLiteSpeed: cgroups 1 in CGIRLimit, so each site's PHP runs in its account's user slice (backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1510)
+  - OpenLiteSpeed: phpMyAdmin's vhost and its listener on 127.0.0.1:8090 (/usr/local/lsws/conf/sifruno-phpmyadmin.conf, included from /usr/local/lsws/conf/httpd_config.conf; backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1510)
+  - MariaDB admin user for the panel created, with its option file /var/lib/sifpanel/db-admin.cnf
+PASS  sifruno-broker.service is active
+PASS  sifruno.service is active
+PASS  both units start at boot
+PASS  the panel answers on 127.0.0.1:8080
+PASS  the panel runs as sifpanel
+PASS  the broker socket exists
+PASS  the socket is sifpanel's, mode 0600
+PASS  hostbroker --check-host passes
+PASS  SELinux is still enforcing
+PASS  the programs have the SELinux type bin_t
+PASS  the broker runs as unconfined_service_t, not systemd's init_t
+PASS  the installed broker creates an account
+PASS  its Linux user exists
+PASS  the installed broker deletes it again
+  | Changed in this run: nothing
+PASS  the second run succeeds
+PASS  it reports that nothing changed
+PASS  both units are still active
+PASS: the fresh-install test passed 17 checks on a new g6-standard-2 Linode (linode/almalinux9). Transcript: SCRATCH/fresh-install-20261126T151000Z.txt
+KEPT: Linode 111993682 (sifruno-owner-test-lsn1126a) and firewall 233384247 stay on the account and are billed until they are deleted.
+
+# Its listeners right after (over SSH, 2026-11-26T15:16Z):
+$ ss -ltnp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      4096         0.0.0.0:7080      0.0.0.0:*    users:(("litespeed",pid=18199,fd=11),("litespeed",pid=18196,fd=11))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=18200,fd=14),("litespeed",pid=18196,fd=14))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=18199,fd=13),("litespeed",pid=18196,fd=13))
+LISTEN 0      4096       127.0.0.1:8080      0.0.0.0:*    users:(("sifruno",pid=18102,fd=9))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=18200,fd=28),("litespeed",pid=18196,fd=28))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=18199,fd=27),("litespeed",pid=18196,fd=27))
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=15181,fd=7))
+LISTEN 0      4096         0.0.0.0:8088      0.0.0.0:*    users:(("litespeed",pid=18200,fd=10),("litespeed",pid=18196,fd=10))
+LISTEN 0      4096         0.0.0.0:8088      0.0.0.0:*    users:(("litespeed",pid=18199,fd=9),("litespeed",pid=18196,fd=9))
+LISTEN 0      80           0.0.0.0:3306      0.0.0.0:*    users:(("mariadbd",pid=17791,fd=18))
+LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=15181,fd=8))
+LISTEN 0      80              [::]:3306         [::]:*    users:(("mariadbd",pid=17791,fd=19))
+$ ss -lunp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+UNCONN 0      0            0.0.0.0:7080      0.0.0.0:*    users:(("litespeed",pid=18199,fd=12),("litespeed",pid=18196,fd=12))
+UNCONN 0      0          127.0.0.1:323       0.0.0.0:*    users:(("chronyd",pid=680,fd=5))
+UNCONN 0      0              [::1]:323          [::]:*    users:(("chronyd",pid=680,fd=6))
+$ firewall-cmd --list-all | sed -n '1,7p'
+public (active)
+  target: default
+  icmp-block-inversion: no
+  interfaces: eth0
+  sources:
+  services: cockpit dhcpv6-client ssh
+  ports:
+
+# Part 2. How OpenLiteSpeed takes a moved or removed listener (same server, by hand, before the installer
+# change was written). Key lines copied from the runs; words in parentheses are notes. Every file was put
+# back afterwards and compared byte for byte with the installed one (cmp), and OpenLiteSpeed started clean.
+## A. openlitespeed -t on three hand-edited copies of httpd_config.conf (the file put back after each)
+  A: listener Default and virtualHost Example removed, vhTemplates kept: exit 0, no lines
+  B: also the vhTemplates' "listeners Default" lines removed:              exit 0, no lines
+  C: listener Default on 127.0.0.1:8088:                                  exit 1, the two stock warnings
+     [WARN] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+     [WARN] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+
+## B. Variant A and the console on 127.0.0.1:7080, applied with systemctl reload lsws
+reload exit 0
+  listeners afterwards: 0.0.0.0:7080 (TCP and UDP), 0.0.0.0:80, 0.0.0.0:8088, 127.0.0.1:8090 (unchanged)
+2026-11-26 15:20:50.673892 [ERROR] [19343] HttpListener::start(): Can't listen at address adminListener: Address already in use!
+2026-11-26 15:20:50.673947 [ERROR] [19343] HttpServer::addListener(adminListener) failed to create new listener
+2026-11-26 15:20:50.673952 [ERROR] [19343] [config:admin:listener:adminListener] failed to start listener on address 127.0.0.1:7080!
+2026-11-26 15:20:50.673957 [ERROR] [19343] [config:admin:listener] No listener is available for admin virtual host!
+2026-11-26 15:20:50.674156 [ERROR] [19343] Fatal error in configuration, exit!
+  The new server exited; the old one kept serving the old listeners. The unit then went into a restart loop
+  (its PID file named the exited server), which was ended with systemctl stop, pkill -9 -x litespeed and a start.
+
+## C. The same change from a clean state, applied with systemctl restart lsws
+restart exit 0
+  listeners afterwards: 0.0.0.0:7080, 0.0.0.0:80, 0.0.0.0:8088, 127.0.0.1:8090 (unchanged)
+2026-11-26 15:24:33.172004 [ERROR] [20204] HttpListener::start(): Can't listen at address adminListener: Address already in use!
+2026-11-26 15:24:33.172276 [ERROR] [20204] Fatal error in configuration, exit!
+  journal: "lshttpd.service: Unit process 20109 (litespeed) remains running after unit stopped." (KillMode=none:
+  the unit's stop is lswsctrl delay-stop, a graceful stop, and its start then finds the old server running)
+
+## D. Variant B and the console on 127.0.0.1:7080, from a clean state: systemctl stop, wait, systemctl start
+stop exit 0 after 0 s
+no litespeed process after 3 s
+listeners left: 0
+start exit 0
+active
+      2 0.0.0.0:80
+      1 127.0.0.1:7080        (TCP)
+      2 127.0.0.1:8090
+      1 127.0.0.1:7080        (UDP)
+  [ERROR]/[WARN] lines since the change: none
+admin on loopback: 200
+  With variant A instead, the same stop and start logged at the start:
+2026-11-26 15:29:37.978711 [ERROR] [21123] [config:template:centralConfigLog] Listener [Default] does not exist
+2026-11-26 15:29:37.979110 [ERROR] [21123] [config:template:EasyRailsWithSuEXEC] Listener [Default] does not exist
+
+## E. A plain systemctl restart lsws with no listener change (the existing rollback step for httpd_config.conf)
+restart exit 0
+active
+  journal: "[OK] litespeed: graceful stop." then "[OK] Send SIGUSR1 to 24453": the start gracefully restarts the old server
+  listeners unchanged and served by the new main process; it works when no listener moves
+
+# Part 3. Server 1 before the change, installed again by the branch head's installer with the panel's HTTPS
+# address and Let's Encrypt for websites. The Cloud Firewall admits 3306, 7080, 8088, 8443 and 8444 from the
+# runner only, and 80 and 443 from anywhere; firewalld has them open for this boot only.
+# AlmaLinux release 9.8 (Olive Jaguar), kernel 5.14.0-687.60.1.el9_8.x86_64, SELinux Enforcing; openlitespeed-1.9.4-3.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+
+## firewalld: the proof's ports are open for this boot only (runtime, not --permanent)
+$ firewall-cmd --list-ports
+80/tcp 443/tcp 3306/tcp 7080/tcp 8088/tcp 8443/tcp 8444/tcp
+
+## The branch head's installer, run again with the same options
+$ bash /root/sifruno-release/sifruno-linux-amd64/install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io
+== 2026-11-26T15:44:09Z Sifruno is installed
+Changed in this run: nothing
+
+
+## Listening sockets with the branch head's install
+$ ss -ltnp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      4096         0.0.0.0:7080      0.0.0.0:*    users:(("litespeed",pid=21992,fd=21),("litespeed",pid=21986,fd=21))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=21993,fd=28),("litespeed",pid=21986,fd=28))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=21992,fd=27),("litespeed",pid=21986,fd=27))
+LISTEN 0      4096       127.0.0.1:8080      0.0.0.0:*    users:(("sifruno",pid=21839,fd=9))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=21993,fd=26),("litespeed",pid=21986,fd=26))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=21992,fd=25),("litespeed",pid=21986,fd=25))
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=15181,fd=7))
+LISTEN 0      4096         0.0.0.0:8088      0.0.0.0:*    users:(("litespeed",pid=21993,fd=24),("litespeed",pid=21986,fd=24))
+LISTEN 0      4096         0.0.0.0:8088      0.0.0.0:*    users:(("litespeed",pid=21992,fd=23),("litespeed",pid=21986,fd=23))
+LISTEN 0      80           0.0.0.0:3306      0.0.0.0:*    users:(("mariadbd",pid=17791,fd=18))
+LISTEN 0      4096               *:8443            *:*    users:(("sifruno",pid=21839,fd=8))
+LISTEN 0      4096               *:8444            *:*    users:(("sifruno",pid=21839,fd=12))
+LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=15181,fd=8))
+LISTEN 0      80              [::]:3306         [::]:*    users:(("mariadbd",pid=17791,fd=19))
+$ ss -lunp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+UNCONN 0      0            0.0.0.0:7080      0.0.0.0:*    users:(("litespeed",pid=21992,fd=22),("litespeed",pid=21986,fd=22))
+UNCONN 0      0          127.0.0.1:323       0.0.0.0:*    users:(("chronyd",pid=680,fd=5))
+UNCONN 0      0              [::1]:323          [::]:*    users:(("chronyd",pid=680,fd=6))
+$ grep -n -A3 -E '^(listener|virtualHost)' /usr/local/lsws/conf/httpd_config.conf
+209:virtualHost Example{
+210-    vhRoot                   Example/
+211-    allowSymbolLink          1
+212-    enableScript             1
+--
+221:listener Default{
+222-    address                  *:8088
+223-    secure                   0
+224-    map                      Example *
+$ grep -n -A1 '^listener' /usr/local/lsws/admin/conf/admin_config.conf
+22:listener adminListener{
+23-  address               *:7080
+$ my_print_defaults --mysqld
+--datadir=/var/lib/mysql
+--socket=/var/lib/mysql/mysql.sock
+--log-error=/var/log/mariadb/mariadb.log
+--pid-file=/run/mariadb/mariadb.pid
+--plugin_load_add=provider_lz4
+--provider_lz4=force_plus_permanent
+
+## From the runner (outside the server), with the Cloud Firewall rule and firewalld open for these ports
+$ probe.py SERVER_IP 22 80 443 8443 8444 3306 7080 8088
+  SERVER_IP:22 open: something listens and accepted the connection
+  SERVER_IP:80 open: something listens and accepted the connection
+  SERVER_IP:443 refused: the server answered with a TCP reset, nothing listens there
+  SERVER_IP:8443 open: something listens and accepted the connection
+  SERVER_IP:8444 open: something listens and accepted the connection
+  SERVER_IP:3306 open: something listens and accepted the connection
+  SERVER_IP:7080 open: something listens and accepted the connection
+  SERVER_IP:8088 open: something listens and accepted the connection
+
+# Part 4. The upgrade: the installer of 286c195 over it. (In this capture the echoed grep pattern says
+# 'default' where the command that ran says 'listeners'; the next capture, Part 8, echoes it right.)
+## The installer from 286c195 over the branch head's install (an upgrade), same options
+$ bash /root/release-286c195/sifruno-linux-amd64/install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io
+exit status 0, 15 s
+== 2026-11-26T15:57:00Z Install OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman, cronie and Apache (for the Compat tier; left off)
+== 2026-11-26T15:57:01Z Add Sifruno's include, namespace isolation and the cache module to OpenLiteSpeed's config (backup)
+== 2026-11-26T15:57:01Z Let each site's PHP run in its account's user slice: cgroups 1 in OpenLiteSpeed's CGIRLimit (backup, config test)
+== 2026-11-26T15:57:01Z Put OpenLiteSpeed's WebAdmin console on 127.0.0.1 and remove the package's sample site on 8088 (backups, config test; a stop and start when a listener moves)
+== 2026-11-26T15:57:09Z Install phpMyAdmin 5.2.3 in /usr/local/lib/sifruno/phpmyadmin (pinned sha256), its user sifpma, and its OpenLiteSpeed vhost on 127.0.0.1:8090 (backup, config test)
+== 2026-11-26T15:57:10Z Keep MariaDB on loopback: bind-address 127.0.0.1 in /etc/my.cnf.d/sifruno.cnf (backup; a running MariaDB that listens beyond loopback restarts once)
+== 2026-11-26T15:57:10Z Enable and start MariaDB, OpenLiteSpeed and crond
+== 2026-11-26T15:57:10Z Create the panel's MariaDB admin user and its 0600 option file /var/lib/sifpanel/db-admin.cnf
+== 2026-11-26T15:57:10Z Create the LSCache stores folder /var/lib/sifruno-lscache and remove unused stores earlier releases left in /usr/local/lsws/cachedata (as OpenLiteSpeed's user)
+== 2026-11-26T15:57:15Z Sifruno is installed
+Changed in this run:
+  - OpenLiteSpeed: the WebAdmin console on 127.0.0.1 only, and the package's sample site (virtualHost Example and its listener Default on *:8088) removed (backups: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1557 /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1557)
+  - OpenLiteSpeed stopped and started to drop its old listeners on 0.0.0.0:7080 0.0.0.0:8088
+  - MariaDB: bind-address 127.0.0.1 in /etc/my.cnf.d/sifruno.cnf (created); restarted, it now listens on loopback only (it listened on 0.0.0.0:3306 [::]:3306)
+
+  7. MariaDB on loopback only: /etc/my.cnf.d/sifruno.cnf (created in this run)
+       rm /etc/my.cnf.d/sifruno.cnf
+       systemctl restart mariadb
+  8. OpenLiteSpeed's WebAdmin console on loopback only: /usr/local/lsws/admin/conf/admin_config.conf
+       cp -a /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1557 /usr/local/lsws/admin/conf/admin_config.conf && systemctl restart lsws
+
+## Listening sockets after the upgrade
+$ ss -ltnp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=22777,fd=26),("litespeed",pid=22770,fd=26))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=22776,fd=25),("litespeed",pid=22770,fd=25))
+LISTEN 0      4096       127.0.0.1:8080      0.0.0.0:*    users:(("sifruno",pid=21839,fd=9))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=22777,fd=24),("litespeed",pid=22770,fd=24))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=22776,fd=23),("litespeed",pid=22770,fd=23))
+LISTEN 0      80         127.0.0.1:3306      0.0.0.0:*    users:(("mariadbd",pid=22931,fd=20))
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=15181,fd=7))
+LISTEN 0      4096       127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=22776,fd=21),("litespeed",pid=22770,fd=21))
+LISTEN 0      4096               *:8443            *:*    users:(("sifruno",pid=21839,fd=8))
+LISTEN 0      4096               *:8444            *:*    users:(("sifruno",pid=21839,fd=12))
+LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=15181,fd=8))
+$ ss -lunp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+UNCONN 0      0          127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=22776,fd=22),("litespeed",pid=22770,fd=22))
+UNCONN 0      0          127.0.0.1:323       0.0.0.0:*    users:(("chronyd",pid=680,fd=5))
+UNCONN 0      0              [::1]:323          [::]:*    users:(("chronyd",pid=680,fd=6))
+
+## The files
+$ cat /etc/my.cnf.d/sifruno.cnf; ls -lZ /etc/my.cnf.d/sifruno.cnf
+# Managed by the Sifruno installer (install.sh); a new run puts it back.
+# MariaDB answers on loopback only. The websites reach it at 127.0.0.1, and
+# the panel, the broker and phpMyAdmin through its socket, all on this server.
+[mysqld]
+bind-address=127.0.0.1
+-rw-r--r--. 1 root root system_u:object_r:mysqld_etc_t:s0 260 Nov 26 15:57 /etc/my.cnf.d/sifruno.cnf
+$ my_print_defaults --mysqld
+--datadir=/var/lib/mysql
+--socket=/var/lib/mysql/mysql.sock
+--log-error=/var/log/mariadb/mariadb.log
+--pid-file=/run/mariadb/mariadb.pid
+--plugin_load_add=provider_lz4
+--provider_lz4=force_plus_permanent
+--bind-address=127.0.0.1
+$ grep -n -i -E 'example|default|^listener|^virtualhost' /usr/local/lsws/conf/httpd_config.conf
+$ grep -n -A1 '^listener' /usr/local/lsws/admin/conf/admin_config.conf
+22:listener adminListener{
+23-  address               127.0.0.1:7080
+$ ls -l /usr/local/lsws/conf/httpd_config.conf* /usr/local/lsws/admin/conf/admin_config.conf*
+-rw-rw-r--. 1 lsadm lsadm   656 Nov 26 15:57 /usr/local/lsws/admin/conf/admin_config.conf
+-rw-r--r--. 1 root  root    656 Nov 26 15:20 /usr/local/lsws/admin/conf/admin_config.conf0
+-rw-rw-r--. 1 lsadm lsadm   648 Nov  3 05:32 /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1557
+-rw-r--r--. 1 root  root    497 Nov 26 15:57 /usr/local/lsws/admin/conf/admin_config.conf.txt
+-rw-r-----. 1 lsadm nobody 7265 Nov 26 15:57 /usr/local/lsws/conf/httpd_config.conf
+-rw-r-----. 1 lsadm nobody 7265 Nov 26 15:31 /usr/local/lsws/conf/httpd_config.conf0
+-rw-r-----. 1 lsadm nobody 7653 Nov  3 05:32 /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1510
+-rw-r-----. 1 lsadm nobody 7804 Nov 26 15:14 /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1557
+-rw-r-----. 1 lsadm nobody 5100 Nov 26 15:57 /usr/local/lsws/conf/httpd_config.conf.txt
+$ diff the backups with the files now
+209,219d208
+< virtualHost Example{
+<     vhRoot                   Example/
+<     allowSymbolLink          1
+<     enableScript             1
+<     restrained               1
+<     maxKeepAliveReq
+<     smartKeepAlive
+<     setUIDMode               0
+<     chrootMode               0
+<     configFile               conf/vhosts/Example/vhconf.conf
+< }
+221,225d209
+< listener Default{
+<     address                  *:8088
+<     secure                   0
+<     map                      Example *
+< }
+229d212
+<     listeners                Default
+234d216
+<     listeners                Default
+23c23
+<   address               *:7080
+---
+>   address               127.0.0.1:7080
+$ /usr/local/lsws/bin/openlitespeed -t
+exit status 0
+$ [ERROR] and [WARN] lines in OpenLiteSpeed's error.log since the upgrade started
+  none
+
+## On the server itself, loopback still works
+  WebAdmin console https://127.0.0.1:7080/: HTTP 200
+  MariaDB over loopback TCP as root: ERROR 1698 (28000): Access denied for user 'root'@'localhost'
+  MariaDB over its socket: 10.11.18-MariaDB
+  MariaDB on this server's public address: ERROR 2002 (HY000): Can't connect to server on 'SERVER_IP' (115)
+  the panel: HTTP 200, the units: active active active active
+
+## A second run of the same installer
+$ bash /root/release-286c195/sifruno-linux-amd64/install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io
+exit status 0
+== 2026-11-26T15:57:22Z Sifruno is installed
+Changed in this run: nothing
+
+
+## From the runner (outside the server), with the Cloud Firewall rule and firewalld open for these ports
+$ probe.py SERVER_IP 22 80 443 8443 8444 3306 7080 8088
+  SERVER_IP:22 open: something listens and accepted the connection
+  SERVER_IP:80 open: something listens and accepted the connection
+  SERVER_IP:443 refused: the server answered with a TCP reset, nothing listens there
+  SERVER_IP:8443 open: something listens and accepted the connection
+  SERVER_IP:8444 open: something listens and accepted the connection
+  SERVER_IP:3306 refused: the server answered with a TCP reset, nothing listens there
+  SERVER_IP:7080 refused: the server answered with a TCP reset, nothing listens there
+  SERVER_IP:8088 refused: the server answered with a TCP reset, nothing listens there
+
+# Part 5. The New website wizard with Let's Encrypt (scripts/devvm/proofs/public-ca-wizard.sh from the checkout
+# 380e5dc), over the internet, on the state Part 4 left: WordPress reaches MariaDB at 127.0.0.1
+# Public-CA wizard proof 2026-11-26T16:01:24Z
+# source 380e5dc; runner: Ubuntu 24.04.5 LTS, curl 8.5.0, OpenSSL 3.0.13, agent-browser 0.45.0
+# panel https://SERVER_IP:8443, website www.SERVER_IP.sslip.io, limit 120 s from Create
+## Before the wizard
+  www.SERVER_IP.sslip.io resolves to SERVER_IP; the panel's name to SERVER_IP
+PASS  the domain resolves in public DNS to the panel's server
+PASS  the panel serves the self-signed certificate the login file names
+  a top-level link from another site to https://SERVER_IP:8443/ answers HTTP 200
+PASS  a link from another site opens the panel (cross-site navigation answers 200)
+  https://www.SERVER_IP.sslip.io/ before the wizard: curl: (7) Failed to connect to www.SERVER_IP.sslip.io port 443 after 70 ms: Couldn't connect to server
+PASS  before the wizard, https://www.SERVER_IP.sslip.io/ has no certificate this machine trusts
+## Browser: sign in over the internet and open the wizard
+PASS  the panel's sign-in form opens at https://SERVER_IP:8443/websites
+PASS  the admin owner signs in with password and authenticator code
+PASS  Websites, New website opens the wizard at /websites/new
+PASS  WordPress is the chosen website type
+## Browser: Create, then follow the job
+  pressed Create at 2026-11-26T16:02:15Z
+  2.6 s: steps done running pending pending pending
+  4.7 s: steps done done running pending pending
+  19.2 s: steps done done done done running
+  the job page shows its last screen (succeeded) 48.1 s after Create
+PASS  the job succeeds
+PASS  Create to the job's last screen: 48.1 s, within 120 s
+  first HTTPS 200 from https://www.SERVER_IP.sslip.io/, system trust store: 28.9 s after Create
+PASS  Create to the site's first HTTPS 200: 28.9 s, within 120 s
+PASS  that first 200 is the new WordPress site
+  step account: done (Created the hosting account www.)
+  step web: done (The site is live with PHP 8.3.)
+  step ssl: done (Installed a certificate for www.SERVER_IP.sslip.io, valid until 2027-02-24.)
+  step database: done (Created the database www_wp and its user.)
+  step wordpress: done (Installed WordPress 7.1.5 with the LiteSpeed Cache plugin 7.9.3.)
+PASS  the job's HTTPS step is done
+  last screen: www.SERVER_IP.sslip.io is ready. WordPress is installed. The site uses https with its own certificate.
+PASS  the last screen says the site uses https
+PASS  Open site on the last screen is https://www.SERVER_IP.sslip.io/
+## The certificate, checked with this machine's system trust store
+  curl | * ALPN: curl offers h2,http/1.1
+  curl | *  CAfile: /etc/ssl/certs/ca-certificates.crt
+  curl | *  CApath: /etc/ssl/certs
+  curl | * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+  curl | * ALPN: server accepted h2
+  curl | * Server certificate:
+  curl | *  subject: CN=www.SERVER_IP.sslip.io
+  curl | *  start date: Nov 26 15:03:54 2026 GMT
+  curl | *  expire date: Feb 24 15:03:53 2027 GMT
+  curl | *  subjectAltName: host "www.SERVER_IP.sslip.io" matched cert's "www.SERVER_IP.sslip.io"
+  curl | *  issuer: C=US; O=Let's Encrypt; CN=YE1
+  curl | *  SSL certificate verify ok.
+  curl | < HTTP/2 200
+PASS  curl -sv https://www.SERVER_IP.sslip.io/ exits 0 with no CA but the system's
+PASS  curl says: SSL certificate verify ok
+PASS  the page is the WordPress site
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | Certificate chain
+  openssl |  0 s:CN = www.SERVER_IP.sslip.io
+  openssl |    i:C = US, O = Let's Encrypt, CN = YE1
+  openssl |    a:PKEY: id-ecPublicKey, 256 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: Nov 26 15:03:54 2026 GMT; NotAfter: Feb 24 15:03:53 2027 GMT
+  openssl |  1 s:C = US, O = Let's Encrypt, CN = YE1
+  openssl |    i:C = US, O = ISRG, CN = Root YE
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: Sep  3 00:00:00 2025 GMT; NotAfter: Sep  2 23:59:59 2028 GMT
+  openssl |  2 s:C = US, O = ISRG, CN = Root YE
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+  openssl |  3 s:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X1
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: RSA-SHA256
+  openssl |    v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+  openssl | ---
+  openssl | Verify return code: 0 (ok)
+PASS  openssl s_client -verify_return_error exits 0
+PASS  openssl says: Verify return code: 0 (ok)
+  issuer:  C = US, O = Let's Encrypt, CN = YE1
+  SAN:     DNS:www.SERVER_IP.sslip.io
+  valid:   Nov 26 15:03:54 2026 GMT to Feb 24 15:03:53 2027 GMT
+  SHA-256: D2:B7:0F:58:EF:33:2D:E1:A2:15:7F:0E:4E:46:9A:55:66:20:F7:45:F6:26:60:F6:D4:DC:83:74:B5:78:66:74
+PASS  the issuer is Let's Encrypt's production CA (not staging, not Pebble)
+PASS  the certificate names exactly www.SERVER_IP.sslip.io
+PASS  it was issued during this run and is valid for at least 30 more days
+## A browser that ignores no certificate error opens the site
+  Chrome shows: Sifruno public CA proof
+PASS  Chrome opens https://www.SERVER_IP.sslip.io/ without a certificate warning and shows the site
+## The new site in Websites
+  row: www.SERVER_IP.sslip.io Live https until Feb 24, 2027 8.3 WordPress 7.1.5 118 MB of 1 GB (11%) Traffic: 427 KB in November 2026 Open site www.SERVER_IP.sslip.io (opens in a new tab) WordPress admin www.SERVER_IP.sslip.io (opens in a new tab) Details for www.SERVER_IP.sslip.io
+PASS  Websites lists www.SERVER_IP.sslip.io as Live
+PASS  its https badge is on, with the certificate's expiry
+
+# 0 check(s) failed
+# Times from pressing Create: last screen 48.1 s, first HTTPS 200 28.9 s (limit 120 s)
+# Screenshots: SCRATCH/public-ca-wizard-20261126T160123Z
+
+# Part 6. phpMyAdmin's one-click sign-in on that state: the panel's API on loopback makes the link, Chrome
+# on the runner opens it on https://SERVER_IP:8444 from the panel's page, as the panel's button does. Two
+# earlier tries are not shown: one opened the link after loading the sign-in page by hand (signed in, lists
+# www_wp, the same 'Token mismatch'), one from a blank page (refused as cross-site, as the origin means to).
+## phpMyAdmin's one-click sign-in, through the panel's API on the server's loopback
+  website www, account 0c92243ce7b04075658021a2aae08ab5
+  sign-in link expires 2026-11-26T16:11:32.217782586Z, phpMyAdmin login expires 2026-11-26T17:10:32Z
+PASS  the panel makes the one-time phpMyAdmin link
+  the link is on https://SERVER_IP:8444/sifruno-signon.php?code=...
+  the page: https://SERVER_IP:8444/index.php, title "127.0.0.1:8090 / This server | phpMyAdmin 5.2.3"
+  database server shown: Server: This server Server: This server
+  databases in phpMyAdmin's navigation: information_schema www_wp
+PASS  phpMyAdmin is signed in and lists the website's database www_wp
+  error messages on the page: Error: Token mismatch
+FAIL  phpMyAdmin's first page shows no error
+  screenshot: phpmyadmin-after.png
+  www_wp's page lists 14 wp_ tables; wp_options among them
+PASS  phpMyAdmin reads the WordPress tables of www_wp from MariaDB
+  screenshot: phpmyadmin-after-www_wp.png
+## On the server: the temporary user phpMyAdmin signed in as
+  SifrunoPMA_<hex>@localhost
+  SifrunoPMA_<hex>@localhost
+  SifrunoPMA_<hex>@localhost
+# 1 check(s) failed
+
+# Part 7. Is the 'Token mismatch' message new? Server 1 back to the branch head's listeners with the rollback
+# steps (16:2xZ), then at 18:51Z, once the earlier sign-ins had ended, the same sign-in as the admin (username,
+# password and authenticator code). Same message, so it is not from this change.
+## Back to the branch head's listeners, with the backups and the rollback steps the installer printed
+$ rm /etc/my.cnf.d/sifruno.cnf && systemctl restart mariadb
+$ cp -a httpd_config.conf.bak-20261126-1557 and admin_config.conf.bak-20261126-1557 back
+$ systemctl stop lsws, wait for its processes to end, systemctl start lsws
+active active
+$ ss -ltnp | grep -E ':(3306|7080|8088) '
+LISTEN 0      4096         0.0.0.0:7080      0.0.0.0:*    users:(("litespeed",pid=24460,fd=21),("litespeed",pid=24453,fd=21))
+LISTEN 0      4096         0.0.0.0:8088      0.0.0.0:*    users:(("litespeed",pid=24461,fd=24),("litespeed",pid=24453,fd=24))
+LISTEN 0      4096         0.0.0.0:8088      0.0.0.0:*    users:(("litespeed",pid=24460,fd=23),("litespeed",pid=24453,fd=23))
+LISTEN 0      80           0.0.0.0:3306      0.0.0.0:*    users:(("mariadbd",pid=24364,fd=21))
+LISTEN 0      80              [::]:3306         [::]:*    users:(("mariadbd",pid=24364,fd=22))
+## phpMyAdmin's one-click sign-in, through the panel's API on the server's loopback
+  signed in to the panel as the admin owner (username, password and authenticator code)
+  website www, account 0c92243ce7b04075658021a2aae08ab5
+  sign-in link expires 2026-11-26T18:52:30.27171224Z, phpMyAdmin login expires 2026-11-26T19:51:30Z
+PASS  the panel makes the one-time phpMyAdmin link
+  the link is on https://SERVER_IP:8444/sifruno-signon.php?code=...
+  the page: https://SERVER_IP:8444/index.php, title "127.0.0.1:8090 / This server | phpMyAdmin 5.2.3"
+  database server shown: Server: This server Server: This server
+  databases in phpMyAdmin's navigation: information_schema www_wp
+PASS  phpMyAdmin is signed in and lists the website's database www_wp
+  error messages on the page: Error: Token mismatch
+FAIL  phpMyAdmin's first page shows no error
+  screenshot: phpmyadmin-after.png
+  www_wp's page lists 14 wp_ tables; wp_options among them
+PASS  phpMyAdmin reads the WordPress tables of www_wp from MariaDB
+  screenshot: phpmyadmin-after-www_wp.png
+## On the server: the temporary user phpMyAdmin signed in as
+  SifrunoPMA_<hex>@localhost
+# 1 check(s) failed
+
+# Part 8. The installer of 3cd4927 (the final installer) over that, as an upgrade again
+## The installer from 3cd4927 over the branch head's install (an upgrade), same options
+$ bash /root/release-3cd4927/sifruno-linux-amd64/install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io
+exit status 0, 17 s
+== 2026-11-26T18:56:22Z Install OpenLiteSpeed, LSPHP 8.3, MariaDB 10.11, Podman, cronie and Apache (for the Compat tier; left off)
+== 2026-11-26T18:56:23Z Add Sifruno's include, namespace isolation and the cache module to OpenLiteSpeed's config (backup)
+== 2026-11-26T18:56:23Z Let each site's PHP run in its account's user slice: cgroups 1 in OpenLiteSpeed's CGIRLimit (backup, config test)
+== 2026-11-26T18:56:23Z Install phpMyAdmin 5.2.3 in /usr/local/lib/sifruno/phpmyadmin (pinned sha256), its user sifpma, and its OpenLiteSpeed vhost on 127.0.0.1:8090 (backup, config test)
+== 2026-11-26T18:56:23Z Put OpenLiteSpeed's WebAdmin console on 127.0.0.1 and remove the package's sample site on 8088 (backups, config test; a stop and start when a listener moves)
+== 2026-11-26T18:56:31Z Keep MariaDB on loopback: bind-address 127.0.0.1 in /etc/my.cnf.d/sifruno.cnf (backup; a running MariaDB that listens beyond loopback restarts once)
+== 2026-11-26T18:56:32Z Enable and start MariaDB, OpenLiteSpeed and crond
+== 2026-11-26T18:56:32Z Create the panel's MariaDB admin user and its 0600 option file /var/lib/sifpanel/db-admin.cnf
+== 2026-11-26T18:56:32Z Create the LSCache stores folder /var/lib/sifruno-lscache and remove unused stores earlier releases left in /usr/local/lsws/cachedata (as OpenLiteSpeed's user)
+== 2026-11-26T18:56:39Z Sifruno is installed
+Changed in this run:
+  - OpenLiteSpeed: the WebAdmin console on 127.0.0.1 only, and the package's sample site (virtualHost Example and its listener Default on *:8088) removed (backups: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1856 /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1856)
+  - OpenLiteSpeed stopped and started to drop its old listeners on 0.0.0.0:7080 0.0.0.0:8088
+  - MariaDB: bind-address 127.0.0.1 in /etc/my.cnf.d/sifruno.cnf (created); restarted, it now listens on loopback only (it listened on 0.0.0.0:3306 [::]:3306)
+  - program /usr/local/lib/sifruno/bin/sifruno installed
+  - panel UI installed in /usr/local/lib/sifruno/ui
+  - sifruno-broker.service restarted with the new files
+  - sifruno.service restarted with the new files
+
+  7. MariaDB on loopback only: /etc/my.cnf.d/sifruno.cnf (created in this run)
+       rm /etc/my.cnf.d/sifruno.cnf
+       systemctl restart mariadb
+  8. OpenLiteSpeed's WebAdmin console on loopback only: /usr/local/lsws/admin/conf/admin_config.conf
+       cp -a /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1856 /usr/local/lsws/admin/conf/admin_config.conf
+     then stop and start OpenLiteSpeed (a restart keeps the console where it is):
+       systemctl stop lsws; while pgrep -x litespeed >/dev/null; do sleep 1; done; systemctl start lsws
+
+## Listening sockets after the upgrade
+$ ss -ltnp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=26392,fd=30),("litespeed",pid=26384,fd=30))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=26391,fd=29),("litespeed",pid=26384,fd=29))
+LISTEN 0      4096       127.0.0.1:8080      0.0.0.0:*    users:(("sifruno",pid=26648,fd=9))
+LISTEN 0      4096         0.0.0.0:443       0.0.0.0:*    users:(("litespeed",pid=26392,fd=26),("litespeed",pid=26384,fd=26))
+LISTEN 0      4096         0.0.0.0:443       0.0.0.0:*    users:(("litespeed",pid=26391,fd=25),("litespeed",pid=26384,fd=25))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=26392,fd=24),("litespeed",pid=26384,fd=24))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=26391,fd=23),("litespeed",pid=26384,fd=23))
+LISTEN 0      80         127.0.0.1:3306      0.0.0.0:*    users:(("mariadbd",pid=26491,fd=17))
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=15181,fd=7))
+LISTEN 0      4096       127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=26391,fd=21),("litespeed",pid=26384,fd=21))
+LISTEN 0      4096               *:8443            *:*    users:(("sifruno",pid=26648,fd=8))
+LISTEN 0      4096               *:8444            *:*    users:(("sifruno",pid=26648,fd=13))
+LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=15181,fd=8))
+$ ss -lunp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+UNCONN 0      0          127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=26391,fd=22),("litespeed",pid=26384,fd=22))
+UNCONN 0      0          127.0.0.1:323       0.0.0.0:*    users:(("chronyd",pid=680,fd=5))
+UNCONN 0      0            0.0.0.0:443       0.0.0.0:*    users:(("litespeed",pid=26392,fd=28),("litespeed",pid=26384,fd=28))
+UNCONN 0      0            0.0.0.0:443       0.0.0.0:*    users:(("litespeed",pid=26391,fd=27),("litespeed",pid=26384,fd=27))
+UNCONN 0      0              [::1]:323          [::]:*    users:(("chronyd",pid=680,fd=6))
+
+## The files
+$ cat /etc/my.cnf.d/sifruno.cnf; ls -lZ /etc/my.cnf.d/sifruno.cnf
+# Managed by the Sifruno installer (install.sh); a new run puts it back.
+# MariaDB answers on loopback only. The websites reach it at 127.0.0.1, and
+# the panel, the broker and phpMyAdmin through its socket, all on this server.
+[mysqld]
+bind-address=127.0.0.1
+-rw-r--r--. 1 root root system_u:object_r:mysqld_etc_t:s0 260 Nov 26 18:56 /etc/my.cnf.d/sifruno.cnf
+$ my_print_defaults --mysqld
+--datadir=/var/lib/mysql
+--socket=/var/lib/mysql/mysql.sock
+--log-error=/var/log/mariadb/mariadb.log
+--pid-file=/run/mariadb/mariadb.pid
+--plugin_load_add=provider_lz4
+--provider_lz4=force_plus_permanent
+--bind-address=127.0.0.1
+$ grep -n -i -E 'example|listeners|^listener|^virtualhost' /usr/local/lsws/conf/httpd_config.conf
+$ grep -n -A1 '^listener' /usr/local/lsws/admin/conf/admin_config.conf
+22:listener adminListener{
+23-  address               127.0.0.1:7080
+$ ls -l /usr/local/lsws/conf/httpd_config.conf* /usr/local/lsws/admin/conf/admin_config.conf*
+-rw-rw-r--. 1 lsadm lsadm   656 Nov 26 18:56 /usr/local/lsws/admin/conf/admin_config.conf
+-rw-r--r--. 1 root  root    656 Nov 26 15:20 /usr/local/lsws/admin/conf/admin_config.conf0
+-rw-rw-r--. 1 lsadm lsadm   648 Nov  3 05:32 /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1557
+-rw-rw-r--. 1 lsadm lsadm   648 Nov  3 05:32 /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1856
+-rw-r--r--. 1 root  root    497 Nov 26 18:56 /usr/local/lsws/admin/conf/admin_config.conf.txt
+-rw-r-----. 1 lsadm nobody 7265 Nov 26 18:56 /usr/local/lsws/conf/httpd_config.conf
+-rw-r-----. 1 lsadm nobody 7265 Nov 26 15:31 /usr/local/lsws/conf/httpd_config.conf0
+-rw-r-----. 1 lsadm nobody 7653 Nov  3 05:32 /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1510
+-rw-r-----. 1 lsadm nobody 7804 Nov 26 15:14 /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1557
+-rw-r-----. 1 lsadm nobody 7804 Nov 26 15:14 /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1856
+-rw-r-----. 1 lsadm nobody 5694 Nov 26 18:56 /usr/local/lsws/conf/httpd_config.conf.txt
+$ diff the backups with the files now
+209,219d208
+< virtualHost Example{
+<     vhRoot                   Example/
+<     allowSymbolLink          1
+<     enableScript             1
+<     restrained               1
+<     maxKeepAliveReq
+<     smartKeepAlive
+<     setUIDMode               0
+<     chrootMode               0
+<     configFile               conf/vhosts/Example/vhconf.conf
+< }
+221,225d209
+< listener Default{
+<     address                  *:8088
+<     secure                   0
+<     map                      Example *
+< }
+229d212
+<     listeners                Default
+234d216
+<     listeners                Default
+23c23
+<   address               *:7080
+---
+>   address               127.0.0.1:7080
+$ /usr/local/lsws/bin/openlitespeed -t
+exit status 0
+$ [ERROR] and [WARN] lines in OpenLiteSpeed's error.log since the upgrade started
+  none
+
+## On the server itself, loopback still works
+  WebAdmin console https://127.0.0.1:7080/: HTTP 200
+  MariaDB over loopback TCP as root: ERROR 1698 (28000): Access denied for user 'root'@'localhost'
+  MariaDB over its socket: 10.11.18-MariaDB
+  MariaDB on this server's public address: ERROR 2002 (HY000): Can't connect to server on 'SERVER_IP' (115)
+  the panel: HTTP 200, the units: active active active active
+
+## A second run of the same installer
+$ bash /root/release-3cd4927/sifruno-linux-amd64/install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io
+exit status 0
+== 2026-11-26T18:56:43Z Sifruno is installed
+Changed in this run: nothing
+
+
+## From the runner (outside the server), with the Cloud Firewall rule and firewalld open for these ports
+$ probe.py SERVER_IP 22 80 443 8443 8444 3306 7080 8088
+  SERVER_IP:22 open: something listens and accepted the connection
+  SERVER_IP:80 open: something listens and accepted the connection
+  SERVER_IP:443 open: something listens and accepted the connection
+  SERVER_IP:8443 open: something listens and accepted the connection
+  SERVER_IP:8444 open: something listens and accepted the connection
+  SERVER_IP:3306 refused: the server answered with a TCP reset, nothing listens there
+  SERVER_IP:7080 refused: the server answered with a TCP reset, nothing listens there
+  SERVER_IP:8088 refused: the server answered with a TCP reset, nothing listens there
+
+# Part 9. phpMyAdmin and the WordPress site after Part 8
+## phpMyAdmin's one-click sign-in, through the panel's API on the server's loopback
+  signed in to the panel as the admin owner (username, password and authenticator code)
+  website www, account 0c92243ce7b04075658021a2aae08ab5
+  sign-in link expires 2026-11-26T18:58:02.2575947Z, phpMyAdmin login expires 2026-11-26T19:57:02Z
+PASS  the panel makes the one-time phpMyAdmin link
+  the link is on https://SERVER_IP:8444/sifruno-signon.php?code=...
+  the page: https://SERVER_IP:8444/index.php, title "127.0.0.1:8090 / This server | phpMyAdmin 5.2.3"
+  database server shown: Server: This server Server: This server
+  databases in phpMyAdmin's navigation: information_schema www_wp
+PASS  phpMyAdmin is signed in and lists the website's database www_wp
+  error messages on the page: Error: Token mismatch
+FAIL  phpMyAdmin's first page shows no error
+  screenshot: phpmyadmin-after.png
+  www_wp's page lists 14 wp_ tables; wp_options among them
+PASS  phpMyAdmin reads the WordPress tables of www_wp from MariaDB
+  screenshot: phpmyadmin-after-www_wp.png
+## On the server: the temporary user phpMyAdmin signed in as
+  SifrunoPMA_<hex>@localhost
+  SifrunoPMA_<hex>@localhost
+# 1 check(s) failed
+## The WordPress site after the final upgrade
+$ curl -sS -o page.html -w '%{http_code} %{ssl_verify_result}' https://www.SERVER_IP.sslip.io/
+  200 verify=0
+  <title>Sifruno public CA proof</title>
+PASS  the site answers 200 over https with WordPress's page
+$ (on the server) grep DB_HOST and DB_NAME in wp-config.php; ss for the site's PHP connections to MariaDB
+define( 'DB_NAME', 'www_wp' );
+define( 'DB_HOST', '127.0.0.1' );
+Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+0      0          127.0.0.1:48598    127.0.0.1:3306  users:(("lsphp",pid=27208,fd=8))
+0      0          127.0.0.1:3306     127.0.0.1:48598 users:(("mariadbd",pid=26491,fd=55))
+
+# Part 10. Server 2 (Linode 111996427): a fresh install of 286c195 on a new Linode. It passed, but OpenLiteSpeed's
+# error.log showed the step had left it with no listener for a moment, which 1710d6a fixes by its order
+== 2026-11-26T15:57:56Z Linode 111996427 created
+== 2026-11-26T15:58:22Z Firewall 233385081 is on Linode 111996427
+  - OpenLiteSpeed: Sifruno's include and namespace isolation added (backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1602)
+  - OpenLiteSpeed: cgroups 1 in CGIRLimit, so each site's PHP runs in its account's user slice (backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1602)
+  - OpenLiteSpeed: the WebAdmin console on 127.0.0.1 only, and the package's sample site (virtualHost Example and its listener Default on *:8088) removed (backups: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1602 /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1602)
+  - OpenLiteSpeed stopped and started to drop its old listeners on 0.0.0.0:7080 0.0.0.0:8088
+  - OpenLiteSpeed: phpMyAdmin's vhost and its listener on 127.0.0.1:8090 (/usr/local/lsws/conf/sifruno-phpmyadmin.conf, included from /usr/local/lsws/conf/httpd_config.conf; backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1602)
+  - MariaDB: bind-address 127.0.0.1 in /etc/my.cnf.d/sifruno.cnf (created), read when MariaDB starts
+  - MariaDB admin user for the panel created, with its option file /var/lib/sifpanel/db-admin.cnf
+PASS  sifruno-broker.service is active
+PASS  sifruno.service is active
+PASS  both units start at boot
+PASS  the panel answers on 127.0.0.1:8080
+PASS  the panel runs as sifpanel
+PASS  the broker socket exists
+PASS  the socket is sifpanel's, mode 0600
+PASS  hostbroker --check-host passes
+PASS  SELinux is still enforcing
+PASS  the programs have the SELinux type bin_t
+PASS  the broker runs as unconfined_service_t, not systemd's init_t
+PASS  the installed broker creates an account
+PASS  its Linux user exists
+PASS  the installed broker deletes it again
+  | Changed in this run: nothing
+PASS  the second run succeeds
+PASS  it reports that nothing changed
+PASS  both units are still active
+PASS: the fresh-install test passed 17 checks on a new g6-standard-2 Linode (linode/almalinux9). Transcript: SCRATCH/fresh-install-20261126T160216Z.txt
+KEPT: Linode 111996427 (sifruno-owner-test-lsn1126b) and firewall 233385081 stay on the account and are billed until they are deleted.
+$ ss -ltnp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      4096       127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=18340,fd=9),("litespeed",pid=18337,fd=9))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=18341,fd=26),("litespeed",pid=18337,fd=26))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=18340,fd=25),("litespeed",pid=18337,fd=25))
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=15122,fd=7))
+LISTEN 0      80         127.0.0.1:3306      0.0.0.0:*    users:(("mariadbd",pid=17965,fd=20))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=18341,fd=12),("litespeed",pid=18337,fd=12))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=18340,fd=11),("litespeed",pid=18337,fd=11))
+LISTEN 0      4096       127.0.0.1:8080      0.0.0.0:*    users:(("sifruno",pid=18240,fd=9))
+LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=15122,fd=8))
+$ ss -lunp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+UNCONN 0      0          127.0.0.1:323       0.0.0.0:*    users:(("chronyd",pid=679,fd=5))
+UNCONN 0      0          127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=18340,fd=10),("litespeed",pid=18337,fd=10))
+UNCONN 0      0              [::1]:323          [::]:*    users:(("chronyd",pid=679,fd=6))
+$ cat /etc/my.cnf.d/sifruno.cnf
+# Managed by the Sifruno installer (install.sh); a new run puts it back.
+# MariaDB answers on loopback only. The websites reach it at 127.0.0.1, and
+# the panel, the broker and phpMyAdmin through its socket, all on this server.
+[mysqld]
+bind-address=127.0.0.1
+$ grep -n -i -E "example|listeners|^listener|^virtualhost" /usr/local/lsws/conf/httpd_config.conf
+$ grep -n -A1 ^listener /usr/local/lsws/admin/conf/admin_config.conf
+22:listener adminListener{
+23-  address               127.0.0.1:7080
+$ grep -E "\[(ERROR|WARN)\]" /usr/local/lsws/logs/error.log
+2026-11-26 16:05:15.880256 [WARN] [14728] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+2026-11-26 16:05:15.880261 [WARN] [14728] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+2026-11-26 16:05:20.202102 [WARN] [PlainConf] [httpServerConfig:] Conf file /usr/local/lsws/conf/sifruno.conf is blank, skip.
+2026-11-26 16:05:20.214578 [WARN] [17483] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+2026-11-26 16:05:20.214586 [WARN] [17483] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+2026-11-26 16:05:25.377990 [WARN] [PlainConf] [httpServerConfig:] Conf file /usr/local/lsws/conf/sifruno.conf is blank, skip.
+2026-11-26 16:05:25.383028 [WARN] [17586] [config:server:listener] No listener is available for normal virtual host!
+2026-11-26 16:05:25.386136 [ERROR] [17593] No listener is available, stop server!
+2026-11-26 16:05:25.488049 [ERROR] [17594] No listener is available, stop server!
+2026-11-26 16:05:25.590006 [ERROR] [17595] No listener is available, stop server!
+2026-11-26 16:05:25.691950 [ERROR] [17596] No listener is available, stop server!
+2026-11-26 16:05:25.793836 [ERROR] [17597] No listener is available, stop server!
+2026-11-26 16:05:25.895617 [ERROR] [17598] No listener is available, stop server!
+2026-11-26 16:05:25.997482 [ERROR] [17599] No listener is available, stop server!
+2026-11-26 16:05:26.000670 [ERROR] [17600] No listener is available, stop server!
+2026-11-26 16:05:26.102513 [ERROR] [17601] No listener is available, stop server!
+2026-11-26 16:05:26.204621 [ERROR] [17602] No listener is available, stop server!
+2026-11-26 16:05:26.306720 [ERROR] [17603] No listener is available, stop server!
+2026-11-26 16:05:26.408666 [ERROR] [17604] No listener is available, stop server!
+2026-11-26 16:05:26.510798 [ERROR] [17605] No listener is available, stop server!
+2026-11-26 16:05:26.612742 [ERROR] [17606] No listener is available, stop server!
+2026-11-26 16:05:26.714746 [ERROR] [17607] No listener is available, stop server!
+2026-11-26 16:05:26.817101 [ERROR] [17608] No listener is available, stop server!
+2026-11-26 16:05:26.918150 [WARN] [17586] [AutoRestarter] forking too frequently, suspend for a while!
+2026-11-26 16:05:35.841058 [WARN] [PlainConf] [httpServerConfig:] Conf file /usr/local/lsws/conf/sifruno.conf is blank, skip.
+
+# Part 11. Server 3 (Linode 111998021): a fresh install of 1710d6a (the same steps as 3cd4927, which changes
+# only a printed rollback line and the MariaDB restart-failure path)
+== 2026-11-26T16:23:55Z Linode 111998021 created
+== 2026-11-26T16:24:20Z Firewall 233385441 is on Linode 111998021
+  - OpenLiteSpeed: Sifruno's include and namespace isolation added (backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1628)
+  - OpenLiteSpeed: cgroups 1 in CGIRLimit, so each site's PHP runs in its account's user slice (backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1628)
+  - OpenLiteSpeed: phpMyAdmin's vhost and its listener on 127.0.0.1:8090 (/usr/local/lsws/conf/sifruno-phpmyadmin.conf, included from /usr/local/lsws/conf/httpd_config.conf; backup: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1628)
+  - OpenLiteSpeed: the WebAdmin console on 127.0.0.1 only, and the package's sample site (virtualHost Example and its listener Default on *:8088) removed (backups: /usr/local/lsws/conf/httpd_config.conf.bak-20261126-1628 /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1628)
+  - OpenLiteSpeed stopped and started to drop its old listeners on 0.0.0.0:7080 0.0.0.0:8088
+  - MariaDB: bind-address 127.0.0.1 in /etc/my.cnf.d/sifruno.cnf (created), read when MariaDB starts
+  - MariaDB admin user for the panel created, with its option file /var/lib/sifpanel/db-admin.cnf
+PASS  sifruno-broker.service is active
+PASS  sifruno.service is active
+PASS  both units start at boot
+PASS  the panel answers on 127.0.0.1:8080
+PASS  the panel runs as sifpanel
+PASS  the broker socket exists
+PASS  the socket is sifpanel's, mode 0600
+PASS  hostbroker --check-host passes
+PASS  SELinux is still enforcing
+PASS  the programs have the SELinux type bin_t
+PASS  the broker runs as unconfined_service_t, not systemd's init_t
+PASS  the installed broker creates an account
+PASS  its Linux user exists
+PASS  the installed broker deletes it again
+  | Changed in this run: nothing
+PASS  the second run succeeds
+PASS  it reports that nothing changed
+PASS  both units are still active
+PASS: the fresh-install test passed 17 checks on a new g6-standard-2 Linode (linode/almalinux9). Transcript: SCRATCH/fresh-install-20261126T162801Z.txt
+KEPT: Linode 111998021 (sifruno-owner-test-lsn1126c) and firewall 233385441 stay on the account and are billed until they are deleted.
+$ ss -ltnp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      4096       127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=18298,fd=9),("litespeed",pid=18295,fd=9))
+LISTEN 0      4096       127.0.0.1:8080      0.0.0.0:*    users:(("sifruno",pid=18197,fd=9))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=18299,fd=12),("litespeed",pid=18295,fd=12))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=18298,fd=11),("litespeed",pid=18295,fd=11))
+LISTEN 0      80         127.0.0.1:3306      0.0.0.0:*    users:(("mariadbd",pid=17923,fd=18))
+LISTEN 0      128          0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=15188,fd=7))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=18299,fd=26),("litespeed",pid=18295,fd=26))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=18298,fd=25),("litespeed",pid=18295,fd=25))
+LISTEN 0      128             [::]:22           [::]:*    users:(("sshd",pid=15188,fd=8))
+$ ss -lunp
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+UNCONN 0      0          127.0.0.1:323       0.0.0.0:*    users:(("chronyd",pid=678,fd=5))
+UNCONN 0      0          127.0.0.1:7080      0.0.0.0:*    users:(("litespeed",pid=18298,fd=10),("litespeed",pid=18295,fd=10))
+UNCONN 0      0              [::1]:323          [::]:*    users:(("chronyd",pid=678,fd=6))
+$ grep -n -i -E "example|listeners|^listener|^virtualhost" /usr/local/lsws/conf/httpd_config.conf
+$ grep -n -A1 ^listener /usr/local/lsws/admin/conf/admin_config.conf
+22:listener adminListener{
+23-  address               127.0.0.1:7080
+$ my_print_defaults --mysqld | grep bind
+--bind-address=127.0.0.1
+$ [ERROR] and [WARN] lines in OpenLiteSpeed error.log
+2026-11-26 16:31:11.788105 [WARN] [14725] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+2026-11-26 16:31:11.788111 [WARN] [14725] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+2026-11-26 16:31:15.667838 [WARN] [PlainConf] [httpServerConfig:] Conf file /usr/local/lsws/conf/sifruno.conf is blank, skip.
+2026-11-26 16:31:15.774274 [WARN] [17453] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+2026-11-26 16:31:15.774280 [WARN] [17453] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+2026-11-26 16:31:24.959116 [WARN] [PlainConf] [httpServerConfig:] Conf file /usr/local/lsws/conf/sifruno.conf is blank, skip.
+2026-11-26 16:31:24.966040 [WARN] [17628] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+2026-11-26 16:31:24.966044 [WARN] [17628] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+2026-11-26 16:31:31.313439 [WARN] [PlainConf] [httpServerConfig:] Conf file /usr/local/lsws/conf/sifruno.conf is blank, skip.
+
+# Part 12. Deleting the three Linodes and their firewalls; the API then finds nothing with their labels
+== 2026-11-26T16:20:24Z deleted: Linode 111996427 (sifruno-owner-test-lsn1126b)
+== 2026-11-26T16:20:42Z deleted: firewall 233385081 (sifruno-owner-test-lsn1126b)
+== 2026-11-26T16:20:45Z checked through the API: no Linode and no firewall named sifruno-owner-test-lsn1126b is left
+== 2026-11-26T16:33:05Z deleted: Linode 111998021 (sifruno-owner-test-lsn1126c)
+== 2026-11-26T16:33:22Z deleted: firewall 233385441 (sifruno-owner-test-lsn1126c)
+== 2026-11-26T16:33:24Z checked through the API: no Linode and no firewall named sifruno-owner-test-lsn1126c is left
+== 2026-11-26T18:58:26Z deleted: Linode 111993682 (sifruno-owner-test-lsn1126a)
+== 2026-11-26T18:58:42Z deleted: firewall 233384247 (sifruno-owner-test-lsn1126a)
+== 2026-11-26T18:58:43Z checked through the API: no Linode and no firewall named sifruno-owner-test-lsn1126a is left

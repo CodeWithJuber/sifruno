@@ -86,6 +86,12 @@ try {
   page.on("console", (m) => { if (m.type() === "error" && !/\b(401|404|409|422|429)\b/.test(m.text())) errors.push(`console: ${m.text()}`); });
   const signonURLs = [];
   ctx.on("request", (r) => { if (r.url().includes("/sifruno-signon.php?code=")) signonURLs.push(r.url()); });
+  // The routes of phpMyAdmin's own POSTs that it answered "Token mismatch".
+  const mismatches = [];
+  ctx.on("response", async (r) => {
+    if (!r.url().startsWith(`${pmaOrigin}/`) || r.request().method() !== "POST") return;
+    if ((await r.text().catch(() => "")).includes("Token mismatch")) mismatches.push(new URL(r.url()).searchParams.get("route") ?? new URL(r.url()).pathname);
+  });
 
   console.log("## Browser: phpMyAdmin's origin without a code or an admission");
   const stranger = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -184,6 +190,14 @@ try {
     admission && admission.httpOnly && admission.secure && admission.sameSite === "Strict" && admission.path === "/" && admission.expires > Date.now() / 1000 && admission.expires <= Date.now() / 1000 + 3600,
     JSON.stringify(admission ?? {}));
   check("the panel's session cookie stays on /api/v1", (await ctx.cookies(panelOrigin)).filter((c) => c.name === "sifruno_operator").every((c) => c.path === "/api/v1"));
+  // Over HTTPS phpMyAdmin 5.2.2 and later name their session cookie
+  // __Secure-phpMyAdmin_https. Without it each request starts a new session,
+  // and the page's own POSTs fail with "Error: Token mismatch".
+  check("phpMyAdmin's own session cookie reaches the browser (__Secure-phpMyAdmin_https, Secure, HttpOnly)",
+    pmaCookies.some((c) => c.name === "__Secure-phpMyAdmin_https" && c.secure && c.httpOnly), pmaCookies.map((c) => c.name).join(" "));
+  const pmaErrors = (await tab.locator(".alert-danger, .error, #pma_errors").allInnerTexts()).map((t) => t.trim()).filter(Boolean);
+  check("phpMyAdmin's first page shows no error", pmaErrors.length === 0, pmaErrors.join(" | "));
+  check("none of phpMyAdmin's own POSTs on that page answered Token mismatch", mismatches.length === 0, mismatches.join(" "));
   await tab.screenshot({ path: join(outDir, "1440-phpmyadmin-signed-in.png") });
 
   console.log("## phpMyAdmin's origin cannot use the panel's API");

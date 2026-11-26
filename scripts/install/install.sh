@@ -37,6 +37,12 @@ readonly PANEL_HTTPS_LISTEN=0.0.0.0:8443
 readonly PMA_HTTPS_LISTEN=0.0.0.0:8444
 readonly LSWS=/usr/local/lsws
 readonly OLS_CONF="$LSWS/conf/httpd_config.conf"
+# OpenLiteSpeed's WebAdmin console. Sifruno writes OpenLiteSpeed's config
+# itself, so the console listens on loopback only.
+readonly OLS_ADMIN_CONF="$LSWS/admin/conf/admin_config.conf"
+# MariaDB listens on loopback only. The installer owns this drop-in; its
+# name sorts after the package's mariadb-server.cnf, so it is read later.
+readonly MARIADB_DROPIN=/etc/my.cnf.d/sifruno.cnf
 readonly NSSWITCH=/etc/nsswitch.conf
 readonly SSHD_CONFIG=/etc/ssh/sshd_config
 readonly SSHD_INCLUDE='Include /etc/ssh/sshd_config.d/*.conf'
@@ -114,6 +120,9 @@ SSHD_BACKUP=""
 SSHD_CHANGE=unchanged
 SSH_ADMIN=""
 OLS_BACKUP=""
+OLS_ADMIN_BACKUP=""
+MARIADB_BACKUP=""
+MARIADB_CHANGE=unchanged
 
 usage() {
   cat <<'USAGE'
@@ -988,6 +997,170 @@ step_ols_cgroups() {
   changed "OpenLiteSpeed: cgroups 1 in CGIRLimit, so each site's PHP runs in its account's user slice (backup: $OLS_BACKUP)"
 }
 
+# Prints the WebAdmin console's config (file $1) with every listener's
+# address on 127.0.0.1, at the same port. The package's listener is
+# "adminListener{" on *:7080. Every other line stays as it is.
+ols_admin_loopback() {
+  awk '
+    tolower($1) == "listener" { inblock = 1; print; next }
+    inblock && /^[[:space:]]*\}/ { inblock = 0 }
+    inblock && tolower($1) == "address" && NF == 2 {
+      port = $2
+      sub(/^.*:/, "", port)
+      if (port ~ /^[0-9]+$/ && $2 != "127.0.0.1:" port) {
+        sub(/[^[:space:]]+[[:space:]]*$/, "127.0.0.1:" port)
+      }
+    }
+    { print }
+  ' "$1"
+}
+
+# Prints OpenLiteSpeed's config (file $1) without the package's sample site:
+# the "virtualHost Example" block, the "listener Default" block that serves
+# it on *:8088, and the "listeners Default" line of each vhTemplate block.
+# Without that last part OpenLiteSpeed logs "Listener [Default] does not
+# exist" as an [ERROR] for each of the two stock templates at every start,
+# which openlitespeed -t does not show. Everything else stays as it is.
+ols_without_example() {
+  awk '
+    function depth(s,   open) { open = gsub(/\{/, "", s); return open - gsub(/\}/, "", s) }
+    skip { level += depth($0); if (level <= 0) skip = 0; next }
+    {
+      key = tolower($1)
+      name = $2
+      sub(/\{$/, "", name)
+    }
+    (key == "listener" && name == "Default") || (key == "virtualhost" && name == "Example") {
+      level = depth($0)
+      skip = level > 0
+      next
+    }
+    key == "vhtemplate" { template = 1 }
+    template && /^[[:space:]]*\}/ { template = 0 }
+    template && key == "listeners" && NF == 2 && $2 == "Default" { next }
+    { print }
+  ' "$1"
+}
+
+# What a running OpenLiteSpeed still serves from before the change below:
+# its TCP listeners, not on 127.0.0.1, on a WebAdmin console port or on
+# 8088, the sample site's port.
+ols_old_listeners() {
+  local ports
+  ports="$(awk 'tolower($1) == "address" { p = $2; sub(/^.*:/, "", p); if (p ~ /^[0-9]+$/) print p }' "$OLS_ADMIN_CONF" | paste -sd '|')"
+  ss -Hltnp | awk -v want="^(${ports:+$ports|}8088)\$" '
+    /"litespeed"/ { port = $4; sub(/^.*:/, "", port); if (port ~ want && $4 !~ /^127\.0\.0\.1:/) print $4 }
+  ' | sort -u
+}
+
+# A listener that moves or goes needs OpenLiteSpeed stopped and started
+# again. Its graceful restart (systemctl reload lsws, and also restart: the
+# package's unit stops it gracefully and with KillMode=none) starts the new
+# server while the old one still holds the old address; the new one exits
+# with "Address already in use" and the old one keeps serving the old
+# listeners, even though systemctl answers success. Seen with openlitespeed
+# 1.9.4 on AlmaLinux 9. The websites are down for the few seconds it takes.
+ols_stop_start() {
+  local waited=0
+  systemctl stop lsws
+  # The old processes end once their requests are done.
+  while pgrep -x litespeed >/dev/null && [ "$waited" -lt 60 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if pgrep -x litespeed >/dev/null; then
+    # As lswsctrl's own restart does when the server does not come back.
+    log "OpenLiteSpeed's processes did not end within 60 s of the stop; ending them"
+    pkill -TERM -x litespeed || true
+    sleep 5
+    pkill -KILL -x litespeed || true
+    sleep 1
+  fi
+  if ! systemctl start lsws; then
+    unit_failed lshttpd "OpenLiteSpeed did not start again after the installer stopped it to put the WebAdmin console on 127.0.0.1 and remove the sample site on 8088; the websites are down."
+  fi
+  # The unit says started before the server has read its listeners; one
+  # that cannot listen exits a moment later.
+  sleep 3
+  waited=0
+  while ! systemctl is-active --quiet lsws && [ "$waited" -lt 30 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  systemctl is-active --quiet lsws || unit_failed lshttpd "OpenLiteSpeed did not stay up after its start with the listeners on loopback; the websites are down."
+}
+
+# Puts CONTENT in place of the OpenLiteSpeed config FILE, with its owner and
+# mode, and keeps the old one as FILE.old.
+ols_replace() { # ols_replace FILE CONTENT
+  cp -a -- "$1" "$1.old"
+  printf '%s\n' "$2" > "$1.new"
+  chown --reference="$1" "$1.new"
+  chmod --reference="$1" "$1.new"
+  mv -f -- "$1.new" "$1"
+  relabel "$1"
+}
+
+step_ols_listeners() {
+  local conf_next admin_next before after added name old wrote=no
+  local replaced=()
+  conf_next="$(ols_without_example "$OLS_CONF")"
+  admin_next="$(ols_admin_loopback "$OLS_ADMIN_CONF")"
+  if [ "$conf_next" != "$(cat "$OLS_CONF")" ] || [ "$admin_next" != "$(cat "$OLS_ADMIN_CONF")" ]; then
+    before="$(ols_test_errors)"
+    # The new files go in place before the test, which reads the server
+    # root's own files only; a new [ERROR] puts the old ones back.
+    if [ "$conf_next" != "$(cat "$OLS_CONF")" ]; then
+      [ -n "$OLS_BACKUP" ] || OLS_BACKUP="$(backup_file "$OLS_CONF")"
+      ols_replace "$OLS_CONF" "$conf_next"
+      replaced+=("$OLS_CONF")
+    fi
+    if [ "$admin_next" != "$(cat "$OLS_ADMIN_CONF")" ]; then
+      OLS_ADMIN_BACKUP="$(backup_file "$OLS_ADMIN_CONF")"
+      ols_replace "$OLS_ADMIN_CONF" "$admin_next"
+      replaced+=("$OLS_ADMIN_CONF")
+    fi
+    after="$(ols_test_errors)"
+    added="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
+    if [ -n "$added" ]; then
+      for name in "${replaced[@]}"; do
+        mv -f -- "$name.old" "$name"
+        relabel "$name"
+      done
+      printf '%s\n' "$added" | sed 's/^/  openlitespeed -t:/' >&2
+      die "OpenLiteSpeed's config test reports a new error without the sample site or with the WebAdmin console on 127.0.0.1, so the installer put the old files back." \
+        "The installer changes OpenLiteSpeed's config only when OpenLiteSpeed accepts the result; the errors are above." \
+        "Fix what they name in $OLS_CONF or $OLS_ADMIN_CONF, check with $LSWS/bin/openlitespeed -t, then run this again."
+    fi
+    for name in "${replaced[@]}"; do
+      rm -f -- "$name.old"
+    done
+    wrote=yes
+  fi
+  # A running OpenLiteSpeed that still serves the old listeners (after this
+  # change, or after a run that stopped before the start) starts again once.
+  old=""
+  if systemctl is-active --quiet lsws; then
+    old="$(ols_old_listeners)"
+  fi
+  if [ -n "$old" ]; then
+    ols_stop_start
+    if [ -n "$(ols_old_listeners)" ]; then
+      die "OpenLiteSpeed still listens beyond loopback after its restart: $(ols_old_listeners | paste -sd ' ')." \
+        "Its config files have the WebAdmin console on 127.0.0.1 and no sample site, yet the running server listens elsewhere too." \
+        "Check $OLS_CONF, $OLS_ADMIN_CONF and ss -ltnp, put the cause right, then run this again."
+    fi
+  fi
+  if [ "$wrote" = yes ]; then
+    changed "OpenLiteSpeed: the WebAdmin console on 127.0.0.1 only, and the package's sample site (virtualHost Example and its listener Default on *:8088) removed (backups: $(printf '%s\n' "$OLS_BACKUP" "$OLS_ADMIN_BACKUP" | sed '/^$/d' | paste -sd ' '))"
+  fi
+  if [ -n "$old" ]; then
+    changed "OpenLiteSpeed stopped and started to drop its old listeners on $(printf '%s' "$old" | paste -sd ' ')"
+  fi
+}
+
+# A backstop for every hosting account's UID (the broker allocates 20000 to
+
 # A backstop for every hosting account's UID (the broker allocates 20000 to
 # 60000) in any PAM session: SFTP, cron, su or runuser. pam_limits sets
 # RLIMIT_NPROC, which the kernel counts over all of the UID's tasks on the
@@ -1360,6 +1533,92 @@ step_phpmyadmin() {
   pma_files
   pma_settings
   pma_openlitespeed
+}
+
+# MariaDB's drop-in. Every client of MariaDB is on this server: the websites
+# connect to 127.0.0.1 over TCP (a site's PHP runs in an OpenLiteSpeed
+# namespace container, which does not see the socket), and the panel's
+# dbhost, the broker's backups, restores and migration imports and
+# phpMyAdmin use the socket. bind-address, not skip-networking, keeps the
+# websites' loopback TCP.
+mariadb_policy() {
+  cat <<'CNF'
+# Managed by the Sifruno installer (install.sh); a new run puts it back.
+# MariaDB answers on loopback only. The websites reach it at 127.0.0.1, and
+# the panel, the broker and phpMyAdmin through its socket, all on this server.
+[mysqld]
+bind-address=127.0.0.1
+CNF
+}
+
+# The bind-address mariadbd starts with: the last one its option files set,
+# or nothing when none does (then it listens on every address).
+mariadb_bind_address() {
+  my_print_defaults --mysqld | sed -n 's/^--bind[-_]address=//p' | tail -n 1
+}
+
+# The addresses a running mariadbd listens on over TCP, one per line, that
+# are not 127.0.0.1.
+mariadb_public_listeners() {
+  ss -Hltnp | awk '/"mariadbd"/ && $4 !~ /^127\.0\.0\.1:/ { print $4 }'
+}
+
+mariadb_put_back() {
+  if [ -n "$MARIADB_BACKUP" ]; then
+    cp -a -- "$MARIADB_BACKUP" "$MARIADB_DROPIN"
+  else
+    rm -f -- "$MARIADB_DROPIN"
+  fi
+}
+
+step_mariadb() {
+  local policy bind public
+  policy="$(mktemp)"
+  mariadb_policy > "$policy"
+  if [ -L "$MARIADB_DROPIN" ] || ! cmp -s "$policy" "$MARIADB_DROPIN" ||
+    [ "$(stat -c '%U:%G %a' "$MARIADB_DROPIN")" != "root:root 644" ]; then
+    if [ -e "$MARIADB_DROPIN" ] || [ -L "$MARIADB_DROPIN" ]; then
+      MARIADB_BACKUP="$(backup_file "$MARIADB_DROPIN")"
+      MARIADB_CHANGE=replaced
+    else
+      MARIADB_CHANGE=created
+    fi
+    put_file root root 0644 "$policy" "$MARIADB_DROPIN" || true
+    relabel "$MARIADB_DROPIN"
+  fi
+  rm -f -- "$policy"
+  bind="$(mariadb_bind_address)"
+  if [ "$bind" != 127.0.0.1 ]; then
+    [ "$MARIADB_CHANGE" = unchanged ] || changed "MariaDB: $MARIADB_DROPIN $MARIADB_CHANGE${MARIADB_BACKUP:+ (backup: $MARIADB_BACKUP)}"
+    warn "MariaDB would listen on ${bind:-every address}, not on 127.0.0.1 only, so the installer did not restart it." \
+      "An option file MariaDB reads after $MARIADB_DROPIN sets bind-address (my_print_defaults --mysqld lists what MariaDB starts with)." \
+      "Take that bind-address line out, then run this again."
+    return 0
+  fi
+  # bind-address is read at start only. A running MariaDB that still
+  # listens beyond loopback restarts once: after this change, or after a
+  # run that stopped before its restart.
+  public=""
+  if systemctl is-active --quiet mariadb; then
+    public="$(mariadb_public_listeners)"
+  fi
+  if [ -z "$public" ]; then
+    [ "$MARIADB_CHANGE" = unchanged ] || changed "MariaDB: bind-address 127.0.0.1 in $MARIADB_DROPIN ($MARIADB_CHANGE${MARIADB_BACKUP:+; backup: $MARIADB_BACKUP}), read when MariaDB starts"
+    return 0
+  fi
+  if ! systemctl restart mariadb; then
+    mariadb_put_back
+    systemctl restart mariadb || true
+    die "MariaDB did not start again with bind-address 127.0.0.1 from $MARIADB_DROPIN." \
+      "The installer put the earlier file back and started MariaDB once more." \
+      "Read journalctl -u mariadb, put the cause right, then run this again."
+  fi
+  if [ -n "$(mariadb_public_listeners)" ]; then
+    die "MariaDB still listens beyond loopback after its restart: $(mariadb_public_listeners | paste -sd ' ')." \
+      "MariaDB's option files give bind-address 127.0.0.1, yet the running server listens elsewhere too." \
+      "Check what my_print_defaults --mysqld and ss -ltnp show, put the cause right, then run this again."
+  fi
+  changed "MariaDB: bind-address 127.0.0.1 in $MARIADB_DROPIN ($MARIADB_CHANGE${MARIADB_BACKUP:+; backup: $MARIADB_BACKUP}); restarted, it now listens on loopback only (it listened on $(printf '%s' "$public" | paste -sd ' '))"
 }
 
 step_services() {
@@ -1830,9 +2089,12 @@ TEXT
 
 print_rollback() {
   local nss_backup="$NSS_BACKUP" ols_backup="$OLS_BACKUP" sshd_backup="$SSHD_BACKUP"
+  local admin_backup="$OLS_ADMIN_BACKUP" mariadb_backup="$MARIADB_BACKUP"
   [ -n "$nss_backup" ] || nss_backup="$(latest_backup "$NSSWITCH")"
   [ -n "$ols_backup" ] || ols_backup="$(latest_backup "$OLS_CONF")"
   [ -n "$sshd_backup" ] || sshd_backup="$(latest_backup "$SSHD_DROPIN")"
+  [ -n "$admin_backup" ] || admin_backup="$(latest_backup "$OLS_ADMIN_CONF")"
+  [ -n "$mariadb_backup" ] || mariadb_backup="$(latest_backup "$MARIADB_DROPIN")"
   cat <<TEXT
 
 Rollback
@@ -1874,6 +2136,20 @@ TEXT
        systemctl reload lsws
      The panel drops its temporary database users (SifrunoPMA_...) within
      the hour while it runs.
+  7. MariaDB on loopback only: $MARIADB_DROPIN ($MARIADB_CHANGE in this run)
+       rm $MARIADB_DROPIN
+TEXT
+  if [ -n "$mariadb_backup" ]; then
+    echo "       (or put the earlier copy back: cp -a $mariadb_backup $MARIADB_DROPIN)"
+  fi
+  echo "       systemctl restart mariadb"
+  echo "  8. OpenLiteSpeed's WebAdmin console on loopback only: $OLS_ADMIN_CONF"
+  if [ -n "$admin_backup" ]; then
+    echo "       cp -a $admin_backup $OLS_ADMIN_CONF && systemctl restart lsws"
+  else
+    echo "       No backup found: the installer has not changed this file."
+  fi
+  cat <<TEXT
   Packages, the $PANEL_USER and $PMA_USER users, websites and databases
   stay. Remove them by hand if you want them gone.
 TEXT
@@ -1898,10 +2174,12 @@ main() {
   step "Write the sshd policy $SSHD_DROPIN (backup, sshd -t, automatic rollback, reload)" step_sshd
   step "Add Sifruno's include, namespace isolation and the cache module to OpenLiteSpeed's config (backup)" step_openlitespeed
   step "Let each site's PHP run in its account's user slice: cgroups 1 in OpenLiteSpeed's CGIRLimit (backup, config test)" step_ols_cgroups
+  step "Put OpenLiteSpeed's WebAdmin console on 127.0.0.1 and remove the package's sample site on 8088 (backups, config test; a stop and start when a listener moves)" step_ols_listeners
   step "Bound each hosting account to 4096 processes, the largest plan, in PAM sessions: $LIMITS_FILE" step_limits
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
   step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
   step "Install phpMyAdmin $PMA_VERSION in $PMA_DIR (pinned sha256), its user $PMA_USER, and its OpenLiteSpeed vhost on $PMA_LISTEN (backup, config test)" step_phpmyadmin
+  step "Keep MariaDB on loopback: bind-address 127.0.0.1 in $MARIADB_DROPIN (backup; a running MariaDB that listens beyond loopback restarts once)" step_mariadb
   step "Enable and start MariaDB, OpenLiteSpeed and crond" step_services
   step "Create the panel's MariaDB admin user and its 0600 option file $DB_ADMIN_CNF" step_db_admin
   step "Create the ACME challenge folder $ACME_DIR" step_acme

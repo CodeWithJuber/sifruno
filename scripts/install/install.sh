@@ -144,6 +144,10 @@ refuse() { # refuse WHAT WHY TODO
   printf 'REFUSED: %s\n  Why: %s\n  What to do: %s\n' "$1" "$2" "$3" >&2
 }
 
+warn() { # warn WHAT WHY TODO: something to know; the install goes on
+  printf 'WARNING: %s\n  Why: %s\n  What to do: %s\n' "$1" "$2" "$3" >&2
+}
+
 changed() { CHANGES+=("$1"); }
 
 step() { # step DESCRIPTION FUNCTION
@@ -201,6 +205,35 @@ dir_fresh() {
 
 # True when the broker has never run here.
 broker_state_fresh() { dir_fresh "$BROKER_STATE"; }
+
+# The --panel-host names the panel asks Let's Encrypt for, comma-separated:
+# with --acme-email, the DNS names (lower case, two labels or more, each a
+# plain label) outside the names kept for tests, examples and local
+# networks, once each, as panelcert.PublicNames picks them. The broker
+# serves them on port 80 for the panel's certificate challenge only. An IP
+# address is left out: it keeps the self-signed certificate, and no vhost
+# maps it.
+panel_cert_names() {
+  local h out="" label ok
+  local -a hosts labels
+  [ -n "$ACME_EMAIL" ] || return 0
+  IFS=, read -r -a hosts <<<"$PANEL_HOST"
+  for h in "${hosts[@]}"; do
+    h="${h,,}"
+    [[ "$h" == *.* && ! "$h" =~ ^[0-9.]+$ && "$h" != *:* ]] || continue
+    case "$h" in
+      *.test | *.example | *.invalid | *.localhost | *.local | *.onion | *.arpa | *.internal) continue ;;
+      example.com | *.example.com | example.net | *.example.net | example.org | *.example.org) continue ;;
+    esac
+    ok=yes
+    IFS=. read -r -a labels <<<"$h"
+    for label in "${labels[@]}"; do
+      [[ "$label" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || ok=no
+    done
+    [[ "$ok" = yes && ",$out," != *",$h,"* ]] && out="${out:+$out,}$h"
+  done
+  printf '%s' "$out"
+}
 
 sshd_policy() {
   # Deny by default: every login is SFTP-only and uses the key file the
@@ -498,6 +531,28 @@ preflight() {
     selinux="$(getenforce 2>/dev/null || true)"
     echo "SELinux is ${selinux:-unknown}; the installer leaves the SELinux mode as it is"
   fi
+  preflight_panel_host
+}
+
+# preflight_panel_host warns when a --panel-host name is already a
+# website's domain (or its www. form), as the web server's Sifruno config
+# maps it. The panel refuses new websites and domains with its own name,
+# but one made before stays the website's.
+preflight_panel_host() {
+  local conf="$LSWS/conf/sifruno.conf" h vhost domain
+  local -a hosts
+  [ -n "$PANEL_HOST" ] && [ -r "$conf" ] || return 0
+  IFS=, read -r -a hosts <<<"${PANEL_HOST,,}"
+  # Each map line is "map VHOST d1, d2, ..."; sifruno-panel is the panel's
+  # own challenge vhost. A name and its www. form are one to the web server.
+  while read -r vhost domain; do
+    for h in "${hosts[@]}"; do
+      [ "${h#www.}" = "$domain" ] || continue
+      warn "--panel-host $h is also the domain of a website on this server (OpenLiteSpeed vhost $vhost)." \
+        "The website keeps that name on ports 80 and 443, so the name opens the website there and the panel only on port ${PANEL_HTTPS_LISTEN##*:}. The panel refuses new websites with its own name for this reason." \
+        "Give the panel a name of its own, such as panel.${h#www.}, and run this again with it; or move the website to another domain. The install goes on."
+    done
+  done < <(awk '$1 == "map" && $2 != "sifruno-panel" { for (i = 3; i <= NF; i++) { d = $i; sub(/,$/, "", d); sub(/^www\./, "", d); print $2, d } }' "$conf" | LC_ALL=C sort -u)
 }
 
 verify_release() {
@@ -1514,6 +1569,11 @@ step_layout() {
 }
 
 broker_unit() { # broker_unit CONTROLLER_UID WEB_USER
+  local panel names
+  # The names the panel asks Let's Encrypt for: the broker answers their
+  # HTTP-01 challenge on port 80, and nothing else at them there.
+  names="$(panel_cert_names)"
+  panel="${names:+ --panel-host $names}"
   cat <<UNIT
 # Written by the Sifruno installer (install.sh); a new run rewrites it.
 [Unit]
@@ -1525,7 +1585,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=$BIN_DIR/hostbroker --state $BROKER_STATE --socket $BROKER_SOCKET --homes $HOMES --controller-uid $1 --web-user $2
+ExecStart=$BIN_DIR/hostbroker --state $BROKER_STATE --socket $BROKER_SOCKET --homes $HOMES --controller-uid $1 --web-user $2$panel
 # systemd makes /run/sifruno-broker (root, 0755) at start and removes it at
 # stop, so a socket left by a crash never blocks the next start.
 RuntimeDirectory=sifruno-broker
@@ -1722,16 +1782,33 @@ First run
      paste it into chat, tickets or screenshots:
        $PANEL_STATE/operator/access.key
 TEXT
-  if [ -n "$PANEL_HOST" ]; then
+  local cert_names
+  cert_names="$(panel_cert_names)"
+  if [ -n "$cert_names" ]; then
+    cat <<TEXT
+  3. After that, sign in from anywhere at https://${PANEL_HOST%%,*}:${PANEL_HTTPS_LISTEN##*:}/
+     Once it runs, the panel asks Let's Encrypt for a certificate for
+     ${cert_names//,/, } over port 80 and renews it by itself. Until it has one, and
+     for an IP address, the certificate is self-signed. How it went:
+       journalctl -u $PANEL_UNIT | grep 'Panel certificate:'
+     With a self-signed certificate, compare the fingerprint your browser
+     shows with the one the panel logged:
+       journalctl -u $PANEL_UNIT | grep SHA-256
+TEXT
+  elif [ -n "$PANEL_HOST" ]; then
     cat <<TEXT
   3. After that, sign in from anywhere at https://${PANEL_HOST%%,*}:${PANEL_HTTPS_LISTEN##*:}/
      The certificate is self-signed. Compare the fingerprint your browser
      shows with the one the panel logged:
        journalctl -u $PANEL_UNIT | grep SHA-256
+TEXT
+  fi
+  if [ -n "$PANEL_HOST" ]; then
+    cat <<TEXT
      Open TCP ${PANEL_HTTPS_LISTEN##*:} for the panel, ${PMA_HTTPS_LISTEN##*:} for phpMyAdmin (its own
      address, https://${PANEL_HOST%%,*}:${PMA_HTTPS_LISTEN##*:}/, which each website's
-     Databases page opens) and 80 and 443 for websites in your firewall. The
-     installer does not change firewall rules.
+     Databases page opens) and 80 and 443 for websites and Let's Encrypt in
+     your firewall. The installer does not change firewall rules.
 TEXT
   else
     cat <<TEXT

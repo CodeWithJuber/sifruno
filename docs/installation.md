@@ -95,13 +95,13 @@ This writes `artifacts/release/sifruno-linux-amd64.tar.gz` and `sifruno-linux-am
    ./install.sh
    ```
 
-   To also reach the panel from other machines over HTTPS on port 8443, and to turn on Let's Encrypt certificates for websites, name the panel's host and a contact address:
+   To also reach the panel from other machines over HTTPS on port 8443, and to turn on Let's Encrypt certificates for websites and for the panel itself, name the panel's host and a contact address:
 
    ```bash
    ./install.sh --panel-host panel.example.com --acme-email admin@example.com
    ```
 
-   `--acme-email` accepts the certificate authority's terms of service. `--no-start` installs everything but leaves the two Sifruno units off.
+   `--acme-email` accepts the certificate authority's terms of service. With both, the broker answers the panel's name on port 80 for its certificate challenge and nothing else, and the installer warns when the name is already a website's domain. `--no-start` installs everything but leaves the two Sifruno units off.
 
 5. Keep your SSH session open. Open a second one and check that you can still sign in before you close the first.
 
@@ -116,7 +116,7 @@ The installer ends by printing the first-run steps and the rollback steps for th
    ```
 
 2. Open **Websites**. The panel asks for the operator access key, then a username, a password of at least 12 characters and an authenticator app. The key is in `/var/lib/sifpanel/state/operator/access.key`, which only root and `sifpanel` can read. Open it on the server. Do not print it in a shared terminal, paste it into chat, or include it in screenshots.
-3. If you gave `--panel-host`, sign in from anywhere at `https://NAME:8443/` after that. Only the admin sign-in works there; the access key and first-run setup stay on the server. The certificate is self-signed, so compare the fingerprint your browser shows with the one the panel logged: `journalctl -u sifruno | grep SHA-256`.
+3. If you gave `--panel-host`, sign in from anywhere at `https://NAME:8443/` after that. Only the admin sign-in works there; the access key and first-run setup stay on the server. With `--acme-email` and a NAME in public DNS that points at this server, with TCP 80 open, the panel gets a Let's Encrypt certificate for it a few minutes after it starts and renews it by itself; `journalctl -u sifruno | grep 'Panel certificate:'` says how it went and, on a failure, what to do. Until then, and for an IP address, the certificate is self-signed, so compare the fingerprint your browser shows with the one the panel logged: `journalctl -u sifruno | grep SHA-256`.
 
 ### What the installer changes
 

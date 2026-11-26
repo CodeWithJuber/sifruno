@@ -1,0 +1,137 @@
+# Automatic first certificates on a real server, 2026-11-26
+# Server: Linode 112009889 g6-standard-2 (de-fra-2), made and kept by scripts/ci/nightly-fresh-install.sh
+# (SIFRUNO_NIGHTLY_KEEP=1) with the owner's admin key added. Its fresh-install test passed 17 checks,
+# 0 failed, with the release built from f3c7e10. The installer ran without --acme-email:
+# website certificates were off. Then, by hand: TCP 80 and 443 opened to everyone in the Linode Cloud
+# Firewall and in firewalld; a PHP site made with the wizard through the panel's loopback API (access key);
+# install.sh run again with --acme-email and nothing else. There is no --panel-host, so the panel asks
+# Let's Encrypt for no certificate of its own.
+
+## Before: certificates off
+AlmaLinux release 9.8 (Olive Jaguar)
+SELinux Enforcing
+  panel unit:
+    ExecStart=/usr/local/lib/sifruno/bin/sifruno --listen 127.0.0.1:8080 --sites-listen= --state /var/lib/sifpanel/state --ui /usr/local/lib/sifruno/ui --accounts-socket /run/sifruno-broker/control.sock --db-defaults-file /var/lib/sifpanel/db-admin.cnf
+  --acme-email in the panel unit: 0
+  the renewal loop's state folder: none
+  firewalld services: cockpit dhcpv6-client http https ssh
+
+## The wizard makes a PHP site at old.SERVER_IP.sslip.io
+  sign-in with the local access key on the loopback: HTTP 200
+  POST /api/v1/websites/php {domain: old.SERVER_IP.sslip.io, php_version: 8.3, database: none}
+  job php for old.SERVER_IP.sslip.io: succeeded
+    step account: done (Created the hosting account old.)
+    step web: done (The site is live with PHP 8.3.)
+    step ssl: skipped (Certificates are not set up on this server.)
+    step database: skipped (No database was asked for.)
+    step placeholder: done (Added a placeholder page, public_html/index.php. Replace it with your website's files.)
+  the site as the panel lists it:
+    {
+      "account_id": "edb66b679a297f2401ba1e82b4fdf7a3",
+      "domain": "old.SERVER_IP.sslip.io",
+      "state": "active",
+      "php_version": "8.3",
+      "https": {
+        "on": false,
+        "not_after": ""
+      },
+      "always_https": true
+    }
+
+## From the machine that runs the proof, over the internet
+  old.SERVER_IP.sslip.io resolves to SERVER_IP
+  http://old.SERVER_IP.sslip.io/ answers HTTP 200: It runs PHP.
+  https://old.SERVER_IP.sslip.io/ with the system trust store: curl: (7) Failed to connect to old.SERVER_IP.sslip.io port 443 after 74 ms: Couldn't connect to server
+
+## install.sh again, now with --acme-email (and nothing else)
+  started 2026-11-26 19:27:56 UTC: bash install.sh --acme-email admin@old.SERVER_IP.sslip.io
+  exit status 0; its last lines:
+  |   8. OpenLiteSpeed's WebAdmin console on loopback only: /usr/local/lsws/admin/conf/admin_config.conf
+  |        cp -a /usr/local/lsws/admin/conf/admin_config.conf.bak-20261126-1924 /usr/local/lsws/admin/conf/admin_config.conf
+  |      then stop and start OpenLiteSpeed (a restart keeps the console where it is):
+  |        systemctl stop lsws; while pgrep -x litespeed >/dev/null; do sleep 1; done; systemctl start lsws
+  |   Packages, the sifpanel and sifpma users, websites and databases
+  |   stay. Remove them by hand if you want them gone.
+  --acme-email in the panel unit: 1
+  sifruno.service is active, started Thu 2026-11-26 19:28:01 UTC
+
+## The renewal loop, as the panel's journal shows it (no person asks for anything from here)
+  2026-11-26T19:28:01+0000 localhost systemd[1]: Started Sifruno panel.
+  2026-11-26T19:30:14+0000 localhost sifruno[19745]: acme: old.SERVER_IP.sslip.io (account edb66b679a297f2401ba1e82b4fdf7a3): certificate installed, valid until 2027-02-24
+  lines that start an attempt (installed, or no certificate): 1
+
+## On the server: the panel, the loop's record and the broker
+  sign-in with the local access key on the loopback: HTTP 200
+  the site as the panel lists it:
+    {
+      "account_id": "edb66b679a297f2401ba1e82b4fdf7a3",
+      "domain": "old.SERVER_IP.sslip.io",
+      "state": "active",
+      "php_version": "8.3",
+      "https": {
+        "on": true,
+        "not_after": "2027-02-24T18:31:40Z"
+      },
+      "always_https": true
+    }
+  the renewal loop's record (/var/lib/sifpanel/state/acme/certificates.json, mode 600):
+    {
+      "account_id": "edb66b679a297f2401ba1e82b4fdf7a3",
+      "domain": "old.SERVER_IP.sslip.io",
+      "not_after": "2027-02-24T18:31:40Z",
+      "last_attempt": "2026-11-26T19:30:02.046363535Z",
+      "last_result": "installed"
+    }
+  the broker's account (panelctl accounts list):
+    (the proof's jq filter for this list was wrong in the run above; the same read, run again a minute later:)
+    {
+      "id": "edb66b679a297f2401ba1e82b4fdf7a3",
+      "domain": "old.SERVER_IP.sslip.io",
+      "state": "active",
+      "revision": 3,
+      "web": {
+        "php_version": "8.3",
+        "quota_mib": 1024
+      },
+      "certificate": {
+        "not_after": 1803493900,
+        "fingerprint": "9ad7484f9c7581e98c06c1d56f8dace63b0e4c09d09013e22c267198907d5a2c",
+        "names": "old.SERVER_IP.sslip.io"
+      }
+    }
+
+## From the machine that runs the proof, over the internet, with its system trust store
+  curl | *  CAfile: /etc/ssl/certs/ca-certificates.crt
+  curl | * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+  curl | *  subject: CN=old.SERVER_IP.sslip.io
+  curl | *  start date: Nov 26 18:31:41 2026 GMT
+  curl | *  expire date: Feb 24 18:31:40 2027 GMT
+  curl | *  subjectAltName: host "old.SERVER_IP.sslip.io" matched cert's "old.SERVER_IP.sslip.io"
+  curl | *  issuer: C=US; O=Let's Encrypt; CN=YE1
+  curl | *  SSL certificate verify ok.
+  curl | < HTTP/2 200
+  the page: It runs PHP.
+  openssl | depth=3 C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl | depth=2 C = US, O = ISRG, CN = Root YE
+  openssl | depth=1 C = US, O = Let's Encrypt, CN = YE1
+  openssl | depth=0 CN = old.SERVER_IP.sslip.io
+  openssl | Verify return code: 0 (ok)
+  http://old.SERVER_IP.sslip.io/ now answers: HTTP 301, Location: https://old.SERVER_IP.sslip.io/x?y=1
+  the ACME challenge path stays on http: HTTP 404
+
+## The server is deleted
+  2026-11-26T19:31:24Z Delete this run's Linode and firewall (sifruno-owner-test-autocerts)
+  2026-11-26T19:31:41Z deleted: Linode 112009889 (sifruno-owner-test-autocerts)
+  2026-11-26T19:31:58Z deleted: firewall 233390773 (sifruno-owner-test-autocerts)
+  2026-11-26T19:32:06Z checked through the API: no Linode and no firewall named sifruno-owner-test-autocerts is left
+  checked again through the API afterwards: GET /linode/instances/ID and /networking/firewalls/ID both answer 404
+
+## Result
+  The site was made with certificates off, so the wizard skipped https and left no record. After the
+  installer turned certificates on, the renewal loop's first check (2 minutes after the panel started)
+  found the live site with no certificate and no record, probed its domain, ordered, and installed the
+  certificate 2 min 13 s after the panel started. No person asked. One Let's Encrypt order in all:
+  the journal has one attempt, and the panel asked nothing for itself (no --panel-host).
+  Not shown here: a site whose DNS points elsewhere (it is left alone, logged once and looked at every
+  hour; internal/acme/first_test.go covers it), the bound of 3 first orders per check (first_test.go),
+  and a site moved from cPanel (it gets the same path once its DNS points here; not run on a server).

@@ -85,18 +85,15 @@ func (n *linuxSystem) enableWeb(web *WebOptions) error {
 	if e != nil {
 		return ErrUnavailable
 	}
-	n.webUID = -1
-	for _, u := range users {
-		if u.Username == web.ServerUser {
-			if n.webUID != -1 {
-				return ErrUnavailable
-			}
-			n.webUID = u.UID
-		}
-	}
-	if n.webUID <= 0 {
+	groups, e := systemGroups()
+	if e != nil {
 		return ErrUnavailable
 	}
+	uid, group, ok := webIdentity(users, groups, web.ServerUser)
+	if !ok {
+		return ErrUnavailable
+	}
+	n.webUID, n.webUser, n.webGroup = uid, web.ServerUser, group
 	if e := n.ensureChallengeDir(olsweb.ACMEChallengeDir, users); e != nil {
 		return e
 	}
@@ -104,6 +101,31 @@ func (n *linuxSystem) enableWeb(web *WebOptions) error {
 		return e
 	}
 	return ensureEmptyRootDir(siteHome)
+}
+
+// webIdentity finds the web server's user, named once in users and not
+// root: its UID, which the ACLs grant read access, and the name of its
+// primary group, which with the user's name the panel's challenge vhost
+// names (olsweb.Server.ChallengeUser).
+func webIdentity(users []nativeUser, groups []nativeGroup, name string) (int, string, bool) {
+	found := -1
+	for i, u := range users {
+		if u.Username == name {
+			if found != -1 {
+				return 0, "", false
+			}
+			found = i
+		}
+	}
+	if found < 0 || users[found].UID <= 0 {
+		return 0, "", false
+	}
+	for _, g := range groups {
+		if g.GID == users[found].GID {
+			return users[found].UID, g.Name, true
+		}
+	}
+	return 0, "", false
 }
 
 // ensureEmptyRootDir makes sure a directory exists, root's own and empty:
@@ -584,7 +606,7 @@ func (n *linuxSystem) configDirSafe(uid, gid int, mode os.FileMode) bool {
 // problems from a tenant's. On an error the caller restores t.
 func (n *linuxSystem) writeSites(t *configTxn, sites []olsweb.Site) (map[string]bool, error) {
 	server := webServer(sites)
-	server.ChallengeHosts = n.panelHosts
+	server.ChallengeHosts, server.ChallengeUser, server.ChallengeGroup = n.panelHosts, n.webUser, n.webGroup
 	files, e := olsweb.Render(server)
 	if e != nil {
 		return nil, ErrWebRejected

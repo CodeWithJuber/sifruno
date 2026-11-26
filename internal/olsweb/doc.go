@@ -48,10 +48,12 @@
 //     site's: one more virtualhost, NamePrefix+PanelChallengeName, mapped
 //     on the plain listeners only, in a suspended site's form (vhRoot and
 //     docRoot SuspendedDocRoot, no scripts, no symlinks, the cache module
-//     off, autoLoadHtaccess 0, one rule answering 403 to everything) with
-//     the challenge context, so the panel gets its own certificate over
-//     HTTP-01 and port 80 serves nothing else at that name. A name a site
-//     serves stays with the site, whose vhost serves the same folder.
+//     off, autoLoadHtaccess 0, one rule answering 403 to everything, and
+//     the web server's own user and group, Server.ChallengeUser and
+//     ChallengeGroup) with the challenge context, so the panel gets its own
+//     certificate over HTTP-01 and port 80 serves nothing else at that
+//     name. A name a site serves stays with the site, whose vhost serves
+//     the same folder.
 //   - An active site's protected folders (access.go), converted from a
 //     migrated site's .htaccess by internal/htaccess: one "realm" block per
 //     password folder, whose userDB is RealmFile(site, n) in RealmRoot
@@ -293,6 +295,14 @@
 //   - src/http/httpsession.cpp: a request whose host matches no vhost is
 //     answered 404 (1648-1661). So port 80 does not answer the panel's name
 //     until a vhost maps it, and Let's Encrypt's HTTP-01 check would fail.
+//
+// Seen 2026-11-26 on a real server (OpenLiteSpeed 1.9.4-3.el9, user and
+// group nobody): `openlitespeed -t` with the challenge vhost and no user or
+// group lines warns in its context "Uid of /var/lib/sifruno-suspended/ is
+// 0, smaller than minimum requirement 11, use server uid!" and the same for
+// its Gid, and the broker refuses a config with a warning for a vhost it
+// wrote, so the panel's name was never served. With "user nobody" and
+// "group nobody" in the virtualhost block the test prints no line for it.
 //
 // Read 2026-11-24, same tag and docs, for protected folders (internal/htaccess
 // doc.go, "Converting access rules", has the Apache side):

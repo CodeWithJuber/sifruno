@@ -6,5 +6,7 @@
      "key_file": "/etc/sifruno/tls/listener-privkey.pem"}
   ],
   "sites": [],
-  "challenge_hosts": ["panel.example.org"]
+  "challenge_hosts": ["panel.example.org"],
+  "challenge_user": "nobody",
+  "challenge_group": "nobody"
 }

@@ -91,6 +91,14 @@ type Server struct {
 	// its www. form, stays with the site, whose vhost serves the same
 	// folder; with none left no such vhost is rendered.
 	ChallengeHosts []string `json:"challenge_hosts,omitempty"`
+	// ChallengeUser and ChallengeGroup are the user and group the
+	// challenge-only vhost names, required with ChallengeHosts: the web
+	// server's own, as the vhost runs nothing. Without them OpenLiteSpeed
+	// 1.9.4's config test warns that its root-owned vhRoot's owner is below
+	// the minimum UID, and the broker refuses a config with a warning for a
+	// vhost it wrote.
+	ChallengeUser  string `json:"challenge_user,omitempty"`
+	ChallengeGroup string `json:"challenge_group,omitempty"`
 }
 
 // Listener is one Sifruno-owned listener. Plain listeners map every site; a

@@ -31,7 +31,7 @@ type WebOptions struct {
 // most olsweb.MaxDomainsPerSite lowercase DNS names, none twice counting
 // its www. form.
 func ValidPanelHosts(hosts []string) bool {
-	return olsweb.Validate(olsweb.Server{ChallengeHosts: hosts}) == nil
+	return olsweb.ValidateChallengeHosts(hosts) == nil
 }
 
 // WebInput asks for an account's site to be live with these settings.

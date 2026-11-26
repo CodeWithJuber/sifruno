@@ -77,8 +77,11 @@ type linuxSystem struct {
 	// panelHosts are WebOptions.PanelHosts: every render maps them to the
 	// challenge-only vhost.
 	panelHosts []string
-	cacheMu    sync.Mutex
-	cache      *accountDatabase
+	// webUser and webGroup are OpenLiteSpeed's user and its primary group,
+	// which the challenge-only vhost names.
+	webUser, webGroup string
+	cacheMu           sync.Mutex
+	cache             *accountDatabase
 }
 
 // accountDatabase is one parse of /etc/passwd and /etc/group with the

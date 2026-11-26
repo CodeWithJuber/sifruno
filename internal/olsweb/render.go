@@ -47,7 +47,7 @@ func Render(s Server) (map[string][]byte, error) {
 
 	challenge := challengeHosts(s.ChallengeHosts, sites)
 	files := make(map[string][]byte, len(sites)+2)
-	files[ServerConfigPath] = renderServer(listeners, sites, challenge)
+	files[ServerConfigPath] = renderServer(listeners, sites, challenge, s.ChallengeUser, s.ChallengeGroup)
 	for _, v := range sites {
 		files[VhostConfigPath(v.Name)] = renderVhost(v)
 	}
@@ -91,7 +91,7 @@ func challengeHosts(hosts []string, sites []site) []string {
 // then the listeners with their map lines. A secure listener is left out
 // while no site has its own certificate, because it would map no site; it
 // never maps the panel's names.
-func renderServer(listeners []Listener, sites []site, challenge []string) []byte {
+func renderServer(listeners []Listener, sites []site, challenge []string, challengeUser, challengeGroup string) []byte {
 	anyCertificate := false
 	for _, v := range sites {
 		if v.TLS.CertFile != "" {
@@ -130,6 +130,11 @@ func renderServer(listeners []Listener, sites []site, challenge []string) []byte
 		kv(&b, "allowSymbolLink", "0")
 		kv(&b, "enableScript", "0")
 		kv(&b, "restrained", "1")
+		// The web server's own user and group: the vhost runs nothing, and
+		// without them OpenLiteSpeed warns that the root-owned vhRoot's
+		// owner is below its minimum UID (Server.ChallengeUser).
+		kv(&b, "user", challengeUser)
+		kv(&b, "group", challengeGroup)
 		b.WriteString("}\n")
 	}
 	for _, l := range listeners {

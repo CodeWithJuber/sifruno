@@ -40,6 +40,22 @@ func TestWebACLLayout(t *testing.T) {
 	}
 }
 
+// The web server's user, as --web-user names it: its UID for the ACLs, and
+// its own name and its group's for the panel's challenge vhost, which
+// OpenLiteSpeed's config test warns about without them.
+func TestWebIdentity(t *testing.T) {
+	users := []nativeUser{{Username: "root", UID: 0, GID: 0}, {Username: "nobody", UID: 65534, GID: 65534}, {Username: "twice", UID: 70, GID: 70}, {Username: "twice", UID: 71, GID: 71}, {Username: "lost", UID: 72, GID: 4242}}
+	groups := []nativeGroup{{Name: "root", GID: 0}, {Name: "nobody", GID: 65534}, {Name: "twice", GID: 70}}
+	if uid, group, ok := webIdentity(users, groups, "nobody"); !ok || uid != 65534 || group != "nobody" {
+		t.Fatalf("nobody: %d %q %v", uid, group, ok)
+	}
+	for _, name := range []string{"root", "twice", "lost", "absent", ""} {
+		if uid, group, ok := webIdentity(users, groups, name); ok {
+			t.Errorf("%q accepted: %d %q", name, uid, group)
+		}
+	}
+}
+
 func TestIncludeAndQuotaParsing(t *testing.T) {
 	if !includesSifruno([]byte("serverName x\n  include   /usr/local/lsws/conf/sifruno.conf  \n")) {
 		t.Fatal("include line not found")

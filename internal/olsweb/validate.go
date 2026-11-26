@@ -14,6 +14,9 @@ var (
 	listenerNamePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,14}[a-z0-9])?$`)
 	usernamePattern     = regexp.MustCompile(`^[a-z][a-z0-9_]{2,31}$`)
 	tlsFileNamePattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	// systemNamePattern is a system user or group name, such as the web
+	// server's own (nobody, www-data, _lsws).
+	systemNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 )
 
 // Validate checks a spec without rendering it. Render calls it first; it is
@@ -104,15 +107,25 @@ func normalize(s Server) ([]site, error) {
 	if err := checkFolderListeners(s.Listeners, s.Sites); err != nil {
 		return nil, err
 	}
-	if err := validateChallengeHosts(s.ChallengeHosts); err != nil {
+	if err := ValidateChallengeHosts(s.ChallengeHosts); err != nil {
 		return nil, err
+	}
+	if len(s.ChallengeHosts) > 0 {
+		if !systemNamePattern.MatchString(s.ChallengeUser) {
+			return nil, fieldErr("challenge_user", "must match %s", systemNamePattern)
+		}
+		if !systemNamePattern.MatchString(s.ChallengeGroup) {
+			return nil, fieldErr("challenge_group", "must match %s", systemNamePattern)
+		}
 	}
 	return out, nil
 }
 
-// validateChallengeHosts admits at most MaxDomainsPerSite domain names,
-// each once counting its www. form, as for a site's domains.
-func validateChallengeHosts(hosts []string) error {
+// ValidateChallengeHosts checks Server.ChallengeHosts alone, for a caller
+// that has the names before the rest of the server: at most
+// MaxDomainsPerSite domain names, each once counting its www. form, as for
+// a site's domains.
+func ValidateChallengeHosts(hosts []string) error {
 	if len(hosts) > MaxDomainsPerSite {
 		return fieldErr("challenge_hosts", "at most %d names", MaxDomainsPerSite)
 	}

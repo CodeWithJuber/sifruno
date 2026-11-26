@@ -13,6 +13,7 @@ import (
 func TestChallengeHostsRenderChallengeOnlyVhost(t *testing.T) {
 	s := baseServer()
 	s.ChallengeHosts = []string{"panel.example.org", "admin.example.org"}
+	s.ChallengeUser, s.ChallengeGroup = "nobody", "nobody"
 	files, err := Render(s)
 	if err != nil {
 		t.Fatal(err)
@@ -24,6 +25,8 @@ func TestChallengeHostsRenderChallengeOnlyVhost(t *testing.T) {
 		"  allowSymbolLink         0\n" +
 		"  enableScript            0\n" +
 		"  restrained              1\n" +
+		"  user                    nobody\n" +
+		"  group                   nobody\n" +
 		"}\n"
 	if strings.Count(server, "virtualhost sifruno-panel ") != 1 || !strings.Contains(server, block) {
 		t.Fatalf("no challenge-only virtualhost:\n%s", server)
@@ -88,6 +91,7 @@ func TestChallengeHostsNoneRendersAsBefore(t *testing.T) {
 func TestChallengeHostsLeaveWebsiteNamesToTheWebsite(t *testing.T) {
 	s := baseServer()
 	s.ChallengeHosts = []string{"www.shop.example.com", "panel.example.org"}
+	s.ChallengeUser, s.ChallengeGroup = "nobody", "nobody"
 	files, err := Render(s)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +109,7 @@ func TestChallengeHostsLeaveWebsiteNamesToTheWebsite(t *testing.T) {
 		t.Fatal("a challenge vhost for names only websites serve")
 	}
 	// With no website at all, port 80 still answers the panel's names.
-	files, err = Render(Server{Listeners: baseServer().Listeners, ChallengeHosts: []string{"panel.example.org"}})
+	files, err = Render(Server{Listeners: baseServer().Listeners, ChallengeHosts: []string{"panel.example.org"}, ChallengeUser: "nobody", ChallengeGroup: "nobody"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +134,7 @@ func TestChallengeHostsHostile(t *testing.T) {
 	} {
 		s := baseServer()
 		s.ChallengeHosts = hosts
+		s.ChallengeUser, s.ChallengeGroup = "nobody", "nobody"
 		err := Validate(s)
 		var fe *FieldError
 		if !errors.Is(err, ErrInvalid) || !errors.As(err, &fe) || !strings.HasPrefix(fe.Field, "challenge_hosts[") {
@@ -137,11 +142,42 @@ func TestChallengeHostsHostile(t *testing.T) {
 		}
 	}
 	s := baseServer()
+	s.ChallengeUser, s.ChallengeGroup = "nobody", "nobody"
 	for i := 0; i <= MaxDomainsPerSite; i++ {
 		s.ChallengeHosts = append(s.ChallengeHosts, fmt.Sprintf("p%d.example.org", i))
 	}
 	if err := Validate(s); !errors.Is(err, ErrInvalid) {
 		t.Errorf("too many names: %v", err)
+	}
+	// The vhost names the web server's own user and group: without them
+	// OpenLiteSpeed's config test warns that its root-owned vhRoot's owner
+	// is below the minimum UID, and the broker refuses the config. They are
+	// written into the config, so they are plain names.
+	for name, owner := range map[string][2]string{
+		"no user":         {"", "nobody"},
+		"no group":        {"nobody", ""},
+		"a space":         {"no body", "nobody"},
+		"a newline":       {"nobody\nlistener x {", "nobody"},
+		"a brace":         {"nobody", "nobody{"},
+		"upper case":      {"Nobody", "nobody"},
+		"a leading digit": {"nobody", "1nobody"},
+		"too long":        {strings.Repeat("n", 33), "nobody"},
+	} {
+		s := baseServer()
+		s.ChallengeHosts = []string{"panel.example.org"}
+		s.ChallengeUser, s.ChallengeGroup = owner[0], owner[1]
+		var fe *FieldError
+		if err := Validate(s); !errors.As(err, &fe) || (fe.Field != "challenge_user" && fe.Field != "challenge_group") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for _, owner := range [][2]string{{"nobody", "nobody"}, {"www-data", "www-data"}, {"_lsws", "_lsws"}} {
+		s := baseServer()
+		s.ChallengeHosts = []string{"panel.example.org"}
+		s.ChallengeUser, s.ChallengeGroup = owner[0], owner[1]
+		if err := Validate(s); err != nil {
+			t.Errorf("%q refused: %v", owner, err)
+		}
 	}
 	// The vhost's name is the panel's: no website may take it.
 	s = baseServer()

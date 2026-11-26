@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Check, Copy, ExternalLink, Eye, EyeOff, Globe, KeyRound, LogOut, ShieldCheck, UserRound } from "lucide-react";
+import { Check, Copy, ExternalLink, Eye, EyeOff, FingerprintPattern, Globe, KeyRound, LogOut, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ProblemAlert } from "@/components/problem-alert";
 import type { Problem } from "@/components/problem-alert";
-import { AuthError, beginAuthenticatorChange, beginCustomerSetup, changeOwnPassword, finishAuthenticatorChange, finishCustomerSetup, groupedSecret } from "@/lib/auth-api";
-import type { CustomerSetupSecret, SetupSecret } from "@/lib/auth-api";
+import { AuthError, beginAuthenticatorChange, beginCustomerSetup, beginPasskey, changeOwnPassword, finishAuthenticatorChange, finishCustomerSetup, finishPasskey, groupedSecret, listPasskeys, removePasskey } from "@/lib/auth-api";
+import type { CustomerSetupSecret, Passkey, PasskeyList, SetupSecret } from "@/lib/auth-api";
+import { dateLabel } from "@/lib/api";
+import { creationOptions, credentialJSON, passkeyBrowserProblem, passkeySupport, signalAccepted, signalUnknown } from "@/lib/passkey";
+import type { PasskeySupport } from "@/lib/passkey";
 import { linkSecret } from "@/lib/customers-api";
 import { listWebsites, WebsitesApiError } from "@/lib/websites-api";
 import type { Website } from "@/lib/websites-api";
@@ -196,14 +201,15 @@ export function CustomerAccount() {
       <h2 id="account-login">Your login</h2>
       <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
         <dt className="text-muted-foreground">Username</dt><dd className="font-medium text-foreground wrap-anywhere" data-testid="account-username">{name || "None: signed in with the server's access key"}</dd>
-        <dt className="text-muted-foreground">Sign-in</dt><dd className="text-foreground">{name ? "Password and a 6-digit code from your authenticator app" : "The access key, on this server only"}</dd>
+        <dt className="text-muted-foreground">Sign-in</dt><dd className="text-foreground">{name ? "A passkey, or your password and a 6-digit code from your authenticator app" : "The access key, on this server only"}</dd>
       </dl>
-      {customer && <div className="text-sm text-foreground">Lost your phone, or forgot your password? Ask whoever gave you this login for a new setup link. It replaces your password and your authenticator app, and signs out your other sessions.</div>}
+      {customer && <div className="text-sm text-foreground">Lost your phone, or forgot your password? Ask whoever gave you this login for a new setup link. It replaces your password and your authenticator app, removes your passkeys, and signs out your other sessions.</div>}
       {session.view_as && <div className="text-sm text-foreground" data-testid="account-view-as-note">The password and authenticator app of {session.view_as} are its own, so they cannot be changed here. Go back to your admin view to change yours.</div>}
       {!session.username && <div className="text-sm text-foreground" data-testid="account-key-note">The access key has no password or authenticator app. Sign in with your admin username to change those.</div>}
       {!session.view_as && <Button variant="outline" className={`${control} w-fit`} onClick={shell.signOut}><LogOut aria-hidden="true" />Sign out</Button>}
     </section>
     {own && session.username && <>
+      <Passkeys username={session.username} csrf={session.csrf_token} />
       <PasswordChange username={session.username} csrf={session.csrf_token} />
       <AuthenticatorChange username={session.username} csrf={session.csrf_token} />
     </>}
@@ -260,6 +266,160 @@ function CurrentField({ id, value, onChange, error, testId }: { id: string; valu
       value={value} onChange={(event) => onChange(event.target.value)} aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-error` : undefined} data-testid={testId} />
     {error && <div id={`${id}-error`} className="text-sm text-destructive">{error}</div>}
   </Field>;
+}
+
+// Passkeys: the person's own, and adding one with the current password and
+// a code, the rule a password change follows. They work only where the panel
+// is open at its name over HTTPS with a trusted certificate; anywhere else the
+// section says so and where to go. The browser's passkey manager is told
+// which passkeys the panel still has, so removed ones stop being offered.
+function Passkeys({ username, csrf }: { username: string; csrf: string }) {
+  const [list, setList] = useState<PasskeyList>();
+  const [support, setSupport] = useState<PasskeySupport>();
+  const [loadProblem, setLoadProblem] = useState<Problem>();
+  const [attempt, setAttempt] = useState(0);
+  const [name, setName] = useState("");
+  const [current, setCurrent] = useState("");
+  const [code, setCode] = useState("");
+  const [fieldError, setFieldError] = useState<{ field: "name" | "current" | "code"; text: string }>();
+  const [problem, setProblem] = useState<Problem>();
+  const [done, setDone] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [target, setTarget] = useState<Passkey>();
+  const [removing, setRemoving] = useState(false);
+  const listHeading = useRef<HTMLHeadingElement>(null);
+  const show = (next: PasskeyList) => { setList(next); void signalAccepted(next.rp_id, next.user_id, next.items.map((p) => p.credential_id)); };
+  useEffect(() => {
+    let live = true;
+    void passkeySupport().then((next) => { if (live) setSupport(next); });
+    listPasskeys().then(
+      (next) => { if (live) { show(next); setLoadProblem(undefined); } },
+      (error: unknown) => { if (live) setLoadProblem(changeProblem(error, "Your passkeys could not be loaded")); },
+    );
+    return () => { live = false; };
+  }, [attempt]);
+  const add = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+    setDone("");
+    const chosen = name.trim();
+    if (!chosen || [...chosen].length > 64) { setFieldError({ field: "name", text: "Give the passkey a name of 1 to 64 characters, such as the phone, computer or password manager it is saved in." }); return; }
+    if (!current) { setFieldError({ field: "current", text: "Enter the password you sign in with now." }); return; }
+    if (!/^[0-9]{6}$/.test(code)) { setFieldError({ field: "code", text: "Enter the 6-digit code your app shows now." }); return; }
+    setBusy(true); setFieldError(undefined); setProblem(undefined);
+    try {
+      const creation = await beginPasskey(csrf, current, code);
+      setCurrent(""); setCode("");
+      let answer: Record<string, unknown>;
+      try {
+        const credential = await navigator.credentials.create({ publicKey: creationOptions(creation.options) });
+        if (!credential) throw new DOMException("No passkey", "NotAllowedError");
+        answer = credentialJSON(credential);
+      } catch (error) {
+        setProblem({ what: "No passkey was added", why: passkeyBrowserProblem(error, true), next: "Enter your password and a new code to try again.", technical: error instanceof Error ? error.name : "unknown error", status: 0 });
+        return;
+      }
+      try {
+        const added = await finishPasskey(csrf, chosen, answer);
+        setName("");
+        setDone(`Added the passkey ${added.name}. Next time, choose Sign in with a passkey.`);
+        setAttempt((value) => value + 1);
+      } catch (error) {
+        // The device holds a passkey the panel did not keep: let its
+        // passkey manager drop it.
+        const rp = creation.options.rp as { id?: unknown };
+        void signalUnknown(String(rp.id ?? ""), String(answer.id ?? ""));
+        setProblem(changeProblem(error, "No passkey was added"));
+      }
+    } catch (error) {
+      if (error instanceof AuthError && error.code === "passkeys_unavailable") setAttempt((value) => value + 1);
+      setProblem(changeProblem(error, "No passkey was added"));
+      setCode("");
+    } finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!target || removing) return;
+    setRemoving(true);
+    try {
+      const next = await removePasskey(csrf, target.id);
+      show(next);
+      setDone(`Removed the passkey ${target.name}. It no longer signs in.`);
+      setTarget(undefined);
+      window.requestAnimationFrame(() => listHeading.current?.focus());
+    } catch (error) {
+      setProblem(changeProblem(error, "The passkey was not removed"));
+      setTarget(undefined);
+    } finally { setRemoving(false); }
+  };
+  const full = list ? list.items.length >= list.capacity : false;
+  const canAdd = Boolean(list?.available && support?.supported && !full);
+  return <section className={section} aria-labelledby="account-passkeys" data-testid="account-passkeys">
+    <div className="flex flex-col gap-1">
+      <h2 id="account-passkeys" ref={listHeading} tabIndex={-1} className="outline-none">Passkeys</h2>
+      <div className="text-sm text-muted-foreground">Sign in with your fingerprint, face or device PIN instead of typing your password and code. Your password and code keep working.</div>
+    </div>
+    {loadProblem && <ProblemAlert problem={loadProblem} onRetry={() => setAttempt((value) => value + 1)} testId="passkeys-load-problem" />}
+    {!list && !loadProblem && <Skeleton className="h-16 w-full" />}
+    {list && !list.available && list.detail && <div className="flex gap-2 rounded-md border border-border bg-muted p-3 text-sm text-foreground" data-testid="passkeys-unavailable">
+      <FingerprintPattern className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <div className="flex flex-col gap-1"><span>{list.detail}</span>
+        {list.address && list.address !== location.origin && <a className="font-medium text-primary underline-offset-4 hover:underline wrap-anywhere" href={list.address}>{list.address}</a>}</div>
+    </div>}
+    {list && list.available && support && !support.supported && <div className="text-sm text-foreground" data-testid="passkeys-browser-note">This browser cannot use passkeys. Try another browser, or your phone.</div>}
+    {list && (list.items.length === 0
+      ? <div className="text-sm text-foreground" data-testid="passkeys-empty">No passkeys yet.</div>
+      : <ul role="list" className="flex flex-col gap-2" data-testid="passkeys-list">
+        {list.items.map((passkey) => <li key={passkey.id} className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border p-3" data-testid="passkey-row" data-name={passkey.name}>
+          <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <FingerprintPattern className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="font-medium wrap-anywhere text-foreground">{passkey.name}</span>
+              {passkey.synced && <Badge variant="outline">Synced</Badge>}
+              {passkey.blocked && <Badge variant="destructive">Blocked</Badge>}
+            </div>
+            <div className="text-xs text-muted-foreground">Added <time dateTime={passkey.created_at}>{dateLabel(passkey.created_at)}</time> · {passkey.last_used_at ? <>last used <time dateTime={passkey.last_used_at}>{dateLabel(passkey.last_used_at)}</time></> : "not used yet"}</div>
+            {passkey.blocked && <div className="text-xs text-destructive">It reported fewer uses than before, which can mean it was copied, so it no longer signs in. Remove it and add it again.</div>}
+          </div>
+          <Button variant="outline" className={`${control} w-fit`} onClick={() => { setDone(""); setProblem(undefined); setTarget(passkey); }} data-testid="remove-passkey">
+            <Trash2 aria-hidden="true" />Remove<span className="sr-only"> the passkey {passkey.name}</span>
+          </Button>
+        </li>)}
+      </ul>)}
+    {list && full && <div className="text-sm text-foreground">This login has 10 passkeys, the most it can have. Remove one to add another.</div>}
+    {problem && <ProblemAlert problem={problem} testId="passkey-problem" />}
+    {canAdd && <form method="post" noValidate onSubmit={(event) => void add(event)} aria-label="Add a passkey" data-testid="passkey-add-form">
+      <FieldGroup className="gap-4">
+        <input type="text" name="username" autoComplete="username" value={username} readOnly hidden />
+        <Field data-invalid={fieldError?.field === "name" ? true : undefined}>
+          <FieldLabel htmlFor="passkey-name">Name for the new passkey</FieldLabel>
+          <FieldDescription id="passkey-name-hint" className="text-start">The device or password manager it is saved in, so you can tell your passkeys apart.</FieldDescription>
+          <Input id="passkey-name" name="passkey-name" autoComplete="off" enterKeyHint="next" maxLength={64} required className={control} placeholder="Work laptop"
+            value={name} onChange={(event) => setName(event.target.value)} aria-invalid={fieldError?.field === "name" ? true : undefined}
+            aria-describedby={fieldError?.field === "name" ? "passkey-name-hint passkey-name-error" : "passkey-name-hint"} data-testid="passkey-name" />
+          {fieldError?.field === "name" && <div id="passkey-name-error" className="text-sm text-destructive">{fieldError.text}</div>}
+        </Field>
+        <CurrentField id="passkey-current" value={current} onChange={setCurrent} error={fieldError?.field === "current" ? fieldError.text : undefined} testId="passkey-password" />
+        <CodeField id="passkey-code" label="6-digit code from your app" hint="Proves the change is yours. Each code works once." value={code} onChange={setCode}
+          error={fieldError?.field === "code" ? fieldError.text : undefined} testId="passkey-code" />
+        <Button type="submit" className={`${control} w-fit`} disabled={busy} data-testid="add-passkey"><FingerprintPattern aria-hidden="true" />{busy ? "Waiting for your device…" : "Add a passkey"}</Button>
+      </FieldGroup>
+    </form>}
+    <div role="status" className="text-sm text-foreground empty:hidden" data-testid="passkey-changed">{done && <span className="inline-flex items-center gap-2"><Check className="size-4 text-primary" aria-hidden="true" />{done}</span>}</div>
+    <Dialog open={Boolean(target)} onOpenChange={(open) => { if (!open && !removing) setTarget(undefined); }}>
+      <DialogContent showCloseButton={false} className="sm:max-w-md" data-testid="remove-passkey-dialog">
+        {target && <>
+          <DialogHeader>
+            <DialogTitle className="leading-snug wrap-anywhere">Remove the passkey {target.name}?</DialogTitle>
+            <DialogDescription className="text-start">It stops signing in at once. You can still sign in with your password and code, and add a passkey again later.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" className={control} disabled={removing} onClick={() => setTarget(undefined)} data-testid="cancel-remove-passkey">Cancel</Button>
+            <Button type="button" variant="destructive" className={control} disabled={removing} onClick={() => void remove()} data-testid="confirm-remove-passkey"><Trash2 aria-hidden="true" />{removing ? "Removing…" : "Remove passkey"}</Button>
+          </DialogFooter>
+        </>}
+      </DialogContent>
+    </Dialog>
+  </section>;
 }
 
 // A new password: the current one and a current code first, then the new

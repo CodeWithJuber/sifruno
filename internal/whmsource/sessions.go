@@ -127,12 +127,12 @@ func (s *Sessions) Finish(ctx context.Context, id string, b Finisher, in hostacc
 		res.Detail = strings.TrimSpace(res.Detail + " The key's public file " + file + " may remain there; without the line it opens nothing.")
 	case removed:
 		if cerr := b.ClearStaleMigrationKey(ctx, id, hostaccounts.MigrationFinishInput{Reason: "WHM's API removed the key line"}, actor); cerr != nil && !errors.Is(cerr, hostaccounts.ErrNotFound) {
-			res.Detail = "The key is gone from the old server: WHM's API removed it, and WHM no longer lists it for root. This panel could not take it off its list of lines to remove, so mark it removed there. Removing it over SSH had failed: " + res.Detail
+			res.Detail = "The key is gone from the old server: WHM's API removed it, and WHM no longer lists it for root; SSH could not remove it. This panel could not take it off its list of key lines to remove, so mark it removed there."
 			res.RemovedFromSource = true
 			return res, nil
 		}
 		res.RemovedFromSource = true
-		res.Detail = "The key is gone from the old server: WHM's API removed it, and WHM no longer lists it for root. Removing it over SSH had failed: " + res.Detail
+		res.Detail = "The key is gone from the old server: WHM's API removed it, and WHM no longer lists it for root; SSH could not remove it."
 	default:
 		why := "WHM did not answer"
 		var failed *hostaccounts.MigrationError

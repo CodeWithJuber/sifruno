@@ -2174,11 +2174,15 @@ main() {
   step "Write the sshd policy $SSHD_DROPIN (backup, sshd -t, automatic rollback, reload)" step_sshd
   step "Add Sifruno's include, namespace isolation and the cache module to OpenLiteSpeed's config (backup)" step_openlitespeed
   step "Let each site's PHP run in its account's user slice: cgroups 1 in OpenLiteSpeed's CGIRLimit (backup, config test)" step_ols_cgroups
-  step "Put OpenLiteSpeed's WebAdmin console on 127.0.0.1 and remove the package's sample site on 8088 (backups, config test; a stop and start when a listener moves)" step_ols_listeners
   step "Bound each hosting account to 4096 processes, the largest plan, in PAM sessions: $LIMITS_FILE" step_limits
   step "Install WP-CLI $WPCLI_VERSION in $PREFIX, checked against its pinned sha512" step_wpcli
   step "Install restic $RESTIC_VERSION in $PREFIX for backups, checked against its pinned sha256" step_restic
   step "Install phpMyAdmin $PMA_VERSION in $PMA_DIR (pinned sha256), its user $PMA_USER, and its OpenLiteSpeed vhost on $PMA_LISTEN (backup, config test)" step_phpmyadmin
+  # After phpMyAdmin's step: on a new server its loopback listener is the
+  # only one left for OpenLiteSpeed's vhosts until the broker writes the
+  # websites' listeners, and with no listener at all OpenLiteSpeed's
+  # workers exit at start ("No listener is available, stop server!").
+  step "Put OpenLiteSpeed's WebAdmin console on 127.0.0.1 and remove the package's sample site on 8088 (backups, config test; a stop and start when a listener moves)" step_ols_listeners
   step "Keep MariaDB on loopback: bind-address 127.0.0.1 in $MARIADB_DROPIN (backup; a running MariaDB that listens beyond loopback restarts once)" step_mariadb
   step "Enable and start MariaDB, OpenLiteSpeed and crond" step_services
   step "Create the panel's MariaDB admin user and its 0600 option file $DB_ADMIN_CNF" step_db_admin

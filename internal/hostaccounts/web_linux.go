@@ -772,7 +772,8 @@ func olsLines(out []byte) []olsLine {
 }
 
 // olsTestPasses reads `openlitespeed -t`, which exits 2 after an [ERROR] and
-// 1 after any other message (the stock Example vhost always warns).
+// 1 after any other message, such as a warning (the package's stock Example
+// vhost, which the installer removes, warns on every run).
 //
 // A broker vhost in changed fails on an error or a warning. A broker vhost
 // in docRootGone (a rewritten vhost of another account whose tenant changed

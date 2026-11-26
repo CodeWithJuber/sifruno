@@ -4,9 +4,18 @@
 
 ### Changed
 
-- The product plan (`docs/PRODUCT-PLAN.md`) replaces the zero-edit cPanel
-  compatibility target. Earlier delivery notes moved to `docs/archive/`, the
-  README is one page, and `internal/whmapi` is frozen.
+- The repository is public. CI runs only on GitHub-hosted `ubuntu-24.04`
+  runners: `source-checks.yml` runs Go vet and tests, the UI build, every
+  Node test file, the Python fixture tests and `reuse lint` on pull requests
+  and pushes to `main`. `scripts/ci/public-repo-guard.sh` replaces
+  `no-github-billing.sh` and fails on self-hosted or larger runners, unpinned
+  actions, missing permissions, checkouts that keep credentials, and
+  `pull_request_target` workflows that check out pull request code. The
+  nightly fresh-install test needs approval in the `nightly` environment and
+  keeps its transcripts as a run artifact.
+- The product plan replaces the zero-edit cPanel compatibility target.
+  Earlier delivery notes were archived, the README is one page, and
+  `internal/whmapi` is frozen.
 - The account broker creates regular Linux users with subordinate ID ranges
   instead of system users, and the 100-account bound is now 2000.
 - `--dns-reload-cmd` runs without a shell: give an absolute program and plain
@@ -15,12 +24,30 @@
 
 ### Removed
 
+- Material that is not for a public repository: the internal product plan,
+  the archived delivery notes, the cPanel reference captures and API
+  inventories (`docs/reference/`, `lab/reference/`), stale binaries in
+  `dist/`, the operator's mobile preview scripts and an internal strategy
+  review config. Test hosts and server addresses that remain use
+  `example.com` and documentation addresses.
+- The verbatim captures in `internal/whmapi`'s tests; `contract_test.go`
+  uses synthetic fixtures with the same fields.
 - The Compatibility and Platforms screens and the "hosting engine in
   development" notice. Their API routes remain.
 - The Ghidra and REA analysis tooling and the `rea-agents` dev dependency.
 
 ### Added
 
+- Files for an open-source project: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`
+  (Contributor Covenant 2.1), `SECURITY.md` (private vulnerability
+  reporting), `NOTICE`, and `CLA.md`, an individual contributor licence
+  agreement that supports the dual-licence plan in `LICENSING.md`, checked
+  on pull requests by `cla.yml`. `REUSE.toml` and `LICENSES/` record every
+  file's copyright and licence. Issue forms, a pull request template,
+  `CODEOWNERS` and Dependabot (Go modules, npm, GitHub Actions).
+- Supply-chain checks: dependency review on pull requests, gitleaks on pull
+  requests and pushes (`.gitleaks.toml` allows the known false positives),
+  and the OpenSSF Scorecard on pushes to `main` and weekly.
 - WordPress install broker operation (needs human review): `InstallWordPress`
   runs WP-CLI 2.12.0, checked against its pinned sha512, with the site's
   LSPHP as the account's user, passwords on stdin. It runs outside the

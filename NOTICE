@@ -1,0 +1,39 @@
+Sifruno
+Copyright (C) 2026 Juber Shaikh (Hostlelo)
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by the
+Free Software Foundation, version 3 only (AGPL-3.0-only).
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+details. The full text is in LICENSE; LICENSING.md explains the Community
+and Pro plan and the contributor agreement.
+
+If you run a modified version for users over a network, section 13 of the
+license requires you to offer those users the Corresponding Source of the
+version you run.
+
+Third-party material in this repository keeps its own copyright and
+license. REUSE.toml names each such file, and LICENSES/ holds the texts:
+
+- shadcn/ui component source in web/src/components/ui/
+  Copyright 2023 shadcn. MIT License. Sifruno's changes are AGPL-3.0-only.
+- Inter font files in assets/brand/fonts/
+  Copyright 2016 The Inter Project Authors. SIL Open Font License 1.1
+  (assets/brand/licenses/inter-OFL.txt).
+- Lucide icons in assets/brand/icons/ui-*.svg
+  Copyright 2026 Lucide Icons and Contributors. ISC License; the icons
+  Lucide derived from Feather are also Copyright 2013 Cole Bemis, MIT
+  License (assets/brand/licenses/lucide-LICENSE.txt).
+- The .htaccess file of the Akismet WordPress plugin 5.7.2, a test input in
+  internal/htaccess/testdata/
+  Copyright Automattic, Inc. GNU General Public License 2.0 or later.
+- The Contributor Covenant 2.1 text in CODE_OF_CONDUCT.md
+  Creative Commons Attribution 4.0 International.
+
+Go modules and npm packages are not part of this repository. They keep
+their own licenses, which go.sum, package-lock.json and web/package-lock.json
+pin; web/NOTICE.md lists the UI libraries, and runtime archives carry their
+own NOTICE.md and licenses/ inventory.

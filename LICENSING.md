@@ -1,8 +1,12 @@
 # Sifruno Community and Pro licensing
 
+Copyright (C) 2026 Juber Shaikh (Hostlelo)
+
 Original Sifruno Community source is licensed under GNU Affero General Public
 License version 3 only (`AGPL-3.0-only`), unless a file or component carries a
 different notice. The unmodified standard license is in [LICENSE](LICENSE).
+[REUSE.toml](REUSE.toml) records the copyright and license of every file, and
+[LICENSES/](LICENSES/) holds each license text; `reuse lint` checks both.
 The license selection applies to owner-controlled original Sifruno code;
 third-party material keeps its existing copyright notices and terms.
 
@@ -15,8 +19,8 @@ section 13 requires a prominent, free offer of its Corresponding Source to
 those users. Distribution of binaries has separate source obligations.
 Refer to the license itself for the complete conditions.
 
-An inaccessible private repository link alone is not a source offer to
-anonymous users. Operators releasing covered builds or running modified
+A link to source that the network users cannot open is not a source offer
+to them. Operators releasing covered builds or running modified
 network versions must provide source for the version they actually use,
 including applicable build material. Source packages exclude operator state,
 credentials, server keys and customer files; those are not project source.
@@ -35,27 +39,31 @@ Do not include third-party AGPL/GPL code in a proprietary offer without the
 rights and compliance that its own license requires.
 
 Existing GPLv3 releases and any earlier grants are not revoked by this choice.
-Repository visibility is managed separately; this change does not publish a
-private repository or confer access to its contents.
 
 ## Contributions and commercial rights
 
-Before accepting outside contributions to code intended for commercial dual
-licensing, maintainers must document provenance and obtain the necessary
-relicensing permission in a suitable signed contribution agreement. A pull
-request, copyright notice or developer certificate of origin alone must not
-be treated as that permission. An agreement and signing workflow are not
-implemented by this policy. Maintain a permissively licensed integration
-boundary only when the files have actually been designated and reviewed;
-there is no blanket plugin or SDK license exception here.
+Outside contributions are accepted only from people who have signed the
+[Contributor License Agreement](CLA.md). The CLA leaves contributors their
+copyright and grants the project owner a license that includes the right to
+relicense the contribution, which is what a commercial edition next to the
+AGPL Community edition needs. A pull request, copyright notice or developer
+certificate of origin alone must not be treated as that permission.
+
+The [CLA workflow](.github/workflows/cla.yml) asks each new contributor on
+their first pull request to sign by posting a comment, and records the
+signature in the `cla-signatures` branch. The owner and bots are on its
+allowlist. Maintainers still document the provenance of any third-party
+material a contribution brings in. Maintain a permissively licensed
+integration boundary only when the files have actually been designated and
+reviewed; there is no blanket plugin or SDK license exception here.
 
 ## Third-party material
 
 The inspected Go dependency license texts use MIT, BSD or Apache-2.0 terms.
 The installed direct UI dependencies mainly use MIT/ISC, with
 class-variance-authority under Apache-2.0. Component and asset notices remain
-in `web/NOTICE.md`, `web/licenses/` and `assets/brand/licenses/` in the source
-tree. Runtime archives place their notice index at `NOTICE.md` and component
+in [NOTICE](NOTICE), `web/NOTICE.md`, `web/licenses/` and
+`assets/brand/licenses/` in the source tree. Runtime archives place their notice index at `NOTICE.md` and component
 texts under `licenses/`; retain that complete notice inventory.
 
 Separate terms include Inter fonts (OFL-1.1), Lightning CSS build tooling

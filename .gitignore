@@ -1,7 +1,18 @@
 .tools/
 .cache/
 .state/
-.forge/
+# Share ForgeKit's project settings and reviewable memory across fresh checkouts.
+/.forge/*
+!/.forge/forge.config.json
+!/.forge/decisions.md
+!/.forge/lessons/
+/.forge/lessons/*
+!/.forge/lessons/*.md
+!/.forge/brain/
+/.forge/brain/*
+!/.forge/brain/facts/
+/.forge/brain/facts/*
+!/.forge/brain/facts/*.md
 .worktrees/
 node_modules/
 web/node_modules/

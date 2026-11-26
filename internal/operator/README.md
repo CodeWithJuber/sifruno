@@ -8,6 +8,7 @@ This package decides who may use the panel's private pages and API. It is securi
 | --- | --- | --- |
 | Access key (`operator/access.key`, 43 random characters) | Whoever controls the server: the CLI, first-run setup, recovery | Loopback only |
 | Username, password and a 6-digit authenticator code | People: admins, and customers (site owners), who reach only their own websites | Loopback, and the HTTPS listener (`--https-listen`) |
+| A passkey the person added on Account | The same people, without typing a password | The HTTPS listener at a `--panel-host` name whose certificate browsers trust |
 | API token (`Authorization: Bearer sfr_…`) | Programs, such as the WHMCS module | Loopback, and the HTTPS listener; never on `/api/v1/session/*` |
 
 The access key is not weaker than the admin login for the people it serves. Reading it needs the panel's own OS user, and that user can already read `session.keys` and forge sessions. The admin login is the one for people, and the only one accepted off loopback.
@@ -51,6 +52,18 @@ A signed-in admin or customer changes its own password, or moves its codes to a 
 - They need the person's own session with Origin and CSRF, signed in with a username: not an API token, not the access key (403 `admin_sign_in_required`; it has no password), and not an admin viewing as a customer (403 `viewing_as_customer`; the login is the customer's). A customer's whose login was turned off has no session left.
 - A customer that lost its phone still asks an admin for a new setup link: re-enrolling needs a code from the app in use.
 
+## Passkeys
+
+A passkey signs an admin or a customer in on its own; a password and a code stay the way in when no passkey is at hand (Jev, 0.96). Code in `passkeys.go`; the WebAuthn checks are go-webauthn's (v0.18.2, BSD-3-Clause, in the plan's stack table).
+
+- Where: a passkey belongs to a relying party ID, a domain name. `cmd/sifruno` gives the manager the HTTPS listener's addresses at the `--panel-host` names (`SetPasskeySites`): with the operator's own certificate every name, with the self-signed one the names Let's Encrypt is asked for, and passkeys work there only while browsers trust the certificate (Let's Encrypt's once it is in place; an operator's own `--tls-cert` is taken as trusted, which the panel cannot check). The RP ID is the name the browser used and the origin is exactly `https://` plus its Host, port included. An IP address cannot be an RP ID, and loopback is not where people sign in: there `GET /api/v1/session/passkey-login` and every passkey route say, in plain words, to open the panel at its name over HTTPS, and give the address (409 `passkeys_unavailable` on the routes).
+- Adding (`POST /api/v1/session/passkeys/begin`, then `/finish` with a name): the person's own session with Origin and CSRF, signed in with a username (not an API token, not the access key, not an admin viewing as a customer), and the current password and a current code, checked as a password change checks them: one try from the sign-in bucket each, one answer for a wrong password or code, the code's step saved so it works once. The options ask for a discoverable credential (resident key required), user verification required and no attestation, and exclude the login's passkeys. The step works once, for that session, for 5 minutes. At most 10 per login; a credential already on any login is refused.
+- Stored with the login in `admins.json` or `customers.json`: per login a WebAuthn user handle (32 random bytes, made with the first passkey) and per passkey the credential ID, COSE public key, use count, backup-eligible and backed-up flags, a blocked mark, the name the person gave, and when it was added and last used. Credential IDs and user handles are unique across admins and customers. No private key is ever on the server.
+- Account lists the person's passkeys (`GET /api/v1/session/passkeys`, with the RP ID and user handle for the browser's passkey manager) and removes one (`POST /api/v1/session/passkeys/{id}/remove`; the ID is a 32-hex handle, not the credential ID).
+- Signing in: `POST /api/v1/session/passkey-login/begin` answers a challenge for any passkey of this panel (no allow list, user verification required) and a random ceremony token; `/finish` takes the token and the browser's answer. The token binds the challenge to the request that began it; ceremonies live in memory, work once, last 5 minutes, and at most 256 wait at once (the oldest makes room). The passkey's user handle names the login: an admin, or a customer whose login is set up and turned on. Every finish takes one from the sign-in limits, the network-wide one first and then the login's bucket, as a password does. A passkey on no login gets 404 `passkey_unknown`, so the browser can drop it; anything else wrong gets one 401. `remember` is Keep me signed in, and the session is the login's, as after a password sign-in, so it is saved across restarts the same way.
+- Use count: go-webauthn flags a count that does not grow (CloneWarning) and leaves what to do to the relying party. The panel refuses that sign-in (401 `passkey_blocked`) and marks the passkey blocked: it signs in no more until it is removed and added again, because a count going back can mean the passkey was copied. Passkeys that always report 0, as synced ones do, are fine.
+- A customer's new setup link removes its passkeys, with its password and authenticator; turning the login off blocks them while it is off. A password change keeps them.
+
 ## Over the network
 
 `--https-listen` serves the same panel over TLS for the host names in `--panel-host`. `Remote` (remote.go) marks a request remote only when it came through that listener, over TLS, for one of those names; anything else gets 421 before the API sees it. For a remote request:
@@ -70,13 +83,13 @@ An admin's changes are still recorded as `local-operator`; the admin's username 
 
 All in the private state directory (0700, owner only, no symlinks), next to `access.key` and `session.keys`:
 
-- `admins.json` (0600, at most 64 KiB, 16 admins): username, Argon2id hash, authenticator secret, last used code step, creation time. Written atomically (new file, fsync, rename).
+- `admins.json` (0600, at most 1 MiB, 16 admins): username, Argon2id hash, authenticator secret, last used code step, creation time, and passkeys (above). Written atomically (new file, fsync, rename).
 - Passwords: Argon2id, 19 MiB memory, 2 passes, 1 lane, 16-byte salt, 32-byte key (the OWASP Password Storage Cheat Sheet minimum). Parameters are stored per hash, bounded on read, so they can be raised later.
 - Authenticator: RFC 6238, HMAC-SHA1, 6 digits, 30-second steps, one step of drift either way. The secret is 160 random bits. It is stored in the clear because the server must compute codes; the file's permissions are its protection, as for `session.keys`.
 - `tokens.json` (0600, at most 64 KiB, 32 tokens), written the same way as `admins.json`: per token a public ID, name, shown prefix, HMAC-SHA256 of the token, creation, expiry and last-use times. Never the token.
-- `customers.json` (0600, at most 1 MiB, 500 customers), written the same way: per customer the username, its websites (hosting account IDs, sorted), whether it is turned off, the creation time, and either the SHA-256 and expiry of its setup link or, once set up, its Argon2id hash, authenticator secret and last used code step. Never the link.
+- `customers.json` (0600, at most 16 MiB, 500 customers), written the same way: per customer the username, its websites (hosting account IDs, sorted), whether it is turned off, the creation time, and either the SHA-256 and expiry of its setup link or, once set up, its Argon2id hash, authenticator secret, last used code step and passkeys. Never the link. The bounds hold 10 passkeys per login as authenticators make them (credential IDs of 16 to 64 bytes, public keys under 300); a file filled with the largest IDs and keys the panel accepts (1023 and 2048 bytes) would not fit, and the panel would then refuse to start, as for any oversized private file.
 - `tokens.key` (0600, 32 random bytes): the HMAC key. Tokens carry 256 random bits, so a keyed hash compared in constant time is enough; Argon2id would slow every API call for no gain. Deleting the key makes every token fail.
-- `sessions.json` (0600, at most 256 KiB), written the same way: the sessions opened with a password and a code, sealed with AES-256-GCM under a key derived from `session.keys` (HMAC-SHA256), so moving `session.keys` aside ends saved sessions too. Inside, per session: the cookie's session ID, the SHA-256 of its CSRF token (never the token), the management handle, the creation, hard-limit and last-activity times, the username, and whether it is a customer's, kept signed in, or viewing as a customer. Sessions opened with the access key are never saved.
+- `sessions.json` (0600, at most 256 KiB), written the same way: the sessions opened with a password and a code or with a passkey, sealed with AES-256-GCM under a key derived from `session.keys` (HMAC-SHA256), so moving `session.keys` aside ends saved sessions too. Inside, per session: the cookie's session ID, the SHA-256 of its CSRF token (never the token), the management handle, the creation, hard-limit and last-activity times, the username, and whether it is a customer's, kept signed in, or viewing as a customer. Sessions opened with the access key are never saved.
 
 ## Sessions survive a restart
 
@@ -102,7 +115,7 @@ The plan moves this file into the single SQLite store with the broker rework.
 
 ## Not done yet
 
-- More than one admin, a reset for an admin who lost its password or phone, passkeys. A customer cannot see its own sessions yet.
+- More than one admin, a reset for an admin who lost its password or phone. A customer cannot see its own sessions yet. Passkeys cannot be renamed yet, and Account does not show which password manager holds one.
 - Resellers and plans (Phase 2).
 - Token scopes: every token has full admin API access. An audit log of admin actions, including token use.
 - An outside review of this package and the broker, which the plan requires before a paying customer.

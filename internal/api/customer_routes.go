@@ -63,6 +63,15 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/session/password":             customerOpen,
 	"POST /api/v1/session/authenticator/begin":  customerOpen,
 	"POST /api/v1/session/authenticator/finish": customerOpen,
+	// Signing in with a passkey needs no session; the person's own passkeys
+	// are its own, and the operator refuses an admin viewing as a customer.
+	"GET /api/v1/session/passkey-login":         customerOpen,
+	"POST /api/v1/session/passkey-login/begin":  customerOpen,
+	"POST /api/v1/session/passkey-login/finish": customerOpen,
+	"GET /api/v1/session/passkeys":              customerOpen,
+	"POST /api/v1/session/passkeys/begin":       customerOpen,
+	"POST /api/v1/session/passkeys/finish":      customerOpen,
+	"POST /api/v1/session/passkeys/{id}/remove": customerOpen,
 	// The panel's own management: admins only.
 	"GET /api/v1/session/sessions":                         adminOnly,
 	"POST /api/v1/session/sessions/{id}/revoke":            adminOnly,

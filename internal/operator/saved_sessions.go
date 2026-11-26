@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// Sessions opened with a password and a code (an admin's or a customer's)
-// are saved in the private folder, so restarting the panel does not sign
+// Sessions opened with a password and a code, or with a passkey (an admin's
+// or a customer's), are saved in the private folder, so restarting the panel does not sign
 // people out (Jev, 0.81). Sessions opened with the access key are not saved:
 // a restart still ends them.
 //

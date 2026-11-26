@@ -45,7 +45,7 @@ case "${1:-}" in
     for _ in $(seq 1 90); do curl -fs -o /dev/null "http://127.0.0.1:$port/" && break; sleep 2; done
     check "the panel answers on 127.0.0.1:$port as sifpanel" bash -c "curl -fs -o /dev/null http://127.0.0.1:$port/ && [ \"\$(ps -o user= -p \$(pgrep -x sifruno | head -1))\" = sifpanel ]"
     check "the panel answers over HTTPS for panel.sifruno.test" curl -fsk -o /dev/null --resolve "panel.sifruno.test:$https_port:127.0.0.1" "https://panel.sifruno.test:$https_port/"
-    check "the start-up note says customers sign in over HTTPS" grep -q 'password sign-in only (admins and customers)' panel.log
+    check "the start-up note says customers sign in over HTTPS" grep -q 'sign-in (admins and customers)' panel.log
     exit "$fails"
     ;;
   check)

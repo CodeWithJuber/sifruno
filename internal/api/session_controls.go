@@ -17,13 +17,17 @@ func allowedSessionMutation(r *http.Request) bool {
 		"/api/v1/session/setup/totp", "/api/v1/session/setup/admin", "/api/v1/session/tokens",
 		"/api/v1/session/customers", "/api/v1/session/customer-setup/begin", "/api/v1/session/customer-setup/finish",
 		"/api/v1/session/view-as", "/api/v1/session/view-as/end",
-		"/api/v1/session/password", "/api/v1/session/authenticator/begin", "/api/v1/session/authenticator/finish":
+		"/api/v1/session/password", "/api/v1/session/authenticator/begin", "/api/v1/session/authenticator/finish",
+		"/api/v1/session/passkeys/begin", "/api/v1/session/passkeys/finish",
+		"/api/v1/session/passkey-login/begin", "/api/v1/session/passkey-login/finish":
 		return true
 	}
-	for _, prefix := range []string{"/api/v1/session/sessions/", "/api/v1/session/tokens/"} {
+	for prefix, action := range map[string]string{"/api/v1/session/sessions/": "revoke", "/api/v1/session/tokens/": "revoke", "/api/v1/session/passkeys/": "remove"} {
 		if strings.HasPrefix(r.URL.Path, prefix) {
 			parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
-			return len(parts) == 2 && parts[0] != "" && parts[1] == "revoke"
+			if len(parts) == 2 && parts[0] != "" && parts[1] == action {
+				return true
+			}
 		}
 	}
 	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/session/customers/"); ok {

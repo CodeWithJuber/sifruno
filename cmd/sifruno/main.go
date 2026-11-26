@@ -363,6 +363,7 @@ func run() error {
 		remoteServer, remoteListener, remoteHosts = remote, listener, hosts
 		// Customers' setup links start with the address they reach the panel at.
 		access.SetPublicAddress(publicAddress(hosts[0], *httpsListen))
+		access.SetPasskeySites(passkeyOrigins(hosts, names, cert.SelfSigned, *httpsListen), passkeyCertificateTrusted(cert.SelfSigned, panelIssued))
 		kind := "operator-provided"
 		switch {
 		case panelIssued != nil && !panelIssued.NotAfter().IsZero():
@@ -372,7 +373,7 @@ func run() error {
 		case cert.SelfSigned:
 			kind = "self-signed: " + whyNot
 		}
-		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — password sign-in only (admins and customers)\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
+		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — password or passkey sign-in (admins and customers)\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
 			*httpsListen, strings.Join(hosts, ", "), kind, cert.NotAfter.UTC().Format("2006-01-02"), cert.Fingerprint)
 	}
 	if *whmListen != "" {
@@ -606,6 +607,35 @@ func publicAddress(host, listen string) string {
 		return "https://" + host + ":" + port
 	}
 	return "https://" + host
+}
+
+// passkeyOrigins are the HTTPS listener's addresses passkeys work at: the
+// --panel-host names (an IP address cannot hold a passkey, and the operator
+// package leaves one out), or, when the panel asks Let's Encrypt for some
+// of them, those, because only they get a certificate browsers trust.
+func passkeyOrigins(hosts, letsEncrypt []string, selfSigned bool, listen string) []string {
+	names := hosts
+	if selfSigned && len(letsEncrypt) > 0 {
+		names = letsEncrypt
+	}
+	origins := make([]string, 0, len(names))
+	for _, name := range names {
+		origins = append(origins, publicAddress(name, listen))
+	}
+	return origins
+}
+
+// passkeyCertificateTrusted reports whether browsers trust the listener's
+// certificate for the passkey names now: always with the operator's own,
+// and with the self-signed one only once Let's Encrypt's is in place and
+// unexpired.
+func passkeyCertificateTrusted(selfSigned bool, issued *panelcert.Issued) func() bool {
+	return func() bool {
+		if !selfSigned {
+			return true
+		}
+		return issued != nil && time.Now().Before(issued.NotAfter())
+	}
 }
 
 // splitHosts reads --panel-host: comma-separated, lower-cased, de-duplicated.

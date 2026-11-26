@@ -40,7 +40,12 @@ type authenticatorChanged struct {
 
 // ownLogin admits a change to the signed-in person's own login.
 func (m *Manager) ownLogin(w http.ResponseWriter, r *http.Request) (string, activeSession, bool) {
-	_, id, a, ok := m.checkSession(w, r, true)
+	return m.ownLoginFor(w, r, true)
+}
+
+// ownLoginFor is ownLogin, for a read when mutation is false.
+func (m *Manager) ownLoginFor(w http.ResponseWriter, r *http.Request, mutation bool) (string, activeSession, bool) {
+	_, id, a, ok := m.checkSession(w, r, mutation)
 	if !ok {
 		return "", activeSession{}, false
 	}

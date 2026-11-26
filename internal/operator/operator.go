@@ -161,6 +161,12 @@ type Manager struct {
 	saveDone    chan struct{}
 	closeOnce   sync.Once
 
+	// Passkeys (passkeys.go): where they work, set when the panel starts,
+	// and the ceremonies in progress, which are under adminMu.
+	passkeySites  atomic.Pointer[passkeySites]
+	passkeyLogins map[string]pendingPasskeyLogin
+	passkeyAdds   map[string]pendingPasskeyAdd
+
 	// API tokens (tokens.go). tokenMu guards the token file, its cached copy
 	// and the bearer limiters. It is never held together with adminMu; when
 	// a session is rechecked, tokenMu is taken first, then mu.
@@ -265,7 +271,8 @@ func Open(dir string) (*Manager, error) {
 		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession), seen: make(map[string]time.Time),
 		dir: dir, admins: admins, pending: map[string]pendingSetup{}, dummy: dummy, hashSlots: make(chan struct{}, 2),
 		customerPending: map[string]pendingSetup{}, authenticatorPending: map[string]pendingSetup{},
-		savedKey: savedSessionsKey(keys), saveWake: make(chan struct{}, 1), saveStop: make(chan struct{})}
+		savedKey: savedSessionsKey(keys), saveWake: make(chan struct{}, 1), saveStop: make(chan struct{}),
+		passkeyLogins: map[string]pendingPasskeyLogin{}, passkeyAdds: map[string]pendingPasskeyAdd{}}
 	m.customers.Store(&customers)
 	// A damaged sessions file does not stop the panel; StartSaving logs why
 	// everyone has to sign in again.
@@ -632,8 +639,8 @@ func DecodeObject(b []byte, target any) error {
 
 // Register serves the /api/v1/session routes. Every one refuses a request
 // that carries an Authorization header (sessionOnly): sign-in, sessions,
-// first-run setup, API tokens, customer logins and their setup links, and
-// viewing as a customer are for a person with a session. Credential
+// first-run setup, API tokens, customer logins and their setup links,
+// viewing as a customer, and passkeys are for a person with a session. Credential
 // management added later belongs under this prefix too.
 func (m *Manager) Register(mux interface {
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
@@ -667,6 +674,13 @@ func (m *Manager) Register(mux interface {
 		{"POST /api/v1/session/password", m.changePassword},
 		{"POST /api/v1/session/authenticator/begin", m.beginAuthenticatorChange},
 		{"POST /api/v1/session/authenticator/finish", m.finishAuthenticatorChange},
+		{"GET /api/v1/session/passkeys", m.listPasskeys},
+		{"POST /api/v1/session/passkeys/begin", m.beginPasskey},
+		{"POST /api/v1/session/passkeys/finish", m.finishPasskey},
+		{"POST /api/v1/session/passkeys/{id}/remove", m.removePasskey},
+		{"GET /api/v1/session/passkey-login", m.getPasskeyLogin},
+		{"POST /api/v1/session/passkey-login/begin", m.beginPasskeyLogin},
+		{"POST /api/v1/session/passkey-login/finish", m.finishPasskeyLogin},
 	} {
 		mux.HandleFunc(route.pattern, sessionOnly(route.handler))
 	}

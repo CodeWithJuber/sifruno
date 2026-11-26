@@ -533,10 +533,12 @@ print(json.dumps(b))" "$CIP" "$1" "$2" > "$WORK/whm.json"
     echo "$WORK/whm.json"
   }
   in_ctr "touch /etc/standin-whm/broken"
+  # The stand-in logs every request; none may come with the first POST.
+  seen="$(in_ctr "wc -l < /var/log/whm-standin.log")"
   call POST /api/v1/websites/migrations/whm "$(whm_body "$WORK/whm.token" "")"
   echo "  first POST .../whm answered $code: certificate $(json "$WORK/answer.json" "d.get('certificate', {}).get('fingerprint')")"
   check "an untrusted certificate is shown first (409), with its fingerprint" test "$code" = 409 -a "$(json "$WORK/answer.json" "d['certificate']['fingerprint']")" = "$STUB_FP"
-  check "no login reached WHM before the certificate was confirmed" bash -c "! podman exec $CTR grep -q . /var/log/whm-standin.log"
+  check "no request, so no login, reached WHM before the certificate was confirmed" test "$(in_ctr "wc -l < /var/log/whm-standin.log")" = "$seen"
   call POST /api/v1/websites/migrations/whm "$(whm_body "$WORK/whm.token" "$STUB_FP")"
   echo "  POST .../whm with a WHM that prints no JSON answered $code:"; explain
   check "a WHM that prints no JSON fails with 422" test "$code" = 422

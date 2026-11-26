@@ -1,7 +1,7 @@
 // Package panelcert provides the certificate the panel serves over HTTPS: the
 // operator's own files when given, otherwise a self-signed certificate kept in
-// the private state directory. Let's Encrypt (lego) comes later with the
-// first-run hostname and SSL step.
+// the private state directory, and, for the panel's public DNS names, one
+// from Let's Encrypt that internal/acme gets and renews (letsencrypt.go).
 package panelcert
 
 import (

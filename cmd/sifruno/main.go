@@ -316,6 +316,9 @@ func run() error {
 	var remoteHosts []string
 	var remoteTLS *tls.Config
 	var httpsNote string
+	// The panel's own Let's Encrypt certificate, when it asks for one.
+	var panelIssued *panelcert.Issued
+	var panelCertificates *acme.Manager
 	if *httpsListen != "" {
 		hosts := splitHosts(*panelHosts)
 		if len(hosts) == 0 {
@@ -326,6 +329,19 @@ func run() error {
 			return cerr
 		}
 		remoteTLS = &tls.Config{Certificates: []tls.Certificate{cert.Certificate}, MinVersion: tls.VersionTLS12}
+		names, whyNot := panelLetsEncrypt(hosts, cert.SelfSigned, *acmeEmail, certificates != nil)
+		if len(names) > 0 {
+			// The self-signed certificate stays the listener's own: it
+			// answers an IP address, and every name until Let's Encrypt's is
+			// in place.
+			if panelIssued, err = panelcert.OpenIssued(dir, names, time.Now); err != nil {
+				return err
+			}
+			if panelCertificates, err = certificates.Alongside(panelIssued, panelIssued, filepath.Join(dir, "tls", "acme")); err != nil {
+				return err
+			}
+			remoteTLS.GetCertificate = panelIssued.GetCertificate
+		}
 		listener, lerr := tls.Listen("tcp", *httpsListen, remoteTLS)
 		if lerr != nil {
 			return lerr
@@ -336,8 +352,11 @@ func run() error {
 		// Customers' setup links start with the address they reach the panel at.
 		access.SetPublicAddress(publicAddress(hosts[0], *httpsListen))
 		kind := "operator-provided"
-		if cert.SelfSigned {
-			kind = "self-signed; browsers warn until you add --tls-cert"
+		switch {
+		case panelIssued != nil:
+			kind = "self-signed, for an IP address, and for " + strings.Join(names, ", ") + " until Let's Encrypt's is in place: see the line that starts \"Panel certificate:\""
+		case cert.SelfSigned:
+			kind = "self-signed: " + whyNot
 		}
 		httpsNote = fmt.Sprintf("Panel over HTTPS on %s for %s — password sign-in only (admins and customers)\nTLS certificate (%s), valid until %s, SHA-256 %s\n",
 			*httpsListen, strings.Join(hosts, ", "), kind, cert.NotAfter.UTC().Format("2006-01-02"), cert.Fingerprint)
@@ -439,6 +458,14 @@ func run() error {
 		renewDone := make(chan struct{})
 		go func() { defer close(renewDone); certificates.Run(ctx) }()
 		defer func() { stop(); <-renewDone }()
+	}
+	if panelCertificates != nil {
+		// The panel's own certificate: asked for now if it has none (or
+		// one with 30 days or less left), then renewed by its own loop.
+		obtainDone, panelRenewDone := make(chan struct{}), make(chan struct{})
+		go func() { defer close(obtainDone); panelIssued.Obtain(ctx, panelCertificates, os.Stderr) }()
+		go func() { defer close(panelRenewDone); panelCertificates.Run(ctx) }()
+		defer func() { stop(); <-obtainDone; <-panelRenewDone }()
 	}
 	if pma != nil {
 		// The sweeper drops expired temporary users now and every minute;
@@ -576,4 +603,26 @@ func splitHosts(value string) []string {
 		}
 	}
 	return out
+}
+
+// panelLetsEncrypt answers the --panel-host names the panel asks Let's
+// Encrypt for, or, when it asks for none, why it keeps its self-signed
+// certificate, for the startup lines. --tls-cert and --tls-key win: with
+// them it answers neither. websites says the website certificate manager
+// runs: the panel's shares its account, and the broker it talks to serves
+// the panel's names on port 80 for the challenge.
+func panelLetsEncrypt(hosts []string, selfSigned bool, acmeEmail string, websites bool) ([]string, string) {
+	if !selfSigned {
+		return nil, ""
+	}
+	names := panelcert.PublicNames(hosts)
+	switch {
+	case len(names) == 0:
+		return nil, "no --panel-host name is a public domain name, and Let's Encrypt issues this panel none for an IP address or a name like panel.test; browsers warn until you add --tls-cert"
+	case acmeEmail == "":
+		return nil, "Let's Encrypt needs a contact address: install again with --acme-email, or give --tls-cert"
+	case !websites:
+		return nil, "Let's Encrypt checks the name on port 80, which the account broker serves, and --accounts-socket is not set; give --tls-cert"
+	}
+	return names, ""
 }

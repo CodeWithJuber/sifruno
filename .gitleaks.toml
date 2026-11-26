@@ -1,0 +1,25 @@
+# gitleaks configuration for .github/workflows/secret-scan.yml and local runs
+# (gitleaks git . or gitleaks dir .). It keeps every default rule and only
+# allows the lines below, which the default rules mistake for secrets. Add a
+# line here only for a value that is not a secret, and say what it is.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test values, a handler name and code that look like secrets"
+regexTarget = "line"
+regexes = [
+  # A placeholder key in internal/acme/acme_test.go: its body is "fake".
+  '''-----BEGIN EC PRIVATE KEY-----\\nfake\\n''',
+  # The example ACME token from RFC 8555, section 8.3, in the same test.
+  '''token, keyAuth := "evaGxfADs6pSRb2LAv9IZf17Dt3juxGJ-PCt92wr-oA"''',
+  # A named test constant in internal/hostaccounts/backup_test.go.
+  '''^\s*const fixtureSecret = ''',
+  # bbolt bucket statistics in hostwebgeneration's storage code.
+  '''\.Stats\(\)\.KeyN > MaxGenerations''',
+  # OpenLiteSpeed handler names in generated vhost configuration.
+  '''^\s*add\s+lsapi:sifruno-[0-9a-z-]+\s''',
+  # Prose in lab/hostwebruntime-serving-host/README.md.
+  '''keys, duplicate/foreign markers''',
+]

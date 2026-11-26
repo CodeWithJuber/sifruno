@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"sifruno/internal/acme"
 	"sifruno/internal/cpsource"
 	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
@@ -50,6 +51,12 @@ type fakeMigrationBroker struct {
 	via     string
 	cpanel  []string
 	cleared int
+	// certificate is what MigrateCertificate answers (no certificate on
+	// the old server unless a test sets one), certErr its failure, and
+	// withSSL the steps whose WHM answers carried the site's certificate.
+	certificate hostaccounts.MigrateCertificateResult
+	certErr     error
+	withSSL     []string
 }
 
 func (f *fakeMigrationBroker) ClearStaleMigrationKey(context.Context, string, hostaccounts.MigrationFinishInput, string) error {
@@ -63,8 +70,31 @@ func (f *fakeMigrationBroker) sawCPanel(step string, a *hostaccounts.CPanelAnswe
 	if a != nil {
 		f.mu.Lock()
 		f.cpanel = append(f.cpanel, step)
+		if len(a.SSL) > 0 {
+			f.withSSL = append(f.withSSL, step)
+		}
 		f.mu.Unlock()
 	}
+}
+
+func (f *fakeMigrationBroker) MigrateCertificate(_ context.Context, id string, in hostaccounts.MigrateCertificateInput, _ string) (hostaccounts.MigrateCertificateResult, error) {
+	f.order.add(fmt.Sprintf("certificate %s rev=%d", id[28:], in.ExpectedRevision))
+	f.sawCPanel("certificate", in.CPanel)
+	if f.certErr != nil {
+		return hostaccounts.MigrateCertificateResult{}, f.certErr
+	}
+	res := f.certificate
+	if !res.Copied && res.Refused == "" {
+		res.Refused, res.Detail = "no_certificate", "The old server has no certificate for shop.example.test."
+	}
+	if err := f.revision(id, in.ExpectedRevision, res.Copied); err != nil {
+		return hostaccounts.MigrateCertificateResult{}, err
+	}
+	res.Revision = in.ExpectedRevision
+	if res.Copied {
+		res.Revision++
+	}
+	return res, nil
 }
 
 func (f *fakeMigrationBroker) GetMigration(_ context.Context, id string) (hostaccounts.Migration, error) {
@@ -221,14 +251,15 @@ func TestMigrationCopiesInOrderAndOpensTheGate(t *testing.T) {
 	if m.Gate != GateOpen || !m.KeyRemoved || !m.WordPress || !slices.Equal(m.Databases, []string{"shopone_wp"}) || !slices.Equal(m.DatabaseUsers, []string{"shopone_wpu"}) {
 		t.Fatalf("migration: %+v", m)
 	}
+	// The old server has no certificate here: that step alone is skipped.
 	for _, s := range job.Steps {
-		if s.State != StepDone {
+		if s.State != StepDone && !(s.Name == StepSSL && s.State == StepSkipped) {
 			t.Errorf("step %s: %s %s", s.Name, s.State, s.Message)
 		}
 	}
 	// StartMigration lists accounts, the source step lists them again for
 	// the domain, then every step in order, and the key goes last.
-	want := []string{"list", "plan shopone", "list", "create shopone", "web 0001 php=8.1 quota=1024 rev=1 reason=Website migration", "files 0001 rev=2", "create-db shopone shopone_wp", "create-user-hash shopone shopone_wpu", "grant shopone shopone_wpu shopone_wp", "copy-db shopone_wp", "cron 0001 1", "finish"}
+	want := []string{"list", "plan shopone", "list", "create shopone", "web 0001 php=8.1 quota=1024 rev=1 reason=Website migration", "files 0001 rev=2", "create-db shopone shopone_wp", "create-user-hash shopone shopone_wpu", "grant shopone shopone_wpu shopone_wp", "copy-db shopone_wp", "cron 0001 1", "certificate 0001 rev=3", "finish"}
 	if !slices.Equal(f.order.all, want) {
 		t.Fatalf("order\n got %q\nwant %q", f.order.all, want)
 	}
@@ -616,11 +647,16 @@ func TestWHMMoveAsksCPanelThroughWHM(t *testing.T) {
 	if job.State != StateSucceeded || job.Migration.Via != hostaccounts.ViaWHM || !job.Migration.KeyRemoved {
 		t.Fatalf("job: %+v %+v", job.Migration, job.Error)
 	}
-	if !slices.Equal(f.broker.cpanel, []string{"plan", "files", "database"}) {
+	if !slices.Equal(f.broker.cpanel, []string{"plan", "files", "database", "certificate"}) {
 		t.Fatalf("steps with WHM's answers: %q", f.broker.cpanel)
 	}
+	// The site's certificate, with its key, goes to the broker with the
+	// certificate step alone.
+	if !slices.Equal(f.broker.withSSL, []string{"certificate"}) {
+		t.Fatalf("steps that carried the certificate: %q", f.broker.withSSL)
+	}
 	calls := strings.Join(whm.CallList(), ",")
-	for _, want := range []string{"listaccts", "domainuserdata", "php_get_vhost_versions", "uapi_cpanel", "deletesshkey", "listsshkeys"} {
+	for _, want := range []string{"listaccts", "domainuserdata", "php_get_vhost_versions", "uapi_cpanel", "fetch_vhost_ssl_components", "deletesshkey", "listsshkeys"} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("WHM was not asked %s: %s", want, calls)
 		}
@@ -672,5 +708,98 @@ func TestWHMMoveNeedsTheLoginInMemory(t *testing.T) {
 	var refusal *Refusal
 	if !errors.As(err, &refusal) || !errors.Is(err, ErrConflict) || !strings.Contains(refusal.Detail, "connect with the WHM login again") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// The old site's certificate is copied after the scheduled jobs: the site
+// answers https here at once, the certificate manager records where it
+// came from, and the copy is compared with the old site over https on both
+// sides, the copy through this server's port 443.
+func TestMigrationCopiesTheOldSitesCertificate(t *testing.T) {
+	f := newMigrationFixture(t)
+	withCertificates(t, f.fixture, fakeIssuer{}, fakeInstaller{acc: f.acc})
+	until := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	f.broker.certificate = hostaccounts.MigrateCertificateResult{Copied: true, Issuer: "Old CA",
+		Certificate: hostaccounts.CertificateState{NotAfter: until.Unix(), Fingerprint: strings.Repeat("ab", 32), Names: "shop.example.test,www.shop.example.test"}}
+	job := f.migrate(t)
+	if job.State != StateSucceeded {
+		t.Fatalf("job: %s %+v", job.State, job.Error)
+	}
+	i := slices.IndexFunc(job.Steps, func(s Step) bool { return s.Name == StepSSL })
+	if i < 1 || job.Steps[i-1].Name != StepCron || job.Steps[i+1].Name != StepVerify || job.Steps[i].Title != "Copy the website's certificate" {
+		t.Fatalf("steps: %s", stepStates(job))
+	}
+	want := "Copied the old server's certificate for shop.example.test, issued by Old CA, valid until 2027-03-01: the site answers https on this server already. The panel replaces it with a Let's Encrypt certificate before then, once the domain points here."
+	if job.Steps[i].State != StepDone || job.Steps[i].Message != want {
+		t.Fatalf("step: %+v", job.Steps[i])
+	}
+	if c := job.Migration.Certificate; c == nil || !c.Copied || c.NotAfter != "2027-03-01T12:00:00Z" || c.Issuer != "Old CA" || c.Why != "" {
+		t.Fatalf("record: %+v", c)
+	}
+	if got, ok := f.runner.certificates.(*acme.Manager).CopiedUntil(job.Result.AccountID); !ok || !got.Equal(until) {
+		t.Fatalf("not recorded as copied: %v %v", got, ok)
+	}
+	if job.Result.URL != "https://shop.example.test/" || job.Result.AdminURL != "https://shop.example.test/wp-admin/" {
+		t.Fatalf("result: %+v", job.Result)
+	}
+	if !slices.Contains(f.order.all, "certificate 0001 rev=3") {
+		t.Fatalf("order %q", f.order.all)
+	}
+	https := func(o migrateverify.Options) bool {
+		return o.Old == "https://shop.example.test" && o.New == "https://shop.example.test" && o.NewConnect == "127.0.0.1:443" && o.NewClient == "127.0.0.1" && !o.InsecureNewTLS
+	}
+	if len(f.verify) != 1 || !https(f.verify[0]) {
+		t.Fatalf("verify: %+v", f.verify)
+	}
+	if _, err := f.runner.VerifyMigration(context.Background(), job.ID, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	f.runner.Wait()
+	if len(f.verify) != 2 || !https(f.verify[1]) {
+		t.Fatalf("a later comparison: %+v", f.verify)
+	}
+}
+
+// A certificate that cannot be copied leaves the site on http and the move
+// goes on: the step says why, and that https follows once the domain
+// points here; the old server's own words stay in the activity log.
+func TestMigrationGoesOnWithoutTheCertificate(t *testing.T) {
+	follows := " The site uses http on this server until shop.example.test points here; then the panel gets it a certificate by itself."
+	for _, c := range []struct {
+		name    string
+		result  hostaccounts.MigrateCertificateResult
+		err     error
+		certs   bool
+		message string
+		log     string
+	}{
+		{name: "expired", certs: true, result: hostaccounts.MigrateCertificateResult{Refused: "expired", Detail: "It expired on 2026-10-01."},
+			message: "The old server's certificate was not copied. It expired on 2026-10-01." + follows},
+		{name: "none", certs: true, message: "The old server has no certificate for shop.example.test." + follows},
+		{name: "certificates off", result: hostaccounts.MigrateCertificateResult{Refused: "self_signed", Detail: "It is self-signed, so visitors' browsers would warn about it."},
+			message: "The old server's certificate was not copied. It is self-signed, so visitors' browsers would warn about it. The site uses http on this server: certificates are not set up here."},
+		{name: "a failing cPanel tool", certs: true, err: &hostaccounts.MigrationError{Step: "cpanel_tool", Output: "whmapi1: refused to run"},
+			message: "The old server's certificate was not copied: " + cpanelTools.why + follows, log: "whmapi1: refused to run"},
+	} {
+		f := newMigrationFixture(t)
+		if c.certs {
+			withCertificates(t, f.fixture, fakeIssuer{}, fakeInstaller{acc: f.acc})
+		}
+		f.broker.certificate, f.broker.certErr = c.result, c.err
+		job := f.migrate(t)
+		i := slices.IndexFunc(job.Steps, func(s Step) bool { return s.Name == StepSSL })
+		if job.State != StateSucceeded || job.Steps[i].State != StepSkipped || job.Steps[i].Message != c.message {
+			t.Errorf("%s: %s %+v", c.name, job.State, job.Steps[i])
+			continue
+		}
+		if m := job.Migration; m.Certificate == nil || m.Certificate.Copied || m.Certificate.Why == "" || strings.Contains(m.Certificate.Why, "refused to run") {
+			t.Errorf("%s: record %+v", c.name, m.Certificate)
+		}
+		if job.Result.URL != "http://shop.example.test/" || len(f.verify) != 1 || f.verify[0].New != "http://shop.example.test" || f.verify[0].NewConnect != "127.0.0.1:80" {
+			t.Errorf("%s: result %+v verify %+v", c.name, job.Result, f.verify)
+		}
+		if c.log != "" && !slices.ContainsFunc(job.Migration.Activity, func(a Activity) bool { return strings.Contains(a.What, c.log) }) {
+			t.Errorf("%s: activity %+v", c.name, job.Migration.Activity)
+		}
 	}
 }

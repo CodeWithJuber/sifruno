@@ -41,9 +41,12 @@ type Broker struct {
 // Certificates gets a certificate for the site and installs it on the
 // account at its revision, answering the account's new revision and the
 // certificate's expiry. acme.Manager is the real one. A failure wraps one of
-// acme's error kinds; the job explains it and carries on over http.
+// acme's error kinds; the job explains it and carries on over http. Copied
+// records that a moved site's certificate, valid until notAfter, was copied
+// from its old server, so the renewal loop replaces it in time.
 type Certificates interface {
 	Secure(ctx context.Context, accountID, domain string, revision uint64) (uint64, time.Time, error)
+	Copied(accountID, domain string, notAfter time.Time)
 }
 
 // Databases is the part of dbhost a job uses. The creates are strict: a

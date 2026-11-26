@@ -15,7 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { dateLabel } from "@/lib/api";
 import { acceptMigration, cancelSource, certificateToConfirm, checkAcceptReason, checkOptionalSSHPort, checkSourceHost, checkSourcePort, checkWHMAddress, checkWHMSecret, clearStaleKey, confirmFingerprint, connectWHM, getMigrationJob, listSourceAccounts, listStaleKeys, openSource, preferredHostKey, readyMigration, startMigration, verifyMigration } from "@/lib/migration-api";
 import type { MigrationSource, SourceAccount, StaleKey, WHMCertificate, WHMLogin } from "@/lib/migration-api";
-import { hostsLine } from "@/lib/migration-record";
+import { certificateNote, hostsLine } from "@/lib/migration-record";
 import type { MigrationRecord } from "@/lib/migration-record";
 import { jobProgress, validJobId } from "@/lib/wordpress-api";
 import type { WebsiteJob } from "@/lib/wordpress-api";
@@ -507,7 +507,7 @@ function Comparison({ job, onChanged }: { job: WebsiteJob; onChanged: (job: Webs
         <TableBody>{m.dns.map((r) => <TableRow key={r.name}><TableCell className="break-all">{r.name}</TableCell><TableCell>{r.type}</TableCell><TableCell><code>{r.value}</code></TableCell></TableRow>)}</TableBody>
       </Table>
       <p className="text-sm text-muted-foreground">Leave the MX and other mail records as they are: email stays on the old server. Keep the old server running for 14 days, so you can switch back.</p>
-      <p className="text-sm text-muted-foreground">Once these records point here, the panel gets the website's certificate by itself, usually within the hour, when certificates are set up on this server. Until then the website uses http.</p>
+      <p className="text-sm text-muted-foreground" data-testid="move-certificate">{certificateNote(m)}</p>
     </div>}
     <div role="status" className="sr-only">{busy}</div>
   </section>;

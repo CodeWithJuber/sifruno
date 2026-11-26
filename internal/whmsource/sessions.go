@@ -2,6 +2,7 @@ package whmsource
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -95,6 +96,16 @@ func (s *Sessions) Answers(ctx context.Context, id, user string) (*hostaccounts.
 		return nil, errNoLogin
 	}
 	return v.client.Answers(ctx, user)
+}
+
+// Certificate fetches, through WHM, the certificate of domain's virtual
+// host, for the broker's copy of it (Client.Certificate).
+func (s *Sessions) Certificate(ctx context.Context, id, domain string) (json.RawMessage, error) {
+	v, ok := s.get(id)
+	if !ok {
+		return nil, errNoLogin
+	}
+	return v.client.Certificate(ctx, domain)
 }
 
 // Finisher is the broker's end of a migration.

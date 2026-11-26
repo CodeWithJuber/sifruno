@@ -43,6 +43,7 @@ var migrationStepTitles = []stepTitle{
 	{StepFiles, "Copy the website's files"},
 	{StepDatabase, "Copy the databases"},
 	{StepCron, "Copy the scheduled jobs"},
+	{StepSSL, "Copy the website's certificate"},
 	{StepVerify, "Compare the copy with the old site"},
 	{StepKey, "Remove the migration key from the old server"},
 }
@@ -103,11 +104,28 @@ type Migration struct {
 	// tell what an address-list folder should answer it. Empty when the old
 	// server did not say: those folders' checks then fail.
 	ClientAddress string `json:"client_address,omitempty"`
+	// Certificate says whether the old site's certificate was copied, and
+	// until when it is valid, or why not; nil before that step ran.
+	Certificate *MigrationCertificate `json:"certificate,omitempty"`
+}
+
+// MigrationCertificate is the certificate step's outcome: Copied with the
+// certificate's expiry (RFC 3339) and issuer, or Why it was not copied, in
+// plain words. It never holds the key.
+type MigrationCertificate struct {
+	Copied   bool   `json:"copied"`
+	NotAfter string `json:"not_after,omitempty"`
+	Issuer   string `json:"issuer,omitempty"`
+	Why      string `json:"why,omitempty"`
 }
 
 // clone copies the record so callers never share its slices.
 func (m *Migration) clone() *Migration {
 	c := *m
+	if m.Certificate != nil {
+		cert := *m.Certificate
+		c.Certificate = &cert
+	}
 	c.Databases = slices.Clone(m.Databases)
 	c.DatabaseUsers = slices.Clone(m.DatabaseUsers)
 	c.Tables = slices.Clone(m.Tables)
@@ -200,6 +218,7 @@ type MigrationBroker interface {
 	PlanMigration(context.Context, string, hostaccounts.MigrationPlanInput, string) (hostaccounts.MigrationPlan, error)
 	MigrateFiles(context.Context, string, hostaccounts.MigrateFilesInput, string) (hostaccounts.MigrateFilesResult, error)
 	MigrateDatabase(context.Context, string, hostaccounts.MigrateDatabaseInput, string) (hostaccounts.MigrateDatabaseResult, error)
+	MigrateCertificate(context.Context, string, hostaccounts.MigrateCertificateInput, string) (hostaccounts.MigrateCertificateResult, error)
 	FinishMigration(context.Context, string, hostaccounts.MigrationFinishInput, string) (hostaccounts.MigrationFinishResult, error)
 	ClearStaleMigrationKey(context.Context, string, hostaccounts.MigrationFinishInput, string) error
 	SetCron(context.Context, string, hostaccounts.CronInput, string) (hostaccounts.CronResult, error)
@@ -350,7 +369,7 @@ func (j *run) executeMigration(ctx context.Context) {
 		}
 		j.secrets = nil
 	}()
-	steps := []func(context.Context) (string, *stepError){j.migrateSource, j.migrateAccount, j.migrateWeb, j.migrateFiles, j.migrateDatabases, j.migrateCron}
+	steps := []func(context.Context) (string, *stepError){j.migrateSource, j.migrateAccount, j.migrateWeb, j.migrateFiles, j.migrateDatabases, j.migrateCron, j.migrateCertificate}
 	failed := false
 	for i, step := range steps {
 		j.begin(i)
@@ -372,6 +391,9 @@ func (j *run) executeMigration(ctx context.Context) {
 	if !failed {
 		j.job.State = StateSucceeded
 		scheme := "http://"
+		if c := j.job.Migration.Certificate; c != nil && c.Copied {
+			scheme = "https://"
+		}
 		j.job.Result = &Result{URL: scheme + j.job.Domain + "/", AccountID: j.accountID}
 		if j.migration.wordpress {
 			j.job.Result.AdminURL = scheme + j.job.Domain + "/wp-admin/"
@@ -737,6 +759,81 @@ func (j *run) migrateCron(ctx context.Context) (string, *stepError) {
 	return fmt.Sprintf("Copied %d scheduled job(s); they run as the site's user on this server's clock.", len(jobs)), nil
 }
 
+// migrateCertificate copies the old site's certificate, so the moved site
+// answers https here before its DNS changes. It never fails the move: a
+// certificate the broker does not copy, or a step that fails, leaves the
+// site on http with the step skipped and the reason, and the renewal loop
+// gets a certificate once the domain points here. For a WHM move the
+// certificate, with its key, is fetched through WHM for this step alone and
+// sent with no other request.
+func (j *run) migrateCertificate(ctx context.Context) (string, *stepError) {
+	i := j.index(StepSSL)
+	m, mr := j.job.Migration, j.migration
+	answers := mr.cpanel
+	if m.Via == hostaccounts.ViaWHM {
+		ssl, err := mr.options.WHM.Certificate(ctx, m.Source, j.job.Domain)
+		if err != nil {
+			j.certificateSkipped(i, hostaccounts.MigrateCertificateResult{}, err)
+			return "", nil
+		}
+		defer clear(ssl)
+		withSSL := *mr.cpanel
+		withSSL.SSL = ssl
+		answers = &withSSL
+	}
+	res, err := mr.options.Broker.MigrateCertificate(ctx, j.accountID, hostaccounts.MigrateCertificateInput{Migration: m.Source, ExpectedRevision: j.revision, CPanel: answers, Reason: migrateReason}, j.actor)
+	if err != nil {
+		// The broker may have installed it after the panel stopped
+		// waiting, which moves the account's revision.
+		j.refreshRevision(ctx)
+		j.certificateSkipped(i, res, err)
+		return "", nil
+	}
+	j.revision = res.Revision
+	if !res.Copied {
+		j.certificateSkipped(i, res, nil)
+		return "", nil
+	}
+	until := time.Unix(res.Certificate.NotAfter, 0).UTC()
+	m.Certificate = &MigrationCertificate{Copied: true, NotAfter: until.Format(time.RFC3339), Issuer: clip(res.Issuer)}
+	renewal := " The panel replaces it with a Let's Encrypt certificate before then, once the domain points here."
+	if certs := j.runner.certificates; certs != nil {
+		certs.Copied(j.accountID, j.job.Domain, until)
+	} else {
+		renewal = " Certificates are not set up on this server, so it is not renewed here."
+	}
+	issuer := ""
+	if res.Issuer != "" {
+		issuer = ", issued by " + res.Issuer
+	}
+	return clip("Copied the old server's certificate for " + j.job.Domain + issuer + ", valid until " + until.Format(time.DateOnly) + ": the site answers https on this server already." + renewal), nil
+}
+
+// certificateSkipped ends the certificate step without one: it says why,
+// and when https comes. A failure's technical words go to the activity
+// log only.
+func (j *run) certificateSkipped(i int, res hostaccounts.MigrateCertificateResult, err error) {
+	var why string
+	switch {
+	case err != nil:
+		f := j.migrationFailure(err)
+		why = "The old server's certificate was not copied: " + f.why
+		if f.technical != "" {
+			j.activity(j.actor, "The old site's certificate was not copied ("+f.technical+").")
+		}
+	case res.Refused == "no_certificate" && res.Detail != "":
+		why = res.Detail
+	default:
+		why = strings.TrimSpace("The old server's certificate was not copied. " + res.Detail)
+	}
+	next := " The site uses http on this server until " + j.job.Domain + " points here; then the panel gets it a certificate by itself."
+	if j.runner.certificates == nil {
+		next = " The site uses http on this server: certificates are not set up here."
+	}
+	j.job.Migration.Certificate = &MigrationCertificate{Why: clip(why)}
+	j.skip(i, clip(why+next))
+}
+
 // verifyStep compares the copy with the old site. It never undoes the
 // copy: a red line is for a person to fix or accept.
 func (j *run) verifyStep(ctx context.Context) {
@@ -761,8 +858,18 @@ func (r *Runner) runVerify(ctx context.Context, job Job) VerifySummary {
 	o := r.migrationOptions()
 	ctx, cancel := context.WithTimeout(ctx, verifyLimit)
 	defer cancel()
-	opts := migrateverify.Options{Old: "http://" + job.Domain, New: "http://" + job.Domain, NewConnect: o.Connect, Probes: job.Migration.Probes,
-		OldClient: job.Migration.ClientAddress, NewClient: copyClient(o.Connect)}
+	// A copy that answers https with the old site's own certificate is
+	// compared over https on both sides, the copy through this server's
+	// port 443: its "Always use HTTPS" sends plain http there, which the
+	// old site may not do, and the certificate is checked on the way.
+	scheme, connect := "http://", o.Connect
+	if c := job.Migration.Certificate; c != nil && c.Copied {
+		if host, _, err := net.SplitHostPort(o.Connect); err == nil {
+			scheme, connect = "https://", net.JoinHostPort(host, "443")
+		}
+	}
+	opts := migrateverify.Options{Old: scheme + job.Domain, New: scheme + job.Domain, NewConnect: connect, Probes: job.Migration.Probes,
+		OldClient: job.Migration.ClientAddress, NewClient: copyClient(connect)}
 	if job.Migration.WordPress {
 		opts.Paths = []string{"/wp-login.php", "/wp-admin/"}
 	}

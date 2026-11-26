@@ -70,6 +70,16 @@ test("a domain is checked as the server checks it", () => {
   assert.match(api.checkDomain("b.example.com", full), /at most 15/);
 });
 
+test("the form hints' example domain never says www.www.", () => {
+  assert.equal(api.exampleOtherDomain("example.com"), "www.example.com");
+  assert.equal(api.exampleOtherDomain("shop.example.com"), "www.shop.example.com");
+  // A site whose domain starts with www. gets the domain without it.
+  assert.equal(api.exampleOtherDomain("www.example.com"), "example.com");
+  assert.equal(api.exampleOtherDomain("www.shop.example.co.uk"), "shop.example.co.uk");
+  // Nothing sensible is left without the www.: a plain example instead.
+  assert.equal(api.exampleOtherDomain("www.example"), "example.net");
+});
+
 test("a redirect's source and target are checked, with no way into the server's config", () => {
   const site = api.parseSiteDomains(detail());
   assert.equal(api.redirectKind("/x"), "path");

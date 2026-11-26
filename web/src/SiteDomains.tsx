@@ -14,7 +14,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { addDomain, addRedirect, aliasHttps, alwaysHttps, alwaysHttpsOutcome, checkDomain, checkRedirectFrom, checkRedirectTo, getSiteDomains, maxAliases, maxPathLength, maxRedirects, maxTargetLength, normalizeDomain, redirectKind, removeDomain, removeRedirect, setAlwaysHttps, SiteDomainsApiError, statusLabel } from "@/lib/site-domains-api";
+import { addDomain, addRedirect, aliasHttps, alwaysHttps, alwaysHttpsOutcome, checkDomain, checkRedirectFrom, checkRedirectTo, exampleOtherDomain, getSiteDomains, maxAliases, maxPathLength, maxRedirects, maxTargetLength, normalizeDomain, redirectKind, removeDomain, removeRedirect, setAlwaysHttps, SiteDomainsApiError, statusLabel } from "@/lib/site-domains-api";
 import type { AliasHttps, SiteDomains as Domains, WebsiteRedirect } from "@/lib/site-domains-api";
 import { useShell } from "@/shell/context";
 // The busy ring a working button shows, as on the wizard's screens.
@@ -199,7 +199,7 @@ function AddDomainForm({ site, busy, announcer, onSubmit }: { site: Domains; bus
       <Field data-invalid={field.error ? true : undefined}>
         <FieldLabel htmlFor="add-domain-name">Domain</FieldLabel>
         <FieldDescription id="add-domain-name-hint" className="text-start">
-          Another domain for this website, such as www.{site.domain} or a domain you also registered. It shows the same site. Point its DNS at this server too.
+          Another domain for this website, such as {exampleOtherDomain(site.domain)} or a domain you also registered. It shows the same site. Point its DNS at this server too.
         </FieldDescription>
         <Input {...field.props} name="domain" className={`${control} user-invalid:border-destructive`} type="text" inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={253} required
           value={domain} onChange={(event) => { field.markEdited(); setDomain(event.target.value); }} data-testid="add-domain-input" />
@@ -232,7 +232,7 @@ function AddRedirectForm({ site, busy, announcer, onSubmit }: { site: Domains; b
       <Field data-invalid={fromField.error ? true : undefined}>
         <FieldLabel htmlFor="add-redirect-from">Redirect from</FieldLabel>
         <FieldDescription id="add-redirect-from-hint" className="text-start">
-          A path on this website, such as /old-page, or one of its domains to send the whole domain, such as www.{site.domain}. Up to {maxPathLength} characters for a path.
+          A path on this website, such as /old-page, or one of its domains to send the whole domain, such as {exampleOtherDomain(site.domain)}. Up to {maxPathLength} characters for a path.
         </FieldDescription>
         <Input {...fromField.props} name="from" className={`${control} font-mono user-invalid:border-destructive`} type="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={253} required
           value={from} onChange={(event) => { fromField.markEdited(); setFrom(event.target.value); }} data-testid="add-redirect-from" />
@@ -513,7 +513,7 @@ export function SiteDomains({ accountId }: { accountId: string }) {
           <EmptyHeader>
             <EmptyMedia variant="icon"><Globe aria-hidden="true" /></EmptyMedia>
             <EmptyTitle>No redirects yet</EmptyTitle>
-            <EmptyDescription>Send an old page to its new address, or a whole domain, such as www.{site.domain}, to another.</EmptyDescription>
+            <EmptyDescription>Send an old page to its new address, or a whole domain, such as {exampleOtherDomain(site.domain)}, to another.</EmptyDescription>
           </EmptyHeader>
         </Empty>
         : site.redirects.length > 0 && <ul role="list" className="flex flex-col divide-y divide-border rounded-md border border-border" data-testid="redirects-list">

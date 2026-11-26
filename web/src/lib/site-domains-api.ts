@@ -72,6 +72,15 @@ export function checkDomain(value: string, site?: Pick<SiteDomains, "domain" | "
   return undefined;
 }
 
+// The other domain the form hints name as an example: www.<domain>, or for
+// a site whose domain starts with www. that domain without it, so a hint
+// never says www.www.example.com.
+export function exampleOtherDomain(domain: string): string {
+  if (!domain.startsWith("www.")) return `www.${domain}`;
+  const bare = domain.slice("www.".length);
+  return bare.includes(".") ? bare : "example.net";
+}
+
 // A redirect's source: a path (it starts with /) or a domain of the site.
 export const redirectKind = (from: string): "path" | "domain" => from.trim().startsWith("/") ? "path" : "domain";
 
@@ -166,9 +175,9 @@ export function alwaysHttps(site: Pick<SiteDomains, "domain" | "state" | "https"
     if (site.aliases.some((alias) => alias.https === "off")) {
       return { kind: "no-certificates-here", why: "Certificates are not set up on this server, so the website has none and stays on http://.", next: "Ask whoever runs this server to set up certificates." };
     }
-    // The panel retries only a site it has tried before (one made before
-    // certificates were set up it leaves alone), so the step ends with who
-    // to ask.
+    // The panel asks for one by itself once the domain points here, but
+    // one may still not come (the certificate authority refuses or limits
+    // it), so the step ends with who to ask.
     return { kind: "no-certificate", why: "This website has no certificate yet, so visitors cannot be sent to https:// without a security warning.", next: `Get a certificate on this tab first: point ${site.domain} at this server with the DNS record below. The panel tries every few hours; if no certificate comes within a day, ask whoever runs this server.` };
   }
   const until = site.https.not_after ? new Date(site.https.not_after) : undefined;

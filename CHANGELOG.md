@@ -143,6 +143,8 @@
 
 ### Fixed
 
+- phpMyAdmin no longer answers "Token mismatch": the panel's proxy now passes
+  phpMyAdmin's own `__Secure-` session cookies, which it uses over HTTPS.
 - The database tools sent each SQL statement to the mysql client as an
   argument, so a statement that sets a password exposed it to every local
   user; the SQL now goes on stdin (needs human review).

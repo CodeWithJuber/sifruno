@@ -1,0 +1,468 @@
+# phpMyAdmin's "Error: Token mismatch": cause, fix, and the fix on a real server, 2026-11-26
+#
+# Server: Linode 112009633 (g6-standard-2, de-fra-2), made by scripts/ci/nightly-fresh-install.sh with
+# SIFRUNO_NIGHTLY_KEEP=1 and the owner's admin key added. AlmaLinux 9.8, SELinux Enforcing,
+# openlitespeed-1.9.4-3.el9, lsphp83-8.3.37-1.el9, mariadb-server-10.11.18, phpMyAdmin 5.2.3 (the installer's
+# pin). Deleted at the end (Part 7). The runner is the machine that ran Chrome 158 (agent-browser 0.45.0) over
+# the internet; the Cloud Firewall admitted 8443 and 8444 from the runner only, 80 and 443 from anywhere.
+#
+# The cause. phpMyAdmin 5.2.2 and later name their cookies __Secure-NAME_https when the request is HTTPS
+# (ChangeLog 5.2.2, issue #19141; libraries/classes/Config.php, getCookieName). Behind phpMyAdmin's origin
+# every request is HTTPS (the proxy sets X-Forwarded-Proto: https), so phpMyAdmin's session cookie is
+# __Secure-phpMyAdmin_https (Part 2). The proxy's allow list (1492930) passed SifrunoPhpMyAdminSignon,
+# phpMyAdmin* and pma* only, so it dropped that cookie from every answer and every request. Each request
+# then started a new phpMyAdmin session with a new token (Session::setUp), and the page's own AJAX POSTs,
+# which carry the token of the session that drew the page, failed the check in Common::run with
+# "Error: Token mismatch". Signing in still worked on every request, because the signon session cookie got
+# through; that is why the database list and the tables showed. Log out failed the same way (LogoutController
+# sends a mismatched POST back to the home page), and a SQL query from the SQL tab was refused.
+# Ruled out on the way: the signon script and session names (the fix changes neither), a token in the
+# redirect URL (the script redirects to /index.php with no query), the cookie path and SameSite (Path=/,
+# SameSite=Strict, and every request is same-origin), and the first request being a POST (it is a GET; the
+# failing requests are the page's later POSTs, Part 3).
+#
+# The fix: 7a1c740 "Pass phpMyAdmin its own session cookie over HTTPS (needs human review)": the allow list
+# also takes __Secure-phpMyAdmin* and __Secure-pma*, and still no other name (not the panel's, not the
+# admission cookie, no other __Secure- or __Host- name). 3a7c39d adds the same three checks to the dev-VM
+# proof (proof.sh phpmyadmin), which passed before because it never looked at phpMyAdmin's first page.
+#
+# Releases: the branch head 203b3a4 (fresh install, Parts 1 to 3) and 7a1c740 (as an upgrade, Parts 4 to 6),
+# each built with scripts/install/build-release.sh. Part 6's proof.sh builds its own panel from the checkout.
+#
+# Edits to the captured output: the server's address is written SERVER_IP (also in www.SERVER_IP.sslip.io),
+# the temporary users' names end in <hex>, scratch paths are SCRATCH/, trailing spaces are removed. No cookie
+# value, token, code or password is printed by the scripts; Chrome's HAR files stayed on the runner.
+#
+# Screenshots in phpmyadmin-token/: before-1440-sql-token-mismatch.png (Part 3) and the after-fix ones named
+# in Part 5. The panel's own pages are not included, because they show the website's name with the address.
+
+# Part 1. The server: a fresh install of the branch head 203b3a4, the panel's HTTPS address, the wizard's site
+# scripts/ci/nightly-fresh-install.sh with SIFRUNO_NIGHTLY_KEEP=1 made the Linode and ran fresh-install-test.sh:
+== 2026-11-26T19:16:02Z Linode 112009633 created
+== 2026-11-26T19:16:28Z Firewall 233390604 is on Linode 112009633
+PASS  sifruno-broker.service is active
+PASS  sifruno.service is active
+PASS  both units start at boot
+PASS  the panel answers on 127.0.0.1:8080
+PASS  the panel runs as sifpanel
+PASS  the broker socket exists
+PASS  the socket is sifpanel's, mode 0600
+PASS  hostbroker --check-host passes
+PASS  SELinux is still enforcing
+PASS  the programs have the SELinux type bin_t
+PASS  the broker runs as unconfined_service_t, not systemd's init_t
+PASS  the installed broker creates an account
+PASS  its Linux user exists
+PASS  the installed broker deletes it again
+PASS  the second run succeeds
+PASS  it reports that nothing changed
+PASS  both units are still active
+PASS: the fresh-install test passed 17 checks on a new g6-standard-2 Linode (linode/almalinux9). Transcript: SCRATCH/fresh-install.txt
+KEPT: Linode 112009633 (sifruno-owner-test-pma1126a, SERVER_IP) and firewall 233390604 stay on the account and are billed until they are deleted.
+
+## The admin made on the server's loopback with the access key (first-run setup), then the same installer again
+$ bash /root/sifruno-release/sifruno-linux-amd64/install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io
+exit status 0
+$ firewall-cmd --add-port=80/tcp --add-port=443/tcp --add-port=8443/tcp --add-port=8444/tcp   (this boot only)
+$ ss -ltnp | grep -E ':(8443|8444|80|443|8090) '
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=19631,fd=14),("litespeed",pid=19627,fd=14))
+LISTEN 0      4096       127.0.0.1:8090      0.0.0.0:*    users:(("litespeed",pid=19630,fd=13),("litespeed",pid=19627,fd=13))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=19631,fd=12),("litespeed",pid=19627,fd=12))
+LISTEN 0      4096         0.0.0.0:80        0.0.0.0:*    users:(("litespeed",pid=19630,fd=11),("litespeed",pid=19627,fd=11))
+LISTEN 0      4096               *:8444            *:*    users:(("sifruno",pid=19575,fd=12))
+LISTEN 0      4096               *:8443            *:*    users:(("sifruno",pid=19575,fd=8))
+## The New website wizard makes the WordPress site (scripts/devvm/proofs/public-ca-wizard.sh, from the runner)
+PASS  the domain resolves in public DNS to the panel's server
+PASS  the panel serves the self-signed certificate the login file names
+PASS  a link from another site opens the panel (cross-site navigation answers 200)
+PASS  before the wizard, https://www.SERVER_IP.sslip.io/ has no certificate this machine trusts
+PASS  the panel's sign-in form opens at https://SERVER_IP:8443/websites
+PASS  the admin owner signs in with password and authenticator code
+PASS  Websites, New website opens the wizard at /websites/new
+PASS  WordPress is the chosen website type
+  the job page shows its last screen (succeeded) 29.8 s after Create
+PASS  the job succeeds
+PASS  Create to the job's last screen: 29.8 s, within 120 s
+  first HTTPS 200 from https://www.SERVER_IP.sslip.io/, system trust store: 20.1 s after Create
+PASS  Create to the site's first HTTPS 200: 20.1 s, within 120 s
+PASS  that first 200 is the new WordPress site
+PASS  the job's HTTPS step is done
+PASS  the last screen says the site uses https
+PASS  Open site on the last screen is https://www.SERVER_IP.sslip.io/
+PASS  curl -sv https://www.SERVER_IP.sslip.io/ exits 0 with no CA but the system's
+PASS  curl says: SSL certificate verify ok
+PASS  the page is the WordPress site
+PASS  openssl s_client -verify_return_error exits 0
+PASS  openssl says: Verify return code: 0 (ok)
+PASS  the issuer is Let's Encrypt's production CA (not staging, not Pebble)
+PASS  the certificate names exactly www.SERVER_IP.sslip.io
+PASS  it was issued during this run and is valid for at least 30 more days
+PASS  Chrome opens https://www.SERVER_IP.sslip.io/ without a certificate warning and shows the site
+PASS  Websites lists www.SERVER_IP.sslip.io as Live
+PASS  its https badge is on, with the certificate's expiry
+# Times from pressing Create: last screen 29.8 s, first HTTPS 200 20.1 s (limit 120 s)
+
+# Part 2. The cookies phpMyAdmin sets behind phpMyAdmin's origin, asked on the server at its loopback listener
+# (the proxy always sends X-Forwarded-Proto: https, because the origin is HTTPS only)
+$ curl -sS -D - -o /dev/null -H "X-Forwarded-Proto: https" http://127.0.0.1:8090/index.php   (values replaced by ...)
+  HTTP/1.1 302 Found
+  set-cookie: __Secure-pma_lang_https=...; expires=Sat, 26 Dec 2026 19:26:31 GMT; Max-Age=2592000; path=/; secure; HttpOnly; SameSite=Strict
+  set-cookie: __Secure-phpMyAdmin_https=...; path=/; secure; HttpOnly; SameSite=Strict
+  location: /sifruno-signon.php
+$ the same without X-Forwarded-Proto (plain http)
+  HTTP/1.1 302 Found
+  set-cookie: pma_lang=...; expires=Sat, 26 Dec 2026 19:26:31 GMT; Max-Age=2592000; path=/; HttpOnly; SameSite=Strict
+  set-cookie: phpMyAdmin=...; path=/; HttpOnly; SameSite=Strict
+  location: /sifruno-signon.php
+  session files: 2
+
+# Part 3. Before the fix (the branch head 203b3a4): Chrome on the runner, the panel's real Open phpMyAdmin button
+# (scratch script pma-proof.sh: sign in with password and authenticator code, Databases tab, the button, the new
+# tab; Chrome's HAR is read for the routes and answers only). The screenshot 1440-phpmyadmin-select.png is in
+# phpmyadmin-token/before-1440-sql-token-mismatch.png; the others stayed on the runner. The first run of the same
+# script, a few minutes earlier, showed the same failures and is not shown.
+## Browser (before): sign in to the panel at https://SERVER_IP:8443/ and press Open phpMyAdmin
+PASS  the admin signs in to the panel (password and authenticator code)
+  the Databases tab of www.SERVER_IP.sslip.io at 1440 px: button "Open phpMyAdmin
+(opens in a new tab)"
+## phpMyAdmin's first page at 1440 px
+  the tab: https://SERVER_IP:8444/index.php, title "127.0.0.1:8090 / This server | phpMyAdmin 5.2.3"
+  databases in phpMyAdmin's navigation: information_schema www_wp
+PASS  phpMyAdmin is signed in and lists the website's database www_wp
+  error messages on the page: Error: Token mismatch
+FAIL  phpMyAdmin's first page shows no error (1440 px)
+  cookies the browser holds for SERVER_IP (names only): SifrunoPhpMyAdminSignon __Host-sifruno_phpmyadmin
+  screenshot: 1440-phpmyadmin-first-page.png
+## Browse wp_options, then a SELECT in the SQL tab
+  wp_options: 25 rows shown;  Showing rows 0 - 24 (322 total, Query took 0.0002 seconds.)
+  error messages: Error: Token mismatch
+FAIL  phpMyAdmin browses wp_options with no error
+  screenshot: 1440-phpmyadmin-browse-wp_options.png
+  SELECT option_name, option_value FROM wp_options WHERE option_name IN ('siteurl', 'blogname'): no rows
+  error messages: Error: Token mismatch
+FAIL  a SELECT in the SQL tab answers with its rows and no error
+  screenshot: 1440-phpmyadmin-select.png
+## Sign out in phpMyAdmin
+  the tab: /index.php?route=/, heading ""
+FAIL  phpMyAdmin's Log out ends on the page that says you signed out
+  screenshot: 1440-phpmyadmin-signed-out.png
+  /index.php in that tab afterwards answers 200
+FAIL  after sign-out phpMyAdmin's origin no longer lets this browser in (401)
+## phpMyAdmin's pages and AJAX requests in that run, from Chrome's HAR (kept on the runner, not printed)
+  GET /sifruno-signon.php?code=... -> 303
+  GET /index.php -> 200
+  POST /index.php?route=/config/get -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/navigation&ajax_request=1 -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/get -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/set -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/set -> 200   answer: Error: Token mismatch
+  GET /index.php?route=/database/structure&db=www_wp&ajax_request=true -> 200
+  POST /index.php?route=/navigation&ajax_request=1 -> 200   answer: Error: Token mismatch
+  GET /index.php?route=/sql&db=www_wp&table=wp_options&ajax_request=true -> 200
+  POST /index.php?route=/navigation&ajax_request=1 -> 200   answer: Error: Token mismatch
+  GET /index.php?route=/recent-table&ajax_request=1 -> 200
+  GET /index.php?route=/table/sql&db=www_wp&table=wp_options -> 200
+  POST /index.php?route=/config/get -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/navigation&ajax_request=1 -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/get -> 200   answer: Error: Token mismatch
+  GET /index.php?route=/recent-table&ajax_request=1 -> 200
+  POST /index.php?route=/lint -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/set -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/set -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/import -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/lint -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/logout -> 302
+  GET /index.php?route=/ -> 200
+  POST /index.php?route=/config/get -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/navigation&ajax_request=1 -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/get -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/set -> 200   answer: Error: Token mismatch
+  POST /index.php?route=/config/set -> 200   answer: Error: Token mismatch
+  GET /index.php -> 200
+  21 POSTs to phpMyAdmin's origin; 20 answers said "Error: Token mismatch"
+FAIL  no answer from phpMyAdmin said Token mismatch (first open, table, SELECT, sign-out)
+  phpMyAdmin's session files on the server: 38 before the first open, 68 after it
+## Open phpMyAdmin again from the panel, at 390 px
+  the Databases tab of www.SERVER_IP.sslip.io at 390 px: button "Open phpMyAdmin
+(opens in a new tab)"
+  the tab: https://SERVER_IP:8443/websites/sites/46e993c025040b0886f402b4a3b68825/databases
+# Added by hand: no tab opened. The panel's Databases tab said "phpMyAdmin did not open. You already have 3
+# phpMyAdmin sign-ins open for this website, the most one person may have. Each ends one hour after it was
+# opened: use a phpMyAdmin tab you already have open, or try again later." (the per-person limit: this run's
+# first open and an earlier reproduction's two; read from its 390 px screenshot, which stays on the runner
+# because it shows the address). So the checks below read the panel's page, not phpMyAdmin.
+  databases in phpMyAdmin's navigation: none read
+FAIL  opened again, phpMyAdmin is signed in and lists www_wp
+  error messages on the page: none
+PASS  phpMyAdmin's first page shows no error (390 px)
+  page width / window width: 390 390
+  screenshot: 390-phpmyadmin-first-page.png
+  cookies the browser holds for SERVER_IP (names only): SifrunoPhpMyAdminSignon __Host-sifruno_phpmyadmin
+## phpMyAdmin's pages and AJAX requests in the second open, from Chrome's HAR
+  0 POSTs to phpMyAdmin's origin; 0 answers said "Error: Token mismatch"
+PASS  no answer from phpMyAdmin said Token mismatch (second open)
+  phpMyAdmin's session files on the server after the second open: 68 (before it: 68)
+## On the server: the temporary users
+  temporary SifrunoPMA_ users: 3
+# 7 check(s) failed
+
+# Part 4. The fix installed: the release of 7a1c740 over the branch head's install (an upgrade), same options
+$ echo '<sha256>  /root/release-fix.tar.gz' | sha256sum -c -
+/root/release-fix.tar.gz: OK
+$ bash /root/release-7a1c740/sifruno-linux-amd64/install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io
+exit status 0, 7 s
+Changed in this run:
+  - program /usr/local/lib/sifruno/bin/sifruno installed
+  - sifruno-broker.service restarted with the new files
+  - sifruno.service restarted with the new files
+
+# Part 5. After the fix: the same script, the same browser steps. Its first open came after waiting for two of
+# Part 3's sign-ins to end (at most 3 open per website and person). Screenshots in phpmyadmin-token/:
+# 1440-phpmyadmin-first-page.png as after-1440-first-page.png, 1440-phpmyadmin-browse-wp_terms.png as
+# after-1440-browse-wp_terms.png, 1440-phpmyadmin-signed-out.png as after-1440-signed-out.png and
+# 390-phpmyadmin-first-page.png as after-390-opened-again.png (at 390 px phpMyAdmin first shows its navigation).
+# The table and query were changed from Part 3's (wp_options, siteurl) to ones that show no address.
+## Browser (after): sign in to the panel at https://SERVER_IP:8443/ and press Open phpMyAdmin
+PASS  the admin signs in to the panel (password and authenticator code)
+  the Databases tab of www.SERVER_IP.sslip.io at 1440 px: button "Open phpMyAdmin
+(opens in a new tab)"
+## phpMyAdmin's first page at 1440 px
+  the tab: https://SERVER_IP:8444/index.php, title "127.0.0.1:8090 / This server | phpMyAdmin 5.2.3"
+  databases in phpMyAdmin's navigation: information_schema www_wp
+PASS  phpMyAdmin is signed in and lists the website's database www_wp
+  error messages on the page: none
+PASS  phpMyAdmin's first page shows no error (1440 px)
+  cookies the browser holds for SERVER_IP (names only): SifrunoPhpMyAdminSignon __Host-sifruno_phpmyadmin __Secure-phpMyAdmin_https __Secure-pma_lang_https
+  screenshot: 1440-phpmyadmin-first-page.png
+## Browse wp_terms, then a SELECT in the SQL tab
+  wp_terms: 1 rows shown;  Showing rows 0 - 0 (1 total, Query took 0.0003 seconds.)
+  error messages: none
+PASS  phpMyAdmin browses wp_terms with no error
+  screenshot: 1440-phpmyadmin-browse-wp_terms.png
+  SELECT option_name, option_value FROM wp_options WHERE option_name IN ('blogname', 'template'): 1 = Uncategorized = uncategorized = 0
+  error messages: none
+FAIL  a SELECT in the SQL tab answers with its rows and no error
+# Added by hand: the script typed its query into the first CodeMirror on the page, not the SQL box's (most
+# likely the console's), so the SQL tab sent its default query, SELECT * FROM `wp_terms` WHERE 1 (POST /import below,
+# no error), and showed wp_terms's one row; the check looked for the typed query's blogname row. The script
+# was corrected (the SQL box's editor is the one after #sqlquery) and run again with one more open: Part 5b.
+  screenshot: 1440-phpmyadmin-select.png
+## Sign out in phpMyAdmin
+  the tab: /sifruno-signon.php?signed_out=1, heading "You signed out of phpMyAdmin."
+PASS  phpMyAdmin's Log out ends on the page that says you signed out
+  screenshot: 1440-phpmyadmin-signed-out.png
+  /index.php in that tab afterwards answers 401
+PASS  after sign-out phpMyAdmin's origin no longer lets this browser in (401)
+## phpMyAdmin's pages and AJAX requests in that run, from Chrome's HAR (kept on the runner, not printed)
+  POST /index.php?route=/config/get -> 200
+  POST /index.php?route=/navigation&ajax_request=1 -> 200
+  POST /index.php?route=/config/get -> 200
+  POST /index.php?route=/config/set -> 200
+  GET /index.php?route=/database/structure&db=www_wp&ajax_request=true -> 200
+  POST /index.php?route=/navigation&ajax_request=1 -> 200
+  GET /index.php?route=/sql&db=www_wp&table=wp_terms&ajax_request=true -> 200
+  GET /index.php?route=/recent-table&ajax_request=1 -> 200
+  GET /index.php?route=/table/sql&db=www_wp&table=wp_terms -> 200
+  POST /index.php?route=/config/get -> 200
+  POST /index.php?route=/navigation&ajax_request=1 -> 200
+  POST /index.php?route=/config/get -> 200
+  GET /index.php?route=/recent-table&ajax_request=1 -> 200
+  POST /index.php?route=/lint -> 200
+  POST /index.php?route=/config/set -> 200
+  POST /index.php?route=/import -> 200
+  POST /index.php?route=/lint -> 200
+  POST /index.php?route=/logout -> 302
+  GET /sifruno-signon.php?signed_out=1 -> 200
+  GET /index.php -> 401
+  13 POSTs to phpMyAdmin's origin; 0 answers said "Error: Token mismatch"
+PASS  no answer from phpMyAdmin said Token mismatch (first open, table, SELECT, sign-out)
+  phpMyAdmin's session files on the server: 86 before the first open, 86 after it
+## Open phpMyAdmin again from the panel, at 390 px
+  the Databases tab of www.SERVER_IP.sslip.io at 390 px: button "Open phpMyAdmin
+(opens in a new tab)"
+  the tab: https://SERVER_IP:8444/index.php
+  databases in phpMyAdmin's navigation: information_schema www_wp
+PASS  opened again, phpMyAdmin is signed in and lists www_wp
+  error messages on the page: none
+PASS  phpMyAdmin's first page shows no error (390 px)
+  page width / window width: 390 390
+  screenshot: 390-phpmyadmin-first-page.png
+  cookies the browser holds for SERVER_IP (names only): SifrunoPhpMyAdminSignon __Host-sifruno_phpmyadmin __Secure-phpMyAdmin_https __Secure-pma_lang_https
+## phpMyAdmin's pages and AJAX requests in the second open, from Chrome's HAR
+  GET /sifruno-signon.php?code=... -> 303
+  GET /index.php -> 200
+  POST /index.php?route=/config/get -> 200
+  POST /index.php?route=/navigation&ajax_request=1 -> 200
+  POST /index.php?route=/config/get -> 200
+  POST /index.php?route=/config/set -> 200
+  4 POSTs to phpMyAdmin's origin; 0 answers said "Error: Token mismatch"
+PASS  no answer from phpMyAdmin said Token mismatch (second open)
+  phpMyAdmin's session files on the server after the second open: 88 (before it: 86)
+## On the server: the temporary users
+  temporary SifrunoPMA_ users: 2
+# 1 check(s) failed
+
+# Part 5b. The typed SELECT, with the script's editor fixed: one more open from the panel (the third of three).
+# Its 1440-phpmyadmin-select.png is phpmyadmin-token/after-1440-sql-select.png.
+## Browser (select): sign in to the panel at https://SERVER_IP:8443/ and press Open phpMyAdmin
+PASS  the admin signs in to the panel (password and authenticator code)
+  the Databases tab of www.SERVER_IP.sslip.io at 1440 px: button "Open phpMyAdmin
+(opens in a new tab)"
+## phpMyAdmin's first page at 1440 px
+  the tab: https://SERVER_IP:8444/index.php, title "127.0.0.1:8090 / This server | phpMyAdmin 5.2.3"
+  databases in phpMyAdmin's navigation: information_schema www_wp
+PASS  phpMyAdmin is signed in and lists the website's database www_wp
+  error messages on the page: none
+PASS  phpMyAdmin's first page shows no error (1440 px)
+  cookies the browser holds for SERVER_IP (names only): SifrunoPhpMyAdminSignon __Host-sifruno_phpmyadmin __Secure-phpMyAdmin_https __Secure-pma_lang_https
+  screenshot: 1440-phpmyadmin-first-page.png
+## Browse wp_terms, then a SELECT in the SQL tab
+  wp_terms: 1 rows shown;  Showing rows 0 - 0 (1 total, Query took 0.0002 seconds.)
+  error messages: none
+PASS  phpMyAdmin browses wp_terms with no error
+  screenshot: 1440-phpmyadmin-browse-wp_terms.png
+  the SQL box holds: SELECT option_name, option_value FROM wp_options WHERE option_name IN ('blogname', 'template') ORDER BY option_name
+  SELECT option_name, option_value FROM wp_options WHERE option_name IN ('blogname', 'template'): blogname = Sifruno public CA proof ; template = twentytwentyfive
+  error messages: none
+PASS  a SELECT in the SQL tab answers with its rows and no error
+  screenshot: 1440-phpmyadmin-select.png
+# 0 check(s) failed
+
+# Part 6. The dev-VM proof (scripts/devvm/proof.sh phpmyadmin) on the same server, with the three checks of
+# 3a7c39d: its own proof build of the panel and broker from the checkout, its own state and 2-minute sign-ins,
+# two PHP sites made by the wizard, Chrome 158 through Playwright, the panel and phpMyAdmin's origin reached
+# through SSH forwards. The installed units were stopped for both runs and started again afterwards.
+## Control run: the checkout with internal/phpmyadmin/proxy.go put back to 7a1c740^ (the allow list before the
+## fix) for this run only. The failed checks and the result line:
+FAIL  phpMyAdmin's own session cookie reaches the browser (__Secure-phpMyAdmin_https, Secure, HttpOnly) (SifrunoPhpMyAdminSignon __Host-sifruno_phpmyadmin)
+FAIL  phpMyAdmin's first page shows no error (Error: Token mismatch)
+FAIL  none of phpMyAdmin's own POSTs on that page answered Token mismatch (/config/get /navigation /config/get /config/set /config/set)
+RESULT (browser): 36 passed, 3 failed
+
+## With the fix (proxy.go of 7a1c740, the proof script as 3a7c39d commits it): the whole transcript
+# guest: AlmaLinux release 9.8 (Olive Jaguar), kernel 5.14.0-687.60.1.el9_8.x86_64, SELinux Enforcing
+# openlitespeed-1.9.4-3.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+## The installer's phpMyAdmin step, as an upgrade runs it
+  changed:
+PASS  the step changes nothing the second time
+  sifpma: uid=993(sifpma) gid=993(sifpma) groups=993(sifpma)
+PASS  sifpma is a system user outside the accounts' 20000 to 60000, in its own group only
+PASS  phpMyAdmin 5.2.3 is in /usr/local/lib/sifruno/phpmyadmin
+PASS  every file of it is root's and no one else can write it
+PASS  there is no setup/ or examples/ folder
+PASS  config.inc.php is root:sifpma 0640, the sign-in script root's 0644
+PASS  the blowfish secret is root:sifpma 0640 and 32 bytes
+PASS  the session and temp folders are sifpma's, 0700
+PASS  httpd_config.conf includes the phpMyAdmin fragment once
+  openlitespeed -t errors naming phpMyAdmin: none
+PASS  OpenLiteSpeed's config test has no error for phpMyAdmin's vhost
+  listening on 8090: 127.0.0.1:8090 127.0.0.1:8090
+PASS  OpenLiteSpeed listens for phpMyAdmin on 127.0.0.1:8090 only
+  GET / on the listener: 302 http://127.0.0.1:8090/sifruno-signon.php
+PASS  phpMyAdmin (at the root) with no sign-in sends the browser to the sign-in script
+PASS  the sign-in script without a code asks for a new sign-in (401)
+PASS  the listener refuses /api/v1/session (403)
+PASS  the listener refuses /API/x (403)
+PASS  the listener refuses /libraries/classes/Version.php (403)
+PASS  the listener refuses /vendor/autoload.php (403)
+PASS  the listener refuses /templates/login/form.twig (403)
+PASS  the listener refuses /config.inc.php (403)
+PASS  the listener refuses /composer.json (403)
+PASS  the listener refuses /.rtlcssrc.json (403)
+PASS  the broker runs
+PASS  the audit log records every program started from now on
+PASS  the panel answers on 127.0.0.1:35447 as sifpanel
+PASS  the panel says phpMyAdmin has its own origin, with 2-minute proof sign-ins
+PASS  its sign-in socket is in /run/sifruno-panel
+PASS  phpMyAdmin's origin serves the panel's certificate
+PASS  phpMyAdmin's origin answers 404 for the panel's API
+PASS  it answers 401 to a browser with no code and no admission
+PASS  it answers only for the panel's host name (421)
+## Browser: phpMyAdmin's origin without a code or an admission
+PASS  phpMyAdmin's origin answers 401 with a page that says to open phpMyAdmin from the panel
+## Browser: first-run setup on the server's loopback address, then the admin over HTTPS
+PASS  the admin account is made on the server
+PASS  the admin signs in over HTTPS
+## Two PHP sites, each with its own database
+PASS  the wizard starts a-pma22787.proof.test
+  a-pma22787.proof.test: succeeded after 5 s, account apma22787
+PASS  a-pma22787.proof.test is made, with the database apma22787_wp
+PASS  the wizard starts b-pma22787.proof.test
+  b-pma22787.proof.test: succeeded after 5 s, account bpma22787
+PASS  b-pma22787.proof.test is made, with the database bpma22787_wp
+PASS  the admin signs in again
+## The panel's origin no longer serves phpMyAdmin
+PASS  the panel answers 404 for /api/v1/phpmyadmin/ to a signed-in admin
+## Browser: Open phpMyAdmin on a-pma22787.proof.test's Databases tab
+PASS  the Databases tab has an Open phpMyAdmin button
+PASS  it says phpMyAdmin opens on its own address, for this website's databases only
+PASS  it says triggers, views and stored routines need the website's own database user
+PASS  one click lands in phpMyAdmin on its own origin, signed in (its database tree, no login form)
+PASS  the new tab has no opener
+PASS  the sign-in link was on phpMyAdmin's origin, opened once, with a code
+  phpMyAdmin's database tree: Recent Favorites apma22787_wp information_schema
+PASS  it lists apma22787_wp
+PASS  it does not list bpma22787_wp, the other website's
+PASS  phpMyAdmin's pages may connect and post only to their own origin
+PASS  no script or style was blocked on phpMyAdmin's page
+PASS  the admission cookie is __Host-, HttpOnly, Secure, SameSite=Strict, Path=/, ending within the hour
+PASS  the panel's session cookie stays on /api/v1
+PASS  phpMyAdmin's own session cookie reaches the browser (__Secure-phpMyAdmin_https, Secure, HttpOnly)
+PASS  phpMyAdmin's first page shows no error
+PASS  none of phpMyAdmin's own POSTs on that page answered Token mismatch
+## phpMyAdmin's origin cannot use the panel's API
+PASS  a fetch from a phpMyAdmin page to the panel's API gets nothing
+PASS  the panel refuses its API to a request from phpMyAdmin's origin, cookie and all (403)
+PASS  and refuses a change from there too
+PASS  there are no CORS headers on the panel's answer
+PASS  phpMyAdmin's origin answers 404 for the panel's API path
+## Browser: the same link again, and the admission cookie alone
+PASS  a used code is refused (403, and says to open phpMyAdmin again)
+PASS  the admission cookie alone, with no code, lets the browser back in
+## VM: the temporary user and its password
+  temporary users: SifrunoPMA_<hex>
+PASS  there is exactly one temporary user
+  its grants: GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, SHOW VIEW ON `apma22787\_wp`.* TO `SifrunoPMA_<hex>`@`localhost`
+PASS  it has one grant, on exactly apma22787_wp
+PASS  it may read and change tables (SELECT to ALTER)
+PASS  it has no privilege that records a definer (no ALL, TRIGGER, CREATE VIEW, routines or EVENT)
+PASS  nothing of bpma22787's is in its grants
+PASS  the panel's record holds it, with apma22787 as the owner
+PASS  the record is the panel's, 0600
+PASS  phpMyAdmin's signon session holds the login, sifpma's 0600
+PASS  the session's password is 43 characters
+PASS  with it the temporary user signs in to MariaDB and sees apma22787's database only
+  process-argument samples taken while phpMyAdmin opened: 281; programs started, from the audit log: 846
+PASS  no process argument held the temporary user's password
+PASS  the panel ran the mysql client meanwhile (audit log)
+PASS  with it the temporary user makes a table but no view or trigger
+PASS  phpMyAdmin's PHP error log folder is sifpma's, 0700
+PASS  neither the panel's log nor OpenLiteSpeed's logs hold the password
+PASS  no OpenLiteSpeed log holds a sign-in link's code
+PASS  sifpma cannot open apma22787's or bpma22787's home
+  phpMyAdmin's PHP: sifpma   lsphp
+PASS  phpMyAdmin's PHP runs as sifpma
+PASS  the VM's checks of the temporary user pass
+## At most 3 open sign-ins per website and person
+  three more clicks answered 201, 201, 429
+PASS  the second and third sign-in open, the fourth is refused with 429 and says why
+PASS  another website still opens
+## VM: the temporary users expire (proof build: 2 minutes)
+  waiting for the sweeper (2-minute sign-ins, a sweep every minute)
+PASS  the sweeper dropped the temporary user within 5 minutes
+PASS  no connection of a temporary user is left
+PASS  the VM sees the sweeper drop it
+PASS  then the admission cookie no longer lets the browser in (401)
+PASS  the open phpMyAdmin tab asks for a new sign-in too
+PASS  the Databases tab fits a phone screen
+PASS  no browser errors on the panel's pages
+RESULT (browser): 39 passed, 0 failed
+
+# Part 7. The server deleted (the same Linode also ran migrate-verify.txt's proof)
+$ SIFRUNO_NIGHTLY_KEEP=1 SIFRUNO_NIGHTLY_ID=pma1126a scripts/ci/nightly-fresh-install.sh cleanup
+== 2026-11-26T20:35:36Z Delete this run's Linode and firewall (sifruno-owner-test-pma1126a)
+== 2026-11-26T20:35:53Z deleted: Linode 112009633 (sifruno-owner-test-pma1126a)
+== 2026-11-26T20:36:09Z deleted: firewall 233390604 (sifruno-owner-test-pma1126a)
+== 2026-11-26T20:36:11Z checked through the API: no Linode and no firewall named sifruno-owner-test-pma1126a is left
+
+Log: artifacts/devvm/nightly-pma1126a.txt

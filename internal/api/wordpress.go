@@ -83,6 +83,7 @@ var wizardFields = map[string][]wizardField{
 	"always-https":    {{name: "always_https", flag: true}, {name: "expected_revision", whole: true}},
 	// Move a website here (migrations.go).
 	"migration-source":        {{name: "host"}, {name: "port", whole: true}},
+	"migration-whm":           {{name: "address"}, {name: "token"}, {name: "password"}, {name: "ssh_port", whole: true}, {name: "tls_fingerprint"}},
 	"migration-host-key":      {{name: "fingerprint"}},
 	"migration-cancel":        {},
 	"migration-stale-cleared": {},

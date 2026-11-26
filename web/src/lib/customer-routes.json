@@ -96,6 +96,7 @@
   "POST /api/v1/websites/migrations/sources/{id}/cancel": "adminOnly",
   "POST /api/v1/websites/migrations/sources/{id}/host-key": "adminOnly",
   "POST /api/v1/websites/migrations/stale-keys/{id}/cleared": "adminOnly",
+  "POST /api/v1/websites/migrations/whm": "adminOnly",
   "POST /api/v1/websites/migrations/{id}/accept": "adminOnly",
   "POST /api/v1/websites/migrations/{id}/ready": "adminOnly",
   "POST /api/v1/websites/migrations/{id}/verify": "adminOnly",

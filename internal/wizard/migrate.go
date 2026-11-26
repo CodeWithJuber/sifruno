@@ -14,6 +14,7 @@ import (
 	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/migrateverify"
+	"sifruno/internal/whmsource"
 )
 
 // Migration v1 as a website job (hostaccounts README, Migration): one
@@ -62,7 +63,9 @@ type Migration struct {
 	Source     string `json:"source"`
 	SourceHost string `json:"source_host"`
 	SourceUser string `json:"source_user"`
-	Tier       string `json:"tier,omitempty"`
+	// Via is "whm" for a move connected with the old server's WHM login.
+	Via  string `json:"via,omitempty"`
+	Tier string `json:"tier,omitempty"`
 	// WWW says the old site answered for www.<domain> too, so the DNS
 	// records name it.
 	WWW       bool   `json:"www,omitempty"`
@@ -198,6 +201,7 @@ type MigrationBroker interface {
 	MigrateFiles(context.Context, string, hostaccounts.MigrateFilesInput, string) (hostaccounts.MigrateFilesResult, error)
 	MigrateDatabase(context.Context, string, hostaccounts.MigrateDatabaseInput, string) (hostaccounts.MigrateDatabaseResult, error)
 	FinishMigration(context.Context, string, hostaccounts.MigrationFinishInput, string) (hostaccounts.MigrationFinishResult, error)
+	ClearStaleMigrationKey(context.Context, string, hostaccounts.MigrationFinishInput, string) error
 	SetCron(context.Context, string, hostaccounts.CronInput, string) (hostaccounts.CronResult, error)
 }
 
@@ -220,6 +224,10 @@ type MigrationOptions struct {
 	Connect string
 	// Address is this server's public address, for the DNS records.
 	Address string
+	// WHM holds the WHM logins of moves connected that way, in memory
+	// (D-0005): the copy's cPanel answers come through WHM's API, and the
+	// key is removed through it when SSH cannot.
+	WHM *whmsource.Sessions
 }
 
 // EnableMigrations turns migrations on for this runner.
@@ -276,6 +284,8 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 		return Job{}, refuse(ErrUnavailable, "The account service is not answering, so nothing was moved. Check that it is running, then try again.")
 	case source.Pinned == "":
 		return Job{}, refuse(ErrConflict, "Confirm the old server's fingerprint first, so Sifruno knows it talks to the right server.")
+	case source.Via == hostaccounts.ViaWHM && !o.WHM.Has(in.Source):
+		return Job{}, refuse(ErrConflict, "This panel no longer holds the WHM login for that connection: it keeps it in memory only, and the panel restarted. Press Stop and remove the key, then connect with the WHM login again.")
 	}
 	accounts, err := r.accounts.List(ctx)
 	if err != nil {
@@ -291,7 +301,7 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 	now := time.Now()
 	job := newKindJob(id, KindMigration, "", actor, now)
 	job.Username = in.Username
-	job.Migration = &Migration{Source: in.Source, SourceHost: source.Host, SourceUser: in.Username, Gate: GateClosed, Address: o.Address,
+	job.Migration = &Migration{Source: in.Source, SourceHost: source.Host, SourceUser: in.Username, Via: source.Via, Gate: GateClosed, Address: o.Address,
 		Databases: []string{}, DatabaseUsers: []string{}, Tables: []TableDifference{}, Notes: []string{}, Probes: []migrateverify.Probe{},
 		Activity: []Activity{{At: timestamp(now), Actor: actor, What: "Started moving the account " + in.Username + " from " + source.Host + "."}}}
 	if err = r.store.put(job); err != nil {
@@ -317,7 +327,10 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 // migrationRun is what a migration job holds while it runs: the plan, with
 // the database users' hashes, which never reach the job record.
 type migrationRun struct {
-	options   *MigrationOptions
+	options *MigrationOptions
+	// cpanel are WHM's answers for a move connected with the WHM login,
+	// nil for one over SSH.
+	cpanel    *hostaccounts.CPanelAnswers
 	plan      hostaccounts.MigrationPlan
 	php       string
 	madeDBs   []string
@@ -402,6 +415,8 @@ type MigrationExplanation struct {
 type migrationCase struct {
 	why, next string
 	detail    bool
+	// whole: next already says how to go on, so no "then <again>" follows.
+	whole bool
 }
 
 // cpanelTools is the case of cPanel's whmapi1 or uapi failing on the old
@@ -409,12 +424,12 @@ type migrationCase struct {
 // library was preloaded through LD_PRELOAD into processes started over SSH.
 var cpanelTools = migrationCase{
 	why:  "cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them (a security problem on the old server) or when cPanel's files are damaged or being updated.",
-	next: "Check the old server's security and cPanel (cPanel support can help)",
+	next: "Check the old server's security and cPanel (cPanel support can help), or connect with the WHM login",
 }
 
 var migrationCases = map[string]migrationCase{
 	"unreachable":      {why: "Sifruno could not reach the old server: nothing answered on its SSH port, or the connection was refused or cut.", next: "Check the old server's address and SSH port, that the server is running, and that its firewall accepts connections from this server"},
-	"key_refused":      {why: "The old server did not accept the migration key: the key line is not in root's /root/.ssh/authorized_keys there, or its SSH server does not let root sign in with a key.", next: "Run the key command again as root on the old server, and check that its SSH server allows root to sign in with a key (PermitRootLogin prohibit-password or yes)"},
+	"key_refused":      {why: "The old server did not accept the migration key: the key line is not in root's /root/.ssh/authorized_keys there, or its SSH server does not let root sign in with a key.", next: "Check that the old server's SSH server allows root to sign in with a key (PermitRootLogin prohibit-password or yes), and on the SSH path run the key command again as root there"},
 	"host_key_changed": {why: "The old server's SSH host key is not the one you confirmed. The server may have been reinstalled, or another machine is answering at its address.", next: "Stop until you know why. Connect to the old server again and confirm its new fingerprint only if you trust it"},
 	"connect":          {why: "Sifruno could not sign in to the old server over SSH.", next: "Open Technical details to see what SSH said, and check the old server's SSH service"},
 	"host_key":         {why: "The old server's fingerprint has not been confirmed, so Sifruno has not signed in there.", next: "Confirm the fingerprint first"},
@@ -432,6 +447,13 @@ var migrationCases = map[string]migrationCase{
 	"import":           {why: "A database could not be copied: this server could not load the old server's dump.", next: "Open Technical details for MariaDB's message and check that MariaDB runs on this server", detail: true},
 	"compare":          {why: "A database could not be copied: its rows could not be counted afterwards.", next: "Check that MariaDB runs on both servers", detail: true},
 	"remove_key":       {why: "The migration key could not be removed from the old server.", next: "Remove the line ending in sifruno-migration- from /root/.ssh/authorized_keys on the old server", detail: true},
+	// The WHM login's own failures (internal/whmsource).
+	"whm_unreachable": {why: "Sifruno could not reach WHM on the old server: nothing answered at that address and port, or the connection was cut.", next: "Check the WHM address (WHM listens on port 2087), that the old server is running, and that its firewall accepts connections from this server", detail: true},
+	"whm_login":       {why: "WHM on the old server refused the login.", next: "Check the API token (in WHM: Development, Manage API Tokens) or root's password, and that it is root's, not a reseller's", detail: true},
+	"whm_tls":         {why: "WHM's certificate is not one this server can trust, or it changed since you confirmed it.", next: "Compare the fingerprint with WHM's own certificate (in WHM: Service Configuration, Manage Service SSL Certificates) and confirm it only if it matches; if it changed and you did not change it, stop", detail: true},
+	"whm_output":      {why: "WHM on the old server did not answer with the data cPanel documents. This happens when cPanel's files are damaged or being updated, or when something on the old server interferes with cPanel (a security problem).", next: "Check the old server's security and cPanel (cPanel support can help), or use SSH instead", detail: true},
+	"whm_failed":      {why: "WHM on the old server could not do a step it was asked.", next: "Open Technical details for WHM's own words, and check that the login is root's", detail: true},
+	"whm_session":     {why: "This panel no longer holds the WHM login for this connection: it keeps it in memory only, and the panel restarted.", next: "Press Stop and remove the key, then connect with the WHM login again.", whole: true},
 }
 
 // ExplainMigration says what a failed migration step means. again is how
@@ -452,7 +474,11 @@ func ExplainMigration(failed *hostaccounts.MigrationError, again string) Migrati
 	if failed.Output != "" {
 		technical += "; the old server printed: " + failed.Output
 	}
-	return MigrationExplanation{Why: why, Next: c.next + ", then " + again + ".", Technical: technical}
+	next := c.next + ", then " + again + "."
+	if c.whole {
+		next = c.next
+	}
+	return MigrationExplanation{Why: why, Next: next, Technical: technical}
 }
 
 // tierCauses says in plain words why a site is not Native.
@@ -471,7 +497,14 @@ var tierCauses = map[string]string{
 
 func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 	m, mr := j.job.Migration, j.migration
-	plan, err := mr.options.Broker.PlanMigration(ctx, m.Source, hostaccounts.MigrationPlanInput{Username: m.SourceUser, Reason: migrateReason}, j.actor)
+	if m.Via == hostaccounts.ViaWHM {
+		answers, err := mr.options.WHM.Answers(ctx, m.Source, m.SourceUser)
+		if err != nil {
+			return "", j.migrationFailure(err)
+		}
+		mr.cpanel = answers
+	}
+	plan, err := mr.options.Broker.PlanMigration(ctx, m.Source, hostaccounts.MigrationPlanInput{Username: m.SourceUser, CPanel: mr.cpanel, Reason: migrateReason}, j.actor)
 	if err != nil {
 		return "", j.migrationFailure(err)
 	}
@@ -605,7 +638,7 @@ func (j *run) migrateWeb(ctx context.Context) (string, *stepError) {
 }
 
 func (j *run) migrateFiles(ctx context.Context) (string, *stepError) {
-	res, err := j.migration.options.Broker.MigrateFiles(ctx, j.accountID, hostaccounts.MigrateFilesInput{Migration: j.job.Migration.Source, ExpectedRevision: j.revision, Reason: migrateReason}, j.actor)
+	res, err := j.migration.options.Broker.MigrateFiles(ctx, j.accountID, hostaccounts.MigrateFilesInput{Migration: j.job.Migration.Source, ExpectedRevision: j.revision, CPanel: j.migration.cpanel, Reason: migrateReason}, j.actor)
 	if err != nil {
 		return "", j.migrationFailure(err)
 	}
@@ -666,7 +699,7 @@ func (j *run) migrateDatabases(ctx context.Context) (string, *stepError) {
 	}
 	j.touch()
 	for _, d := range plan.Databases {
-		res, err := j.migration.options.Broker.MigrateDatabase(ctx, j.accountID, hostaccounts.MigrateDatabaseInput{Migration: m.Source, Database: d.Name, ExpectedRevision: j.revision, Reason: migrateReason}, j.actor)
+		res, err := j.migration.options.Broker.MigrateDatabase(ctx, j.accountID, hostaccounts.MigrateDatabaseInput{Migration: m.Source, Database: d.Name, ExpectedRevision: j.revision, CPanel: j.migration.cpanel, Reason: migrateReason}, j.actor)
 		if err != nil {
 			return "", j.migrationFailure(err)
 		}
@@ -800,7 +833,9 @@ func (j *run) removeKey() {
 	// Only a removal the old server proved is reported as one; anything
 	// else names the line to remove and the server.
 	manual := "Remove the line ending in sifruno-migration-" + m.Source + " from /root/.ssh/authorized_keys on " + m.SourceHost + "."
-	res, err := j.migration.options.Broker.FinishMigration(ctx, m.Source, hostaccounts.MigrationFinishInput{Reason: migrateReason}, j.actor)
+	// SSH removes the key and proves it; for a WHM move, WHM's API deletes
+	// its file, and removes the line when SSH could not.
+	res, err := j.migration.options.WHM.Finish(ctx, m.Source, j.migration.options.Broker, hostaccounts.MigrationFinishInput{Reason: migrateReason}, j.actor)
 	var message string
 	switch {
 	case errors.Is(err, hostaccounts.ErrNotFound):
@@ -812,6 +847,10 @@ func (j *run) removeKey() {
 	case res.RemovedFromSource:
 		m.KeyRemoved = true
 		message = "The old server no longer accepts the migration key, and this server deleted it."
+		if m.Via == hostaccounts.ViaWHM && res.Detail != "" {
+			// It says how the key went: proved over SSH, or through WHM.
+			message = clip(res.Detail + " This server deleted its own copy of the key.")
+		}
 		j.end(i, StepDone, message)
 	default:
 		message = "This server deleted the migration key, but the old server was not shown to refuse it. " + clip(res.Detail)

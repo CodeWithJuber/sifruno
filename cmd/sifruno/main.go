@@ -40,6 +40,7 @@ import (
 	"sifruno/internal/tlshost"
 	"sifruno/internal/trail"
 	"sifruno/internal/whmapi"
+	"sifruno/internal/whmsource"
 	"sifruno/internal/wizard"
 )
 
@@ -261,6 +262,8 @@ func run() error {
 	}
 	var websiteJobs *wizard.Runner
 	var siteMigrations hostaccounts.MigrationService
+	// The WHM logins of moves connected that way, in memory only (D-0005).
+	migrationLogins := whmsource.NewSessions()
 	var siteBackups *sitebackups.Manager
 	var certificates *acme.Manager
 	if *accountsSocket != "" && dbSvc != nil {
@@ -298,7 +301,7 @@ func run() error {
 		if !okMigrations {
 			return errors.New("the account broker client lacks the migration operations")
 		}
-		websiteJobs.EnableMigrations(wizard.MigrationOptions{Broker: migrationBroker, Databases: dbSvc, Verify: migrateverify.Run, Connect: "127.0.0.1:80", Address: *dnsIP})
+		websiteJobs.EnableMigrations(wizard.MigrationOptions{Broker: migrationBroker, Databases: dbSvc, Verify: migrateverify.Run, Connect: "127.0.0.1:80", Address: *dnsIP, WHM: migrationLogins})
 		siteMigrations = migrationBroker.(hostaccounts.MigrationService)
 		// Website backups: the broker runs restic; the panel schedules the
 		// nightly backups, the weekly prune and drill, and the jobs a person
@@ -437,7 +440,7 @@ func run() error {
 	if certificates != nil {
 		siteCertificates = certificates
 	}
-	server.Handler = api.New(api.Options{Certificates: siteCertificates, PanelHosts: splitHosts(*panelHosts), Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, PhpMyAdmin: sitePhpMyAdmin, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}, Migrations: siteMigrations})
+	server.Handler = api.New(api.Options{Certificates: siteCertificates, PanelHosts: splitHosts(*panelHosts), Report: compat.Evaluate(b, obligations), Trail: t, Budget: costs, UI: uiFS, Server: monitor, Sites: websiteStore, Operator: access, Accounts: hostaccounts.NewClient(*accountsSocket), WebPreview: hostaccounts.NewWebPreviewClient(*accountsSocket), SitePreviewPort: &previewPort, BackupSchedulerEnabled: *backupScheduler, WHM: whmHandler, Wizard: websiteJobs, Databases: siteDatabases, PhpMyAdmin: sitePhpMyAdmin, Backups: siteBackups, AllowedOrigins: []string{"http://127.0.0.1:" + port, "http://localhost:" + port, "http://[::1]:" + port, "http://127.0.0.1:5173", "http://localhost:5173"}, Migrations: siteMigrations, MigrationLogins: migrationLogins})
 	if remoteServer != nil {
 		// The same API, behind operator.Remote: only the panel's host names,
 		// only TLS, and only admin sessions.

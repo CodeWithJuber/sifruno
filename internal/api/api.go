@@ -24,6 +24,7 @@ import (
 	"sifruno/internal/sitebackups"
 	"sifruno/internal/sites"
 	"sifruno/internal/trail"
+	"sifruno/internal/whmsource"
 	"sifruno/internal/wizard"
 )
 
@@ -67,6 +68,9 @@ type Options struct {
 	// Migrations is the broker's migration surface for "Move a website
 	// here"; nil answers 503 on /api/v1/websites/migrations.
 	Migrations hostaccounts.MigrationService
+	// MigrationLogins holds, in memory, the WHM login of each move connected
+	// with it (D-0005); the wizard holds the same store.
+	MigrationLogins *whmsource.Sessions
 }
 type statusOutput struct{ Body compat.Report }
 type trailBody struct {

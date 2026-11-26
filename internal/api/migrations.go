@@ -5,10 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"sifruno/internal/cpsource"
 	"sifruno/internal/hostaccounts"
+	"sifruno/internal/whmsource"
 	"sifruno/internal/wizard"
 )
 
@@ -17,6 +20,11 @@ import (
 // /api/v1/websites/migrations, so the wizard's admission applies (an admin
 // session, and for a change also Origin and CSRF), and an API token may not
 // use them (tokenRefused): a migration holds a key to another server's root.
+// The default way in is the old server's WHM login (D-0005, POST
+// .../migrations/whm): the panel lists the accounts and adds the broker's
+// public key for root through WHM's API, holding the login in memory for
+// that connection only (whmsource.Sessions); it is never stored, logged
+// or returned. Copying a command to the old server is the other way in.
 
 const (
 	migrationsUnavailable = "Moving websites is not set up on this server."
@@ -38,6 +46,8 @@ func migrationRoute(p string) string {
 	switch p {
 	case "/api/v1/websites/migrations/sources":
 		return "migration-source"
+	case "/api/v1/websites/migrations/whm":
+		return "migration-whm"
 	case "/api/v1/websites/migrations":
 		return "migration"
 	}
@@ -55,7 +65,8 @@ func migrationRoute(p string) string {
 
 // isMigrationSlow is a route that talks to the old server.
 func isMigrationSlow(r *http.Request) bool {
-	return migrationReadPath.MatchString(r.URL.Path) || migrationRoute(r.URL.Path) == "migration-source" || migrationRoute(r.URL.Path) == "migration-cancel"
+	route := migrationRoute(r.URL.Path)
+	return migrationReadPath.MatchString(r.URL.Path) || route == "migration-source" || route == "migration-whm" || route == "migration-cancel"
 }
 
 // MigrationSource is the old server as the page shows it: the key line the
@@ -68,11 +79,39 @@ type MigrationSource struct {
 	InstallCommand string                          `json:"install_command" doc:"Run as root on the old server to add the key line."`
 	HostKeys       []hostaccounts.MigrationHostKey `json:"host_keys"`
 	Pinned         string                          `json:"pinned_fingerprint" doc:"The confirmed fingerprint; empty until the admin confirms one."`
+	Via            string                          `json:"via" doc:"whm when connected with the old server's WHM login, empty for the SSH path."`
 	ExpiresAt      time.Time                       `json:"expires_at"`
 }
 
 func migrationSource(m hostaccounts.Migration) MigrationSource {
-	return MigrationSource{ID: m.ID, Host: m.Host, Port: m.Port, KeyLine: m.PublicKey, InstallCommand: m.InstallCommand, HostKeys: m.HostKeys, Pinned: m.Pinned, ExpiresAt: m.ExpiresAt}
+	return MigrationSource{ID: m.ID, Host: m.Host, Port: m.Port, KeyLine: m.PublicKey, InstallCommand: m.InstallCommand, HostKeys: m.HostKeys, Pinned: m.Pinned, Via: m.Via, ExpiresAt: m.ExpiresAt}
+}
+
+// migrationWHMInput is the WHM login form. The token and the password are
+// used in memory for this connection only, and never echoed.
+type migrationWHMInput struct {
+	Body struct {
+		Address        string `json:"address" maxLength:"2048" doc:"WHM's address on the old server, such as https://server1.example.com:2087 (https; port 2087 unless given)."`
+		Token          string `json:"token" maxLength:"128" doc:"A WHM API token for root. Kept in memory for this connection only; never stored, logged or returned."`
+		Password       string `json:"password" maxLength:"1024" doc:"Root's password, instead of a token. Kept in memory for this connection only; never stored, logged or returned."`
+		SSHPort        int    `json:"ssh_port" doc:"The old server's SSH port for the copy; 22 when left out."`
+		TLSFingerprint string `json:"tls_fingerprint" maxLength:"95" doc:"The SHA-256 fingerprint of WHM's certificate the admin confirmed, when this server does not trust it."`
+	}
+}
+type migrationWHMOutput struct {
+	Body struct {
+		Source      MigrationSource       `json:"source"`
+		Accounts    []MigrationAccount    `json:"accounts"`
+		Certificate whmsource.Certificate `json:"certificate"`
+	}
+}
+
+func migrationAccounts(items []cpsource.Account) []MigrationAccount {
+	out := make([]MigrationAccount, 0, len(items))
+	for _, a := range items {
+		out = append(out, MigrationAccount(a))
+	}
+	return out
 }
 
 type migrationSourceBody struct {
@@ -172,6 +211,9 @@ type migrationProblem struct {
 	huma.ErrorModel
 	Next      string `json:"next"`
 	Technical string `json:"technical,omitempty"`
+	// Certificate is WHM's certificate this server does not trust, for the
+	// admin to compare and confirm.
+	Certificate *whmsource.Certificate `json:"certificate,omitempty"`
 }
 
 func newMigrationProblem(status int, why, next, technical string) *migrationProblem {
@@ -221,6 +263,16 @@ func registerMigrations(a huma.API, o Options) {
 		out.Body.Source = migrationSource(m)
 		return out, nil
 	})
+	huma.Register(a, op("connect-migration-whm", http.MethodPost, "/api/v1/websites/migrations/whm", http.StatusOK), func(ctx context.Context, in *migrationWHMInput) (*migrationWHMOutput, error) {
+		// The handler drops its references to the login when it returns;
+		// the client keeps its own in memory until the move ends.
+		defer func() { in.Body.Token, in.Body.Password = "", "" }()
+		b, err := broker()
+		if err != nil {
+			return nil, err
+		}
+		return connectWHM(ctx, b, o.MigrationLogins, in, siteActor(ctx))
+	})
 	huma.Register(a, op("get-migration-source", http.MethodGet, "/api/v1/websites/migrations/sources/{id}", http.StatusOK), func(ctx context.Context, in *migrationSourceIDInput) (*migrationSourceOutput, error) {
 		b, err := broker()
 		if err != nil {
@@ -256,15 +308,20 @@ func registerMigrations(a huma.API, o Options) {
 		if err != nil {
 			return nil, err
 		}
-		items, err := b.MigrationAccounts(ctx, in.ID)
+		var items []cpsource.Account
+		if o.MigrationLogins.Has(in.ID) {
+			// A WHM migration's accounts come through WHM's API.
+			items, err = o.MigrationLogins.Accounts(ctx, in.ID)
+		} else if m, gerr := b.GetMigration(ctx, in.ID); gerr == nil && m.Via == hostaccounts.ViaWHM {
+			items, err = o.MigrationLogins.Accounts(ctx, in.ID)
+		} else {
+			items, err = b.MigrationAccounts(ctx, in.ID)
+		}
 		if err != nil {
 			return nil, migrationBrokerError(err)
 		}
 		out := &migrationAccountsOutput{}
-		out.Body.Accounts = make([]MigrationAccount, 0, len(items))
-		for _, a := range items {
-			out.Body.Accounts = append(out.Body.Accounts, MigrationAccount(a))
-		}
+		out.Body.Accounts = migrationAccounts(items)
 		return out, nil
 	})
 	huma.Register(a, op("cancel-migration-source", http.MethodPost, "/api/v1/websites/migrations/sources/{id}/cancel", http.StatusOK), func(ctx context.Context, in *migrationEmptyInput) (*migrationCancelOutput, error) {
@@ -272,7 +329,7 @@ func registerMigrations(a huma.API, o Options) {
 		if err != nil {
 			return nil, err
 		}
-		res, err := b.FinishMigration(ctx, in.ID, hostaccounts.MigrationFinishInput{Reason: migrationReason}, siteActor(ctx))
+		res, err := o.MigrationLogins.Finish(ctx, in.ID, b, hostaccounts.MigrationFinishInput{Reason: migrationReason}, siteActor(ctx))
 		if err != nil {
 			return nil, migrationBrokerError(err)
 		}
@@ -343,4 +400,74 @@ func registerMigrations(a huma.API, o Options) {
 	change("ready-migration", "ready", func(ctx context.Context, id, _, actor string) (wizard.Job, error) {
 		return o.Wizard.ReadyMigration(ctx, id, actor)
 	})
+}
+
+// connectWHM is D-0005's connection (steps 1 and 2, and the host key's
+// reading for step 3): WHM's certificate checked, the accounts listed with
+// the login, the broker's migration opened (its key made, the old server's
+// SSH host keys read), and its public key added for root through WHM's
+// API. A certificate this server does not trust answers 409 with its
+// fingerprint before any login is sent; the admin confirms it and sends it
+// back as tls_fingerprint, and only that certificate is then accepted.
+// No documented WHM API 1 function returns the SSH host key, so the page
+// shows the one the broker read and the admin confirms it with one button.
+func connectWHM(ctx context.Context, b hostaccounts.MigrationService, logins *whmsource.Sessions, in *migrationWHMInput, actor string) (*migrationWHMOutput, error) {
+	if logins == nil {
+		return nil, huma.Error503ServiceUnavailable(migrationsUnavailable)
+	}
+	again := "then press Connect again."
+	address, err := whmsource.ParseAddress(in.Body.Address)
+	if err != nil {
+		return nil, newMigrationProblem(http.StatusUnprocessableEntity, "WHM's address must be https with the old server's host name or IPv4 address, such as https://server1.example.com:2087 (port 2087 unless you give another).", "Correct the address, "+again, "")
+	}
+	login := whmsource.Login{Token: strings.TrimSpace(in.Body.Token), Password: in.Body.Password}
+	if !login.Valid() {
+		return nil, newMigrationProblem(http.StatusUnprocessableEntity, "Give either a WHM API token for root (letters and digits) or root's password, not both and not neither.", "Enter one of them, "+again, "")
+	}
+	port := in.Body.SSHPort
+	if port == 0 {
+		port = 22
+	}
+	pinned := in.Body.TLSFingerprint
+	if port < 1 || port > 65535 || (pinned != "" && !whmsource.ValidFingerprint(pinned)) {
+		return nil, newMigrationProblem(http.StatusUnprocessableEntity, "The SSH port must be 1 to 65535, and a confirmed certificate fingerprint 32 pairs of hex digits.", "Correct it, "+again, "")
+	}
+	cert, err := whmsource.Probe(ctx, address)
+	if err != nil {
+		return nil, migrationBrokerError(err)
+	}
+	switch {
+	case cert.Trusted:
+		pinned = ""
+	case pinned == "":
+		p := newMigrationProblem(http.StatusConflict, "WHM's certificate at "+address.String()+" is not signed by an authority this server trusts. cPanel's own self-signed certificate looks like this; so would another machine pretending to be the old server.", "Compare this fingerprint with WHM's certificate on the old server (in WHM: Service Configuration, Manage Service SSL Certificates). If it is the same, press Trust this certificate. Your login was not sent.", "certificate "+cert.Subject+", issued by "+cert.Issuer)
+		p.Certificate = &cert
+		return nil, p
+	case pinned != cert.Fingerprint:
+		return nil, migrationBrokerError(&hostaccounts.MigrationError{Step: "whm_tls", Detail: "WHM at " + address.String() + " now presents another certificate than the one you confirmed. Your login was not sent."})
+	}
+	client, err := whmsource.New(address, login, pinned)
+	if err != nil {
+		return nil, newMigrationProblem(http.StatusUnprocessableEntity, "The WHM address or login could not be used.", "Check both, "+again, "")
+	}
+	items, err := client.Accounts(ctx)
+	if err != nil {
+		return nil, migrationBrokerError(err)
+	}
+	m, err := b.OpenMigration(ctx, hostaccounts.MigrationOpenInput{Host: address.Host, Port: port, Via: hostaccounts.ViaWHM, Reason: migrationReason}, actor)
+	if err != nil {
+		return nil, migrationBrokerError(err)
+	}
+	logins.Put(m.ID, client, m.PublicKey, m.ExpiresAt)
+	if err = client.AuthorizeKey(ctx, m.PublicKey, m.ID); err != nil {
+		// End the migration at once: its key goes from this server, and
+		// from the old one as far as WHM can remove it.
+		_, _ = logins.Finish(context.WithoutCancel(ctx), m.ID, b, hostaccounts.MigrationFinishInput{Reason: migrationReason}, actor)
+		return nil, migrationBrokerError(err)
+	}
+	out := &migrationWHMOutput{}
+	out.Body.Source = migrationSource(m)
+	out.Body.Accounts = migrationAccounts(items)
+	out.Body.Certificate = cert
+	return out, nil
 }

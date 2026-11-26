@@ -507,6 +507,7 @@ function Comparison({ job, onChanged }: { job: WebsiteJob; onChanged: (job: Webs
         <TableBody>{m.dns.map((r) => <TableRow key={r.name}><TableCell className="break-all">{r.name}</TableCell><TableCell>{r.type}</TableCell><TableCell><code>{r.value}</code></TableCell></TableRow>)}</TableBody>
       </Table>
       <p className="text-sm text-muted-foreground">Leave the MX and other mail records as they are: email stays on the old server. Keep the old server running for 14 days, so you can switch back.</p>
+      <p className="text-sm text-muted-foreground">Once these records point here, the panel gets the website's certificate by itself, usually within the hour, when certificates are set up on this server. Until then the website uses http.</p>
     </div>}
     <div role="status" className="sr-only">{busy}</div>
   </section>;

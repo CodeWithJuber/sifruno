@@ -47,6 +47,14 @@
 
 ### Added
 
+- A website moved from cPanel keeps its https: the move copies the
+  certificate the old site serves, with its key, so the copy answers https
+  before the DNS changes. It is copied only when it is not self-signed, is
+  valid for 7 more days, covers the site's domain and comes from an
+  authority this server trusts; otherwise the step says why and the move
+  goes on over http. The panel replaces a copied certificate with a Let's
+  Encrypt one before it runs out, once the domain points here, and the
+  Domains tab says where the certificate came from.
 - Passkeys. An admin or customer adds one on Account, with the current
   password and a code, and then signs in with it alone. They work when the
   panel is opened by its name over a trusted certificate.
@@ -143,6 +151,8 @@
 
 ### Fixed
 
+- The hosts file line for previewing a moved website no longer says
+  www.www. for a site whose domain starts with www..
 - phpMyAdmin no longer answers "Token mismatch": the panel's proxy now passes
   phpMyAdmin's own `__Secure-` session cookies, which it uses over HTTPS.
 - The database tools sent each SQL statement to the mysql client as an

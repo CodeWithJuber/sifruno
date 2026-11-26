@@ -36,9 +36,11 @@ type inventory struct {
 		Created time.Time `json:"created_at"`
 		Expires time.Time `json:"expires_at"`
 		Current bool      `json:"current"`
+		Kept    bool      `json:"kept_signed_in"`
 	} `json:"items"`
 	Capacity int `json:"capacity"`
-	Lifetime int `json:"lifetime_seconds"`
+	Idle     int `json:"idle_seconds"`
+	KeptIdle int `json:"kept_idle_seconds"`
 }
 
 func isolated(t *testing.T) fixture {
@@ -111,7 +113,7 @@ func login(t *testing.T, f fixture, old admission) admission {
 		t.Fatal("legacy session DTO unavailable")
 	}
 	cs := w.Result().Cookies()
-	if len(cs) != 1 || !cs[0].HttpOnly || cs[0].SameSite != http.SameSiteStrictMode || cs[0].Path != "/api/v1" || cs[0].MaxAge != 900 {
+	if len(cs) != 1 || !cs[0].HttpOnly || cs[0].SameSite != http.SameSiteStrictMode || cs[0].Path != "/api/v1" || cs[0].MaxAge != 0 || !cs[0].Expires.IsZero() {
 		t.Fatal("legacy cookie policy changed")
 	}
 	keys, err := os.ReadFile(filepath.Join(filepath.Dir(f.manager.AccessKeyPath()), "session.keys"))
@@ -139,21 +141,21 @@ func list(t *testing.T, f fixture, a admission, forbidden ...admission) inventor
 	}
 	var v inventory
 	decode(t, w, &v)
-	fields := exactKeys(t, w.Body.Bytes(), "items", "capacity", "lifetime_seconds")
+	fields := exactKeys(t, w.Body.Bytes(), "items", "capacity", "idle_seconds", "kept_idle_seconds")
 	var rawItems []json.RawMessage
 	if json.Unmarshal(fields["items"], &rawItems) != nil {
 		t.Fatal("inventory items unavailable")
 	}
 	for _, raw := range rawItems {
-		exactKeys(t, raw, "id", "created_at", "expires_at", "current")
+		exactKeys(t, raw, "id", "created_at", "expires_at", "current", "kept_signed_in")
 	}
-	if v.Capacity != 128 || v.Lifetime != 900 || v.Items == nil || len(v.Items) > 128 {
+	if v.Capacity != 128 || v.Idle != 1800 || v.KeptIdle != 86400 || v.Items == nil || len(v.Items) > 128 {
 		t.Fatal("inventory bounds invalid")
 	}
 	seen := map[string]bool{}
 	currents := 0
 	for _, x := range v.Items {
-		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(x.ID) || seen[x.ID] || x.Created.IsZero() || x.Expires.Sub(x.Created) != 900*time.Second || x.Created.After(time.Now().Add(time.Second)) || !x.Expires.After(time.Now()) {
+		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(x.ID) || seen[x.ID] || x.Created.IsZero() || x.Kept || x.Expires.Sub(x.Created) != 12*time.Hour || x.Created.After(time.Now().Add(time.Second)) || !x.Expires.After(time.Now()) {
 			t.Fatal("metadata invariants invalid")
 		}
 		seen[x.ID] = true

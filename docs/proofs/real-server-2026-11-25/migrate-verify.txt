@@ -1,0 +1,92 @@
+# Proof 3 rehearsal with its Native copy on a website the broker makes, 2026-11-26
+#
+# scripts/devvm/proof.sh migrate-verify with the scripts of 0fe597c (hostbroker, brokerdrive and panelctl
+# built from the same tree), run against a new Linode that scripts/ci/nightly-fresh-install.sh made and kept
+# (Linode 112009633, g6-standard-2, AlmaLinux 9.8, SELinux Enforcing, openlitespeed-1.9.4-3.el9). It had a
+# fresh install of the branch head 203b3a4, whose installer removed OpenLiteSpeed's sample site (virtualHost
+# Example and its listener on *:8088), then the release of 7a1c740 as an upgrade. Before 0fe597c this proof
+# copied its Native copy into that sample site's folder and compared against 127.0.0.1:8088, which a new
+# install no longer has. The installed sifruno and sifruno-broker units were stopped for the run (the proof
+# starts its own broker on their socket) and started again afterwards, with Apache stopped again.
+#
+# Checked on the server after the run: the user pv22349, its home and its vhost are gone, and the proof's
+# broker unit is inactive. The broker's vhost answers wp-config.php.bak with 403, unlike the sample site in
+# the 2026-11-22 run (phase0-proof3-rehearsal-migrate-verify.txt), so only the password folder opens on the
+# Native copy. The Linode was deleted afterwards (phpmyadmin-token.txt, Part 7).
+#
+# The transcript as the script printed it; it holds loopback addresses only.
+
+# Proof 3 rehearsal: verify catches a protected folder that opens on the new server
+# 2026-11-26T19:45:49Z  httpd-2.4.62-13.el9_8.9.x86_64 openlitespeed-1.9.4-3.el9.x86_64
+
+## The old site (Apache, as on cPanel)
+Port tcp/8081 already defined, modifying instead
+Port tcp/8082 already defined, modifying instead
+PASS  old site answers 200 on /
+PASS  old site closes /private/ with 401
+PASS  old site closes wp-config.php.bak with 403
+
+## Pre-flight: scan the old site's .htaccess files
+.htaccess scan, layout single (read-only)
+sites: 1 (native 0, convertible 0, compat 1)
+sites without .htaccess: 0
+.htaccess files: 2 (native 0, convertible 0, compat 2, not readable 0)
+directives: 6
+  rewrite: 0
+  access_control: 6
+  php_settings: 0
+  headers: 0
+  caching: 0
+  mime_handlers: 0
+  redirect_alias: 0
+site verdict: compat
+PASS  the scan sends this site to the Compat tier
+probes: [{"path": "/private/", "kind": "auth"}]
+PASS  probes cover the password folder
+PASS  the scan reports the <Files> deny rule for wp-config.php.bak
+PASS  probes cover the denied file
+
+## Native tier: the same files on a website the broker makes
+PASS  the broker runs with the web operation on
+PASS  the broker makes the account pv22349 for pv22349.proof.test
+PASS  the account's user copies the old site's files into its public_html
+PASS  the broker puts pv22349.proof.test live on OpenLiteSpeed
+PASS  OpenLiteSpeed serves the copy for pv22349.proof.test on 127.0.0.1:80
+OpenLiteSpeed answers /private/ with 200 and wp-config.php.bak with 403
+CRITICAL closed URL /private/ (auth) new_open: closed on the old site (401) but open on the new site (200)
+CUTOVER LOCKED: 1 failed check(s)
+PASS closed URL /wp-config.php.bak (deny): both sites answer 403
+PASS page /
+PASS page /about.html
+PASS page /blog/
+PASS page /contact.html
+PASS page /blog/first.html
+Old site: http://127.0.0.1:8081
+New site: http://pv22349.proof.test connecting to 127.0.0.1:80
+Pages: 5 compared (limit 50): 5 pass, 0 warn, 0 fail
+Closed URLs: 2 checked: 1 pass, 1 fail
+Scope: Pages discovered on the old site (status, redirect target, content type, HTML title, body size), listed closed URLs (401/403) and folders open to some addresses only (the status each folder's rule gives the address each site sees verify come from). Screenshots, WordPress admin, database rows, mail, DNS and SSL are not compared.
+Started 2026-11-26T19:45:56Z, finished 2026-11-26T19:45:57Z
+PASS  verify exits 3: the gate is closed against the Native copy
+PASS  the report names the opened password folder
+PASS  the JSON report says cutover_allowed false
+
+## Compat tier: the same files on Apache
+CUTOVER ALLOWED: every compared page and closed URL matches the old site
+PASS closed URL /private/ (auth): both sites answer 401
+PASS closed URL /wp-config.php.bak (deny): both sites answer 403
+PASS page /
+PASS page /about.html
+PASS page /blog/
+PASS page /contact.html
+PASS page /blog/first.html
+PASS  verify exits 0: the gate opens against the Compat copy
+PASS  every probe passed
+PASS  pages were compared
+
+## A broken copy is caught too
+FAIL page /blog/first.html: status 200 → 404
+PASS  a page missing on the copy closes the gate
+
+Reports: /srv/proof3-1795722349/work
+# Result: 0 failed

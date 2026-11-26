@@ -277,6 +277,9 @@ export class WordPressApiError extends Error {
     public readonly detail: string,
     public readonly next: string,
     public readonly technical: string,
+    // The problem the server answered, for a caller that reads more of it
+    // (a move's certificate to confirm).
+    public readonly problem: Record<string, unknown> = {},
   ) { super(what); this.name = "WordPressApiError"; }
 }
 
@@ -380,7 +383,7 @@ export async function request(operation: Operation, url: string, options: Reques
       // the old server printed (technical), shown under Technical details.
       const next = serverText(problem.next) || explained.next;
       const technical = serverText(problem.technical, 1100);
-      throw new WordPressApiError(response.status, failed, explained.why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}${technical ? `\n${technical}` : ""}`);
+      throw new WordPressApiError(response.status, failed, explained.why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}${technical ? `\n${technical}` : ""}`, problem);
     }
     return value;
   } finally {

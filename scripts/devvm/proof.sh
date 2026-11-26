@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel [whm] | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -36,7 +36,12 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 refused before anything is made; a failed copy removes the
                 account it made; a tenant's link to /root or hard link to a
                 root-only file brings nothing of /root; no password is in
-                process arguments.
+                process arguments. With whm, the WHM login path instead
+                (D-0005): the stand-in's cPanel tools refuse over SSH, a
+                WHM API stub on port 2087 lists the accounts and adds the
+                key, one site moves, and the key goes; plus the classified
+                errors of a cPanel tool over SSH and of a WHM that prints no
+                JSON. KEEP_STANDIN=1 keeps the stand-in for screenshots.
   broker-web    The broker's web operation: OpenLiteSpeed may read the home,
                 a quota is set, the vhost is rendered, tested and reloaded,
                 a rejected config changes nothing, a symlinked public_html is
@@ -242,6 +247,10 @@ case "${1:-}" in
     exit "$status"
     ;;
   migrate-cpanel)
+    mode="${2:-}"
+    case "$mode" in ''|whm) ;; *) usage >&2; exit 2 ;; esac
+    keep="${KEEP_STANDIN:-0}"
+    case "$keep" in 0|1) ;; *) usage >&2; exit 2 ;; esac
     stage="$(mktemp -d)"
     trap 'rm -rf -- "$stage"' EXIT
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -266,7 +275,7 @@ case "${1:-}" in
     mkdir -p "$OUT"
     transcript="$OUT/migrate-cpanel-$stamp.txt"
     status=0
-    "$HERE/vm.sh" ssh "/opt/sifruno-proof/migrate-cpanel.guest.sh $guest $port" | tee "$transcript" || status=$?
+    "$HERE/vm.sh" ssh "KEEP_STANDIN=$keep /opt/sifruno-proof/migrate-cpanel.guest.sh $guest $port $mode" | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;

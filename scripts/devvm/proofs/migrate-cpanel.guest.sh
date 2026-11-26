@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Migration v1 proof, guest side (proof.sh migrate-cpanel copies it in).
-# Runs as root in the dev VM:  migrate-cpanel.guest.sh DIR PORT
+# Runs as root in the dev VM:  migrate-cpanel.guest.sh DIR PORT [whm]
 # DIR holds the panel (sifruno, dist.tgz, state.tgz); the panel listens on
 # 127.0.0.1:PORT as sifpanel with the broker and the MariaDB option file.
+# With whm, the SSH path's sections are left out and the WHM login path
+# runs instead (whm_proof below). KEEP_STANDIN=1 keeps the stand-in
+# container running afterwards, for screenshots; remove it with
+# podman rm -f NAME.
 #
 # THE OLD SERVER HERE IS A STAND-IN, NOT cPANEL. cPanel's software is
 # licensed and is not installed or analysed. A Podman container (AlmaLinux
@@ -37,8 +41,9 @@
 # Every check prints PASS or FAIL; the exit status is the number of FAILs.
 set -uo pipefail
 
-DIR="${1:?usage: migrate-cpanel.guest.sh DIR PORT}"
-PORT="${2:?usage: migrate-cpanel.guest.sh DIR PORT}"
+DIR="${1:?usage: migrate-cpanel.guest.sh DIR PORT [whm]}"
+PORT="${2:?usage: migrate-cpanel.guest.sh DIR PORT [whm]}"
+MODE="${3:-ssh}"
 BIN=/opt/sifruno-proof
 SOCKET=/run/sifruno-broker/control.sock
 STATE=/var/lib/sifruno-broker
@@ -84,6 +89,10 @@ sample_stop() { kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null; }
 # shellcheck disable=SC2317 # called by the EXIT trap below
 cleanup() {
   sample_stop 2>/dev/null
+  if [ "${KEEP_STANDIN:-0}" = 1 ]; then
+    echo "# kept: the stand-in $CTR and its /etc/hosts lines"
+    return
+  fi
   podman rm -f "$CTR" >/dev/null 2>&1
   sed -i "/ # sifruno-migrate-proof-$RUNID\$/d" /etc/hosts
 }
@@ -126,7 +135,7 @@ podman run -d --name "$CTR" --cap-add AUDIT_WRITE --hostname cpanel-standin "$IM
 CIP="$(podman inspect -f '{{.NetworkSettings.IPAddress}}' "$CTR")"
 echo "  stand-in address: ${CIP:-none}"
 in_ctr "dnf -y -q module enable php:8.3 >/dev/null 2>&1 || dnf -y -q module enable php:8.2 >/dev/null 2>&1; \
-  dnf -y -q install openssh-server rsync mariadb-server httpd php-fpm php-cli php-mysqlnd php-json php-gd php-xml php-mbstring cronie procps-ng >/dev/null 2>&1"
+  dnf -y -q install openssh-server rsync mariadb-server httpd php-fpm php-cli php-mysqlnd php-json php-gd php-xml php-mbstring cronie procps-ng python3 openssl >/dev/null 2>&1"
 PHPXY="$(in_ctr "php -r 'echo PHP_MAJOR_VERSION.PHP_MINOR_VERSION;'" 2>/dev/null)"
 echo "  stand-in PHP: ${PHPXY:-none} (reported to Sifruno as ea-php$PHPXY)"
 check "the stand-in has sshd, MariaDB, Apache, PHP-FPM, rsync and crontab" in_ctr "test -x /usr/sbin/sshd -a -x /usr/sbin/httpd -a -x /usr/sbin/php-fpm -a -x /usr/bin/rsync -a -x /usr/bin/crontab -a -n '$PHPXY'"
@@ -319,6 +328,302 @@ check "the old staff site answers 403 for /old-backups/backup.sql, rewritten int
 check "the old staff site closes /office/ to this server (403) and opens /lobby/ (200)" test "$(status "http://$STAFF_DOMAIN/office/")" = 403 -a "$(status "http://$STAFF_DOMAIN/lobby/")" = 200
 check "the old WordPress denies Akismet's folder with 403" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/akismet.php")" = 403
 check "the old WordPress serves Akismet's allow-listed akismet.css with 200" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/_inc/akismet.css")" = 200
+
+
+# ---- The WHM login path (D-0005) ------------------------------------------------
+# With "whm" as the third argument, sections 3 to 9 (the SSH path) are left
+# out and this runs instead: the stand-in's whmapi1 and uapi refuse when run
+# over SSH, as cPanel's preload protection did on the owner's server, and a
+# small WHM API 1 stub on port 2087 (Python over HTTPS with a self-signed
+# certificate; not cPanel) answers listaccts, domainuserdata,
+# php_get_vhost_versions, uapi_cpanel and the key calls (importsshkey,
+# authorizesshkey, deletesshkey, listsshkeys) as cPanel's public API
+# documentation gives them, for root's API token only.
+whm_proof() {
+  echo
+  echo "## 3. The WHM API stand-in on port 2087 (Python; not cPanel)"
+  cat > "$WORK/whm-standin.py" <<'STUB'
+#!/usr/bin/python3
+# STAND-IN for WHM API 1 over HTTPS in the migration proof: not cPanel. It
+# answers in the shapes cPanel's public API documentation gives
+# (https://api.docs.cpanel.net), from the stand-in whmapi1 and uapi scripts
+# and root's /root/.ssh, for root's API token only ("Authorization: whm
+# root:TOKEN"). With /etc/standin-whm/broken present it prints what a
+# hijacked cPanel printed instead of JSON.
+import base64, http.server, json, os, re, ssl, subprocess, sys, urllib.parse
+TOKEN = open('/etc/standin-whm/token').read().strip()
+SSH = '/root/.ssh'
+KEYS = SSH + '/authorized_keys'
+LOG = open('/var/log/whm-standin.log', 'a', buffering=1)
+
+def tool(args):
+    env = {'PATH': '/usr/bin:/bin'}
+    return subprocess.run(args, capture_output=True, text=True, env=env, timeout=60)
+
+def authorized():
+    try:
+        return [l.rstrip('\n') for l in open(KEYS)]
+    except FileNotFoundError:
+        return []
+
+def write_keys(lines):
+    with open(KEYS, 'w') as f:
+        f.write(''.join(l + '\n' for l in lines))
+    os.chmod(KEYS, 0o600)
+
+def key_file(name):
+    name = os.path.basename(name or '')
+    return name if re.fullmatch(r'[A-Za-z0-9._-]{1,128}', name) else None
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def answer(self, function, result, reason, data=None, status=200):
+        body = {'metadata': {'command': function, 'version': 1, 'result': result, 'reason': reason}}
+        if data is not None:
+            body['data'] = data
+        raw = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def text(self, status, text):
+        raw = text.encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/plain')
+        self.send_header('Content-Length', str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        url = urllib.parse.urlsplit(self.path)
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
+        if not url.path.startswith('/json-api/') or q.get('api.version') != '1':
+            return self.text(404, 'Not found')
+        function = url.path[len('/json-api/'):]
+        if self.headers.get('Authorization', '') != 'whm root:' + TOKEN:
+            LOG.write('%s refused\n' % function)
+            return self.text(403, 'Access denied')
+        LOG.write('%s\n' % function)
+        if os.path.exists('/etc/standin-whm/broken'):
+            return self.text(200, '2026/01/02 03:04:05 LD_Preload detected, refusing to run\n2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369.\n')
+        if function in ('listaccts', 'domainuserdata', 'php_get_vhost_versions'):
+            args = ['/usr/local/cpanel/bin/whmapi1', '--output=json', function]
+            if function == 'domainuserdata':
+                args.append('domain=' + q.get('domain', ''))
+            out = tool(args)
+            if out.returncode != 0:
+                return self.answer(function, 0, 'The function failed.')
+            body = json.loads(out.stdout)
+            if function == 'listaccts' and q.get('search'):
+                if q.get('searchtype') != 'user' or q.get('searchmethod') != 'exact':
+                    return self.answer(function, 0, 'The proof stand-in searches by exact user only.')
+                body['data']['acct'] = [a for a in body['data']['acct'] if a['user'] == q['search']]
+            return self.answer(function, 1, 'OK', body.get('data'))
+        if function == 'uapi_cpanel':
+            out = tool(['/usr/local/cpanel/bin/uapi', '--output=json', '--user=' + q.get('cpanel.user', ''), q.get('cpanel.module', ''), q.get('cpanel.function', '')])
+            if out.returncode != 0:
+                return self.answer(function, 0, 'The function failed.')
+            return self.answer(function, 1, 'OK', {'uapi': json.loads(out.stdout)['result']})
+        if function == 'importsshkey':
+            name, key = key_file(q.get('name')), q.get('key', '')
+            if not name or not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+ [A-Za-z0-9._-]+', key):
+                return self.answer(function, 0, 'Invalid key or name.')
+            with open('%s/%s.pub' % (SSH, name), 'w') as f:
+                f.write(key + '\n')
+            return self.answer(function, 1, 'Key imported.')
+        if function == 'authorizesshkey':
+            name, text = key_file(q.get('file')), q.get('text', '')
+            if not text and name and os.path.exists('%s/%s' % (SSH, name)):
+                text = open('%s/%s' % (SSH, name)).read().strip()
+            if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+ [A-Za-z0-9._-]+', text):
+                return self.answer(function, 0, 'The key does not exist.')
+            lines = [l for l in authorized() if not l.endswith(text)]
+            if q.get('authorize') == '1':
+                options = q.get('options', '')
+                lines.append((options + ' ' if options else '') + text)
+            write_keys(lines)
+            return self.answer(function, 1, 'OK', {'file': name or '', 'authorized': 1 if q.get('authorize') == '1' else 0})
+        if function == 'deletesshkey':
+            name = key_file(q.get('file'))
+            path = '%s/%s' % (SSH, name) if name else None
+            if not path or not os.path.exists(path):
+                return self.answer(function, 0, 'The key file does not exist.')
+            text = open(path).read().strip()
+            os.remove(path)
+            if q.get('leave_authorized') == '0':
+                write_keys([l for l in authorized() if not l.endswith(text)])
+            return self.answer(function, 1, 'OK', {'file': path})
+        if function == 'listsshkeys':
+            keys = []
+            for name in sorted(os.listdir(SSH)):
+                if name.endswith('.pub'):
+                    text = open('%s/%s' % (SSH, name)).read().strip()
+                    keys.append({'file': name, 'authorized': 1 if any(l.endswith(text) for l in authorized()) else 0,
+                                 'comment': text.split(' ')[-1], 'private': 0, 'text': text if q.get('public_texts') == '1' else ''})
+            return self.answer(function, 1, 'OK', {'keys': keys})
+        return self.answer(function, 0, 'The proof stand-in does not offer ' + function + '.')
+
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain('/etc/standin-whm/cert.pem', '/etc/standin-whm/key.pem')
+server = http.server.ThreadingHTTPServer(('0.0.0.0', 2087), Handler)
+server.socket = context.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
+STUB
+  secret > "$WORK/whm.token"
+  chmod 0600 "$WORK/whm.token"
+  podman cp "$WORK/whm-standin.py" "$CTR:/usr/local/cpanel/whm-standin.py"
+  in_ctr "install -d -m 0700 /etc/standin-whm"
+  podman cp "$WORK/whm.token" "$CTR:/etc/standin-whm/token"
+  in_ctr "chmod 0600 /etc/standin-whm/token; openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj /CN=cpanel-standin -keyout /etc/standin-whm/key.pem -out /etc/standin-whm/cert.pem >/dev/null 2>&1"
+  podman exec -d "$CTR" python3 /usr/local/cpanel/whm-standin.py
+  for _ in $(seq 1 20); do curl -sk -o /dev/null "https://$CIP:2087/" && break; sleep 1; done
+  STUB_FP="$(in_ctr "openssl x509 -noout -fingerprint -sha256 -in /etc/standin-whm/cert.pem" | sed 's/.*=//')"
+  echo "  WHM stand-in: https://$CIP:2087, certificate SHA-256 $STUB_FP (self-signed)"
+  check "the WHM stand-in answers on port 2087 over HTTPS" bash -c "curl -sk -o /dev/null -w '%{http_code}' https://$CIP:2087/json-api/listaccts?api.version=1 | grep -qx 403"
+  # As on the owner's server: cPanel's own tools refuse when started over
+  # SSH. The stand-in scripts print what the owner's screen showed.
+  cat > "$WORK/preload-guard" <<'GUARD'
+if [ -n "${SSH_CONNECTION:-}" ]; then
+  echo "$(date '+%Y/%m/%d %H:%M:%S') LD_Preload detected, refusing to run" >&2
+  echo "$(date '+%Y/%m/%d %H:%M:%S') libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369." >&2
+  exit 3
+fi
+GUARD
+  podman cp "$WORK/preload-guard" "$CTR:/root/preload-guard"
+  # shellcheck disable=SC2016 # expanded in the container
+  in_ctr 'for t in whmapi1 uapi; do f=/usr/local/cpanel/bin/$t; { head -n 1 $f; cat /root/preload-guard; tail -n +2 $f; } > /root/$t.new && cat /root/$t.new > $f && rm -f /root/$t.new; done; rm -f /root/preload-guard'
+  check "the stand-in's whmapi1 refuses over SSH (exit 3, the preload message)" bash -c "podman exec -e SSH_CONNECTION='192.0.2.1 1 192.0.2.2 22' $CTR /usr/local/cpanel/bin/whmapi1 --output=json listaccts 2>&1 >/dev/null | grep -q 'LD_Preload detect'"
+
+  # Sign in.
+  python3 -c "import json,sys; print(json.dumps({'access_key': open(sys.argv[1]).read().strip()}))" "$DIR/state/operator/access.key" > "$WORK/login.json"
+  CSRF=""
+  call POST /api/v1/session/login "$WORK/login.json"
+  CSRF="$(json "$WORK/answer.json" "d['csrf_token']")"
+  check "the panel signs in with the server's access key" test "$code" = 200 -a -n "$CSRF"
+  explain() { python3 -c "import json,sys; d=json.load(open(sys.argv[1])); [print('    %s: %s' % (k, d.get(k, ''))) for k in ('detail', 'next', 'technical')]" "$WORK/answer.json"; }
+
+  echo
+  echo "## 4. The SSH path on that server: the classified cPanel-tool failure (D-0006)"
+  call POST /api/v1/websites/migrations/sources "$(body open "{\"host\":\"$CIP\",\"port\":22}")"
+  SRC="$(json "$WORK/answer.json" "d['source']['id']")"
+  cp "$WORK/answer.json" "$WORK/source-ssh.json"
+  fp="$(in_ctr "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub" | awk '{print $2}')"
+  call POST "/api/v1/websites/migrations/sources/$SRC/host-key" "$(body fp "{\"fingerprint\":\"$fp\"}")"
+  in_ctr "$(json "$WORK/source-ssh.json" "d['source']['install_command']")"
+  call GET "/api/v1/websites/migrations/sources/$SRC/accounts"
+  echo "  GET .../accounts over SSH answered $code:"; explain
+  check "listing over SSH fails with 422" test "$code" = 422
+  check "it says cPanel's own tools did not answer properly, and why" grep -q "cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them" "$WORK/answer.json"
+  check "its next step offers checking the server and the WHM login, then Try again" grep -q "Check the old server's security and cPanel (cPanel support can help), or connect with the WHM login, then press Try again." "$WORK/answer.json"
+  check "the old server's words are under technical only" test "$(json "$WORK/answer.json" "('LD_Preload' in d['technical']) and ('LD_Preload' not in d['detail'] + d['next'])")" = True
+  check "the generic \"Fix the value\" step is gone" bash -c "! grep -q 'Fix the value' $WORK/answer.json"
+  call POST "/api/v1/websites/migrations/sources/$SRC/cancel" "$(body empty '{}')"
+  check "stopping that connection removes its key line" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
+
+  echo
+  echo "## 5. Connect with the WHM login: a WHM that prints no JSON, a wrong token"
+  whm_body() { # whm_body TOKENFILE PIN: the form, built from files, never arguments
+    python3 -c "import json,sys; b={'address': 'https://' + sys.argv[1] + ':2087', 'token': open(sys.argv[2]).read().strip()}
+if sys.argv[3]: b['tls_fingerprint'] = sys.argv[3]
+print(json.dumps(b))" "$CIP" "$1" "$2" > "$WORK/whm.json"
+    echo "$WORK/whm.json"
+  }
+  in_ctr "touch /etc/standin-whm/broken"
+  call POST /api/v1/websites/migrations/whm "$(whm_body "$WORK/whm.token" "")"
+  echo "  first POST .../whm answered $code: certificate $(json "$WORK/answer.json" "d.get('certificate', {}).get('fingerprint')")"
+  check "an untrusted certificate is shown first (409), with its fingerprint" test "$code" = 409 -a "$(json "$WORK/answer.json" "d['certificate']['fingerprint']")" = "$STUB_FP"
+  check "no login reached WHM before the certificate was confirmed" bash -c "! podman exec $CTR grep -q . /var/log/whm-standin.log"
+  call POST /api/v1/websites/migrations/whm "$(whm_body "$WORK/whm.token" "$STUB_FP")"
+  echo "  POST .../whm with a WHM that prints no JSON answered $code:"; explain
+  check "a WHM that prints no JSON fails with 422" test "$code" = 422
+  check "it says WHM did not answer with the data cPanel documents, and what to do" grep -q "WHM on the old server did not answer with the data cPanel documents" "$WORK/answer.json"
+  check "what WHM printed is under technical only" test "$(json "$WORK/answer.json" "('LD_Preload' in d['technical']) and ('LD_Preload' not in d['detail'] + d['next'])")" = True
+  in_ctr "rm -f /etc/standin-whm/broken"
+  secret > "$WORK/wrong.token"
+  call POST /api/v1/websites/migrations/whm "$(whm_body "$WORK/wrong.token" "$STUB_FP")"
+  echo "  POST .../whm with a wrong token answered $code:"; explain
+  check "a wrong token: WHM refused the login (422), the token not echoed" bash -c "[ $code = 422 ] && grep -q 'refused the login' $WORK/answer.json && ! grep -qF \"\$(cat $WORK/wrong.token)\" $WORK/answer.json"
+
+  echo
+  echo "## 6. Connect with the WHM login, confirm the SSH key once, choose"
+  sample_start
+  call POST /api/v1/websites/migrations/whm "$(whm_body "$WORK/whm.token" "$STUB_FP")"
+  cp "$WORK/answer.json" "$WORK/source-whm.json"
+  SRC="$(json "$WORK/answer.json" "d['source']['id']")"
+  echo "  POST .../whm answered $code: migration $SRC via $(json "$WORK/answer.json" "d['source']['via']"), accounts $(json "$WORK/answer.json" "' '.join(a['user'] for a in d['accounts'])")"
+  check "WHM's login connects (200): the source is via whm and lists the six accounts" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['via']")" = whm -a "$(json "$WORK/answer.json" "len(d['accounts'])")" = 6
+  check "the token is not in the answer" bash -c "! grep -qF \"\$(cat $WORK/whm.token)\" $WORK/answer.json"
+  check "WHM added the migration key for root with restrict (one line)" in_ctr "grep -c '^restrict ssh-ed25519 [A-Za-z0-9+/=]* sifruno-migration-$SRC\$' /root/.ssh/authorized_keys | grep -qx 1"
+  check "no command was copied to the old server: the key came through WHM's importsshkey and authorizesshkey" in_ctr "grep -qx importsshkey /var/log/whm-standin.log && grep -qx authorizesshkey /var/log/whm-standin.log"
+  shown="$(json "$WORK/source-whm.json" "[k['fingerprint'] for k in d['source']['host_keys'] if k['type']=='ssh-ed25519'][0]")"
+  own="$(in_ctr "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub" | awk '{print $2}')"
+  echo "  SSH key shown once: ssh-ed25519 $shown (the old server's own: $own)"
+  call POST "/api/v1/websites/migrations/sources/$SRC/host-key" "$(body fp "{\"fingerprint\":\"$shown\"}")"
+  check "one confirm pins it (200), the old server's own ed25519 key" test "$code" = 200 -a "$shown" = "$own"
+  call GET "/api/v1/websites/migrations/sources/$SRC/accounts"
+  check "listing again goes through WHM (200, six accounts)" test "$code" = 200 -a "$(json "$WORK/answer.json" "len(d['accounts'])")" = 6
+
+  echo
+  echo "## 7. Move $SHOP_DOMAIN with cPanel's tools refusing over SSH"
+  call POST /api/v1/websites/migrations "$(body start "{\"source\":\"$SRC\",\"username\":\"$SHOP\"}")"
+  JOB="$(json "$WORK/answer.json" "d['job']['id']")"
+  for _ in $(seq 1 450); do
+    call GET "/api/v1/websites/jobs/$JOB"
+    cp "$WORK/answer.json" "$WORK/job.json"
+    state="$(json "$WORK/job.json" "d['job']['state']")"
+    [ "$state" != running ] && break
+    sleep 2
+  done
+  for _ in $(seq 1 120); do
+    [ "$(json "$WORK/job.json" "(d['job']['migration'].get('verify') or {}).get('running')")" = False ] && break
+    sleep 2; call GET "/api/v1/websites/jobs/$JOB"; cp "$WORK/answer.json" "$WORK/job.json"
+  done
+  sample_stop
+  echo "  job $JOB: $state"
+  python3 -c "import json,sys; [print('    %-8s %-8s %s' % (s['name'], s['state'], s['message'][:240])) for s in json.load(open(sys.argv[1]))['job']['steps']]" "$WORK/job.json"
+  [ "$state" = failed ] && python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['job']['error']; [print('    %s: %s' % (k, e[k])) for k in ('why','next','technical')]" "$WORK/job.json"
+  echo "  WHM calls: $(in_ctr "sort /var/log/whm-standin.log | uniq -c | tr -s ' ' | paste -sd ',' -")"
+  check "the move succeeded" test "$state" = succeeded
+  check "the job is via whm" test "$(json "$WORK/job.json" "d['job']['migration'].get('via')")" = whm
+  check "WHM answered what the copy asked of cPanel (domainuserdata, php_get_vhost_versions, uapi_cpanel)" in_ctr "grep -qx domainuserdata /var/log/whm-standin.log && grep -qx php_get_vhost_versions /var/log/whm-standin.log && grep -qx uapi_cpanel /var/log/whm-standin.log"
+  src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
+  dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"
+  check "wp-config.php arrived unchanged (same sha256), over SSH with the pinned key" test -n "$src_sum" -a "$src_sum" = "$dst_sum"
+  src_hash="$(in_ctr "mysql -N -e \"SELECT authentication_string FROM mysql.user WHERE User='${SHOP}_wpu' AND Host='localhost'\"")"
+  dst_hash="$(mysql --protocol=socket -uroot -N -e "SELECT authentication_string FROM mysql.user WHERE User='${SHOP}_wpu' AND Host='localhost'" 2>/dev/null)"
+  check "the database user ${SHOP}_wpu has the same password hash" test -n "$src_hash" -a "$src_hash" = "$dst_hash"
+  src_posts="$(in_ctr "mysql -N -e 'SELECT COUNT(*) FROM ${SHOP}_wp.wp_posts'")"
+  dst_posts="$(mysql --protocol=socket -uroot -N -e "SELECT COUNT(*) FROM ${SHOP}_wp.wp_posts" 2>/dev/null)"
+  check "the database ${SHOP}_wp has the same rows (wp_posts $src_posts = $dst_posts)" test -n "$src_posts" -a "$src_posts" = "$dst_posts"
+  check "the copy answers with the site's title on this server" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/ | grep -q '$TITLE'"
+  echo "  verify: $(json "$WORK/job.json" "d['job']['migration']['verify']['verdict']")"
+  key="$(json "$WORK/job.json" "d['job']['steps'][-1]['message']")"
+  echo "  key step: $key"
+  check "the key step says how the key went" bash -c "grep -q 'now refuses the migration key' <<< \"\$1\" && grep -q 'WHM' <<< \"\$1\"" _ "$key"
+  check "the old server no longer has the key line" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
+  check "WHM deleted the key's file from /root/.ssh" in_ctr "test ! -e /root/.ssh/sifruno-migration-$SRC.pub"
+  check "this server deleted the migration's private key" test ! -e "$STATE/migrate/$SRC"
+
+  echo
+  echo "## 8. The WHM login is nowhere but in the panel's memory"
+  tokfile="$WORK/whm.token"
+  check "not in the panel's state or log" bash -c "! grep -rqF \"\$(cat $tokfile)\" $DIR/state $DIR/panel.log"
+  check "not in the broker's state" bash -c "! grep -rqaF \"\$(cat $tokfile)\" $STATE"
+  check "not in any process's arguments while it ran" bash -c "! grep -qF \"\$(cat $tokfile)\" $WORK/ps-samples.txt"
+  check "not in the job record" bash -c "! grep -qF \"\$(cat $tokfile)\" $WORK/job.json"
+  check "the connection's login is forgotten: listing it again is refused" bash -c "code=\$(curl -s -o /dev/null -w '%{http_code}' -b $JAR -H 'Origin: $API' $API/api/v1/websites/migrations/sources/$SRC/accounts); [ \$code != 200 ]"
+}
+
+if [ "$MODE" = whm ]; then
+  whm_proof
+  echo
+  if [ "$fails" -eq 0 ]; then echo "RESULT: every check passed"; else echo "RESULT: $fails check(s) failed"; fi
+  exit "$fails"
+fi
 
 echo
 echo "## 3. Sign in, connect, confirm the host key"

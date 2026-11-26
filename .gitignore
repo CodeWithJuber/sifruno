@@ -31,3 +31,4 @@ deliverables/runtime-builds/
 deliverables/
 *.tsbuildinfo
 sifruno
+/dist/

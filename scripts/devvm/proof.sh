@@ -22,8 +22,9 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
   migrate-verify
                 Proof 3 rehearsal: the .htaccess scan sends an Apache site
                 with a password folder to the Compat tier, and migrate verify
-                keeps the cutover gate closed against an OpenLiteSpeed copy
-                (where the folder opens) and opens it against an Apache copy.
+                keeps the cutover gate closed against a copy on a website the
+                broker makes on OpenLiteSpeed (where the folder opens) and
+                opens it against an Apache copy.
   migrate-cpanel
                 Migration v1 against a cPanel stand-in (a Podman container
                 with sshd, MariaDB, Apache and stub whmapi1/uapi scripts; not
@@ -283,10 +284,15 @@ case "${1:-}" in
     stage="$(mktemp -d)"
     trap 'rm -rf -- "$stage"' EXIT
     build "$stage/panelctl" ./cmd/panelctl
-    "$HERE/vm.sh" ssh 'install -d -m 0755 /opt/sifruno-proof'
-    "$HERE/vm.sh" put "$stage/panelctl" /opt/sifruno-proof/panelctl
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    # A broker left running by an earlier proof holds its binary open.
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in panelctl hostbroker brokerdrive; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
     "$HERE/vm.sh" put "$HERE/proofs/migrate-verify.guest.sh" /opt/sifruno-proof/migrate-verify.guest.sh
-    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/panelctl /opt/sifruno-proof/migrate-verify.guest.sh; restorecon -R /opt/sifruno-proof'
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/panelctl /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/migrate-verify.guest.sh; restorecon -R /opt/sifruno-proof'
     mkdir -p "$OUT"
     transcript="$OUT/proof3-migrate-verify-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0

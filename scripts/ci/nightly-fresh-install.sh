@@ -48,6 +48,11 @@
 #                                 the run's SSH key and ports file. Reach the
 #                                 server with
 #                                 SIFRUNO_DEVVM_DIR=FOLDER scripts/devvm/vm.sh ssh
+#   SIFRUNO_NIGHTLY_EXTRA_PUBKEY  optional: one more OpenSSH public key line
+#                                 (ssh-ed25519 only) that root accepts besides
+#                                 the run's own key, so a kept server stays
+#                                 reachable after the folder with the run's key
+#                                 is gone.
 #
 # Exit status is zero only when every check passed and nothing of the run is
 # left on the Linode account but a server kept with SIFRUNO_NIGHTLY_KEEP=1. Needs curl, jq, ssh, scp, ssh-keygen and
@@ -539,9 +544,13 @@ log "Create the root disk: $IMAGE, $ROOT_DISK_MB MB, root signs in with this run
 # random, sent once and kept nowhere, so the run's key is the only way in.
 root_pass="$(head -c 30 /dev/urandom | base64 | tr -d '\n/+=')"
 [ "${#root_pass}" -ge 32 ] || die "could not make a random root password"
+extra_key="${SIFRUNO_NIGHTLY_EXTRA_PUBKEY:-}"
+if [ -n "$extra_key" ] && ! [[ "$extra_key" =~ ^ssh-ed25519\ AAAA[A-Za-z0-9+/]+=*(\ [^[:cntrl:]]*)?$ ]]; then
+  die "SIFRUNO_NIGHTLY_EXTRA_PUBKEY is not one ssh-ed25519 public key line."
+fi
 body="$(printf '%s' "$root_pass" | jq -cR --arg image "$IMAGE" --argjson size "$ROOT_DISK_MB" \
-  --arg key "$(cat "$VM_DIR/id_ed25519.pub")" \
-  '{label: "root", image: $image, size: $size, authorized_keys: [$key], root_pass: .}')"
+  --arg key "$(cat "$VM_DIR/id_ed25519.pub")" --arg extra "$extra_key" \
+  '{label: "root", image: $image, size: $size, authorized_keys: ([$key] + (if $extra == "" then [] else [$extra] end)), root_pass: .}')"
 unset root_pass
 answer="$(api_when_free POST "/linode/instances/$LINODE_ID/disks" "$body")"
 unset body

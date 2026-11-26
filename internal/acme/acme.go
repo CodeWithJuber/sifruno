@@ -51,10 +51,28 @@ const (
 	// the broker refuse it is not likely to change by itself, and each try
 	// costs an order and two rows of the account's journal.
 	installRetryEvery = 7 * 24 * time.Hour
-	renewBefore       = 30 * 24 * time.Hour // renew once less than this is left
-	minWait           = time.Minute         // the loop never spins faster than this
-	logLimit          = 300                 // bytes of error text in one log line
-	stateDirMode      = 0o700
+	// The renewal loop also asks a first certificate for a live site the
+	// panel never tried: one made before certificates were set up, one
+	// moved from another server, or one whose record was lost. It asks for
+	// at most firstOrders such sites in one check, and only once the site's
+	// own domain answers this server's challenge path, so it never orders
+	// for a name that does not point here. Turning certificates on, on a
+	// server with hundreds of moved sites, would otherwise order for all of
+	// them at once. While more wait, the next check comes within
+	// firstLookEvery: 3 sites an hour, at most 6 orders (one per site, two
+	// when an alias fails validation and the domain is asked alone), is a
+	// small part of Let's Encrypt's 300 new orders per account in 3 hours
+	// and leaves room for renewals, new websites and domain changes, while
+	// a server with 100 such sites has them all in under two days. A site
+	// whose domain does not point here yet, a moved site before its DNS
+	// changes, is looked at again within the hour too, so its certificate
+	// follows soon after the DNS does.
+	firstOrders    = 3
+	firstLookEvery = time.Hour
+	renewBefore    = 30 * 24 * time.Hour // renew once less than this is left
+	minWait        = time.Minute         // the loop never spins faster than this
+	logLimit       = 300                 // bytes of error text in one log line
+	stateDirMode   = 0o700
 )
 
 // Installer installs a finished certificate (the chain, leaf first) and its
@@ -100,6 +118,11 @@ type Site struct {
 	Covered  []string
 	Revision uint64
 	Active   bool
+	// Live says the web server serves the site and the broker would install
+	// a certificate on it now: its account is active, its PHP is on and its
+	// site folder is as the broker recorded it. The renewal loop asks a
+	// first certificate only for a live site.
+	Live     bool
 	NotAfter time.Time
 }
 
@@ -134,6 +157,11 @@ type Manager struct {
 	log       io.Writer
 	now       func() time.Time
 	reaches   func(context.Context, string) bool
+	// notHere are the live sites without a certificate whose domain did
+	// not reach this server at the last check, by account, with that
+	// domain: each is logged once, not every hour. Only check uses it, and
+	// Run calls check from one goroutine.
+	notHere map[string]string
 }
 
 // NewManager returns a manager over any issuer, keeping its records in
@@ -253,7 +281,7 @@ func (m *Manager) Refresh(ctx context.Context, s Site) error {
 		r, _ := m.records.get(s.AccountID)
 		notAfter = r.NotAfter
 	}
-	return m.renew(ctx, s, due(notAfter, time.Time{}, m.now()), true)
+	return m.renew(ctx, s, due(notAfter, time.Time{}, m.now()), byRefresh)
 }
 
 // Waiting names the site's aliases its last certificate request left out
@@ -273,8 +301,9 @@ func (m *Manager) Waiting(accountID string) []string {
 // failed validation of an expiring certificate with aliases is tried once
 // more for the site's own domain alone, so an alias the certificate
 // authority cannot reach does not let the site's certificate run out. For
-// a refresh (Refresh) the site's last attempt must be refreshWait old.
-func (m *Manager) renew(ctx context.Context, s Site, expiring, refresh bool) error {
+// a refresh (Refresh) the site's last attempt must be refreshWait old; for
+// a first certificate the site must still have no record.
+func (m *Manager) renew(ctx context.Context, s Site, expiring bool, by renewal) error {
 	// The probes run before the manager is taken, all at once: a domain
 	// that answers slowly holds up neither another site's certificate nor
 	// its own for longer than one probe's limit.
@@ -285,13 +314,21 @@ func (m *Manager) renew(ctx context.Context, s Site, expiring, refresh bool) err
 		return ctx.Err()
 	}
 	defer func() { <-m.busy }()
+	// While the probes ran, the wizard's https step or a domain change may
+	// have asked for the site the loop found without a record: it is not
+	// asked for twice.
+	if by == byFirst {
+		if _, known := m.records.get(s.AccountID); known {
+			return nil
+		}
+	}
 	m.records.waiting(s.AccountID, s.Domain, waiting)
 	if !expiring && namesAll(covered(s), names) {
 		return nil
 	}
 	// Read while the manager is held, so two refreshes of one site at once
 	// make one order.
-	if refresh {
+	if by == byRefresh {
 		r, _ := m.records.get(s.AccountID)
 		if at := r.LastAttempt.Add(refreshWait(r)); m.now().Before(at) {
 			m.logf("acme: %s (account %s): no certificate asked for: the last attempt was at %s; the renewal check asks again from %s", strings.Join(names, ", "), s.AccountID, r.LastAttempt.UTC().Format(time.RFC3339), at.UTC().Format(time.RFC3339))
@@ -305,6 +342,15 @@ func (m *Manager) renew(ctx context.Context, s Site, expiring, refresh bool) err
 	}
 	return err
 }
+
+// renewal says who asks renew for a certificate.
+type renewal int
+
+const (
+	byLoop    renewal = iota // the renewal loop, for a site the panel tried before
+	byFirst                  // the renewal loop, for a live site the panel never tried
+	byRefresh                // a change of the site's domains (Refresh)
+)
 
 // probe asks every alias of the site at once whether it reaches this
 // server, and answers the names to ask a certificate for (the site's domain
@@ -367,7 +413,7 @@ func mayChange(s Site) bool {
 
 // Run renews certificates until ctx ends: once 2 minutes after start, then
 // every 12 hours, sooner when a site that has no certificate is due to be
-// tried again.
+// tried again, and within the hour while a live site waits for its first.
 func (m *Manager) Run(ctx context.Context) {
 	timer := time.NewTimer(firstCheck)
 	defer timer.Stop()
@@ -383,9 +429,10 @@ func (m *Manager) Run(ctx context.Context) {
 
 // check renews what is due and answers how long to wait for the next check.
 // A site is due when it has no certificate or less than 30 days left, and
-// was not tried in the last 6 hours. A site the panel has not tried and the
-// broker reports no certificate for is left alone: the panel cannot tell
-// whether it is live.
+// was not tried in the last 6 hours. A live site the panel has not tried and
+// the broker reports no certificate for gets its first certificate once its
+// domain reaches this server, for at most firstOrders sites per check; one
+// that is not live is left alone, since the broker would refuse it.
 func (m *Manager) check(ctx context.Context) time.Duration {
 	sites, err := m.sites.Sites(ctx)
 	if err != nil {
@@ -408,12 +455,36 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 		}
 	}
 	now := m.now()
+	first, firstWaiting := 0, false
+	notHere := map[string]string{}
 	for _, s := range sites {
 		if ctx.Err() != nil {
 			break
 		}
 		r, known := m.records.get(s.AccountID)
-		if !s.Active || (!known && s.NotAfter.IsZero()) {
+		if !s.Active {
+			continue
+		}
+		if !known && s.NotAfter.IsZero() {
+			switch {
+			case !s.Live:
+			case first == firstOrders:
+				firstWaiting = true
+				// Not probed this time: what was logged for it stands.
+				if domain, ok := m.notHere[s.AccountID]; ok {
+					notHere[s.AccountID] = domain
+				}
+			case !m.reaches(ctx, s.Domain):
+				firstWaiting = true
+				notHere[s.AccountID] = s.Domain
+				if m.notHere[s.AccountID] != s.Domain {
+					m.logf("acme: %s (account %s): no certificate yet: the domain does not reach this server on port 80, usually because its DNS points elsewhere; the panel looks again every hour and asks for one once it does", s.Domain, s.AccountID)
+				}
+			default:
+				first++
+				// secure logs the outcome; the error is already in the record.
+				_ = m.renew(ctx, s, true, byFirst)
+			}
 			continue
 		}
 		notAfter := s.NotAfter
@@ -427,10 +498,15 @@ func (m *Manager) check(ctx context.Context) time.Duration {
 		expiring := due(notAfter, retryAt, now)
 		if expiring || (!now.Before(retryAt) && mayChange(s)) {
 			// secure logs the outcome; the error is already in the record.
-			_ = m.renew(ctx, s, expiring, false)
+			_ = m.renew(ctx, s, expiring, byLoop)
 		}
 	}
-	return m.nextWait()
+	m.notHere = notHere
+	wait := m.nextWait()
+	if firstWaiting {
+		wait = min(wait, firstLookEvery)
+	}
+	return wait
 }
 
 // due: no certificate yet, or less than 30 days left, and the site may be

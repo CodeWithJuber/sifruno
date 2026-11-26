@@ -578,9 +578,12 @@ func (b brokerSites) Sites(ctx context.Context) ([]acme.Site, error) {
 }
 
 // certificateSite is a broker account as the certificate manager sees it:
-// its domain, its aliases, and the domains its certificate names.
+// its domain, its aliases, the domains its certificate names, and whether
+// it is live: the broker installs a certificate only on an active account
+// whose PHP is on and whose site folder is as it recorded it.
 func certificateSite(a hostaccounts.Account) acme.Site {
-	site := acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: a.State == "active"}
+	active := a.State == "active"
+	site := acme.Site{AccountID: a.ID, Domain: a.Domain, Revision: a.Revision, Active: active, Live: active && a.Web.PHPVersion != "" && !a.SiteFolderChanged}
 	if a.SiteDomains != nil {
 		site.Aliases = slices.Clone(a.SiteDomains.Aliases)
 	}

@@ -46,7 +46,7 @@ This repository is public. Anyone can open a pull request, and a pull request's 
 - a reusable workflow from another repository;
 - an action not pinned to a full commit SHA (write the version in a comment after it);
 - a workflow without top-level `permissions` (start from `contents: read` and grant more per job), or an `actions/checkout` without `persist-credentials: false`;
-- a `pull_request_target` workflow that checks out or fetches the pull request's code.
+- a `pull_request_target` workflow that checks out or fetches the pull request's code. `cla.yml` is the only such workflow, and it checks out nothing.
 
 Workflows that hold a secret that costs money, such as `nightly-install.yml`, run only on a schedule or by hand, never for a pull request, and use the `nightly` environment, whose required reviewer approves each run. Install languages with the setup actions (setup-go, setup-node), never assume them. `secret-scan.yml` runs gitleaks with `.gitleaks.toml`; add an allowlist line there only for a value that is not a secret.
 

@@ -492,3 +492,67 @@ func TestMigrationQuota(t *testing.T) {
 		}
 	}
 }
+
+// Every failure of a move says why and what to do for that case, and the
+// old server's own words stay in Technical details (D-0006).
+func TestMigrationFailuresSayWhatToDo(t *testing.T) {
+	preload := "2026/01/02 03:04:05 LD_Preload detected, refusing to run 2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369."
+	for _, c := range []struct {
+		name            string
+		plan, files, db error
+		why, next, tech string
+	}{
+		{name: "unreachable", plan: &hostaccounts.MigrationError{Step: "unreachable", Output: "ssh: connect to host 203.0.113.9 port 22: No route to host"},
+			why: "Sifruno could not reach the old server", next: "firewall accepts connections from this server, then move the website again.", tech: "No route to host"},
+		{name: "key refused", plan: &hostaccounts.MigrationError{Step: "key_refused", Output: "root@203.0.113.9: Permission denied (publickey)."},
+			why: "did not accept the migration key", next: "PermitRootLogin prohibit-password or yes", tech: "Permission denied"},
+		{name: "host key changed", plan: &hostaccounts.MigrationError{Step: "host_key_changed", Output: "Host key verification failed."},
+			why: "SSH host key is not the one you confirmed", next: "Stop until you know why", tech: "Host key verification failed"},
+		{name: "cPanel tool", plan: &hostaccounts.MigrationError{Step: "cpanel_tool", Output: preload},
+			why:  "cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them (a security problem on the old server) or when cPanel's files are damaged or being updated.",
+			next: "Check the old server's security and cPanel (cPanel support can help), then move the website again.", tech: "LD_Preload detect"},
+		{name: "cPanel output", plan: &hostaccounts.MigrationError{Step: "cpanel_output", Detail: "The old server's details of the site could not be read (whmapi1 domainuserdata)."},
+			why: "did not answer properly", next: "cPanel support can help", tech: "whmapi1 domainuserdata"},
+		{name: "account missing", plan: &hostaccounts.MigrationError{Step: "account_missing", Detail: "The old server has no account named shopone."},
+			why: "The old server has no account named shopone.", next: "List the old server's accounts again", tech: "step account_missing"},
+		{name: "no room here", files: &hostaccounts.MigrationError{Step: "space", Detail: "The copy needs about 3.0 GiB, but only 1.0 GiB is free on this server beyond the 2.0 GiB it keeps free."},
+			why: "This server does not have room for the copy. The copy needs about 3.0 GiB", next: "Free space on this server", tech: "step space"},
+		{name: "database", db: &hostaccounts.MigrationError{Step: "dump", Output: "mysqldump: Got error: 1045: Access denied for user 'root'@'localhost'"},
+			why: "A database could not be copied: the old server's dump tool stopped.", next: "Check the database on the old server", tech: "Access denied for user"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMigrationFixture(t)
+			f.broker.planErr, f.broker.filesErr, f.broker.dbErr = c.plan, c.files, c.db
+			job := f.migrate(t)
+			e := job.Error
+			if job.State != StateFailed || e == nil || !strings.Contains(e.Why, c.why) || !strings.Contains(e.Next, c.next) || !strings.Contains(e.Technical, c.tech) {
+				t.Fatalf("%+v", e)
+			}
+			var failed *hostaccounts.MigrationError
+			for _, err := range []error{c.plan, c.files, c.db} {
+				if errors.As(err, &failed) && failed.Output != "" && strings.Contains(e.Why+e.Next, failed.Output) {
+					t.Fatalf("the old server's words are outside Technical details: %+v", e)
+				}
+			}
+			if strings.Contains(e.Next, "Fix the value") || strings.Contains(e.Why, "The old server's answer could not be used") {
+				t.Fatalf("a generic text: %+v", e)
+			}
+		})
+	}
+}
+
+// A comparison that finds differences says so in plain words, with the
+// next step; one that matches says nothing more.
+func TestVerifyDifferencesSayWhatToDo(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.verdict = migrateverify.Report{Verdict: "CUTOVER LOCKED: 1 failed check(s)", Counts: migrateverify.Counts{PagesCompared: 3, PagesFail: 1, ProbesFail: 1}}
+	job := f.migrate(t)
+	v := job.Migration.Verify
+	if v == nil || !strings.Contains(v.Why, "1 page(s) differ") || !strings.Contains(v.Why, "1 closed URL(s)") || !strings.Contains(v.Next, "press Compare again") || !strings.Contains(v.Next, "accept the red lines") {
+		t.Fatalf("verify: %+v", v)
+	}
+	f = newMigrationFixture(t)
+	if v = f.migrate(t).Migration.Verify; v.Why != "" || v.Next != "" {
+		t.Fatalf("a matching copy: %+v", v)
+	}
+}

@@ -21,8 +21,10 @@ var testSourceID = strings.Repeat("e", 32)
 type migrationSpy struct {
 	pinned   bool
 	finished int
-	stale    []hostaccounts.StaleMigrationKey
-	cleared  []string
+	// accountsErr is what listing the old server's accounts answers.
+	accountsErr error
+	stale       []hostaccounts.StaleMigrationKey
+	cleared     []string
 }
 
 func (m *migrationSpy) view() hostaccounts.Migration {
@@ -52,6 +54,9 @@ func (m *migrationSpy) PinMigrationHostKey(_ context.Context, _ string, in hosta
 func (m *migrationSpy) MigrationAccounts(context.Context, string) ([]cpsource.Account, error) {
 	if !m.pinned {
 		return nil, &hostaccounts.MigrationError{Step: "host_key", Detail: "not confirmed"}
+	}
+	if m.accountsErr != nil {
+		return nil, m.accountsErr
 	}
 	return []cpsource.Account{{User: "shopone", Domain: "shop.example.test", DiskUsedMiB: 14}}, nil
 }
@@ -222,5 +227,55 @@ func TestMoveAWebsiteHereUnavailable(t *testing.T) {
 	cookie, csrf := websiteSignIn(t, f)
 	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/migrations/sources", map[string]any{"host": "old.example.test", "port": 22}, cookie, csrf); w.Code != 503 {
 		t.Fatalf("without the broker's migrations: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Each failure of the old server reaches the page as what happened, why
+// and the next step for that case; what the old server printed is only
+// technical (D-0006). The owner's screen showed cPanel's preload
+// protection's raw words and "Fix the value the message names".
+func TestMoveAWebsiteHereExplainsEachFailure(t *testing.T) {
+	f, _, spy := migrationFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	base := "/api/v1/websites/migrations/sources/" + testSourceID
+	if w := websiteRequest(f.handler, "POST", base+"/host-key", map[string]any{"fingerprint": "SHA256:abc"}, cookie, csrf); w.Code != 200 {
+		t.Fatalf("pin: %d %s", w.Code, w.Body.String())
+	}
+	preload := "2026/01/02 03:04:05 LD_Preload detected, refusing to run 2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369."
+	for _, c := range []struct {
+		failed           *hostaccounts.MigrationError
+		why, next, techn string
+	}{
+		{&hostaccounts.MigrationError{Step: "cpanel_tool", Output: preload}, "cPanel's own tools on the old server did not answer properly", "Check the old server's security and cPanel (cPanel support can help), then press Try again.", "LD_Preload detect"},
+		{&hostaccounts.MigrationError{Step: "cpanel_output", Detail: "The old server's list of accounts could not be read (whmapi1 listaccts)."}, "injects a preload library", "cPanel support can help", "whmapi1 listaccts"},
+		{&hostaccounts.MigrationError{Step: "unreachable", Output: "ssh: connect to host 203.0.113.9 port 22: Connection timed out"}, "could not reach the old server", "firewall", "Connection timed out"},
+		{&hostaccounts.MigrationError{Step: "key_refused", Output: "Permission denied (publickey)."}, "did not accept the migration key", "PermitRootLogin", "Permission denied"},
+		{&hostaccounts.MigrationError{Step: "host_key_changed", Output: "Host key verification failed."}, "not the one you confirmed", "Stop until you know why", "Host key verification failed"},
+		{&hostaccounts.MigrationError{Step: "account_missing", Detail: "The old server has no account named shopone."}, "no account named shopone", "List the old server's accounts again", "step account_missing"},
+	} {
+		spy.accountsErr = c.failed
+		w := websiteRequest(f.handler, "GET", base+"/accounts", nil, cookie, "")
+		var problem struct {
+			Status    int    `json:"status"`
+			Detail    string `json:"detail"`
+			Next      string `json:"next"`
+			Technical string `json:"technical"`
+		}
+		if w.Code != 422 || json.Unmarshal(w.Body.Bytes(), &problem) != nil || problem.Status != 422 {
+			t.Fatalf("%s: %d %s", c.failed.Step, w.Code, w.Body.String())
+		}
+		if !strings.Contains(problem.Detail, c.why) || !strings.Contains(problem.Next, c.next) || !strings.Contains(problem.Technical, c.techn) {
+			t.Fatalf("%s: %+v", c.failed.Step, problem)
+		}
+		if c.failed.Output != "" && strings.Contains(problem.Detail+problem.Next, c.failed.Output) {
+			t.Fatalf("%s: the old server's words are outside Technical details: %+v", c.failed.Step, problem)
+		}
+		if strings.Contains(w.Body.String(), "Fix the value") {
+			t.Fatalf("%s: the generic next step: %s", c.failed.Step, w.Body.String())
+		}
+	}
+	spy.accountsErr = hostaccounts.ErrNotFound
+	if w := websiteRequest(f.handler, "GET", base+"/accounts", nil, cookie, ""); w.Code != 404 || !strings.Contains(w.Body.String(), `"next":"Connect to the old server again."`) {
+		t.Fatalf("an ended connection: %d %s", w.Code, w.Body.String())
 	}
 }

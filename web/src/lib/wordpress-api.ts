@@ -280,12 +280,15 @@ export class WordPressApiError extends Error {
   ) { super(what); this.name = "WordPressApiError"; }
 }
 
-export type Operation = "create" | "read" | "list";
+// move is a step of Move a website here: its page offers Try again, and the
+// server sends the next step for each failure of the old server.
+export type Operation = "create" | "read" | "list" | "move";
 
 const whatFailed: Record<Operation, string> = {
   create: "The website was not created.",
   read: "The setup progress could not be loaded.",
   list: "Recent website setups could not be loaded.",
+  move: "The move did not go ahead.",
 };
 
 // Server text is shown as text. Keep it short and on one line.
@@ -293,7 +296,22 @@ function serverText(v: unknown, limit = 500): string {
   return text(v) ? v.replace(/\p{Cc}+/gu, " ").trim().slice(0, limit) : "";
 }
 
+// What to do when a step of a move fails and the server named no next step.
+function explainMove(status: number, detail: string): { why: string; next: string } {
+  const again = "then press Try again.";
+  switch (status) {
+    case 401: return { why: "Your sign-in has ended.", next: `Sign in again, ${again}` };
+    case 403: return { why: detail || "The panel refused the request because the session or page origin did not match.", next: `Reload the page, sign in if asked, ${again}` };
+    case 404: return { why: detail || "That connection to the old server or that move is not known any more.", next: "Start again from Move a website here." };
+    case 409: case 422: return { why: detail || "The server refused this step.", next: `Do what the message says, ${again}` };
+    case 429: return { why: detail || "Too many requests in a short time.", next: `Wait a minute, ${again}` };
+    case 503: return { why: detail || "The part of this server that moves websites is not available right now.", next: `Check that the Sifruno services are running, ${again}` };
+    default: return { why: detail || `The server answered with an error (HTTP ${status}).`, next: `Check the Sifruno service log, ${again}` };
+  }
+}
+
 function explain(operation: Operation, status: number, detail: string): { why: string; next: string } {
+  if (operation === "move") return explainMove(status, detail);
   const read = operation !== "create";
   const keepsRunning = read ? " The setup keeps running on the server." : "";
   // The server's detail is the reason whenever it sent one.
@@ -344,7 +362,8 @@ export async function request(operation: Operation, url: string, options: Reques
     } catch {
       const seconds = Math.round(options.timeoutMs / 1000);
       if (timedOut) {
-        const next = operation === "create"
+        const next = operation === "move" ? "Check that the old server answers, then press Try again."
+          : operation === "create"
           ? "Wait a minute, then try again. If the domain is reported as in use, the first try worked."
           : "This page tries again by itself. The setup keeps running on the server.";
         throw new WordPressApiError(0, options.what ?? (operation === "create" ? "The panel could not confirm the new website." : whatFailed[operation]), `The server did not answer within ${seconds} seconds.`, next, `${where}: no answer within ${seconds} s`);
@@ -356,8 +375,12 @@ export async function request(operation: Operation, url: string, options: Reques
       const problem = object(value) ? value : {};
       const detail = serverText(problem.detail);
       const title = serverText(problem.title, 100);
-      const { why, next } = explain(operation, response.status, detail);
-      throw new WordPressApiError(response.status, failed, why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}`);
+      const explained = explain(operation, response.status, detail);
+      // A move's failure carries its own next step and, apart from it, what
+      // the old server printed (technical), shown under Technical details.
+      const next = serverText(problem.next) || explained.next;
+      const technical = serverText(problem.technical, 1100);
+      throw new WordPressApiError(response.status, failed, explained.why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}${technical ? `\n${technical}` : ""}`);
     }
     return value;
   } finally {

@@ -165,32 +165,37 @@ func siteKind(j wizard.Job) string {
 	return wizard.KindPHP
 }
 
+// migrationProblem is a migration route's problem answer: detail says why,
+// next is the next step for that case, and technical what the old server
+// printed, which the page shows under Technical details only (D-0006).
+type migrationProblem struct {
+	huma.ErrorModel
+	Next      string `json:"next"`
+	Technical string `json:"technical,omitempty"`
+}
+
+func newMigrationProblem(status int, why, next, technical string) *migrationProblem {
+	return &migrationProblem{ErrorModel: huma.ErrorModel{Status: status, Title: http.StatusText(status), Detail: why}, Next: next, Technical: technical}
+}
+
+// migrationAgain is how the person retries on the Move a website here page.
+const migrationAgain = "press Try again"
+
 // migrationBrokerError explains the broker's answers in plain words.
 func migrationBrokerError(err error) error {
 	var failed *hostaccounts.MigrationError
 	switch {
 	case errors.As(err, &failed):
-		return huma.Error422UnprocessableEntity(migrationStepWords(failed.Step) + " " + failed.Detail)
+		e := wizard.ExplainMigration(failed, migrationAgain)
+		return newMigrationProblem(http.StatusUnprocessableEntity, e.Why, e.Next, e.Technical)
 	case errors.Is(err, hostaccounts.ErrNotFound):
-		return huma.Error404NotFound("That connection to the old server has ended (it lasts 24 hours). Connect again.")
+		return newMigrationProblem(http.StatusNotFound, "That connection to the old server has ended (it lasts 24 hours), so Sifruno no longer holds its key.", "Connect to the old server again.", "")
 	case errors.Is(err, hostaccounts.ErrInvalid):
-		return huma.Error422UnprocessableEntity("The old server's address must be a host name or IPv4 address and the port 1 to 65535.")
+		return newMigrationProblem(http.StatusUnprocessableEntity, "The old server's address must be a host name or IPv4 address and its SSH port 1 to 65535.", "Correct the address or the port, then press Connect again.", "")
 	case errors.Is(err, hostaccounts.ErrConflict):
-		return huma.Error409Conflict("Too many connections to old servers are open, or this one changed. Finish or cancel one, then try again.")
+		return newMigrationProblem(http.StatusConflict, "Too many connections to old servers are open (16 at most), or this one changed meanwhile.", "Finish a move or press Stop and remove the key on another one, then press Try again.", "")
 	}
-	return huma.Error503ServiceUnavailable("The account service is not answering. Check that it is running, then try again.")
-}
-
-func migrationStepWords(step string) string {
-	switch step {
-	case "connect":
-		return "Sifruno could not reach the old server over SSH."
-	case "host_key":
-		return "The fingerprint was not confirmed."
-	case "source":
-		return "The old server's answer could not be used."
-	}
-	return "A step on the old server failed."
+	return newMigrationProblem(http.StatusServiceUnavailable, "The account service, which holds the migration key, is not answering.", "Check that the sifruno-broker service is running on this server, then press Try again.", "")
 }
 
 func registerMigrations(a huma.API, o Options) {
@@ -238,7 +243,7 @@ func registerMigrations(a huma.API, o Options) {
 		if err != nil {
 			var failed *hostaccounts.MigrationError
 			if errors.As(err, &failed) && failed.Step == "host_key" {
-				return nil, huma.Error422UnprocessableEntity("That fingerprint is not one the old server showed. Compare it again with ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the old server; if it does not match any, stop: something else answered.")
+				return nil, newMigrationProblem(http.StatusUnprocessableEntity, "That fingerprint is not one the old server showed, so it was not confirmed.", "Compare it again with ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the old server; if it does not match any, stop: something else answered at that address.", "")
 			}
 			return nil, migrationBrokerError(err)
 		}

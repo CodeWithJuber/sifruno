@@ -96,7 +96,7 @@ export async function openSource(host: string, port: number, options: { signal?:
   const what = "Sifruno could not connect to the old server.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/sources`;
-  const source = parseSource(await request("create", url, { method: "POST", body: { host, port }, csrf, timeoutMs: slowMs, signal: options.signal, what }));
+  const source = parseSource(await request("move", url, { method: "POST", body: { host, port }, csrf, timeoutMs: slowMs, signal: options.signal, what }));
   if (!source) throw unexpected(what, `POST ${url}`);
   return source;
 }
@@ -104,7 +104,7 @@ export async function openSource(host: string, port: number, options: { signal?:
 export async function getSource(id: string, options: { signal?: AbortSignal } = {}): Promise<MigrationSource> {
   const what = "The connection to the old server could not be loaded.";
   const url = `${base}/sources/${id}`;
-  const source = parseSource(await request("read", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
+  const source = parseSource(await request("move", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
   if (!source || source.id !== id) throw unexpected(what, `GET ${url}`);
   return source;
 }
@@ -113,7 +113,7 @@ export async function confirmFingerprint(id: string, fingerprint: string, option
   const what = "The fingerprint was not confirmed.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/sources/${id}/host-key`;
-  const source = parseSource(await request("create", url, { method: "POST", body: { fingerprint }, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what }));
+  const source = parseSource(await request("move", url, { method: "POST", body: { fingerprint }, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what }));
   if (!source || source.pinned_fingerprint !== fingerprint) throw unexpected(what, `POST ${url}`);
   return source;
 }
@@ -121,7 +121,7 @@ export async function confirmFingerprint(id: string, fingerprint: string, option
 export async function listSourceAccounts(id: string, options: { signal?: AbortSignal } = {}): Promise<SourceAccount[]> {
   const what = "The old server's accounts could not be listed.";
   const url = `${base}/sources/${id}/accounts`;
-  const accounts = parseAccounts(await request("read", url, { timeoutMs: slowMs, signal: options.signal, what }));
+  const accounts = parseAccounts(await request("move", url, { timeoutMs: slowMs, signal: options.signal, what }));
   if (!accounts) throw unexpected(what, `GET ${url}`);
   return accounts;
 }
@@ -130,7 +130,7 @@ export async function cancelSource(id: string, options: { signal?: AbortSignal }
   const what = "The migration key was not removed.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/sources/${id}/cancel`;
-  const value = await request("create", url, { method: "POST", body: {}, csrf, timeoutMs: slowMs, signal: options.signal, what });
+  const value = await request("move", url, { method: "POST", body: {}, csrf, timeoutMs: slowMs, signal: options.signal, what });
   if (!object(value) || typeof value.removed_from_source !== "boolean" || !text(value.detail)) throw unexpected(what, `POST ${url}`);
   return { removed_from_source: value.removed_from_source, detail: value.detail };
 }
@@ -138,7 +138,7 @@ export async function cancelSource(id: string, options: { signal?: AbortSignal }
 export async function listStaleKeys(options: { signal?: AbortSignal } = {}): Promise<StaleKey[]> {
   const what = "The key lines left on old servers could not be listed.";
   const url = `${base}/stale-keys`;
-  const keys = parseStaleKeys(await request("read", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
+  const keys = parseStaleKeys(await request("move", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
   if (!keys) throw unexpected(what, `GET ${url}`);
   return keys;
 }
@@ -147,13 +147,13 @@ export async function clearStaleKey(id: string, options: { signal?: AbortSignal 
   const what = "The key line was not taken off the list.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/stale-keys/${id}/cleared`;
-  const value = await request("create", url, { method: "POST", body: {}, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what });
+  const value = await request("move", url, { method: "POST", body: {}, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what });
   if (!object(value) || value.cleared !== id) throw unexpected(what, `POST ${url}`);
 }
 
 async function jobChange(what: string, url: string, body: unknown, signal?: AbortSignal): Promise<WebsiteJob> {
   const csrf = await csrfToken(signal);
-  const job = parseJobResponse(await request("create", url, { method: "POST", body, csrf, timeoutMs: 20000, signal, what }));
+  const job = parseJobResponse(await request("move", url, { method: "POST", body, csrf, timeoutMs: 20000, signal, what }));
   if (!job || job.kind !== "migration" || !job.migration) throw unexpected(what, `POST ${url}`);
   return job;
 }

@@ -152,6 +152,10 @@ type VerifySummary struct {
 	// message, what differs and what to check before accepting it; Lines
 	// are the technical detail.
 	Problems []string `json:"problems"`
+	// Why and Next explain a comparison that found differences or could
+	// not run, and say what to do (D-0006); empty when the copy matches.
+	Why  string `json:"why,omitempty"`
+	Next string `json:"next,omitempty"`
 }
 
 // Acceptance is a person's decision to cut over with red lines.
@@ -379,32 +383,76 @@ func (j *run) note(text string) {
 func (j *run) migrationFailure(err error) *stepError {
 	var failed *hostaccounts.MigrationError
 	if errors.As(err, &failed) {
-		why, next := migrationStepText(failed.Step)
-		return &stepError{why: why + " " + failed.Detail, next: next, technical: j.technical(err)}
+		e := ExplainMigration(failed, "move the website again")
+		return &stepError{why: e.Why, next: e.Next, technical: scrub(e.Technical, j.secrets...)}
 	}
 	return j.brokerFailure(err)
 }
 
-func migrationStepText(step string) (why, next string) {
-	switch step {
-	case "connect":
-		return "Sifruno could not sign in to the old server with the migration key.", "Check that the key line is in /root/.ssh/authorized_keys on the old server and that its SSH port is open to this server, then move the website again."
-	case "host_key":
-		return "The old server's host key is not the one you confirmed.", "Connect to the old server again and compare the fingerprint."
-	case "source":
-		return "The old server's answer stopped the move.", "Fix what the message names on the old server, then move the website again."
-	case "tier":
-		return "The site's .htaccess rules need a web server this server does not run yet.", "Leave the website on the old server for now."
-	case "space":
-		return "This server does not have room for the copy.", "Free space on this server, then move the website again."
-	case "fetch", "copy":
-		return "The website's files could not be copied.", "Open Technical details to see why, fix the cause, then move the website again."
-	case "reload":
-		return "The web server did not reload after the copy.", "Check that OpenLiteSpeed runs on this server (systemctl status lsws) and read its error log, then move the website again."
-	case "database", "dump", "import", "compare":
-		return "A database could not be copied.", "Open Technical details to see why, fix the cause, then move the website again."
+// MigrationExplanation is a failed migration step in plain words: why it
+// happened and the next step for that case. Technical holds the step, and
+// what the old server printed, for Technical details only.
+type MigrationExplanation struct {
+	Why, Next, Technical string
+}
+
+// migrationCase is one kind of failure (D-0006). With detail, the broker's
+// own words follow why: they name the account, database or file. A cPanel
+// tool's words stay under Technical details.
+type migrationCase struct {
+	why, next string
+	detail    bool
+}
+
+// cpanelTools is the case of cPanel's whmapi1 or uapi failing on the old
+// server: its preload protection refuses to run when a
+// library was preloaded through LD_PRELOAD into processes started over SSH.
+var cpanelTools = migrationCase{
+	why:  "cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them (a security problem on the old server) or when cPanel's files are damaged or being updated.",
+	next: "Check the old server's security and cPanel (cPanel support can help)",
+}
+
+var migrationCases = map[string]migrationCase{
+	"unreachable":      {why: "Sifruno could not reach the old server: nothing answered on its SSH port, or the connection was refused or cut.", next: "Check the old server's address and SSH port, that the server is running, and that its firewall accepts connections from this server"},
+	"key_refused":      {why: "The old server did not accept the migration key: the key line is not in root's /root/.ssh/authorized_keys there, or its SSH server does not let root sign in with a key.", next: "Run the key command again as root on the old server, and check that its SSH server allows root to sign in with a key (PermitRootLogin prohibit-password or yes)"},
+	"host_key_changed": {why: "The old server's SSH host key is not the one you confirmed. The server may have been reinstalled, or another machine is answering at its address.", next: "Stop until you know why. Connect to the old server again and confirm its new fingerprint only if you trust it"},
+	"connect":          {why: "Sifruno could not sign in to the old server over SSH.", next: "Open Technical details to see what SSH said, and check the old server's SSH service"},
+	"host_key":         {why: "The old server's fingerprint has not been confirmed, so Sifruno has not signed in there.", next: "Confirm the fingerprint first"},
+	"cpanel_tool":      cpanelTools,
+	"cpanel_output":    cpanelTools,
+	"account_missing":  {why: "The old server has no account by that name: it may have been renamed or removed since its accounts were listed.", next: "List the old server's accounts again and choose one that is there", detail: true},
+	"source":           {why: "The old server's account cannot be moved as it is.", next: "Fix what the message names on the old server", detail: true},
+	"tier":             {why: "The site's .htaccess rules need a web server this server does not run yet.", next: "Leave the website on the old server for now", detail: true},
+	"space":            {why: "This server does not have room for the copy.", next: "Free space on this server, or move a smaller website first", detail: true},
+	"fetch":            {why: "The website's files could not be copied from the old server.", next: "Fix what the message names, or open Technical details to see what rsync said", detail: true},
+	"copy":             {why: "The website's files could not be put into the new account.", next: "Open Technical details to see why and fix the cause", detail: true},
+	"reload":           {why: "The web server did not reload after the copy.", next: "Check that OpenLiteSpeed runs on this server (systemctl status lsws) and read its error log", detail: true},
+	"database":         {why: "A database could not be copied.", next: "Fix what the message names, and check that MariaDB runs on both servers (Technical details has its own message)", detail: true},
+	"dump":             {why: "A database could not be copied: the old server's dump tool stopped.", next: "Check the database on the old server (Technical details has the dump tool's message)", detail: true},
+	"import":           {why: "A database could not be copied: this server could not load the old server's dump.", next: "Open Technical details for MariaDB's message and check that MariaDB runs on this server", detail: true},
+	"compare":          {why: "A database could not be copied: its rows could not be counted afterwards.", next: "Check that MariaDB runs on both servers", detail: true},
+	"remove_key":       {why: "The migration key could not be removed from the old server.", next: "Remove the line ending in sifruno-migration- from /root/.ssh/authorized_keys on the old server", detail: true},
+}
+
+// ExplainMigration says what a failed migration step means. again is how
+// the person tries again where the failure is shown ("press Try again").
+func ExplainMigration(failed *hostaccounts.MigrationError, again string) MigrationExplanation {
+	c, known := migrationCases[failed.Step]
+	if !known {
+		c = migrationCase{why: "A step on the old server failed.", next: "Open Technical details to see why", detail: true}
 	}
-	return "A migration step failed.", "Open Technical details to see why, then move the website again."
+	why := c.why
+	if c.detail && failed.Detail != "" {
+		why += " " + failed.Detail
+	}
+	technical := "step " + failed.Step
+	if !c.detail && failed.Detail != "" {
+		technical += ": " + failed.Detail
+	}
+	if failed.Output != "" {
+		technical += "; the old server printed: " + failed.Output
+	}
+	return MigrationExplanation{Why: why, Next: c.next + ", then " + again + ".", Technical: technical}
 }
 
 // tierCauses says in plain words why a site is not Native.
@@ -688,7 +736,9 @@ func (r *Runner) runVerify(ctx context.Context, job Job) VerifySummary {
 	report, err := o.Verify(ctx, opts)
 	now := timestamp(time.Now())
 	if err != nil {
-		return VerifySummary{Verdict: "The comparison could not run: " + scrub(err.Error()), Problems: []string{}, Lines: []string{}, FinishedAt: now}
+		return VerifySummary{Verdict: "The comparison could not run: " + scrub(err.Error()), Problems: []string{}, Lines: []string{}, FinishedAt: now,
+			Why:  "The comparison could not load the old site or the copy, so nothing was checked.",
+			Next: "Check that " + job.Domain + " still points at the old server and that the web server runs on this server, then press Compare again."}
 	}
 	s := VerifySummary{Ran: true, CutoverAllowed: report.CutoverAllowed, Verdict: report.Verdict, PagesCompared: report.Counts.PagesCompared, PagesPass: report.Counts.PagesPass,
 		PagesWarn: report.Counts.PagesWarn, PagesFail: report.Counts.PagesFail, ProbesPass: report.Counts.ProbesPass, ProbesFail: report.Counts.ProbesFail, Problems: []string{}, Lines: []string{}, FinishedAt: now}
@@ -699,6 +749,10 @@ func (r *Runner) runVerify(ctx context.Context, job Job) VerifySummary {
 				s.Problems = append(s.Problems, scrub(p.Message))
 			}
 		}
+	}
+	if !report.CutoverAllowed {
+		s.Why = fmt.Sprintf("The copy is not the same as the old site yet: %d page(s) differ, %d to check, %d closed URL(s) answer differently. The old site may have changed during the copy, or part of it did not move.", report.Counts.PagesFail, report.Counts.PagesWarn, report.Counts.ProbesFail)
+		s.Next = "Check each line below and fix it on this server or on the old site, then press Compare again. If a difference is expected, accept the red lines with a reason."
 	}
 	for _, line := range strings.Split(report.Text(), "\n") {
 		if strings.HasPrefix(line, "CRITICAL ") || strings.HasPrefix(line, "FAIL ") || strings.HasPrefix(line, "WARN ") || strings.HasPrefix(line, "PASS closed URL ") {

@@ -432,6 +432,31 @@ test("opening a source posts only host and port and trusts only a source with it
   });
 });
 
+// The owner's screen: cPanel's raw words as the reason and "Fix the value
+// the message names, then press Create website again." as the next step.
+test("a move's failure shows the server's reason and next step, and the old server's words only as technical details", async () => {
+  const preload = "2026/01/02 03:04:05 LD_Preload detected, refusing to run at bin/apitool.pl line 369.";
+  const why = "cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them (a security problem on the old server) or when cPanel's files are damaged or being updated.";
+  const next = "Check the old server's security and cPanel (cPanel support can help), then press Try again.";
+  await withFetch(async () => json({ status: 422, title: "Unprocessable Entity", detail: why, next, technical: `step cpanel_tool; the old server printed: ${preload}` }, 422), async () => {
+    await assert.rejects(migrations.listSourceAccounts(sourceId), (error) => error.status === 422 && error.message === "The old server's accounts could not be listed."
+      && error.detail === why && error.next === next && error.technical.includes(`/accounts returned HTTP 422`) && error.technical.includes("LD_Preload detect")
+      && !error.detail.includes("LD_Preload") && !error.next.includes("LD_Preload"));
+  });
+  // Without a next step from the server, a move never falls back to the website wizard's.
+  for (const status of [401, 404, 409, 413, 422, 503]) {
+    await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ status, detail: "Refused." }, status), async () => {
+      await assert.rejects(migrations.startMigration(sourceId, "shopone"), (error) => error.status === status && !/Create website|New website|site title/.test(error.next) && error.next.length > 0);
+    });
+  }
+  // A comparison that found differences carries why and what to do.
+  const record = migrationRecord({ gate: "closed", verify: { ...migrationRecord().verify, cutover_allowed: false, why: "The copy is not the same as the old site yet.", next: "Check each line below, then press Compare again." } });
+  const parsed = api.parseJob(migrationJob({ migration: record }));
+  assert.equal(parsed.migration.verify.why, "The copy is not the same as the old site yet.");
+  assert.equal(parsed.migration.verify.next, "Check each line below, then press Compare again.");
+  assert.equal(api.parseJob(migrationJob({ migration: migrationRecord({ verify: { ...migrationRecord().verify, why: 7 } }) })), undefined);
+});
+
 test("stale key lines are read only with the line they name, and cleared with the session", async () => {
   const key = { id: sourceId, host: "old.example.test", port: 22, line: `sifruno-migration-${sourceId}`, detail: "Remove the line.", since: "2026-11-24T10:00:00Z" };
   assert.deepEqual(migrations.parseStaleKeys({ keys: [key] }), [key]);

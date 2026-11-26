@@ -268,8 +268,12 @@ func New(a Address, login Login, pinned string) (*Client, error) {
 		}
 	}
 	transport := &http.Transport{
-		Proxy:                  nil,
-		DialContext:            dialer().DialContext,
+		Proxy: nil,
+		// IPv4 only, as the broker reaches the same host (rsync names it
+		// host:path, which an IPv6 address would need brackets for).
+		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+			return dialer().DialContext(ctx, "tcp4", address)
+		},
 		TLSClientConfig:        config,
 		TLSHandshakeTimeout:    dialTimeout,
 		ResponseHeaderTimeout:  callTimeout,

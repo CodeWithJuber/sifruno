@@ -21,9 +21,10 @@ import (
 //	POST /v1/migrations/{id}/stale-cleared      reason: the admin removed that line
 //	POST /v1/accounts/{id}/migrate-files        migration, expected_revision, reason
 //	POST /v1/accounts/{id}/migrate-database     migration, database, expected_revision, reason
+//	POST /v1/accounts/{id}/migrate-certificate  migration, expected_revision, reason
 var (
 	migrationPath   = regexp.MustCompile(`^/v1/migrations/([a-f0-9]{32})(/host-key|/accounts|/plan|/finish|/stale-cleared)?$`)
-	migrateCopyPath = regexp.MustCompile(`^/v1/accounts/([a-f0-9]{32})/(migrate-files|migrate-database)$`)
+	migrateCopyPath = regexp.MustCompile(`^/v1/accounts/([a-f0-9]{32})/(migrate-files|migrate-database|migrate-certificate)$`)
 )
 
 func migrateRoute(path string) bool {
@@ -94,6 +95,16 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 				return
 			}
 			result, err := s.migrateFiles(ctx, m[1], in.Input, in.Actor)
+			answerMigration(w, result, err)
+			return
+		}
+		if m[2] == "migrate-certificate" {
+			var in body[MigrateCertificateInput]
+			if decodeBodyWithin(w, r, &in, []string{"migration", "expected_revision", "cpanel", "reason"}, maxCPanelRequest) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			result, err := s.migrateCertificate(ctx, m[1], in.Input, in.Actor)
 			answerMigration(w, result, err)
 			return
 		}

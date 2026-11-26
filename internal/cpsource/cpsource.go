@@ -119,6 +119,20 @@ func DatabaseUsersCommand(user string) (string, error) {
 	return uapi + " --output=json --user=" + user + " Mysql list_users", nil
 }
 
+// VhostSSLCommand prints the certificate, private key and CA bundle
+// installed on the domain's virtual host: the ones the old site serves.
+// The documented filter keeps the answer to that virtual host, so no other
+// site's key is printed.
+// WHM API 1 fetch_vhost_ssl_components: https://api.docs.cpanel.net/openapi/whm/operation/fetch_vhost_ssl_components/
+// (its page recommends filtering by servername, with this example), and
+// the filter's variables: https://api.docs.cpanel.net/whm/filter-output
+func VhostSSLCommand(domain string) (string, error) {
+	if !ValidDomain(domain) {
+		return "", ErrOutput
+	}
+	return whmapi1 + " --output=json fetch_vhost_ssl_components api.filter.enable=1 api.filter.a.field=servername api.filter.a.arg0=" + domain + " api.filter.a.type=eq", nil
+}
+
 // CrontabCommand prints the user's crontab. cronie's crontab exits 1 with
 // "no crontab for" on stderr when the user has none; the caller reads that
 // as no jobs.
@@ -365,6 +379,70 @@ func ParseSite(out []byte, user, domain string) (Site, error) {
 // ErrNotPublicHTML is a site whose document root is not the account's
 // public_html: migration v1 does not move it.
 var ErrNotPublicHTML = errors.New("the site's files are not in the account's public_html")
+
+// VhostSSL is the certificate a virtual host serves, as
+// fetch_vhost_ssl_components shows it: the certificate, its private key and
+// the CA bundle (empty when there is none), each PEM text as cPanel stores
+// it. The key is a credential: the broker passes it to its certificate
+// install and to nothing else.
+type VhostSSL struct {
+	Certificate string
+	Key         string
+	CABundle    string
+}
+
+// ErrNoCertificate means the old server lists no certificate and key for
+// the site's virtual host.
+var ErrNoCertificate = errors.New("the old server has no certificate for the site")
+
+// maxSSLPart bounds each PEM text of a virtual host's components, as the
+// broker's certificate install bounds what it takes.
+const maxSSLPart = 64 << 10
+
+// ParseVhostSSL reads whmapi1 --output=json fetch_vhost_ssl_components and
+// returns the components of the virtual host whose servername is domain.
+// Another virtual host's are never taken for it; two for the same one, or
+// a part past 64 KiB, is not read.
+func ParseVhostSSL(out []byte, domain string) (VhostSSL, error) {
+	var raw struct {
+		Data struct {
+			Components []struct {
+				ServerName  string  `json:"servername"`
+				Certificate *string `json:"certificate"`
+				Key         *string `json:"key"`
+				CABundle    *string `json:"cabundle"`
+			} `json:"components"`
+		} `json:"data"`
+	}
+	if len(out) > MaxOutput || json.Unmarshal(out, &raw) != nil {
+		return VhostSSL{}, ErrOutput
+	}
+	text := func(s *string) string {
+		if s == nil {
+			return ""
+		}
+		return *s
+	}
+	var ssl VhostSSL
+	found := false
+	for _, c := range raw.Data.Components {
+		if c.ServerName != domain {
+			continue
+		}
+		if found {
+			return VhostSSL{}, fmt.Errorf("%w: two certificates for one virtual host", ErrOutput)
+		}
+		found = true
+		ssl = VhostSSL{Certificate: text(c.Certificate), Key: text(c.Key), CABundle: text(c.CABundle)}
+	}
+	if len(ssl.Certificate) > maxSSLPart || len(ssl.Key) > maxSSLPart || len(ssl.CABundle) > maxSSLPart {
+		return VhostSSL{}, fmt.Errorf("%w: a certificate part is larger than the broker takes", ErrOutput)
+	}
+	if !found || strings.TrimSpace(ssl.Certificate) == "" || strings.TrimSpace(ssl.Key) == "" {
+		return VhostSSL{}, ErrNoCertificate
+	}
+	return ssl, nil
+}
 
 // ParseVhostPHP reads whmapi1 --output=json php_get_vhost_versions and
 // returns the version of the domain's virtual host, such as "ea-php81".

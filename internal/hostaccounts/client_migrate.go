@@ -91,6 +91,17 @@ func (c *client) MigrateDatabase(ctx context.Context, id string, in MigrateDatab
 	return out, err
 }
 
+// MigrateCertificate copies the old site's certificate into the account's
+// live site, or answers why it was not copied.
+func (c *client) MigrateCertificate(ctx context.Context, id string, in MigrateCertificateInput, actor string) (MigrateCertificateResult, error) {
+	if !idPattern.MatchString(id) || !validMigrateCertificate(in, actor) {
+		return MigrateCertificateResult{}, ErrInvalid
+	}
+	var out MigrateCertificateResult
+	err := c.exchange(ctx, c.long, "POST", "/v1/accounts/"+id+"/migrate-certificate", migrationBody[MigrateCertificateInput]{in, actor}, maxCPanelRequest, &out, maxResponseBytes)
+	return out, err
+}
+
 // FinishMigration removes the key from the source and from this server.
 func (c *client) FinishMigration(ctx context.Context, id string, in MigrationFinishInput, actor string) (MigrationFinishResult, error) {
 	if !idPattern.MatchString(id) || !validText(in.Reason, 500) || !validText(actor, 120) {

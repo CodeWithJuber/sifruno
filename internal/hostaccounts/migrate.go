@@ -119,13 +119,17 @@ const ViaWHM = "whm"
 // virtual host, and UAPI Mysql::list_databases and Mysql::list_users as
 // uapi --output=json prints them ({"result": ...}). The broker reads them
 // with the parsers and checks it uses for the same answers over SSH: they
-// are the old server's word either way.
+// are the old server's word either way. SSL is fetch_vhost_ssl_components
+// for the site's virtual host alone, with its private key: the panel
+// fetches it only for the certificate copy (MigrateCertificate) and sends
+// it with no other request.
 type CPanelAnswers struct {
 	Accounts      json.RawMessage `json:"listaccts"`
 	Site          json.RawMessage `json:"domainuserdata,omitempty"`
 	PHP           json.RawMessage `json:"php_get_vhost_versions,omitempty"`
 	Databases     json.RawMessage `json:"list_databases,omitempty"`
 	DatabaseUsers json.RawMessage `json:"list_users,omitempty"`
+	SSL           json.RawMessage `json:"fetch_vhost_ssl_components,omitempty"`
 }
 
 // maxCPanelRequest bounds a request that carries CPanelAnswers.
@@ -283,6 +287,7 @@ type MigrationService interface {
 	PlanMigration(context.Context, string, MigrationPlanInput, string) (MigrationPlan, error)
 	MigrateFiles(context.Context, string, MigrateFilesInput, string) (MigrateFilesResult, error)
 	MigrateDatabase(context.Context, string, MigrateDatabaseInput, string) (MigrateDatabaseResult, error)
+	MigrateCertificate(context.Context, string, MigrateCertificateInput, string) (MigrateCertificateResult, error)
 	FinishMigration(context.Context, string, MigrationFinishInput, string) (MigrationFinishResult, error)
 	StaleMigrationKeys(context.Context) ([]StaleMigrationKey, error)
 	ClearStaleMigrationKey(context.Context, string, MigrationFinishInput, string) error

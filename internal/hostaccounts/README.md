@@ -961,7 +961,8 @@ as the leaf's DNS names sorted and joined with commas) for each account
 that has one, so the panel can renew in time and see which domains are
 covered; the journal's before and after rows record it too. A certificate
 installed before the broker kept its names has none listed and covers the
-account's own domain only. Delete takes the site out of the config first,
+account's own domain only; so does one copied from an old server whose
+names are not all plain domains (see Migration). Delete takes the site out of the config first,
 then removes the site's TLS directory with the user: only the live and
 staged pairs and `writeAt`'s temporary names, and an unexpected file keeps
 the delete pending rather than being removed.
@@ -1525,8 +1526,10 @@ root step. The design, with the owner's choices recorded from Jev on
   broker's public key line through WHM's API, and fetches over HTTPS what
   the copy asks of cPanel: WHM API 1 `listaccts` for the account,
   `domainuserdata`, `php_get_vhost_versions` for its virtual host, and
-  UAPI `Mysql list_databases` and `list_users` through `uapi_cpanel`. Plan,
-  `migrate-files` and `migrate-database` carry them as `cpanel` (at most 1
+  UAPI `Mysql list_databases` and `list_users` through `uapi_cpanel`, and
+  for the certificate step alone `fetch_vhost_ssl_components` for the
+  site's virtual host. Plan, `migrate-files`, `migrate-database` and
+  `migrate-certificate` carry them as `cpanel` (at most 1
   MiB a request) and the broker reads them with the same `cpsource`
   parsers and checks as the same answers over SSH: they are the old
   server's word either way. For such a migration the broker runs no
@@ -1643,6 +1646,31 @@ root step. The design, with the owner's choices recorded from Jev on
   MariaDB user. Every table's rows are then counted on both sides (the
   source after its dump); the answer lists them, and the panel reports a
   difference.
+- `POST /v1/accounts/{id}/migrate-certificate` (`migration`,
+  `expected_revision`, `reason`) copies the certificate the old site
+  serves, so the moved site answers https before its DNS changes. The
+  account must be live, the old server's account of the same name and
+  domain (as for `migrate-files`), and the old server is asked for WHM API
+  1 `fetch_vhost_ssl_components`, filtered to the virtual host whose
+  `servername` is the account's domain, so no other site's key is printed.
+  It is copied only when the leaf is not self-signed, is valid now and for
+  7 days more, covers the account's own domain as a browser checks it
+  (a wildcard counts), chains through its own text and the CA bundle (in
+  any order) to an authority in this system's trust store, with at most 4
+  certificates served (the root left out), and its key is an EC P-256 or
+  P-384 or RSA 2048 to 4096 key that matches it. It is then installed by
+  the certificate operation's own steps (staged, journaled, tested), with
+  one difference from `SetCertificate`'s fit: a copied leaf may name more
+  than the site's domains (its `www.`, `mail.` and other names there),
+  and only the site's domains among them are mapped on the HTTPS listener;
+  a leaf whose names are not all plain domains, or more than a site has,
+  records no `names` and covers the account's own domain. One that cannot
+  be used, or none, answers `copied: false` with `refused` (`no_certificate`,
+  `self_signed`, `not_yet_valid`, `expired`, `expires_soon`,
+  `other_domain`, `untrusted`, `key_mismatch` or `unusable`) and plain
+  words in `detail`, and changes nothing; the move goes on. The key is in
+  no record, journal row, answer or error: only in the staged pair and the
+  site's live files, as an issued certificate's.
 - `POST /v1/migrations/{id}/finish` (`reason`) removes the key's line from
   the source (`sed` on whole lines `restrict ssh-ed25519 <blob>
   sifruno-migration-<id>`), proves
@@ -1673,10 +1701,10 @@ root step. The design, with the owner's choices recorded from Jev on
   the temporary users), and their root-side leftovers go through the
   backup leftover list.
 
-Not in v1: IPv6 source addresses, the site's own certificate (the copy
-runs over http until DNS points here), parked and addon domains (listed,
-not added), the Compat tier, and a panel page to change a converted
-password folder's users.
+Not in v1: IPv6 source addresses, a certificate the old server's
+authority does not vouch for (the copy then runs over http until DNS
+points here), parked and addon domains (listed, not added), the Compat
+tier, and a panel page to change a converted password folder's users.
 
 Known gaps, found in review and not fixed in v1:
 

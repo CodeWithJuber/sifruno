@@ -76,6 +76,9 @@ func (m *migrationSpy) MigrateFiles(context.Context, string, hostaccounts.Migrat
 func (m *migrationSpy) MigrateDatabase(context.Context, string, hostaccounts.MigrateDatabaseInput, string) (hostaccounts.MigrateDatabaseResult, error) {
 	return hostaccounts.MigrateDatabaseResult{}, nil
 }
+func (m *migrationSpy) MigrateCertificate(context.Context, string, hostaccounts.MigrateCertificateInput, string) (hostaccounts.MigrateCertificateResult, error) {
+	return hostaccounts.MigrateCertificateResult{}, nil
+}
 func (m *migrationSpy) FinishMigration(context.Context, string, hostaccounts.MigrationFinishInput, string) (hostaccounts.MigrationFinishResult, error) {
 	m.finished++
 	return hostaccounts.MigrationFinishResult{RemovedFromSource: !m.removed}, nil

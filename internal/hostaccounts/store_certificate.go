@@ -32,6 +32,18 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 	if err != nil {
 		return CertificateResult{}, ErrInvalid
 	}
+	// The leaf names the account's domain and may name its aliases; every
+	// name must be one of them.
+	return s.installCertificate(ctx, id, in.ExpectedRevision, bundle, bundle.fits, actor, in.Reason)
+}
+
+// installCertificate installs a checked bundle on the account's live site
+// at its expected revision: fits says whether the leaf fits the site's
+// domains (the account's own first) now. Callers hold s.mu.
+func (s *store) installCertificate(ctx context.Context, id string, revision uint64, bundle certificateBundle, fits func(domains []string, primary string, now time.Time) error, actor, reason string) (CertificateResult, error) {
+	if !idPattern.MatchString(id) || revision == 0 || !validText(reason, 500) || !validText(actor, 120) {
+		return CertificateResult{}, ErrInvalid
+	}
 	if s.web == nil {
 		return CertificateResult{}, ErrUnavailable
 	}
@@ -52,14 +64,12 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 	r := items[index]
 	// An account busy with a WordPress install is left alone, as the web
 	// operation leaves it.
-	if r.Account.Revision != in.ExpectedRevision || r.Account.State != "active" || !r.Web.enabled() || s.installing[id] {
+	if r.Account.Revision != revision || r.Account.State != "active" || !r.Web.enabled() || s.installing[id] {
 		return CertificateResult{}, ErrConflict
 	}
-	// The leaf names the account's domain and may name its aliases; every
-	// name must be one of them. No operation is pending, so the recorded
-	// aliases are the ones served.
+	// No operation is pending, so the recorded aliases are the ones served.
 	domains := append([]string{r.Account.Domain}, recordSiteDomains(r).Aliases...)
-	if bundle.fits(domains, r.Account.Domain, time.Now()) != nil {
+	if fits(domains, r.Account.Domain, time.Now()) != nil {
 		return CertificateResult{}, ErrCertificateRejected
 	}
 	if r.Account.Revision == ^uint64(0) {
@@ -77,7 +87,7 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 		return CertificateResult{}, ErrUnavailable
 	}
 	next := bundle.state
-	r.Pending = &pending{Action: "certificate", Target: certificateDigest(next), Actor: actor, Reason: in.Reason}
+	r.Pending = &pending{Action: "certificate", Target: certificateDigest(next), Actor: actor, Reason: reason}
 	r.TLSNext = next
 	nextItems := append([]record(nil), items...)
 	nextItems[index] = r
@@ -91,7 +101,7 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 	after := r.Account
 	after.Revision++
 	after.Certificate = next
-	intent := operationEvent{OperationID: operationID, Action: "certificate", Status: "intended", Actor: actor, Reason: in.Reason, Before: &before, After: after}
+	intent := operationEvent{OperationID: operationID, Action: "certificate", Status: "intended", Actor: actor, Reason: reason, Before: &before, After: after}
 	r, err = s.appendEvent(r, intent)
 	if err != nil {
 		return CertificateResult{}, ErrRecovery
@@ -115,7 +125,7 @@ func (s *store) setCertificate(ctx context.Context, id string, in CertificateInp
 	r.Account.Certificate = next
 	r.Account.Revision++
 	r.Account.UpdatedAt = time.Now().UTC()
-	r.Actor, r.Reason = actor, in.Reason
+	r.Actor, r.Reason = actor, reason
 	operation := *r.Pending
 	r.Pending = nil
 	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {

@@ -1,0 +1,30 @@
+Standalone sign-in page, run 2026-11-26 on the runner (Ubuntu 24.04), not on
+the AlmaLinux dev VM: the panel binary and UI of this commit with throwaway
+state on loopback (127.0.0.1), Chrome through agent-browser. No broker runs
+there, so the Websites page answers 503 after sign-in; that is expected.
+
+Signed out, /websites at 1440 px, no admin yet (first-run-setup-1440.png):
+  {"signedOut":true,"sidebar":false,"nav":0,"search":false,
+   "h1":"Sign in to Sifruno","scrollX":false}
+
+Signed out, /websites at 1440 px and 390 px, an admin exists
+(sign-in-1440.png, sign-in-390.png):
+  {"signedOut":true,"sidebar":false,"nav":0,"scrollX":false,
+   "inputs":["username:text:username:required:next",
+             "password:password:current-password:required:next",
+             "one-time-code:text:one-time-code:required:done"]}
+
+"Show password" pressed:
+  {"type":"text","pressed":"true","label":"Hide password"}
+
+Signed in through the form (username, password, a fresh TOTP code):
+  {"signedOut":false,"sidebar":true,"nav":15,"search":true,"h1":"Websites"}
+
+Signed out again with the sidebar's Sign out:
+  {"signedOut":true,"sidebar":false,"form":true}
+
+Checks: npm --prefix web run typecheck and build pass; node --test
+web/src/lib/*.test.mjs 248 passed, 0 failed.
+
+Not shown: the remote HTTPS panel (the same render path, gated for every page
+there), a customer's setup link, right to left, and the dark theme.

@@ -232,6 +232,28 @@ export function AppShell() {
   const subtitle = page ? page.subtitle : "";
   const parent = page?.parent && page.parent !== "server" ? pageById(page.parent) : undefined;
 
+  // Before sign-in a visitor has one job: sign in, or finish a setup link. So the
+  // page shows that form alone, without the menu, page names, search or readings.
+  const signedOut = !publicPreview && !signedIn && (gated || pageId === "setup");
+  if (signedOut) return <ShellContext.Provider value={shell}>
+    <TooltipProvider>
+      <main id="panel-main" className="flex min-h-dvh flex-col items-center gap-6 bg-background px-4 py-10 sm:justify-center" data-testid="signed-out">
+        <img className="h-9 w-auto" src={`/brand/logos/sifruno-logo-${theme === "dark" ? "on-dark" : "primary"}.svg`} alt="Sifruno" width="131" height="36" />
+        <h1 className="sr-only">{pageId === "setup" ? "Set up your login" : "Sign in to Sifruno"}</h1>
+        <div className="w-full max-w-md">
+          <Suspense fallback={<LoadingState label="Loading page" />}>
+            {!gated ? <Outlet /> : auth.checked
+              ? <>{auth.error && <p className="mb-4 text-sm text-destructive" role="alert">{auth.error}</p>}<AuthGate adminRequired={auth.adminRequired} keySession={auth.session} onSession={onSession} /></>
+              : <LoadingState label="Checking your sign-in" />}
+          </Suspense>
+        </div>
+        <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={toggleTheme}>
+          {theme === "light" ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}{theme === "light" ? "Dark theme" : "Light theme"}
+        </Button>
+      </main>
+    </TooltipProvider>
+  </ShellContext.Provider>;
+
   return <ShellContext.Provider value={shell}>
     <TooltipProvider>
       <SidebarProvider>

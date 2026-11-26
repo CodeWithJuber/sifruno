@@ -73,9 +73,11 @@ function SignIn({ onSession }: { onSession: Props["onSession"] }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const { busy, error, run } = useSubmit();
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    setShowPassword(false);
     void run(async () => { const s = await signInAdmin(username.trim(), password, code); setPassword(""); setCode(""); onSession(s, false); });
   };
   if (useKey) return <section className={panel} aria-labelledby="sign-in-title">
@@ -87,11 +89,15 @@ function SignIn({ onSession }: { onSession: Props["onSession"] }) {
     <form onSubmit={submit}>
       <FieldGroup>
         <Field><FieldLabel htmlFor="sign-in-username">Username</FieldLabel>
-          <Input id="sign-in-username" autoComplete="username" autoCapitalize="none" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} required /></Field>
-        <Field><FieldLabel htmlFor="sign-in-password">Password</FieldLabel>
-          <Input id="sign-in-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
+          <Input id="sign-in-username" name="username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next" value={username} onChange={(e) => setUsername(e.target.value)} required /></Field>
+        <Field>
+          <div className="flex items-center justify-between gap-3">
+            <FieldLabel htmlFor="sign-in-password">Password</FieldLabel>
+            <Button type="button" variant="link" size="sm" className="h-auto px-0" aria-controls="sign-in-password" aria-pressed={showPassword} onClick={() => setShowPassword((v) => !v)}>{showPassword ? "Hide password" : "Show password"}</Button>
+          </div>
+          <Input id="sign-in-password" name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" enterKeyHint="next" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
         <Field><FieldLabel htmlFor="sign-in-code">6-digit code</FieldLabel>
-          <Input id="sign-in-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} required /></Field>
+          <Input id="sign-in-code" name="one-time-code" inputMode="numeric" autoComplete="one-time-code" enterKeyHint="done" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} required /></Field>
         <Button type="submit" disabled={busy || !username.trim() || !password || code.length !== 6}><LogIn aria-hidden="true" />{busy ? "Signing in…" : "Sign in"}</Button>
       </FieldGroup>
     </form>

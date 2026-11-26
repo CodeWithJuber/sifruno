@@ -44,6 +44,10 @@ const (
 	// So only root can put a link in place of a store's name, and the root
 	// broker removes a deleted site's store under it.
 	CacheRoot = "/var/lib/sifruno-lscache"
+	// PanelChallengeName names the vhost that serves the panel's own host
+	// names (Server.ChallengeHosts) on the plain listener: NamePrefix +
+	// PanelChallengeName. No site may take this name.
+	PanelChallengeName = "panel"
 )
 
 // Bounds. OpenLiteSpeed aborts a whole file at a line of 8192 bytes or more,
@@ -79,6 +83,14 @@ type Server struct {
 	HTTPDWorkers int        `json:"httpd_workers,omitempty"`
 	Listeners    []Listener `json:"listeners"`
 	Sites        []Site     `json:"sites"`
+	// ChallengeHosts are the panel's own host names. The plain listeners
+	// map them to one vhost (PanelChallengeName) that serves
+	// ACMEChallengeDir at /.well-known/acme-challenge/ and refuses
+	// everything else with 403, so the panel can get its certificate over
+	// HTTP-01 for a name no website has. A name a site already serves, or
+	// its www. form, stays with the site, whose vhost serves the same
+	// folder; with none left no such vhost is rendered.
+	ChallengeHosts []string `json:"challenge_hosts,omitempty"`
 }
 
 // Listener is one Sifruno-owned listener. Plain listeners map every site; a

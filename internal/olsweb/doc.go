@@ -44,6 +44,14 @@
 //     SuspendedDocRoot, so no path it names is under the tenant's home and
 //     the tenant cannot make its config test fail; SuspendedDocRoot must
 //     exist before such a render is tested.
+//   - The panel's own host names (Server.ChallengeHosts), when one is not a
+//     site's: one more virtualhost, NamePrefix+PanelChallengeName, mapped
+//     on the plain listeners only, in a suspended site's form (vhRoot and
+//     docRoot SuspendedDocRoot, no scripts, no symlinks, the cache module
+//     off, autoLoadHtaccess 0, one rule answering 403 to everything) with
+//     the challenge context, so the panel gets its own certificate over
+//     HTTP-01 and port 80 serves nothing else at that name. A name a site
+//     serves stays with the site, whose vhost serves the same folder.
 //   - An active site's protected folders (access.go), converted from a
 //     migrated site's .htaccess by internal/htaccess: one "realm" block per
 //     password folder, whose userDB is RealmFile(site, n) in RealmRoot
@@ -275,6 +283,16 @@
 //     X-Forwarded-Scheme: https (httpreq.cpp 1609-1624). So a proxy that ends
 //     TLS in front of the site and says so gets no redirect loop, and a
 //     client that sends the header itself only keeps itself on http.
+//
+// Read 2026-11-26, same tag, for the panel's names (ChallengeHosts):
+//
+//   - src/http/vhostmap.cpp: a host name with no map line of its own falls
+//     back to the listener's catch-all ("map NAME *") only (wildMatch, 95-104),
+//     and none is rendered; findDedicated (269-297) serves one vhost for
+//     every name only when the catch-all is the listener's only map.
+//   - src/http/httpsession.cpp: a request whose host matches no vhost is
+//     answered 404 (1648-1661). So port 80 does not answer the panel's name
+//     until a vhost maps it, and Let's Encrypt's HTTP-01 check would fail.
 //
 // Read 2026-11-24, same tag and docs, for protected folders (internal/htaccess
 // doc.go, "Converting access rules", has the Apache side):

@@ -232,6 +232,17 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 		fmt.Fprintln(os.Stderr, "sifruno broker: the accounts' process, memory and CPU limits could not all be written to their systemd slices at start; a plan change of an account writes its limits again")
 	}
 	cancelSyncing()
+	// The panel's own names are served on port 80 for its certificate
+	// challenges from the first render; a server with no website yet has
+	// had none, and a changed --panel-host is in none. So the web config is
+	// rendered and loaded once before the socket accepts requests, as the
+	// .htaccess watcher does. A failure does not stop the broker: every web
+	// change renders the names again.
+	if web != nil && len(web.PanelHosts) > 0 {
+		if e := s.reloadWebServer(ctx); e != nil {
+			fmt.Fprintln(os.Stderr, "sifruno broker: the web server config with the panel's own names (for its certificate) could not be loaded at start; the next website change loads it")
+		}
+	}
 	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: opts.SocketPath, Net: "unix"})
 	if e != nil {
 		return ErrUnavailable

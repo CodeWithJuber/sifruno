@@ -104,7 +104,30 @@ func normalize(s Server) ([]site, error) {
 	if err := checkFolderListeners(s.Listeners, s.Sites); err != nil {
 		return nil, err
 	}
+	if err := validateChallengeHosts(s.ChallengeHosts); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// validateChallengeHosts admits at most MaxDomainsPerSite domain names,
+// each once counting its www. form, as for a site's domains.
+func validateChallengeHosts(hosts []string) error {
+	if len(hosts) > MaxDomainsPerSite {
+		return fieldErr("challenge_hosts", "at most %d names", MaxDomainsPerSite)
+	}
+	seen := map[string]int{}
+	for i, h := range hosts {
+		field := fmt.Sprintf("challenge_hosts[%d]", i)
+		if !validDomain(h) {
+			return fieldErr(field, "must be a lowercase DNS name")
+		}
+		if j, dup := seen[hostKey(h)]; dup {
+			return fieldErr(field, "is the same name as challenge_hosts[%d]", j)
+		}
+		seen[hostKey(h)] = i
+	}
+	return nil
 }
 
 func validateListeners(listeners []Listener) error {
@@ -173,6 +196,9 @@ func listenerAddress(l Listener) (string, error) {
 func validateSite(field string, in Site, workers int) (site, error) {
 	if !siteNamePattern.MatchString(in.Name) {
 		return site{}, fieldErr(field+".name", "must match %s", siteNamePattern)
+	}
+	if in.Name == PanelChallengeName {
+		return site{}, fieldErr(field+".name", "%s is the panel's challenge vhost", PanelChallengeName)
 	}
 	if !usernamePattern.MatchString(in.Username) {
 		return site{}, fieldErr(field+".username", "must match %s", usernamePattern)

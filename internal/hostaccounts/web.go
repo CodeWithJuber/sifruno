@@ -21,6 +21,17 @@ type WebOptions struct {
 	// ServerUser is the OpenLiteSpeed process user (the `user` setting in
 	// httpd_config.conf) that reads static files from public_html.
 	ServerUser string
+	// PanelHosts are the panel's own host names (DNS names only, lower
+	// case, each once counting its www. form). Port 80 serves them for the
+	// panel's certificate challenges only (olsweb.Server.ChallengeHosts).
+	PanelHosts []string
+}
+
+// ValidPanelHosts reports whether hosts may be WebOptions.PanelHosts: at
+// most olsweb.MaxDomainsPerSite lowercase DNS names, none twice counting
+// its www. form.
+func ValidPanelHosts(hosts []string) bool {
+	return olsweb.Validate(olsweb.Server{ChallengeHosts: hosts}) == nil
 }
 
 // WebInput asks for an account's site to be live with these settings.

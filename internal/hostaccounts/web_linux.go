@@ -70,6 +70,10 @@ const (
 
 // enableWeb admits the web tools and resolves the OpenLiteSpeed user.
 func (n *linuxSystem) enableWeb(web *WebOptions) error {
+	if !ValidPanelHosts(web.PanelHosts) {
+		return ErrInvalid
+	}
+	n.panelHosts = slices.Clone(web.PanelHosts)
 	for _, p := range webUtilities {
 		info, e := trustedFile(p, false)
 		if e != nil || info.Mode().Perm()&0111 == 0 {
@@ -579,7 +583,9 @@ func (n *linuxSystem) configDirSafe(uid, gid int, mode os.FileMode) bool {
 // the vhosts whose config bytes changed, so the test can tell this change's
 // problems from a tenant's. On an error the caller restores t.
 func (n *linuxSystem) writeSites(t *configTxn, sites []olsweb.Site) (map[string]bool, error) {
-	files, e := olsweb.Render(webServer(sites))
+	server := webServer(sites)
+	server.ChallengeHosts = n.panelHosts
+	files, e := olsweb.Render(server)
 	if e != nil {
 		return nil, ErrWebRejected
 	}
@@ -644,6 +650,21 @@ func (n *linuxSystem) writeSites(t *configTxn, sites []olsweb.Site) (map[string]
 			return fail(e)
 		}
 		wrote, e := t.write(vhost, "vhconf.conf", files[olsweb.VhostConfigPath(s.Name)], private)
+		if e != nil {
+			return fail(e)
+		}
+		changed[dir] = wrote
+	}
+	// The panel's challenge-only vhost, when the render has one: it names
+	// no log folder and no tenant path.
+	if data, ok := files[olsweb.VhostConfigPath(olsweb.PanelChallengeName)]; ok {
+		dir := olsweb.NamePrefix + olsweb.PanelChallengeName
+		want[dir] = true
+		vhost, e := t.subdir(vhosts, dir, confUID, confGID, n.configDirSafe)
+		if e != nil {
+			return fail(e)
+		}
+		wrote, e := t.write(vhost, "vhconf.conf", data, private)
 		if e != nil {
 			return fail(e)
 		}

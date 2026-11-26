@@ -1054,12 +1054,14 @@ ols_old_listeners() {
 }
 
 # A listener that moves or goes needs OpenLiteSpeed stopped and started
-# again. Its graceful restart (systemctl reload lsws, and also restart: the
-# package's unit stops it gracefully and with KillMode=none) starts the new
-# server while the old one still holds the old address; the new one exits
-# with "Address already in use" and the old one keeps serving the old
-# listeners, even though systemctl answers success. Seen with openlitespeed
-# 1.9.4 on AlmaLinux 9. The websites are down for the few seconds it takes.
+# again. Its graceful restart (systemctl reload lsws; also systemctl
+# restart lsws, as the package's unit stops it gracefully with
+# KillMode=none and its start then finds the old server still running)
+# starts the new server while the old one still holds the old address; the
+# new one exits with "Address already in use" and the old one keeps serving
+# the old listeners, even though systemctl answers success. Seen with
+# openlitespeed 1.9.4 on AlmaLinux 9. The websites are down for the few
+# seconds it takes.
 ols_stop_start() {
   local waited=0
   systemctl stop lsws
@@ -2145,7 +2147,9 @@ TEXT
   echo "       systemctl restart mariadb"
   echo "  8. OpenLiteSpeed's WebAdmin console on loopback only: $OLS_ADMIN_CONF"
   if [ -n "$admin_backup" ]; then
-    echo "       cp -a $admin_backup $OLS_ADMIN_CONF && systemctl restart lsws"
+    echo "       cp -a $admin_backup $OLS_ADMIN_CONF"
+    echo "     then stop and start OpenLiteSpeed (a restart keeps the console where it is):"
+    echo "       systemctl stop lsws; while pgrep -x litespeed >/dev/null; do sleep 1; done; systemctl start lsws"
   else
     echo "       No backup found: the installer has not changed this file."
   fi

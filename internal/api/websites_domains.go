@@ -164,7 +164,7 @@ func registerWebsiteDomains(a huma.API, o Options) {
 		case slices.Contains(t.domains.Aliases, domain):
 			return nil, huma.Error422UnprocessableEntity(domain + " is already a domain of this website.")
 		case panelHost(o.PanelHosts, domain):
-			return nil, huma.Error422UnprocessableEntity(domain + " is this panel's own address, so it cannot be a website's domain. Use another domain.")
+			return nil, huma.Error422UnprocessableEntity(panelHostTaken)
 		case len(t.domains.Aliases) >= hostaccounts.MaxSiteAliases:
 			return nil, huma.Error422UnprocessableEntity("A website can have at most 15 other domains. Remove one first.")
 		}
@@ -382,8 +382,15 @@ func sameHost(a hostaccounts.Account, domain string) bool {
 	return false
 }
 
+// panelHostTaken refuses a website or alias named like the panel: the
+// panel's certificate is validated on port 80 at that name, and the www.
+// form is the same name to OpenLiteSpeed.
+const panelHostTaken = "This name is the panel's own address. Use a different domain for the website."
+
+// panelHost reports whether domain, in any case, is one of the panel's
+// --panel-host names or its www. form.
 func panelHost(hosts []string, domain string) bool {
-	key := strings.TrimPrefix(domain, "www.")
+	key := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(domain)), "www.")
 	for _, h := range hosts {
 		if strings.TrimPrefix(strings.ToLower(h), "www.") == key {
 			return true

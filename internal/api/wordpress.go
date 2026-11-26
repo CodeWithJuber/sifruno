@@ -139,6 +139,9 @@ func registerWizard(a huma.API, o Options) {
 			return nil, huma.Error503ServiceUnavailable(wizardUnavailable)
 		}
 		b := in.Body
+		if panelHost(o.PanelHosts, b.Domain) {
+			return nil, huma.Error422UnprocessableEntity(panelHostTaken)
+		}
 		job, err := runner.Start(ctx, wizard.Input{Domain: b.Domain, Title: b.Title, AdminUser: b.AdminUser, AdminEmail: b.AdminEmail, AdminPassword: b.AdminPassword, PHPVersion: b.PHPVersion}, siteActor(ctx))
 		b.AdminPassword = ""
 		if err != nil {
@@ -155,6 +158,9 @@ func registerWizard(a huma.API, o Options) {
 			return nil, huma.Error503ServiceUnavailable(wizardUnavailable)
 		}
 		b := in.Body
+		if panelHost(o.PanelHosts, b.Domain) {
+			return nil, huma.Error422UnprocessableEntity(panelHostTaken)
+		}
 		database := false
 		switch b.Database {
 		case "create":

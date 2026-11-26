@@ -171,8 +171,8 @@ func TestWebsiteDomainAddAndRemove(t *testing.T) {
 		"a newline":           {"shop.example.com\nlistener x {", 422, domainForm},
 		"the main domain":     {"example.com", 422, "example.com is already this website's main domain."},
 		"already an alias":    {"www.example.com", 422, "www.example.com is already a domain of this website."},
-		"the panel's address": {"panel.example.org", 422, "panel.example.org is this panel's own address, so it cannot be a website's domain. Use another domain."},
-		"the panel's www":     {"www.panel.example.org", 422, "www.panel.example.org is this panel's own address, so it cannot be a website's domain. Use another domain."},
+		"the panel's address": {"panel.example.org", 422, panelHostTaken},
+		"the panel's www":     {"www.panel.example.org", 422, panelHostTaken},
 	} {
 		w := websiteRequest(f.handler, "POST", sitePath(site, "domain-add"), map[string]any{"domain": tc.domain, "expected_revision": site.Revision}, cookie, csrf)
 		if w.Code != tc.status || problemDetail(t, w) != tc.detail {

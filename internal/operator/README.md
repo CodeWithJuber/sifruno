@@ -76,6 +76,16 @@ All in the private state directory (0700, owner only, no symlinks), next to `acc
 - `tokens.json` (0600, at most 64 KiB, 32 tokens), written the same way as `admins.json`: per token a public ID, name, shown prefix, HMAC-SHA256 of the token, creation, expiry and last-use times. Never the token.
 - `customers.json` (0600, at most 1 MiB, 500 customers), written the same way: per customer the username, its websites (hosting account IDs, sorted), whether it is turned off, the creation time, and either the SHA-256 and expiry of its setup link or, once set up, its Argon2id hash, authenticator secret and last used code step. Never the link.
 - `tokens.key` (0600, 32 random bytes): the HMAC key. Tokens carry 256 random bits, so a keyed hash compared in constant time is enough; Argon2id would slow every API call for no gain. Deleting the key makes every token fail.
+- `sessions.json` (0600, at most 256 KiB), written the same way: the sessions opened with a password and a code, sealed with AES-256-GCM under a key derived from `session.keys` (HMAC-SHA256), so moving `session.keys` aside ends saved sessions too. Inside, per session: the cookie's session ID, the SHA-256 of its CSRF token (never the token), the management handle, the creation, hard-limit and last-activity times, the username, and whether it is a customer's, kept signed in, or viewing as a customer. Sessions opened with the access key are never saved.
+
+## Sessions survive a restart
+
+A panel restart no longer signs people out (Jev, 0.81). Code in `saved_sessions.go`.
+
+- A background saver (`StartSaving`) takes a snapshot of the session table under `mu` every 30 seconds and writes `sessions.json` only when the snapshot changed. Ending a session (sign-out, revoke, sign out everywhere else, a password change, turning a customer off, a new setup link, removing a customer) and starting or ending view-as wake it at once, so a crash right after a sign-out cannot bring the session back. `Close` saves once more after the listeners have stopped; `cmd/sifruno` calls it as its last deferred step.
+- At start the panel loads the file. Every entry is checked as strictly as the panel makes it (IDs, handles, times, the 128 and customer limits), or none is loaded. Sessions that ended while the panel was stopped (idle or hard limit), and sessions of an admin or customer that is no longer in its file, are left out. The idle time keeps counting while the panel is stopped.
+- A damaged file, one with the wrong mode, or one sealed with other session keys does not stop the panel: it starts with no saved sessions, logs one plain line, and the next save replaces the file.
+- Access-key sessions stay in memory only, so a restart ends them, as before.
 
 The plan moves this file into the single SQLite store with the broker rework.
 
@@ -86,7 +96,7 @@ The plan moves this file into the single SQLite store with the broker rework.
 - Rate limits on the server: the existing 20-attempt burst refilling every 3 seconds, plus 5 attempts per username refilling one per minute (network limits are separate, below). Every name, existing or not, uses one of 256 buckets chosen by a keyed hash, so a 429 does not reveal whether a name exists, and memory stays fixed. Someone can lock an admin out for a while by guessing; the access key still works locally.
 - At most two Argon2id computations run at once, bounding memory under a burst.
 - First-run setup needs an access-key session, works only while no admin exists, and issues the authenticator secret to that one session for 10 minutes. The admin is created only after a correct code proves the app is set up, and only if that session is still active at that moment. The session then becomes the admin's.
-- Lock order: `adminMu`, then `mu`; `tokenMu`, then `mu`. `adminMu` and `tokenMu` are never held together, and `mu` is never held while taking either or writing a file. Customer logins change under `adminMu` and are published as a read-only snapshot, which session checks read without a lock.
+- Lock order: `adminMu`, then `mu`; `tokenMu`, then `mu`; `saveMu`, then `mu`. `adminMu` and `tokenMu` are never held together, `saveMu` is never held with either, and `mu` is never held while taking any of them or writing a file. Customer logins change under `adminMu` and are published as a read-only snapshot, which session checks read without a lock.
 - Cookies, CSRF and Origin checks: HttpOnly, SameSite=Strict, Secure on TLS, at most 128 sessions.
 - A session ends after 30 minutes without a request and at 12 hours in any case, and its cookie ends with the browser. "Keep me signed in on this device" (`remember` at sign-in, with a password and code only; the access key refuses it) makes those 24 hours and 7 days, and only then does the cookie get a Max-Age. Jev chose these (0.81). Activity is any request a session check admits except `GET /api/v1/session`, which the panel asks once a minute: an open tab must still go idle. Pages that refresh by themselves still count: off loopback the Home page's readings need a session, so an open Home page stays signed in until the hard limit. The last activity is kept in `seen`, outside `activeSession`, because `authorizingSessionLocked` compares whole entries and one request's activity must not void a parallel request. `expires_at` is the hard limit; the idle limit is enforced on the server.
 
@@ -95,5 +105,4 @@ The plan moves this file into the single SQLite store with the broker rework.
 - More than one admin, a reset for an admin who lost its password or phone, passkeys. A customer cannot see its own sessions yet.
 - Resellers and plans (Phase 2).
 - Token scopes: every token has full admin API access. An audit log of admin actions, including token use.
-- Sessions live in memory: a panel restart signs everyone out, kept sessions too.
 - An outside review of this package and the broker, which the plan requires before a paying customer.

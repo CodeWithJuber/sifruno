@@ -270,6 +270,10 @@ func TestManagementInventoryExpiryBoundAndRestart(t *testing.T) {
 	if w := opRequest(h, "GET", inventoryPath, "", c, ""); w.Code != 401 {
 		t.Fatal("expired current enumerated sessions")
 	}
+	// Access-key sessions are never saved, so a restart ends them.
+	if e := m.Close(); e != nil {
+		t.Fatal(e)
+	}
 	m2, e := Open(strings.TrimSuffix(m.AccessKeyPath(), "access.key"))
 	if e != nil {
 		t.Fatal(e)

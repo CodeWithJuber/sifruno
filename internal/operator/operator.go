@@ -149,6 +149,18 @@ type Manager struct {
 	websiteCheck       atomic.Pointer[WebsiteCheck]
 	customerRoutes     atomic.Pointer[[]string]
 
+	// Saved sessions (saved_sessions.go). saveMu orders writes of
+	// sessions.json and guards lastSaved and saveDone; lock order is saveMu,
+	// then mu, and saveMu is never held with adminMu or tokenMu.
+	saveMu      sync.Mutex
+	savedKey    [32]byte
+	lastSaved   []byte
+	loadProblem string
+	saveWake    chan struct{}
+	saveStop    chan struct{}
+	saveDone    chan struct{}
+	closeOnce   sync.Once
+
 	// API tokens (tokens.go). tokenMu guards the token file, its cached copy
 	// and the bearer limiters. It is never held together with adminMu; when
 	// a session is rechecked, tokenMu is taken first, then mu.
@@ -252,8 +264,12 @@ func Open(dir string) (*Manager, error) {
 	m := &Manager{keyPath: accessPath, keyHash: sha256.Sum256(access[:43]), cookies: cookies,
 		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession), seen: make(map[string]time.Time),
 		dir: dir, admins: admins, pending: map[string]pendingSetup{}, dummy: dummy, hashSlots: make(chan struct{}, 2),
-		customerPending: map[string]pendingSetup{}, authenticatorPending: map[string]pendingSetup{}}
+		customerPending: map[string]pendingSetup{}, authenticatorPending: map[string]pendingSetup{},
+		savedKey: savedSessionsKey(keys), saveWake: make(chan struct{}, 1), saveStop: make(chan struct{})}
 	m.customers.Store(&customers)
+	// A damaged sessions file does not stop the panel; StartSaving logs why
+	// everyone has to sign in again.
+	m.loadProblem, m.lastSaved = m.loadSavedSessions(m.savedKey)
 	if _, err := rand.Read(m.bucketKey[:]); err != nil {
 		return nil, errors.New("operator admin accounts unavailable")
 	}
@@ -762,6 +778,9 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 	m.active[id] = session
 	m.seen[id] = created
 	m.mu.Unlock()
+	// The sign-in may have replaced the request's old session, or a
+	// customer's oldest one.
+	m.saveSoon()
 	s := sessions.NewSession(m.cookies, cookieName)
 	s.Values = map[any]any{"id": id, "csrf": csrf, "expires": expires.Unix()}
 	options := *m.cookies.Options
@@ -812,6 +831,7 @@ func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(m.active, id)
 	m.mu.Unlock()
+	m.saveSoon()
 	options := *m.cookies.Options
 	options.MaxAge = -1
 	options.Secure = r.TLS != nil

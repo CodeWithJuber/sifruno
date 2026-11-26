@@ -123,6 +123,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Password sign-ins are saved every 30 seconds and once more here, the
+	// last deferred step: after every listener has stopped, so a restart
+	// does not sign people out.
+	access.StartSaving(func(line string) { fmt.Fprintln(os.Stderr, line) })
+	defer func() {
+		if e := access.Close(); e != nil {
+			fmt.Fprintln(os.Stderr, e)
+		}
+	}()
 	websiteStore, err := sites.Open(filepath.Join(dir, "sites"), t)
 	if err != nil {
 		return err

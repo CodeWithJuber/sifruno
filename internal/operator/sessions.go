@@ -162,6 +162,7 @@ func (m *Manager) revokeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(m.active, found)
 	m.mu.Unlock()
+	m.saveSoon()
 	writeJSON(w, struct {
 		RevokedCount int `json:"revoked_count"`
 	}{1})
@@ -189,6 +190,7 @@ func (m *Manager) revokeOthers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	m.mu.Unlock()
+	m.saveSoon()
 	writeJSON(w, struct {
 		RevokedCount int `json:"revoked_count"`
 	}{count})

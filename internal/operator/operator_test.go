@@ -96,7 +96,15 @@ func TestCredentialPersistencePrivateBoundsAndCookie(t *testing.T) {
 		t.Fatal("active session unavailable")
 	}
 	// A newly opened manager shares persistent crypto keys but never resurrects
-	// a logged-in session: admission is an in-process bounded active record.
+	// an access-key session: only password sessions are saved, and the saved
+	// sessions are written when the panel stops.
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m2, err = Open(filepath.Dir(m.AccessKeyPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux2 := http.NewServeMux()
 	m2.Register(mux2)
 	if w := opRequest(mux2, "GET", "/api/v1/session", "", c, ""); w.Code != 401 {

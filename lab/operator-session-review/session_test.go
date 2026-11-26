@@ -351,6 +351,11 @@ func TestIndependentRevokedAuthorizerCannotMutate(t *testing.T) {
 func TestIndependentRestartAndLegacyLogout(t *testing.T) {
 	f := isolated(t)
 	a := login(t, f, admission{})
+	// A graceful stop saves the password sessions; an access-key session is
+	// never among them, so the restarted manager does not admit it.
+	if err := f.manager.Close(); err != nil {
+		t.Fatal("isolated manager did not close")
+	}
 	m, err := operator.Open(filepath.Dir(f.manager.AccessKeyPath()))
 	if err != nil {
 		t.Fatal("isolated reopened manager unavailable")

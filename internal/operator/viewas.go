@@ -36,6 +36,7 @@ func (m *Manager) beginViewAs(w http.ResponseWriter, r *http.Request) {
 	a.viewAs = input.Username
 	m.active[id] = a
 	m.mu.Unlock()
+	m.saveSoon()
 	writeJSON(w, m.publicSession(a, s.Values["csrf"].(string)))
 }
 
@@ -63,5 +64,6 @@ func (m *Manager) endViewAs(w http.ResponseWriter, r *http.Request) {
 	a.viewAs = ""
 	m.active[id] = a
 	m.mu.Unlock()
+	m.saveSoon()
 	writeJSON(w, m.publicSession(a, s.Values["csrf"].(string)))
 }

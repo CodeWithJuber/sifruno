@@ -81,6 +81,7 @@ func (m *Manager) sessionPrincipal(w http.ResponseWriter, id string, a activeSes
 			current.viewAs = ""
 			m.active[id] = current
 		}
+		m.saveSoon()
 	}
 	m.mu.Unlock()
 	if a.customer {
@@ -168,4 +169,5 @@ func (m *Manager) endCustomerSessionsLocked(username string, viewers bool) {
 			m.active[id] = a
 		}
 	}
+	m.saveSoon()
 }

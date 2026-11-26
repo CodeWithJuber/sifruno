@@ -219,6 +219,7 @@ func (m *Manager) changePassword(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	m.mu.Unlock()
+	m.saveSoon()
 	for _, other := range ended {
 		delete(m.authenticatorPending, other)
 	}

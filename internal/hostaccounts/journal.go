@@ -130,6 +130,8 @@ func (s *store) appendEvent(r record, e operationEvent) (record, error) {
 	if err != nil {
 		return r, recovery(e.Action, r, "journal "+e.Status+" row", err)
 	}
+	// The record changed: its certificate or "Always use HTTPS" may have.
+	s.wakeHTTPSExpiry()
 	return r, nil
 }
 func (s *store) beginOperation(r record, before *Account) (record, error) {

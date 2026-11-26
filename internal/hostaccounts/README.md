@@ -851,6 +851,21 @@ off. The input is exactly `always_https` (`true` or `false`, required),
 `expected_revision` and `reason`; it needs the web operation on. The setting
 is kept with or without a certificate and takes effect once one is in force.
 
+The rule is rendered when the site list is installed: at every web change,
+about five seconds after the broker starts (the .htaccess watcher's first
+restart, which also brings an upgraded broker's rules into force), and
+after a tenant's .htaccess changes. A certificate whose renewal keeps
+failing would leave http redirected to an expired https after its NotAfter
+until the next of those, so the broker also renders the site list at that
+second (`https_expiry.go`): one timer, for the earliest NotAfter of a
+redirect the last render put in force, set again after every journaled
+change. The render is the .htaccess watcher's (`reloadWebServer`): under
+the store lock, never while an operation is unfinished, tested before it
+is loaded; it changes no account and journals nothing. A render that fails
+is logged by its class, naming no account, and tried again a minute later.
+A broker that did not render the config at start (no panel host) renders
+at once if a redirect's certificate expired while it was stopped.
+
 Checked before anything is journaled: the form (400 `invalid`), and the
 account (409 `conflict`) as for a domains change: the revision matches, the
 account is active, its site is live, no WordPress install is running, and
@@ -867,11 +882,8 @@ and the account list shows `plain_http` when it is true.
 
 Limits for now:
 
-- The rule is rendered when the site list is installed: at every web
-  change, about five seconds after the broker starts (the .htaccess
-  watcher's first restart, which also brings an upgraded broker's rules
-  into force), and after a tenant's .htaccess changes. A certificate that
-  expires between two of them keeps http redirected until the next.
+- The timer counts on the machine's clock: a clock stepped forward, or a
+  machine paused, leaves the render late by that much.
 - OpenLiteSpeed reads `%{HTTPS}` as `on` when the request carries
   `X-Forwarded-Proto: https` (olsweb doc.go), so a client that sends it on
   plain http is not redirected. That only keeps the client itself on http.

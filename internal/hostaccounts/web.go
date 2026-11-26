@@ -86,6 +86,36 @@ func siteName(id string) string { return "u" + id[:31] }
 // softQuotaMiB leaves a warning margin under the hard limit.
 func softQuotaMiB(hard int) int { return hard - hard/10 }
 
+// servedWeb is the web state webSites renders for a record, and whether it
+// lists the site at all: live, and not being deleted. A web change in
+// flight counts as done.
+func servedWeb(r record) (WebState, bool) {
+	w := r.Web
+	if r.Pending != nil && r.Pending.Action == "web" {
+		w = r.WebNext
+	}
+	return w, w.enabled() && (r.Pending == nil || r.Pending.Action != "delete")
+}
+
+// httpsUntil is the Unix second at which the record's "Always use HTTPS"
+// stops: its certificate's NotAfter. Zero when it has none in the config:
+// no certificate is installed, or the owner turned it off. A certificate or
+// switch change in flight counts as done.
+func httpsUntil(r record) int64 {
+	certificate := r.TLS
+	if r.Pending != nil && r.Pending.Action == "certificate" {
+		certificate = r.TLSNext
+	}
+	plainHTTP := r.Account.PlainHTTP
+	if r.Pending != nil && r.Pending.Action == "https" {
+		plainHTTP = r.Pending.Target == "off"
+	}
+	if !certificate.installed() || plainHTTP {
+		return 0
+	}
+	return certificate.NotAfter
+}
+
 // webSites lists every live site as OpenLiteSpeed should serve it, sorted by
 // name, without the account named by except (used while removing a site).
 // Settings in flight are used for the account they belong to, so a recovery
@@ -101,11 +131,8 @@ func webSites(items []record, except string) []olsweb.Site {
 		if r.Account.ID == except {
 			continue
 		}
-		w := r.Web
-		if r.Pending != nil && r.Pending.Action == "web" {
-			w = r.WebNext
-		}
-		if !w.enabled() || (r.Pending != nil && r.Pending.Action == "delete") {
+		w, served := servedWeb(r)
+		if !served {
 			continue
 		}
 		certificate := r.TLS
@@ -115,10 +142,6 @@ func webSites(items []record, except string) []olsweb.Site {
 		state := r.Account.State
 		if r.Pending != nil && r.Pending.Action == "state" {
 			state = r.Pending.Target
-		}
-		plainHTTP := r.Account.PlainHTTP
-		if r.Pending != nil && r.Pending.Action == "https" {
-			plainHTTP = r.Pending.Target == "off"
 		}
 		limits := recordLimits(r)
 		// The account's own domain first, then its aliases; a domains
@@ -156,8 +179,9 @@ func webSites(items []record, except string) []olsweb.Site {
 			// "Always use HTTPS": plain http for those domains goes to
 			// https while the certificate is valid, unless the owner
 			// turned it off. One past its NotAfter is not in force, so the
-			// next render after it expires serves plain http again.
-			site.AlwaysHTTPS = !plainHTTP && time.Now().Unix() < certificate.NotAfter
+			// next render after it expires serves plain http again; the
+			// broker renders at that second (https_expiry.go).
+			site.AlwaysHTTPS = time.Now().Unix() < httpsUntil(r)
 		}
 		sites = append(sites, site)
 	}

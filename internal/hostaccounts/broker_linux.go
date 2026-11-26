@@ -185,6 +185,15 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	}
 	defer s.close()
 	s.web = web
+	// "Always use HTTPS" stops at a certificate's NotAfter: with the web
+	// operation on, the expiry loop renders the config again then
+	// (https_expiry.go). Every journaled change wakes it from here on; it
+	// starts below, once the config may have been rendered at start.
+	var expiry *httpsExpiry
+	if web != nil {
+		expiry = newHTTPSExpiry(s.httpsExpiresAfter, s.reloadWebServer)
+		s.httpsWake = expiry.wake
+	}
 	// Deleted homes wait in the trash; the remover empties it now, after
 	// each delete and every trashRetry while entries remain, outside the
 	// store lock, so no delete or other account waits for it.
@@ -238,10 +247,21 @@ func RunBrokerWithWeb(ctx context.Context, opts BrokerOptions, factory WebPrevie
 	// rendered and loaded once before the socket accepts requests, as the
 	// .htaccess watcher does. A failure does not stop the broker: every web
 	// change renders the names again.
+	var rendered time.Time // zero: the config was not rendered at start
 	if web != nil && len(web.PanelHosts) > 0 {
+		started := time.Now()
 		if e := s.reloadWebServer(ctx); e != nil {
 			fmt.Fprintln(os.Stderr, "sifruno broker: the web server config with the panel's own names (for its certificate) could not be loaded at start; the next website change loads it")
+		} else {
+			rendered = started
 		}
+	}
+	// Without a render at start, a certificate that expired while the
+	// broker was stopped is rendered away at once.
+	if expiry != nil {
+		expiring, stopExpiry := context.WithCancel(ctx)
+		defer stopExpiry()
+		go expiry.run(expiring, rendered)
 	}
 	listener, e := net.ListenUnix("unix", &net.UnixAddr{Name: opts.SocketPath, Net: "unix"})
 	if e != nil {

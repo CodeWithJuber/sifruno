@@ -257,6 +257,9 @@ type store struct {
 	// trashWake asks the trash remover to run (nil: none, as in tests);
 	// it never waits (wakeTrash).
 	trashWake func()
+	// httpsWake tells the "Always use HTTPS" expiry loop that a record
+	// changed (nil: none, as in tests); it never waits (https_expiry.go).
+	httpsWake func()
 }
 
 // auditBatch is how many accounts each refresh verifies in full (identity

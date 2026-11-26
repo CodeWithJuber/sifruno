@@ -75,8 +75,7 @@ var whmUsername = regexp.MustCompile(`^[a-z][a-z0-9_]{1,31}$`)
 
 // Compat reason strings: the "(XID …) … at …/Create.pm line 659." shape is
 // an interface contract — unchanged clients pattern-match it. The volatile
-// XID is freshly generated per call like the reference. See
-// docs/reference/whm-cpanel-138-lifecycle-capture.md §3.
+// XID is freshly generated per call.
 func reasonDuplicateUser(username string) string {
 	return fmt.Sprintf("(XID %s) This system already has an account named “%s”. at /usr/local/cpanel/Whostmgr/Accounts/Create.pm line 659.\n", xid(), username)
 }

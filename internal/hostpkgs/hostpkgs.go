@@ -1,8 +1,7 @@
 // Package hostpkgs persists hosting packages (WHM "packages" / plan
 // templates) as a root-only JSON store. The default key set and value types
-// mirror the licensed cPanel 138 getpkginfo capture
-// (docs/reference/whm-api-contract-batch4.md): mixed string/null/number
-// values are preserved verbatim for envelope fidelity.
+// mirror cPanel 138's getpkginfo output: mixed string/null/number values are
+// preserved as given for envelope fidelity.
 package hostpkgs
 
 import (

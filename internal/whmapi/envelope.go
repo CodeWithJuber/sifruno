@@ -6,9 +6,9 @@ import (
 	"strconv"
 )
 
-// Envelope shapes below mirror the licensed cPanel & WHM 11.138.0.11
-// reference captures in docs/reference. Field order, types and reason
-// strings are compatibility-relevant: unchanged clients pattern-match them.
+// Envelope shapes below mirror the WHM API 1 wire format of cPanel & WHM
+// 11.138.0.11. Field order, types and reason strings are
+// compatibility-relevant: unchanged clients pattern-match them.
 
 // outputBlock carries metadata.output; Raw is the provisioning step log on
 // success and null on failure (observed).

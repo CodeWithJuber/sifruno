@@ -2,9 +2,9 @@ package whmapi
 
 // backup.archive batch 1: WHM backup_user_list + UAPI
 // Backup::list_backups / Backup::fullbackup_to_homedir over the
-// backuphost store. Placement delta vs the reference (panel backup root
-// instead of the account homedir, which is account-uid-owned) is
-// documented in docs/reference/backup-archive-batch1.md.
+// backuphost store. Placement differs from cPanel: archives go under the
+// panel backup root instead of the account homedir, which is
+// account-uid-owned.
 
 import (
 	"net/http"

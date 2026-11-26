@@ -30,7 +30,6 @@ Then open `http://127.0.0.1:8080`. The [installation guide](docs/installation.md
 | `cmd/`, `internal/` | Go server, CLI, root broker and hosting packages |
 | `web/` | Panel UI (React, TypeScript, Tailwind) |
 | [docs/brand-guidelines.md](docs/brand-guidelines.md) | The V3 brand: logo, colours, type |
-| [docs/reference/](docs/reference/) | Notes behind the frozen WHM API layer |
 | [docs/archive/](docs/archive/README.md) | Delivery notes and evidence from before the plan |
 
 ## Licence

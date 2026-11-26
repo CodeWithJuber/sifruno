@@ -7,23 +7,24 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { addDomain, addRedirect, aliasHttps, checkDomain, checkRedirectFrom, checkRedirectTo, getSiteDomains, maxAliases, maxPathLength, maxRedirects, maxTargetLength, normalizeDomain, redirectKind, removeDomain, removeRedirect, SiteDomainsApiError, statusLabel } from "@/lib/site-domains-api";
+import { Switch } from "@/components/ui/switch";
+import { addDomain, addRedirect, aliasHttps, alwaysHttps, alwaysHttpsOutcome, checkDomain, checkRedirectFrom, checkRedirectTo, getSiteDomains, maxAliases, maxPathLength, maxRedirects, maxTargetLength, normalizeDomain, redirectKind, removeDomain, removeRedirect, setAlwaysHttps, SiteDomainsApiError, statusLabel } from "@/lib/site-domains-api";
 import type { AliasHttps, SiteDomains as Domains, WebsiteRedirect } from "@/lib/site-domains-api";
 import { useShell } from "@/shell/context";
 // The busy ring a working button shows, as on the wizard's screens.
 import "./new-website.css";
 
 // One website's Domains page: the website's other domains (aliases, which
-// serve the same site) with what each one's HTTPS is, and its redirects, with
-// forms to add each and a remove for each. The base styles colour <p> and <a>
-// outside Tailwind's layers, so coloured text uses div or span, as on the
-// other Websites screens.
+// serve the same site) with what each one's HTTPS is, its "Always use HTTPS"
+// switch, and its redirects, with forms to add each and a remove for each.
+// The base styles colour <p> and <a> outside Tailwind's layers, so coloured
+// text uses div or span, as on the other Websites screens.
 
 const panel = "rounded-lg border border-border bg-card";
 const control = "h-10 pointer-coarse:h-12";
@@ -276,14 +277,59 @@ function AddRedirectForm({ site, busy, announcer, onSubmit }: { site: Domains; b
   </form>;
 }
 
+// ---- Always use HTTPS -------------------------------------------------------------
+
+// The switch shows the stored setting. It changes only while the site is live
+// with a valid certificate; otherwise it cannot be pressed, and the section
+// says why and what to do next. While a change is saved, it shows the new
+// position and cannot be pressed again.
+function AlwaysHttpsSection({ site, locked, saving, status, failure, onChange }: { site: Domains; locked: boolean; saving?: boolean; status: string; failure?: Problem; onChange: (on: boolean) => void }) {
+  const [dnsOpen, setDnsOpen] = useState(false);
+  const state = alwaysHttps(site);
+  const blocked = state.kind !== "ready";
+  const checked = saving ?? site.always_https;
+  const describedBy = ["always-https-hint", blocked ? "always-https-blocked" : "", status && saving === undefined ? "always-https-status" : ""].filter(Boolean).join(" ");
+  return <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="always-https-heading" data-testid="always-https-section" data-state={state.kind} data-on={String(site.always_https)}>
+    <h3 id="always-https-heading">HTTPS</h3>
+    <Field orientation="horizontal" data-disabled={blocked ? true : undefined} className="gap-4">
+      <FieldContent>
+        <FieldLabel htmlFor="always-https">Always use HTTPS</FieldLabel>
+        <FieldDescription id="always-https-hint" className="text-start">Send visitors from http:// to https:// once a valid certificate is in force.</FieldDescription>
+      </FieldContent>
+      <Switch id="always-https" checked={checked} disabled={blocked} readOnly={locked} aria-busy={saving !== undefined}
+        aria-describedby={describedBy} onCheckedChange={(on) => { if (!locked) onChange(on); }} data-testid="always-https-switch" />
+    </Field>
+    {saving !== undefined && <div className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="always-https-saving">
+      <progress className="wizard-spinner" aria-hidden="true" />{saving ? "Turning Always use HTTPS on…" : "Turning Always use HTTPS off…"}
+    </div>}
+    {status && saving === undefined && <div id="always-https-status" className="flex items-start gap-1.5 text-sm text-foreground" data-testid="always-https-status">
+      <CircleCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" /><span>{status}</span>
+    </div>}
+    {blocked && <div id="always-https-blocked" className="flex flex-col gap-2 text-sm" data-testid="always-https-blocked">
+      <span className="text-foreground">{state.why}</span>
+      <span className="text-muted-foreground"><span className="font-medium text-foreground">Next step:</span> {state.next}</span>
+      {(state.kind === "no-certificate" || state.kind === "expired") && <>
+        <Button type="button" variant="outline" size="sm" className="w-fit" aria-expanded={dnsOpen} aria-controls="dns-main-domain" onClick={() => setDnsOpen((open) => !open)} data-testid="always-https-show-dns">
+          Set up DNS<span className="sr-only"> for {site.domain}</span>
+        </Button>
+        <DnsHelp id="dns-main-domain" domain={site.domain} hidden={!dnsOpen} />
+      </>}
+    </div>}
+    {failure && <ProblemAlert problem={failure} testId="always-https-problem" />}
+  </section>;
+}
+
 // ---- The page -----------------------------------------------------------------
 
-type Busy = "add-domain" | "add-redirect" | `remove-domain:${string}` | `remove-redirect:${string}`;
-// Where a failed change is told: by its list, or in the remove dialog.
-type Where = "domains" | "redirects" | "remove-domain";
+type Busy = "add-domain" | "add-redirect" | `remove-domain:${string}` | `remove-redirect:${string}` | "always-https";
+// Where a failed change is told: by its list, its switch, or in the remove
+// dialog.
+type Where = "domains" | "redirects" | "remove-domain" | "always-https";
 
 export function SiteDomains({ accountId }: { accountId: string }) {
-  const { revision, setPageResource } = useShell();
+  const { revision, setPageResource, viewer } = useShell();
+  // A login that may not change the switch does not see it.
+  const canHttps = viewer.can("POST /api/v1/websites/sites/{account_id}/always-https");
   const [site, setSite] = useState<Domains>();
   const [problem, setProblem] = useState<Problem>();
   const [loading, setLoading] = useState(true);
@@ -292,6 +338,10 @@ export function SiteDomains({ accountId }: { accountId: string }) {
   const [busy, setBusy] = useState<Busy>();
   const [failure, setFailure] = useState<{ where: Where; problem: Problem }>();
   const [notice, setNotice] = useState("");
+  // The switch's position while its change is saved, and what the last
+  // change did; said beside the switch, not at the top of the page.
+  const [httpsTarget, setHttpsTarget] = useState<boolean>();
+  const [httpsStatus, setHttpsStatus] = useState("");
   const [dnsFor, setDnsFor] = useState<string>();
   const [removing, setRemoving] = useState<string>();
   // Bumped after an add, so its form starts again untouched.
@@ -336,20 +386,27 @@ export function SiteDomains({ accountId }: { accountId: string }) {
 
   const live = site.state === "active";
   // One change at a time: the server's answer becomes the page's read, the
-  // outcome is said, and focus goes to the list the change was in.
+  // outcome is said, and focus goes to the list the change was in. The
+  // switch keeps focus, and its outcome is shown beside it.
   async function run(what: Busy, where: Where, failed: string, work: () => Promise<Domains>, done: (next: Domains) => string) {
     if (busy) return;
-    setBusy(what); setFailure(undefined); setNotice("");
+    setBusy(what); setFailure(undefined); setNotice(""); setHttpsStatus("");
     try {
       const next = await work();
       if (!mounted.current) return;
       const message = done(next);
-      setSite(next); setLoadedAt(new Date()); setNotice(message); setRemoving(undefined);
+      setSite(next); setLoadedAt(new Date()); setRemoving(undefined);
+      if (where === "always-https") setHttpsStatus(message);
+      else setNotice(message);
       if (what.startsWith("add")) setRound((value) => value + 1);
       announcer.say("status", message, 500);
-      (where === "redirects" ? redirectsHeading : domainsHeading).current?.focus();
+      if (where !== "always-https") (where === "redirects" ? redirectsHeading : domainsHeading).current?.focus();
     } catch (error) {
-      if (mounted.current) setFailure({ where, problem: problemFrom(error, failed) });
+      if (!mounted.current) return;
+      setFailure({ where, problem: problemFrom(error, failed) });
+      // The website changed meanwhile: read it again, so the switch shows it
+      // as it is now.
+      if (where === "always-https" && error instanceof SiteDomainsApiError && error.status === 409) reload();
     } finally {
       if (mounted.current) setBusy(undefined);
     }
@@ -366,6 +423,11 @@ export function SiteDomains({ accountId }: { accountId: string }) {
     () => `Added the redirect from ${from.trim()}.`);
   const removeRoute = (r: WebsiteRedirect) => void run(`remove-redirect:${r.from}`, "redirects", "The redirect was not removed.", () => removeRedirect(site, r.from),
     () => `Removed the redirect from ${r.from}.`);
+  const switchHttps = (on: boolean) => {
+    if (busy) return;
+    setHttpsTarget(on);
+    void run("always-https", "always-https", "Always use HTTPS did not change.", () => setAlwaysHttps(site, on), (next) => alwaysHttpsOutcome(next));
+  };
   const unread = site.redirect_count - site.redirects.length;
   const removingRedirects = removing ? site.redirects.filter((r) => r.from === removing) : [];
 
@@ -432,6 +494,9 @@ export function SiteDomains({ accountId }: { accountId: string }) {
         <AddDomainForm key={`domain-${round}`} site={site} busy={busy === "add-domain"} announcer={announcer} onSubmit={addAlias} />
       </>}
     </section>
+
+    {canHttps && <AlwaysHttpsSection site={site} locked={Boolean(busy)} saving={busy === "always-https" ? httpsTarget : undefined} status={httpsStatus}
+      failure={failure?.where === "always-https" ? failure.problem : undefined} onChange={switchHttps} />}
 
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="redirects-list-heading" data-testid="redirects-section">
       <div className="flex flex-wrap items-baseline justify-between gap-2">

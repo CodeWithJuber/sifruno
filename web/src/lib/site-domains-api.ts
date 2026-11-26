@@ -1,7 +1,8 @@
 import { validSession } from "./sites-api";
 
 // Client for a website's Domains page: its other domains (aliases, which
-// serve the same site) and its redirects. The server sends each change to
+// serve the same site), its redirects and its "Always use HTTPS" switch. The
+// server sends each change to
 // the account broker, which renders them into the web server's config; after
 // a domain change the panel asks for a certificate that covers the new set.
 // The checks here mirror the server's so the form can say what is wrong
@@ -23,6 +24,9 @@ export interface SiteDomains {
   // The hosting account's revision: a change sends it back.
   revision: number;
   https: { on: boolean; not_after: string };
+  // Always use HTTPS: true unless the site's owner turned it off. It sends
+  // plain http to https only while a valid certificate is in force.
+  always_https: boolean;
   aliases: WebsiteAlias[];
   // How many redirects the site has. The server lists them in redirects; if
   // it could not read them, redirects is shorter than this.
@@ -144,6 +148,41 @@ export function aliasHttps(https: AliasHttps): { label: string; detail: string; 
 
 export const statusLabel = (status: 301 | 302) => status === 301 ? "301, moved for good" : "302, moved for now";
 
+// What "Always use HTTPS" can do now. ready: the switch works, and while it
+// is on it is in force. Otherwise the switch shows the setting but cannot
+// change, with why and what to do next.
+export type AlwaysHttps =
+  | { kind: "ready" }
+  | { kind: "not-live" | "no-certificates-here" | "no-certificate" | "expired"; why: string; next: string };
+
+export function alwaysHttps(site: Pick<SiteDomains, "domain" | "state" | "https" | "aliases">, now: Date = new Date()): AlwaysHttps {
+  if (site.state !== "active") {
+    return site.state === "suspended"
+      ? { kind: "not-live", why: "This website is suspended, so its domains answer with an error page.", next: "Resume the website in its Settings tab to change this." }
+      : { kind: "not-live", why: "The hosting account needs a check by whoever runs this server.", next: "Ask whoever runs this server to check the website." };
+  }
+  if (!site.https.on) {
+    // An alias says "off" only when this server has no certificate manager.
+    if (site.aliases.some((alias) => alias.https === "off")) {
+      return { kind: "no-certificates-here", why: "Certificates are not set up on this server, so the website has none and stays on http://.", next: "Ask whoever runs this server to set up certificates." };
+    }
+    return { kind: "no-certificate", why: "This website has no certificate yet, so visitors cannot be sent to https:// without a security warning.", next: `Get a certificate on this tab first: point ${site.domain} at this server with the DNS record below. The panel asks for a certificate every few hours until it has one.` };
+  }
+  const until = site.https.not_after ? new Date(site.https.not_after) : undefined;
+  if (until && !Number.isNaN(until.getTime()) && until.getTime() <= now.getTime()) {
+    return { kind: "expired", why: "This website's certificate has expired, so visitors stay on http:// until a new one is in force.", next: `Check on this tab that ${site.domain} still points at this server with the DNS record below. The panel asks for a new certificate every few hours.` };
+  }
+  return { kind: "ready" };
+}
+
+// What a change of the switch did, said once the server has saved it.
+export function alwaysHttpsOutcome(next: Pick<SiteDomains, "domain" | "state" | "https" | "aliases" | "always_https">, now: Date = new Date()): string {
+  if (!next.always_https) return "Always use HTTPS is off. Visitors can use both http:// and https://.";
+  return alwaysHttps(next, now).kind === "ready"
+    ? "Always use HTTPS is on. Visitors on http:// now go to https://."
+    : "Always use HTTPS is on. It starts once a valid certificate is in force.";
+}
+
 // ---- Reading the server's answers -----------------------------------------------
 
 const httpsValues: readonly AliasHttps[] = ["on", "waiting_for_dns", "pending", "off"];
@@ -179,15 +218,16 @@ export function parseSiteDomains(v: unknown): SiteDomains | undefined {
   const redirects = parseRedirects(v.redirects);
   const count = v.redirect_count;
   if (!aliases || !redirects || !Number.isSafeInteger(count) || (count as number) < redirects.length || (count as number) > maxRedirects) return undefined;
+  if (typeof v.always_https !== "boolean") return undefined;
   return {
     account_id: v.account_id, domain: v.domain, username: v.username, state: v.state, revision: v.revision as number,
-    https: { on: https.on, not_after: https.not_after }, aliases, redirect_count: count as number, redirects,
+    https: { on: https.on, not_after: https.not_after }, always_https: v.always_https, aliases, redirect_count: count as number, redirects,
   };
 }
 
 // ---- Errors -------------------------------------------------------------------
 
-export type Operation = "read" | "addDomain" | "removeDomain" | "addRedirect" | "removeRedirect";
+export type Operation = "read" | "addDomain" | "removeDomain" | "addRedirect" | "removeRedirect" | "setAlwaysHttps";
 
 export const whatFailed: Record<Operation, string> = {
   read: "This website's domains could not be loaded.",
@@ -195,6 +235,7 @@ export const whatFailed: Record<Operation, string> = {
   removeDomain: "The domain was not removed.",
   addRedirect: "The redirect was not added.",
   removeRedirect: "The redirect was not removed.",
+  setAlwaysHttps: "Always use HTTPS did not change.",
 };
 const notConfirmed = "The panel could not confirm the change.";
 const seeItNow = "Reload the page to see the website as it is now before you try again.";
@@ -225,7 +266,11 @@ function explain(operation: Operation, status: number, detail: string): { why: s
     case 401: return { why: "Your sign-in has ended.", next: change ? "Sign in again, then try again." : "Sign in again to see this website." };
     case 403: return { why: detail || "The panel refused the request because the session or page origin did not match.", next: "Reload the page, sign in if asked, and try again." };
     case 404: return { why: detail || "That website was not found.", next: "Go back to Websites and choose it again. If it is not listed, it was removed." };
-    case 409: return { why: detail || "The website changed or was busy.", next: seeItNow };
+    // The switch's page reads the website again by itself after a 409; the
+    // server's words go under Technical details.
+    case 409: return operation === "setAlwaysHttps"
+      ? { why: "The website changed after the page read it, or another change to it was still running, so nothing changed.", next: "The page has read the website again and shows it as it is now. Check the switch, then try again if you still want the change." }
+      : { why: detail || "The website changed or was busy.", next: seeItNow };
     case 422: return { why: detail || "The server did not accept the request.", next: "Change what you entered, then try again." };
     case 429: return { why: detail || "Too many requests in a short time.", next: "Wait a minute, then try again." };
     case 503: return { why: detail || "The account service is not available right now.", next: change ? `${seeItNow} If it keeps failing, check the Sifruno services on this server.` : "Try again in a minute. If it keeps failing, check the Sifruno services on this server." };
@@ -268,8 +313,10 @@ async function request(operation: Operation, url: string, options: RequestOption
       const problem = object(value) ? value : {};
       const title = serverText(problem.title, 100);
       const first = Array.isArray(problem.errors) && object(problem.errors[0]) ? serverText(problem.errors[0].message, 300) : "";
-      const { why, next } = explain(operation, response.status, serverText(problem.detail, 900));
-      throw new SiteDomainsApiError(response.status, whatFailed[operation], why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}${first ? `; ${first}` : ""}${note}`);
+      const detail = serverText(problem.detail, 900);
+      const { why, next } = explain(operation, response.status, detail);
+      const said = detail && why !== detail ? `; the server said: ${detail}` : "";
+      throw new SiteDomainsApiError(response.status, whatFailed[operation], why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}${first ? `; ${first}` : ""}${said}${note}`);
     }
     return value;
   } finally {
@@ -305,9 +352,9 @@ async function csrfToken(operation: Operation, signal?: AbortSignal): Promise<st
   return value.csrf_token;
 }
 
-type Action = "domain-add" | "domain-remove" | "redirect-add" | "redirect-remove";
+type Action = "domain-add" | "domain-remove" | "redirect-add" | "redirect-remove" | "always-https";
 
-async function change(operation: Operation, site: SiteDomains, action: Action, body: Record<string, string | number>, signal?: AbortSignal): Promise<SiteDomains> {
+async function change(operation: Operation, site: SiteDomains, action: Action, body: Record<string, string | number | boolean>, signal?: AbortSignal): Promise<SiteDomains> {
   if (!validAccountId(site.account_id)) throw new SiteDomainsApiError(404, whatFailed[operation], "This page does not point to a website.", "Go back to Websites and choose the website there.", "account id is not 32 lowercase hex characters; nothing was sent");
   const csrf = await csrfToken(operation, signal);
   const url = `/api/v1/websites/sites/${site.account_id}/${action}`;
@@ -325,3 +372,5 @@ export const addRedirect = (site: SiteDomains, from: string, to: string, status:
   change("addRedirect", site, "redirect-add", redirectBody(from, to, status), options.signal);
 export const removeRedirect = (site: SiteDomains, from: string, options: { signal?: AbortSignal } = {}) =>
   change("removeRedirect", site, "redirect-remove", { from }, options.signal);
+export const setAlwaysHttps = (site: SiteDomains, on: boolean, options: { signal?: AbortSignal } = {}) =>
+  change("setAlwaysHttps", site, "always-https", { always_https: on }, options.signal);

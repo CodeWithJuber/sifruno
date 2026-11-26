@@ -207,18 +207,19 @@ type Certificates interface {
 // Otherwise it asks the manager for one (Refresh), after waiting up to two
 // minutes for the first name to answer on port 80 here: on a fresh start
 // the broker may still be loading the web server's config with it. Either
-// way it writes one line in plain words: the certificate, or why the panel
-// keeps its self-signed one and what to do.
+// way it writes one line in plain words: the certificate, or why it got
+// none, which certificate it keeps serving and what to do.
 func (i *Issued) Obtain(ctx context.Context, certs Certificates, log io.Writer) {
 	if c := i.current.Load(); c != nil && c.notAfter.Sub(i.now()) > 30*24*time.Hour && i.coversAll(c) {
 		fmt.Fprintln(log, i.valid(c))
 		return
 	}
-	if !i.waitReachable(ctx, certs) {
-		fmt.Fprintf(log, "Panel certificate: %s does not answer on port 80 from this server yet; asking Let's Encrypt anyway.\n", i.names[0])
-	}
+	reached := i.waitReachable(ctx, certs)
 	if ctx.Err() != nil {
 		return
+	}
+	if !reached {
+		fmt.Fprintf(log, "Panel certificate: %s does not answer on port 80 from this server yet; asking Let's Encrypt anyway.\n", i.names[0])
 	}
 	err := certs.Refresh(ctx, i.Site())
 	if err == nil {
@@ -230,7 +231,12 @@ func (i *Issued) Obtain(ctx context.Context, certs Certificates, log io.Writer) 
 	if ctx.Err() != nil {
 		return
 	}
-	fmt.Fprintln(log, explain(err, i.names[0]))
+	// A certificate it has that is still valid for the name stays served.
+	keeps := "its self-signed certificate"
+	if c := i.current.Load(); c != nil && i.now().Before(c.notAfter) && c.cert.Leaf.VerifyHostname(i.names[0]) == nil {
+		keeps = "its Let's Encrypt certificate, valid until " + c.notAfter.UTC().Format(time.DateOnly)
+	}
+	fmt.Fprintln(log, explain(err, i.names[0], keeps))
 }
 
 // waitReachable reports whether the first name answered within reachWait.
@@ -265,19 +271,19 @@ func (i *Issued) valid(c *issuedCert) string {
 		strings.Join(c.cert.Leaf.DNSNames, ", "), c.notAfter.UTC().Format(time.DateOnly))
 }
 
-// explain says in plain words why the panel has no Let's Encrypt
-// certificate for name after err, and what to do. The manager's own line
-// before it has the technical details.
-func explain(err error, name string) string {
+// explain says in plain words why the panel got no new Let's Encrypt
+// certificate for name after err, what it keeps serving (keeps), and what
+// to do. The manager's own line before it has the technical details.
+func explain(err error, name, keeps string) string {
 	switch {
 	case errors.Is(err, acme.ErrValidation):
-		return "Panel certificate: Let's Encrypt could not check " + name + " over http on port 80 of this server, so the panel keeps its self-signed certificate. Point the name's DNS at this server and open TCP port 80 to the internet; the panel asks again within 6 hours."
+		return "Panel certificate: Let's Encrypt could not check " + name + " over http on port 80 of this server, so the panel keeps " + keeps + ". Point the name's DNS at this server and open TCP port 80 to the internet; the panel asks again within 6 hours."
 	case errors.Is(err, acme.ErrRateLimited):
-		return "Panel certificate: Let's Encrypt has had too many requests for " + name + " or from this server, so the panel keeps its self-signed certificate. The panel asks again within 6 hours; if this lasts more than a day, read https://letsencrypt.org/docs/rate-limits/."
+		return "Panel certificate: Let's Encrypt has had too many requests for " + name + " or from this server, so the panel keeps " + keeps + ". The panel asks again within 6 hours; if this lasts more than a day, read https://letsencrypt.org/docs/rate-limits/."
 	case errors.Is(err, acme.ErrInstall):
-		return "Panel certificate: Let's Encrypt issued a certificate for " + name + ", but the panel could not save it in its state folder, so it keeps its self-signed certificate. Check that the folder belongs to the panel's user and the disk has room; the panel asks again in a week."
+		return "Panel certificate: Let's Encrypt issued a certificate for " + name + ", but the panel could not save it in its state folder, so it keeps " + keeps + ". Check that the folder belongs to the panel's user and the disk has room; the panel asks again in a week."
 	case errors.Is(err, acme.ErrTooSoon):
-		return "Panel certificate: the panel asked Let's Encrypt for " + name + " less than an hour ago, so it does not ask again now and keeps its self-signed certificate. The renewal check asks again within 6 hours of that try."
+		return "Panel certificate: the panel asked Let's Encrypt for " + name + " less than an hour ago, so it does not ask again now and keeps " + keeps + ". The renewal check asks again within 6 hours of that try."
 	}
-	return "Panel certificate: Let's Encrypt did not answer or did not issue a certificate for " + name + ", so the panel keeps its self-signed certificate. Check that this server reaches acme-v02.api.letsencrypt.org on port 443; the panel asks again within 6 hours."
+	return "Panel certificate: Let's Encrypt did not answer or did not issue a certificate for " + name + ", so the panel keeps " + keeps + ". Check that this server reaches acme-v02.api.letsencrypt.org on port 443; the panel asks again within 6 hours."
 }

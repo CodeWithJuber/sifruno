@@ -316,6 +316,15 @@ func TestObtainLogsTheIssuedCertificate(t *testing.T) {
 	if len(certs.refreshes) != 1 {
 		t.Fatalf("an expiring certificate was not renewed: %d refreshes", len(certs.refreshes))
 	}
+	// If that fails, the panel says it keeps the certificate it serves,
+	// which is still valid, not the self-signed one.
+	certs = &certificatesFake{err: fmt.Errorf("%w: connection refused", acme.ErrValidation)}
+	log.Reset()
+	late.Obtain(context.Background(), certs, &log)
+	want = "Panel certificate: Let's Encrypt could not check " + panelName + " over http on port 80 of this server, so the panel keeps its Let's Encrypt certificate, valid until 2027-02-24. Point the name's DNS at this server and open TCP port 80 to the internet; the panel asks again within 6 hours.\n"
+	if log.String() != want {
+		t.Fatalf("log\n%q\nwant\n%q", log.String(), want)
+	}
 }
 
 // On a fresh start the broker may still be loading the web server's config
@@ -350,14 +359,15 @@ func TestObtainWaitsForTheNameToAnswer(t *testing.T) {
 	certs = &certificatesFake{reachable: []bool{false}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { i.Obtain(ctx, certs, &bytes.Buffer{}); close(done) }()
+	var stopped bytes.Buffer
+	go func() { i.Obtain(ctx, certs, &stopped); close(done) }()
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Obtain did not stop with its context")
 	}
-	if len(certs.refreshes) != 0 {
-		t.Fatal("a stopped panel asked for a certificate")
+	if len(certs.refreshes) != 0 || stopped.Len() != 0 {
+		t.Fatalf("a stopped panel asked for a certificate or logged %q", stopped.String())
 	}
 }

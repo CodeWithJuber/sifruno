@@ -160,6 +160,40 @@ func TestTheProxyFiltersWhatPhpMyAdminAnswers(t *testing.T) {
 	}
 }
 
+// phpMyAdmin 5.2.2 and later name their cookies __Secure-NAME_https over
+// HTTPS, which is how its origin always runs. Without its session cookie
+// every request starts a new session with a new token, so its pages' own
+// POSTs fail with "Error: Token mismatch".
+func TestTheProxyPassesPhpMyAdminsHTTPSCookies(t *testing.T) {
+	s, _, seen := upstreamFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		for _, line := range []string{
+			// The lines phpMyAdmin 5.2.3 sends behind the origin.
+			"__Secure-phpMyAdmin_https=abc; path=/; secure; HttpOnly; SameSite=Strict",
+			"__Secure-pma_lang_https=en; expires=Sat, 26 Dec 2026 19:00:00 GMT; Max-Age=2592000; path=/; secure; HttpOnly; SameSite=Strict",
+			"__Secure-other=1; path=/; secure",
+			"__Secure-" + PanelCookie + "=x; path=/; secure",
+			"__Secure-pma_tossed_https=1; path=/api/v1; secure",
+		} {
+			h.Add("Set-Cookie", line)
+		}
+	})
+	r := httptest.NewRequest("POST", "https://panel.example.test:8444/index.php?route=/navigation&ajax_request=1", strings.NewReader("token=t"))
+	r.Header.Set("Cookie", "__Secure-phpMyAdmin_https=abc; __Secure-pma_lang_https=en; "+AdmissionCookie+"=admitted; __Secure-other=1; SifrunoPhpMyAdminSignon=signon")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if cookies := seen().Header.Values("Cookie"); !slices.Equal(cookies, []string{"__Secure-phpMyAdmin_https=abc; __Secure-pma_lang_https=en; SifrunoPhpMyAdminSignon=signon"}) {
+		t.Fatalf("cookies sent to phpMyAdmin %q", cookies)
+	}
+	want := []string{
+		"__Secure-phpMyAdmin_https=abc; Path=/; HttpOnly; Secure; SameSite=Strict",
+		"__Secure-pma_lang_https=en; Path=/; Expires=Sat, 26 Dec 2026 19:00:00 GMT; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict",
+	}
+	if cookies := w.Result().Header.Values("Set-Cookie"); !slices.Equal(cookies, want) {
+		t.Fatalf("cookies set\n%q\nwant\n%q", cookies, want)
+	}
+}
+
 func TestTheProxyExplainsAFailure(t *testing.T) {
 	// A listener that is gone.
 	l, err := net.Listen("tcp", "127.0.0.1:0")

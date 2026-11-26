@@ -1162,8 +1162,6 @@ step_ols_listeners() {
 }
 
 # A backstop for every hosting account's UID (the broker allocates 20000 to
-
-# A backstop for every hosting account's UID (the broker allocates 20000 to
 # 60000) in any PAM session: SFTP, cron, su or runuser. pam_limits sets
 # RLIMIT_NPROC, which the kernel counts over all of the UID's tasks on the
 # host. Each account's own bound is its plan's TasksMax on its user slice,
@@ -1609,10 +1607,16 @@ step_mariadb() {
     return 0
   fi
   if ! systemctl restart mariadb; then
-    mariadb_put_back
-    systemctl restart mariadb || true
-    die "MariaDB did not start again with bind-address 127.0.0.1 from $MARIADB_DROPIN." \
-      "The installer put the earlier file back and started MariaDB once more." \
+    # Only a drop-in this run wrote goes back; one already in place stays.
+    if [ "$MARIADB_CHANGE" != unchanged ]; then
+      mariadb_put_back
+      systemctl restart mariadb || true
+      die "MariaDB did not start again with bind-address 127.0.0.1 from $MARIADB_DROPIN." \
+        "The installer put the earlier file back and started MariaDB once more." \
+        "Read journalctl -u mariadb, put the cause right, then run this again."
+    fi
+    die "MariaDB did not start again with bind-address 127.0.0.1 from $MARIADB_DROPIN, which an earlier run wrote." \
+      "It was restarted because it still listened beyond loopback, and the restart failed; the file was left as it is." \
       "Read journalctl -u mariadb, put the cause right, then run this again."
   fi
   if [ -n "$(mariadb_public_listeners)" ]; then

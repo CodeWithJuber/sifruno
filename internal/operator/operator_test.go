@@ -83,14 +83,14 @@ func TestCredentialPersistencePrivateBoundsAndCookie(t *testing.T) {
 		t.Fatal("credential rotated on reopen")
 	}
 	c, s := signIn(t, h, key, nil)
-	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/api/v1" || c.MaxAge != 900 || c.Secure {
+	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/api/v1" || c.MaxAge != 0 || !c.Expires.IsZero() || c.Secure {
 		t.Fatal("incorrect local cookie policy")
 	}
 	if strings.Contains(c.Value, key) || strings.Contains(c.Value, s.CSRFToken) {
 		t.Fatal("cookie payload was not encrypted")
 	}
-	if d := time.Until(s.ExpiresAt); d <= 14*time.Minute || d > 15*time.Minute {
-		t.Fatal("incorrect session lifetime")
+	if d := time.Until(s.ExpiresAt); d <= sessionMax-time.Minute || d > sessionMax {
+		t.Fatal("incorrect session hard limit")
 	}
 	if w := opRequest(h, "GET", "/api/v1/session", "", c, ""); w.Code != 200 {
 		t.Fatal("active session unavailable")
@@ -136,7 +136,7 @@ func TestCookieForgeryRotationLogoutReplayAndExpiry(t *testing.T) {
 	}
 	c, _ = signIn(t, h, key, nil)
 	current := m.now()
-	m.now = func() time.Time { return current.Add(16 * time.Minute) }
+	m.now = func() time.Time { return current.Add(sessionIdle + time.Second) }
 	if w := opRequest(h, "GET", "/api/v1/session", "", c, ""); w.Code != 401 {
 		t.Fatal("expired session accepted")
 	}
@@ -203,7 +203,8 @@ func TestLoginRateAndActiveSessionBounds(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m.active[id] = activeSession{expires: time.Now().Add(time.Minute)}
+		// The idle limit counts from creation until the first request.
+		m.active[id] = activeSession{created: time.Now(), expires: time.Now().Add(time.Minute)}
 	}
 	b, _ := json.Marshal(map[string]string{"access_key": key})
 	if w := opRequest(h, "POST", "/api/v1/session/login", string(b), nil, ""); w.Code != 429 {

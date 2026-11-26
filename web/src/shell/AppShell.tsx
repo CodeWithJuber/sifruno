@@ -133,7 +133,9 @@ export function AppShell() {
   }, []);
   const signedIn = Boolean(auth.session && !auth.adminRequired);
   useEffect(() => { if (!publicPreview) void refreshAuth(); }, [publicPreview, refreshAuth]);
-  // Sessions end after 15 minutes; notice it on return to the tab or within a minute.
+  // A session ends after 30 minutes unused (24 hours if kept signed in) and at its
+  // hard limit; notice it on return to the tab or within a minute. This check is
+  // not activity, so an open tab still goes idle.
   useEffect(() => {
     if (publicPreview || !auth.session) return;
     const onFocus = () => { void refreshAuth(); };

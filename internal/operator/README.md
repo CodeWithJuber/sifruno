@@ -87,12 +87,13 @@ The plan moves this file into the single SQLite store with the broker rework.
 - At most two Argon2id computations run at once, bounding memory under a burst.
 - First-run setup needs an access-key session, works only while no admin exists, and issues the authenticator secret to that one session for 10 minutes. The admin is created only after a correct code proves the app is set up, and only if that session is still active at that moment. The session then becomes the admin's.
 - Lock order: `adminMu`, then `mu`; `tokenMu`, then `mu`. `adminMu` and `tokenMu` are never held together, and `mu` is never held while taking either or writing a file. Customer logins change under `adminMu` and are published as a read-only snapshot, which session checks read without a lock.
-- Sessions, cookies, CSRF and Origin checks are unchanged: 15 minutes, HttpOnly, SameSite=Strict, Secure on TLS, at most 128.
+- Cookies, CSRF and Origin checks: HttpOnly, SameSite=Strict, Secure on TLS, at most 128 sessions.
+- A session ends after 30 minutes without a request and at 12 hours in any case, and its cookie ends with the browser. "Keep me signed in on this device" (`remember` at sign-in, with a password and code only; the access key refuses it) makes those 24 hours and 7 days, and only then does the cookie get a Max-Age. Jev chose these (0.81). Activity is any request a session check admits except `GET /api/v1/session`, which the panel asks once a minute: an open tab must still go idle. Pages that refresh by themselves still count: off loopback the Home page's readings need a session, so an open Home page stays signed in until the hard limit. The last activity is kept in `seen`, outside `activeSession`, because `authorizingSessionLocked` compares whole entries and one request's activity must not void a parallel request. `expires_at` is the hard limit; the idle limit is enforced on the server.
 
 ## Not done yet
 
 - More than one admin, a reset for an admin who lost its password or phone, passkeys. A customer cannot see its own sessions yet.
 - Resellers and plans (Phase 2).
 - Token scopes: every token has full admin API access. An audit log of admin actions, including token use.
-- Sliding session renewal; sessions still end after 15 minutes.
+- Sessions live in memory: a panel restart signs everyone out, kept sessions too.
 - An outside review of this package and the broker, which the plan requires before a paying customer.

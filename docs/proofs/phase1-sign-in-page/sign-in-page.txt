@@ -28,3 +28,23 @@ web/src/lib/*.test.mjs 248 passed, 0 failed.
 
 Not shown: the remote HTTPS panel (the same render path, gated for every page
 there), a customer's setup link, right to left, and the dark theme.
+
+Keep me signed in, run 2026-11-26 the same way (loopback, Chrome), fresh state:
+
+Sign-in form at 390 px (keep-signed-in-390.png):
+  {"sw":true,"checked":"false","scrollX":false}
+Switch turned on, then signed in through the form; GET /api/v1/session:
+  {"kept":true,"hours":168}
+Security page (security-kept-1440.png): this session has the "Kept signed in"
+badge and expires in 7 days; the setup session beside it (not kept) in 12 hours.
+  {"sidebar":true,"badge":true,
+   "summary":"2 of 128 sessions · each ends after 30 minutes unused, or 24 hours if kept signed in"}
+
+The idle and hard limits are proven by go test ./internal/operator
+(session_idle_test.go): idle end at 30 minutes, activity keeps a session open,
+the once-a-minute session check does not, the 12-hour and 7-day limits hold
+against activity, a kept cookie has Max-Age 604800 and a normal one none, and
+the access key refuses remember.
+
+Not shown: a panel restart (sessions still live in memory and end with it),
+a real 30-minute wait in the browser, and a customer's sign-in.

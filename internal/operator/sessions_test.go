@@ -44,13 +44,13 @@ func TestManagementInventoryRevokeReplayAndCurrentProtection(t *testing.T) {
 	b, _ := signIn(t, h, key, nil)
 	c, _ := signIn(t, h, key, nil)
 	v := inventoryFor(t, h, a)
-	if len(v.Items) != 3 || v.Capacity != 128 || v.LifetimeSeconds != 900 {
+	if len(v.Items) != 3 || v.Capacity != 128 || v.IdleSeconds != 1800 || v.KeptIdleSeconds != 86400 {
 		t.Fatal("inventory bounds")
 	}
 	seen := map[string]bool{}
 	current := 0
 	for i, s := range v.Items {
-		if !validManagementID(s.ID) || seen[s.ID] || s.CreatedAt.IsZero() || s.ExpiresAt.Sub(s.CreatedAt) != sessionLifetime {
+		if !validManagementID(s.ID) || seen[s.ID] || s.CreatedAt.IsZero() || s.ExpiresAt.Sub(s.CreatedAt) != sessionMax || s.KeptSignedIn {
 			t.Fatal("inventory metadata")
 		}
 		seen[s.ID] = true
@@ -251,7 +251,7 @@ func TestManagementInventoryExpiryBoundAndRestart(t *testing.T) {
 	for i := 1; i < maxSessions; i++ {
 		m.active[fmt.Sprintf("fixture-%d", i)] = activeSession{managementID: fmt.Sprintf("%032x", i), created: now.Add(-time.Minute), expires: now.Add(time.Minute)}
 	}
-	m.active["fixture-expired"] = activeSession{managementID: strings.Repeat("f", 32), created: now.Add(-sessionLifetime), expires: now}
+	m.active["fixture-expired"] = activeSession{managementID: strings.Repeat("f", 32), created: now.Add(-sessionMax), expires: now}
 	m.mu.Unlock()
 	v := inventoryFor(t, h, c)
 	if len(v.Items) != maxSessions {
@@ -266,7 +266,7 @@ func TestManagementInventoryExpiryBoundAndRestart(t *testing.T) {
 	if w := opRequest(h, "POST", "/api/v1/session/login", fmt.Sprintf(`{"access_key":%q}`, key), nil, ""); w.Code != 429 {
 		t.Fatal("management bypassed session cap")
 	}
-	m.now = func() time.Time { return now.Add(16 * time.Minute) }
+	m.now = func() time.Time { return now.Add(sessionIdle + time.Second) }
 	if w := opRequest(h, "GET", inventoryPath, "", c, ""); w.Code != 401 {
 		t.Fatal("expired current enumerated sessions")
 	}
@@ -346,8 +346,16 @@ func TestManagementAuthorizerExpiresDuringBodyRead(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("body gate not reached")
 	}
+	// The target keeps working while the authorizer's request waits; the
+	// authorizer's own last activity was the start of that request.
 	m.mu.Lock()
-	m.now = func() time.Time { return base.Add(16 * time.Minute) }
+	m.now = func() time.Time { return base.Add(20 * time.Minute) }
+	m.mu.Unlock()
+	if w := opRequest(h, "GET", inventoryPath, "", b, ""); w.Code != 200 {
+		t.Fatalf("target activity: %d", w.Code)
+	}
+	m.mu.Lock()
+	m.now = func() time.Time { return base.Add(2*time.Minute + sessionIdle + time.Second) }
 	m.mu.Unlock()
 	close(gate.release)
 	select {

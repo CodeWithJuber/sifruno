@@ -3,8 +3,9 @@ import type { FormEvent, ReactNode } from "react";
 import { Check, Copy, ExternalLink, KeyRound, LogIn, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { AuthError, beginSetup, finishSetup, groupedSecret, onThisServer, signInAdmin, signInWithKey } from "@/lib/auth-api";
 import type { AuthSession, SetupSecret } from "@/lib/auth-api";
 
@@ -74,11 +75,12 @@ function SignIn({ onSession }: { onSession: Props["onSession"] }) {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember] = useState(false);
   const { busy, error, run } = useSubmit();
   const submit = (e: FormEvent) => {
     e.preventDefault();
     setShowPassword(false);
-    void run(async () => { const s = await signInAdmin(username.trim(), password, code); setPassword(""); setCode(""); onSession(s, false); });
+    void run(async () => { const s = await signInAdmin(username.trim(), password, code, remember); setPassword(""); setCode(""); onSession(s, false); });
   };
   if (useKey) return <section className={panel} aria-labelledby="sign-in-title">
     <KeyForm onSession={(s) => onSession(s, false)} intro={<Heading id="sign-in-title" icon={<KeyRound />} title="Sign in with the access key">For someone working on this server itself, for example when the authenticator app is lost.</Heading>} />
@@ -98,6 +100,13 @@ function SignIn({ onSession }: { onSession: Props["onSession"] }) {
           <Input id="sign-in-password" name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" enterKeyHint="next" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
         <Field><FieldLabel htmlFor="sign-in-code">6-digit code</FieldLabel>
           <Input id="sign-in-code" name="one-time-code" inputMode="numeric" autoComplete="one-time-code" enterKeyHint="done" pattern="[0-9]{6}" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} required /></Field>
+        <Field orientation="horizontal" className="gap-4">
+          <FieldContent>
+            <FieldLabel htmlFor="sign-in-remember">Keep me signed in on this device</FieldLabel>
+            <FieldDescription id="sign-in-remember-hint" className="text-start">Up to 7 days, or until 24 hours unused. Otherwise you are signed out after 30 minutes unused. Leave it off on a shared computer.</FieldDescription>
+          </FieldContent>
+          <Switch id="sign-in-remember" checked={remember} onCheckedChange={(on) => setRemember(on)} aria-describedby="sign-in-remember-hint" data-testid="sign-in-remember" />
+        </Field>
         <Button type="submit" disabled={busy || !username.trim() || !password || code.length !== 6}><LogIn aria-hidden="true" />{busy ? "Signing in…" : "Sign in"}</Button>
       </FieldGroup>
     </form>

@@ -6,7 +6,7 @@
 // websites; view_as names the customer an admin is viewing the panel as.
 // routes comes with a restricted session: the API routes it may use, as the
 // server's customer table names them ("POST /api/v1/websites/sites/{account_id}/php").
-export interface AuthSession { authenticated: true; csrf_token: string; expires_at: string; username?: string; role?: "admin" | "customer"; view_as?: string; routes?: string[] }
+export interface AuthSession { authenticated: true; csrf_token: string; expires_at: string; username?: string; role?: "admin" | "customer"; view_as?: string; routes?: string[]; kept_signed_in?: boolean }
 export interface SetupSecret { secret: string; otpauth_uri: string; expires_at: string }
 export interface CustomerSetupSecret extends SetupSecret { username: string }
 
@@ -64,8 +64,9 @@ export async function currentSession(): Promise<AuthSession | null> {
   catch (error) { if (error instanceof AuthError && error.status === 401) return null; throw error; }
 }
 
-export const signInAdmin = (username: string, password: string, totp_code: string) =>
-  request("/api/v1/session/login", validSession, { method: "POST", body: { username, password, totp_code } });
+// remember asks for "Keep me signed in on this device": 7 days at most, 24 hours unused.
+export const signInAdmin = (username: string, password: string, totp_code: string, remember = false) =>
+  request("/api/v1/session/login", validSession, { method: "POST", body: { username, password, totp_code, ...(remember ? { remember: true } : {}) } });
 export const signInWithKey = (access_key: string) =>
   request("/api/v1/session/login", validSession, { method: "POST", body: { access_key } });
 export const signOut = (csrf: string) =>

@@ -1,7 +1,10 @@
 import { SiteApiError, siteRequest, validSession } from "./sites-api";
 
-export interface AccessSession { id: string; created_at: string; expires_at: string; current: boolean }
-export interface AccessInventory { items: AccessSession[]; capacity: 128; lifetime_seconds: 900 }
+// expires_at is the hard limit: 12 hours, or 7 days for "Keep me signed in on this
+// device". A session ends sooner after idle_seconds (kept: kept_idle_seconds) unused.
+export interface AccessSession { id: string; created_at: string; expires_at: string; current: boolean; kept_signed_in: boolean }
+export interface AccessInventory { items: AccessSession[]; capacity: 128; idle_seconds: 1800; kept_idle_seconds: 86400 }
+const hardLimit = { normal: 12 * 3600_000, kept: 7 * 24 * 3600_000 };
 export interface Revocation { revoked_count: number }
 
 const object = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -10,10 +13,10 @@ const handle = (value: unknown): value is string => typeof value === "string" &&
 const isoDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value.replace(/Z$/, ".000Z");
 
 export function validAccessSession(value: unknown): value is AccessSession {
-  return object(value) && exact(value, ["id", "created_at", "expires_at", "current"]) && handle(value.id) && isoDate(value.created_at) && isoDate(value.expires_at) && Date.parse(value.expires_at) - Date.parse(value.created_at) === 900000 && typeof value.current === "boolean";
+  return object(value) && exact(value, ["id", "created_at", "expires_at", "current", "kept_signed_in"]) && handle(value.id) && isoDate(value.created_at) && isoDate(value.expires_at) && typeof value.kept_signed_in === "boolean" && Date.parse(value.expires_at) - Date.parse(value.created_at) === (value.kept_signed_in ? hardLimit.kept : hardLimit.normal) && typeof value.current === "boolean";
 }
 export function validAccessInventory(value: unknown): value is AccessInventory {
-  return object(value) && exact(value, ["items", "capacity", "lifetime_seconds"]) && value.capacity === 128 && value.lifetime_seconds === 900 && Array.isArray(value.items) && value.items.length >= 1 && value.items.length <= 128 && value.items.every(validAccessSession) && new Set(value.items.map((item) => item.id)).size === value.items.length && value.items.filter((item) => item.current).length === 1;
+  return object(value) && exact(value, ["items", "capacity", "idle_seconds", "kept_idle_seconds"]) && value.capacity === 128 && value.idle_seconds === 1800 && value.kept_idle_seconds === 86400 && Array.isArray(value.items) && value.items.length >= 1 && value.items.length <= 128 && value.items.every(validAccessSession) && new Set(value.items.map((item) => item.id)).size === value.items.length && value.items.filter((item) => item.current).length === 1;
 }
 export function validRevocation(value: unknown): value is Revocation {
   return object(value) && exact(value, ["revoked_count"]) && Number.isSafeInteger(value.revoked_count) && (value.revoked_count as number) >= 0 && (value.revoked_count as number) <= 127;

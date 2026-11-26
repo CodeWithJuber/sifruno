@@ -7,8 +7,9 @@ import test from "node:test";
 const moduleURL = (source) => `data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source, { mode: "transform" })).toString("base64")}`;
 const sitesURL = moduleURL(readFileSync(new URL("./sites-api.ts", import.meta.url), "utf8"));
 const api = await import(moduleURL(readFileSync(new URL("./access-api.ts", import.meta.url), "utf8").replace('"./sites-api"', JSON.stringify(sitesURL))));
-const item = (current = true, letter = "a") => ({ id: letter.repeat(32), created_at: "2026-10-05T10:00:00Z", expires_at: "2026-10-05T10:15:00Z", current });
-const inventory = () => ({ items: [item(), item(false, "b")], capacity: 128, lifetime_seconds: 900 });
+const item = (current = true, letter = "a") => ({ id: letter.repeat(32), created_at: "2026-10-05T10:00:00Z", expires_at: "2026-10-05T22:00:00Z", current, kept_signed_in: false });
+const kept = () => ({ ...item(false, "c"), expires_at: "2026-10-12T10:00:00Z", kept_signed_in: true });
+const inventory = () => ({ items: [item(), item(false, "b"), kept()], capacity: 128, idle_seconds: 1800, kept_idle_seconds: 86400 });
 
 test("strict bounded inventory requires unique public handles and one current session", () => {
   assert(api.validAccessInventory(inventory()));
@@ -16,7 +17,7 @@ test("strict bounded inventory requires unique public handles and one current se
     (v) => { v.items = []; }, (v) => { v.items[0].current = false; },
     (v) => { v.items[1].current = true; }, (v) => { v.items[1].id = v.items[0].id; },
     (v) => { v.items[1].id = "cookie-token"; }, (v) => { v.items[1].id = "B".repeat(32); },
-    (v) => { v.capacity = 129; }, (v) => { v.lifetime_seconds = 901; },
+    (v) => { v.capacity = 129; }, (v) => { v.idle_seconds = 900; }, (v) => { v.kept_idle_seconds = 1800; }, (v) => { delete v.kept_idle_seconds; v.lifetime_seconds = 900; },
     (v) => { v.extra = true; }, (v) => { v.items[0].device = "invented"; },
     (v) => { v.items = Array.from({ length: 129 }, (_, i) => ({ ...item(i === 0), id: i.toString(16).padStart(32, "0") })); },
   ]) { const value = inventory(); change(value); assert.equal(api.validAccessInventory(value), false); }
@@ -28,14 +29,18 @@ test("session timestamps and flag fail closed", () => {
     (v) => { delete v.id; }, (v) => { v.expires_at = "2026-99-99T10:15:00Z"; },
   ]) { const value = item(); change(value); assert.equal(api.validAccessSession(value), false); }
 });
-test("exact 15-minute lifetime and canonical UTC calendar timestamps required", () => {
-  assert(api.validAccessSession({ ...item(), created_at: "2024-02-29T23:50:00Z", expires_at: "2024-03-01T00:05:00Z" }));
+test("exact 12-hour or kept 7-day limit and canonical UTC calendar timestamps required", () => {
+  assert(api.validAccessSession({ ...item(), created_at: "2024-02-29T23:50:00Z", expires_at: "2024-03-01T11:50:00Z" }));
+  assert(api.validAccessSession(kept()));
+  assert.equal(api.validAccessSession({ ...kept(), kept_signed_in: false }), false);
+  assert.equal(api.validAccessSession({ ...item(), kept_signed_in: true }), false);
+  assert.equal(api.validAccessSession({ ...item(), kept_signed_in: "no" }), false);
   for (const change of [
-    (v) => { v.expires_at = "2026-10-05T10:14:59Z"; }, (v) => { v.expires_at = "2026-10-05T10:15:01Z"; },
-    (v) => { v.created_at = "2026-02-30T10:00:00Z"; v.expires_at = "2026-02-30T10:15:00Z"; },
-    (v) => { v.created_at = "2026-02-29T10:00:00Z"; v.expires_at = "2026-02-29T10:15:00Z"; },
-    (v) => { v.created_at = "2026-10-05T24:00:00Z"; v.expires_at = "2026-10-06T00:15:00Z"; },
-    (v) => { v.created_at = "2026-10-05T10:00:00+00:00"; }, (v) => { v.expires_at = "2026-10-05T10:15:00.000Z"; },
+    (v) => { v.expires_at = "2026-10-05T21:59:59Z"; }, (v) => { v.expires_at = "2026-10-05T22:00:01Z"; },
+    (v) => { v.created_at = "2026-02-30T10:00:00Z"; v.expires_at = "2026-02-30T22:00:00Z"; },
+    (v) => { v.created_at = "2026-02-29T10:00:00Z"; v.expires_at = "2026-02-29T22:00:00Z"; },
+    (v) => { v.created_at = "2026-10-05T24:00:00Z"; v.expires_at = "2026-10-06T12:00:00Z"; },
+    (v) => { v.created_at = "2026-10-05T10:00:00+00:00"; }, (v) => { v.expires_at = "2026-10-05T22:00:00.000Z"; },
   ]) { const value = item(); change(value); assert.equal(api.validAccessSession(value), false); }
 });
 test("revocation result bounds and exact fields", () => {

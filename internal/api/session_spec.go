@@ -15,7 +15,7 @@ func documentOperator(a huma.API) {
 	if spec.Components.SecuritySchemes == nil {
 		spec.Components.SecuritySchemes = map[string]*huma.SecurityScheme{}
 	}
-	spec.Components.SecuritySchemes["operatorSession"] = &huma.SecurityScheme{Type: "apiKey", In: "cookie", Name: "sifruno_operator", Description: "Signed and encrypted local operator session, 15 minutes. HttpOnly and SameSite=Strict; Secure on TLS. Server restart and logout invalidate admission. This is loopback access, not qualified remote production authentication or roles."}
+	spec.Components.SecuritySchemes["operatorSession"] = &huma.SecurityScheme{Type: "apiKey", In: "cookie", Name: "sifruno_operator", Description: "Signed and encrypted operator session. It ends after 30 minutes without a request and at 12 hours in any case; with remember (\"Keep me signed in on this device\") after 24 hours without a request and at 7 days, and only then does the cookie outlive the browser. GET /api/v1/session is not activity. HttpOnly and SameSite=Strict; Secure on TLS. Server restart and logout invalidate admission. This is loopback access, not qualified remote production authentication or roles."}
 	spec.Components.SecuritySchemes["sessionCSRF"] = &huma.SecurityScheme{Type: "apiKey", In: "header", Name: "X-CSRF-Token", Description: "Independent CSRF token from the active session response. Required together with the session cookie and exact local Origin for each mutation; login rotates it."}
 	spec.Components.SecuritySchemes["apiToken"] = &huma.SecurityScheme{Type: "http", Scheme: "bearer", Description: "Admin API token (sfr_ and 43 base64url characters), created under /api/v1/session/tokens. Sent as Authorization: Bearer <token> on loopback or the HTTPS listener. It works only in the hosting areas /api/v1/accounts, /api/v1/server, /api/v1/services, /api/v1/sites, /api/v1/status and /api/v1/websites, and on /openapi.json, with an admin session's access there. Every other route refuses it with 403 token_not_allowed: /api/v1/session/*, backup storage set-up, a website's backup restore and drill, opening phpMyAdmin for a website, the older ZIP backups' restores, removal and downloads under /api/v1/sites, any route outside those areas, and any path that is not already clean. No cookie, Origin or CSRF header; a request with both a token and the session cookie is refused (400). A wrong, expired or revoked token returns 401 invalid_token; failed attempts are rate limited like sign-ins (429 with Retry-After), while a valid token is admitted even when that limit is used up."}
 	schemas := spec.Components.Schemas.Map()
@@ -35,7 +35,8 @@ func documentOperator(a huma.API) {
 	code := &huma.Schema{Type: "string", MinLength: &codeLen, MaxLength: &codeLen, Pattern: `^[0-9]{6}$`, WriteOnly: true, Description: "Current 6-digit code from the admin's authenticator app (RFC 6238, 30-second steps). Each code works once."}
 	schemas["OperatorLogin"] = &huma.Schema{Type: "object", AdditionalProperties: false,
 		Description: "Either the local access key alone, or an admin's username, password and code together.",
-		Properties:  map[string]*huma.Schema{"access_key": access, "username": username(), "password": password, "totp_code": code},
+		Properties:  map[string]*huma.Schema{"access_key": access, "username": username(), "password": password, "totp_code": code,
+			"remember": {Type: "boolean", Description: "Keep me signed in on this device: with a username, password and code only; refused with the access key."}},
 		OneOf:       []*huma.Schema{{Required: []string{"access_key"}}, {Required: []string{"username", "password", "totp_code"}}}}
 	sessionUser := username()
 	sessionUser.Description = "Present for an admin's or a customer's password-and-code session; absent for an access-key session."
@@ -45,6 +46,7 @@ func documentOperator(a huma.API) {
 		"authenticated": {Type: "boolean", Enum: []any{true}}, "csrf_token": token(), "expires_at": {Type: "string", Format: "date-time"}, "username": sessionUser,
 		"role":    {Type: "string", Enum: []any{"admin", "customer"}, Description: "admin for the access key and admins; customer for a customer's login, which reaches only its own websites."},
 		"view_as": viewAs,
+		"kept_signed_in": {Type: "boolean", Description: "Present and true for a \"Keep me signed in on this device\" session."},
 		"routes":  {Type: "array", Items: &huma.Schema{Type: "string"}, Description: "Present for a restricted session (a customer, or an admin viewing as one): the API routes it may use, as method and path pattern, sorted. The panel shows only what these allow; the server still checks every request, and a {account_id} route works only for the customer's own websites."},
 	}}
 	schemas["OperatorSetupStatus"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"admin_required"}, Properties: map[string]*huma.Schema{
@@ -64,12 +66,12 @@ func documentOperator(a huma.API) {
 	idLength, inventoryMin, inventoryMax := 32, 1, 128
 	countMin, countMax := float64(0), float64(127)
 	managementID := &huma.Schema{Type: "string", MinLength: &idLength, MaxLength: &idLength, Pattern: `^[0-9a-f]{32}$`, Description: "Public session-management handle. This is not a cookie ID, access key or CSRF credential."}
-	schemas["OperatorManagedSession"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"id", "created_at", "expires_at", "current"}, Properties: map[string]*huma.Schema{
-		"id": managementID, "created_at": {Type: "string", Format: "date-time"}, "expires_at": {Type: "string", Format: "date-time"}, "current": {Type: "boolean"},
+	schemas["OperatorManagedSession"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"id", "created_at", "expires_at", "current", "kept_signed_in"}, Properties: map[string]*huma.Schema{
+		"id": managementID, "created_at": {Type: "string", Format: "date-time"}, "expires_at": {Type: "string", Format: "date-time", Description: "The hard limit; the session ends sooner after the idle time without a request."}, "current": {Type: "boolean"}, "kept_signed_in": {Type: "boolean"},
 	}}
-	schemas["OperatorSessionInventory"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"items", "capacity", "lifetime_seconds"}, Properties: map[string]*huma.Schema{
+	schemas["OperatorSessionInventory"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"items", "capacity", "idle_seconds", "kept_idle_seconds"}, Properties: map[string]*huma.Schema{
 		"items":    {Type: "array", MinItems: &inventoryMin, MaxItems: &inventoryMax, Items: &huma.Schema{Ref: "#/components/schemas/OperatorManagedSession"}, Description: "Unexpired in-process sessions, newest creation first, public handle ascending on ties. Exactly one is current."},
-		"capacity": {Type: "integer", Enum: []any{128}}, "lifetime_seconds": {Type: "integer", Enum: []any{900}},
+		"capacity": {Type: "integer", Enum: []any{128}}, "idle_seconds": {Type: "integer", Enum: []any{1800}}, "kept_idle_seconds": {Type: "integer", Enum: []any{86400}},
 	}}
 	schemas["OperatorSessionRevocation"] = &huma.Schema{Type: "object", AdditionalProperties: false, Required: []string{"revoked_count"}, Properties: map[string]*huma.Schema{
 		"revoked_count": {Type: "integer", Minimum: &countMin, Maximum: &countMax},

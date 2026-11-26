@@ -18,11 +18,16 @@ type ManagedSession struct {
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Current   bool      `json:"current"`
+	// KeptSignedIn marks a "Keep me signed in on this device" session.
+	KeptSignedIn bool `json:"kept_signed_in"`
 }
 type Inventory struct {
-	Items           []ManagedSession `json:"items"`
-	Capacity        int              `json:"capacity"`
-	LifetimeSeconds int              `json:"lifetime_seconds"`
+	Items    []ManagedSession `json:"items"`
+	Capacity int              `json:"capacity"`
+	// IdleSeconds is how long a session lasts without a request; a kept
+	// session lasts KeptIdleSeconds.
+	IdleSeconds     int `json:"idle_seconds"`
+	KeptIdleSeconds int `json:"kept_idle_seconds"`
 }
 
 func validManagementID(id string) bool {
@@ -101,12 +106,12 @@ func (m *Manager) getSessions(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 401, "unauthorized", "Operator session required")
 		return
 	}
-	inventory := Inventory{Items: make([]ManagedSession, 0, len(m.active)), Capacity: maxSessions, LifetimeSeconds: int(sessionLifetime.Seconds())}
+	inventory := Inventory{Items: make([]ManagedSession, 0, len(m.active)), Capacity: maxSessions, IdleSeconds: int(sessionIdle.Seconds()), KeptIdleSeconds: int(keptIdle.Seconds())}
 	// Customers' sessions are theirs: the admin's list and its "sign out
 	// everywhere else" leave them alone.
 	for rawID, entry := range m.active {
 		if !entry.customer {
-			inventory.Items = append(inventory.Items, ManagedSession{entry.managementID, entry.created, entry.expires, rawID == id})
+			inventory.Items = append(inventory.Items, ManagedSession{entry.managementID, entry.created, entry.expires, rawID == id, entry.kept})
 		}
 	}
 	m.mu.Unlock()

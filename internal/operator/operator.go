@@ -32,10 +32,16 @@ import (
 )
 
 const (
-	cookieName      = "sifruno_operator"
-	sessionLifetime = 15 * time.Minute
-	maxSessions     = 128
-	maxLoginBytes   = 2048
+	cookieName = "sifruno_operator"
+	// A session ends after sessionIdle without a request, and at sessionMax in
+	// any case. "Keep me signed in on this device" uses keptIdle and keptMax,
+	// and its cookie outlives the browser; a normal one ends with it.
+	sessionIdle   = 30 * time.Minute
+	sessionMax    = 12 * time.Hour
+	keptIdle      = 24 * time.Hour
+	keptMax       = 7 * 24 * time.Hour
+	maxSessions   = 128
+	maxLoginBytes = 2048
 	// Customers share the session table with admins, so they get at most
 	// three quarters of it, and each customer at most four sessions (a new
 	// sign-in ends that customer's oldest). Customers signing in cannot
@@ -61,14 +67,18 @@ type Session struct {
 	// customer table names them (SetCustomerRoutes). The panel shows only
 	// what they allow; the API still decides every request.
 	Routes []string `json:"routes,omitempty"`
+	// KeptSignedIn is set for a "Keep me signed in on this device" session.
+	KeptSignedIn bool `json:"kept_signed_in,omitempty"`
 }
 
 type activeSession struct {
+	// expires is the hard limit; the idle limit is in deadlineLocked.
 	expires      time.Time
 	csrf         [32]byte
 	managementID string
 	created      time.Time
 	username     string
+	kept         bool
 	// customer marks a customer's session; it never changes. viewAs is an
 	// admin session viewing the panel as that customer, set and cleared by
 	// the view-as routes (viewas.go).
@@ -81,7 +91,14 @@ func (a activeSession) public(csrf string) Session {
 	if a.customer {
 		role = "customer"
 	}
-	return Session{Authenticated: true, CSRFToken: csrf, ExpiresAt: a.expires, Username: a.username, Role: role, ViewAs: a.viewAs}
+	return Session{Authenticated: true, CSRFToken: csrf, ExpiresAt: a.expires, Username: a.username, Role: role, ViewAs: a.viewAs, KeptSignedIn: a.kept}
+}
+
+func (a activeSession) idleLimit() time.Duration {
+	if a.kept {
+		return keptIdle
+	}
+	return sessionIdle
 }
 
 type Manager struct {
@@ -92,6 +109,11 @@ type Manager struct {
 	now     func() time.Time
 	mu      sync.Mutex
 	active  map[string]activeSession
+	// seen holds, by session ID under mu, the last request that counted as
+	// activity. It is kept outside activeSession because authorizingSessionLocked
+	// compares whole entries: one request's activity must not make a parallel
+	// request's snapshot look changed.
+	seen map[string]time.Time
 
 	// Admin accounts. adminMu guards the file, its cached copy, the login
 	// buckets and pending 2FA setups. Lock order is adminMu, then mu, and mu
@@ -221,10 +243,14 @@ func Open(dir string) (*Manager, error) {
 		return nil, errors.New("operator API tokens unavailable: " + tokensFile + " in the panel's private folder is damaged or has the wrong mode (it must be 0600). Move " + tokensFile + " aside and start the panel again; then create new API tokens, because the old ones stop working")
 	}
 	cookies := sessions.NewCookieStore(keys[:32], keys[32:])
-	cookies.MaxAge(int(sessionLifetime.Seconds()))
-	cookies.Options = &sessions.Options{Path: "/api/v1", MaxAge: int(sessionLifetime.Seconds()), HttpOnly: true, SameSite: http.SameSiteStrictMode}
+	// The codecs accept a cookie for as long as a kept session can last; the
+	// session table decides whether it still opens anything. MaxAge 0 makes a
+	// normal session's cookie end with the browser; startSession sets a kept
+	// one's Max-Age.
+	cookies.MaxAge(int(keptMax.Seconds()))
+	cookies.Options = &sessions.Options{Path: "/api/v1", MaxAge: 0, HttpOnly: true, SameSite: http.SameSiteStrictMode}
 	m := &Manager{keyPath: accessPath, keyHash: sha256.Sum256(access[:43]), cookies: cookies,
-		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession),
+		limiter: rate.NewLimiter(rate.Every(3*time.Second), 20), now: time.Now, active: make(map[string]activeSession), seen: make(map[string]time.Time),
 		dir: dir, admins: admins, pending: map[string]pendingSetup{}, dummy: dummy, hashSlots: make(chan struct{}, 2),
 		customerPending: map[string]pendingSetup{}, authenticatorPending: map[string]pendingSetup{}}
 	m.customers.Store(&customers)
@@ -396,10 +422,28 @@ func (m *Manager) session(r *http.Request) (*sessions.Session, string, activeSes
 func (m *Manager) pruneLocked() {
 	now := m.now()
 	for id, a := range m.active {
-		if !now.Before(a.expires) {
+		if !now.Before(m.deadlineLocked(id, a)) {
 			delete(m.active, id)
 		}
 	}
+	for id := range m.seen {
+		if _, ok := m.active[id]; !ok {
+			delete(m.seen, id)
+		}
+	}
+}
+
+// deadlineLocked is when a session ends: its idle limit after the last
+// activity (its creation until the first), but never after its hard limit.
+func (m *Manager) deadlineLocked(id string, a activeSession) time.Time {
+	last, ok := m.seen[id]
+	if !ok {
+		last = a.created
+	}
+	if idle := last.Add(a.idleLimit()); idle.Before(a.expires) {
+		return idle
+	}
+	return a.expires
 }
 
 // Authorize protects every website read. Mutations additionally require an
@@ -447,6 +491,21 @@ func (m *Manager) authorizeSession(w http.ResponseWriter, r *http.Request, mutat
 // with the exact Origin and the session's CSRF token. It says nothing about
 // what the session may reach; sessionPrincipal does.
 func (m *Manager) checkSession(w http.ResponseWriter, r *http.Request, mutation bool) (*sessions.Session, string, activeSession, bool) {
+	s, id, a, ok := m.checkSessionOnly(w, r, mutation)
+	if ok {
+		m.mu.Lock()
+		if current, live := m.active[id]; live && current == a {
+			m.seen[id] = m.now()
+		}
+		m.mu.Unlock()
+	}
+	return s, id, a, ok
+}
+
+// checkSessionOnly is checkSession without counting the request as activity.
+// GET /api/v1/session uses it: the panel asks it once a minute, and an open
+// tab must still go idle.
+func (m *Manager) checkSessionOnly(w http.ResponseWriter, r *http.Request, mutation bool) (*sessions.Session, string, activeSession, bool) {
 	if !admitted(r) {
 		WriteError(w, 403, "local_access_required", "Local operator access required")
 		return nil, "", activeSession{}, false
@@ -620,6 +679,8 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		Username  string `json:"username"`
 		Password  string `json:"password"`
 		TOTPCode  string `json:"totp_code"`
+		// Remember asks for "Keep me signed in on this device".
+		Remember bool `json:"remember"`
 	}
 	if !decodeJSON(w, r, &input, false) {
 		return
@@ -628,6 +689,10 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 	adminFields := input.Username != "" || input.Password != "" || input.TOTPCode != ""
 	switch {
 	case !adminFields:
+		if input.Remember {
+			WriteError(w, 400, "invalid_request", "Keep me signed in works with a username, password and code, not with the access key.")
+			return
+		}
 		if IsRemote(r) {
 			WriteError(w, 403, "local_access_required", "The access key works only on the server itself. Sign in with your username, password and code.")
 			return
@@ -648,12 +713,13 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 400, "invalid_request", "Send either the local access key, or a username, password and 6-digit code")
 		return
 	}
-	m.startSession(w, r, username, customer)
+	m.startSession(w, r, username, customer, input.Remember)
 }
 
 // startSession replaces any session the request carried with a new one, so a
-// session ID is never reused across a sign-in.
-func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username string, customer bool) {
+// session ID is never reused across a sign-in. kept is "Keep me signed in on
+// this device".
+func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username string, customer, kept bool) {
 	_, oldID, _, _ := m.session(r)
 	id, err := randomToken()
 	if err != nil {
@@ -687,13 +753,21 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 		return
 	}
 	created := m.now().UTC().Truncate(time.Second)
-	expires := created.Add(sessionLifetime)
-	session := activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf)), managementID: managementID, created: created, username: username, customer: customer}
+	limit := sessionMax
+	if kept {
+		limit = keptMax
+	}
+	expires := created.Add(limit)
+	session := activeSession{expires: expires, csrf: sha256.Sum256([]byte(csrf)), managementID: managementID, created: created, username: username, customer: customer, kept: kept}
 	m.active[id] = session
+	m.seen[id] = created
 	m.mu.Unlock()
 	s := sessions.NewSession(m.cookies, cookieName)
 	s.Values = map[any]any{"id": id, "csrf": csrf, "expires": expires.Unix()}
 	options := *m.cookies.Options
+	if kept {
+		options.MaxAge = int(keptMax.Seconds())
+	}
 	options.Secure = r.TLS != nil
 	s.Options = &options
 	if err := m.cookies.Save(r, w, s); err != nil {
@@ -707,7 +781,7 @@ func (m *Manager) startSession(w http.ResponseWriter, r *http.Request, username 
 }
 
 func (m *Manager) getSession(w http.ResponseWriter, r *http.Request) {
-	s, id, a, ok := m.checkSession(w, r, false)
+	s, id, a, ok := m.checkSessionOnly(w, r, false)
 	if !ok {
 		return
 	}

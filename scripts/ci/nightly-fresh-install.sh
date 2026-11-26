@@ -43,7 +43,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 API=https://api.linode.com/v4
 
-# The server the test runs on: Frankfurt, where the owner's runner is.
+# The server the test runs on: Frankfurt.
 REGION=de-fra-2
 TYPE=g6-standard-2
 IMAGE=linode/almalinux9

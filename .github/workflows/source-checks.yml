@@ -11,15 +11,30 @@ permissions:
 
 concurrency:
   group: source-checks-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A new push to a pull request cancels its older run; runs on main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# GitHub-hosted runners only: this repository is public, so a pull request's
+# code must never run on our own machines (scripts/ci/public-repo-guard.sh).
+# These checks do not activate hosting, call paid providers, deploy a preview,
+# qualify native daemons or certify parity.
 
 jobs:
-  source:
-    name: Go, UI and fixture source checks
-    # The owner's runner (github-runners kit). GitHub bills its hosted runners in a private
-    # repository, and the account's $0 budget stops them. The full Go suite takes longer on a
-    # shared runner, so the job gets 45 minutes.
-    runs-on: [self-hosted, linux, x64, sifruno]
+  workflows:
+    name: Workflow rules for a public repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Workflows use GitHub-hosted runners and pinned actions
+        run: bash scripts/ci/public-repo-guard.sh
+
+  go:
+    name: Go build, vet and tests
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       GOTOOLCHAIN: local
@@ -29,28 +44,36 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Workflows use nothing GitHub bills for
-        run: bash scripts/ci/no-github-billing.sh
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           cache: false
           go-version: '1.27.1'
+      - name: Go vet
+        run: go vet ./...
+      - name: Go tests
+        run: |
+          # The process test rebuilds with -trimpath under a short startup deadline,
+          # so prime the compiler cache first. One hostaccounts fixture needs the
+          # default umask (AGENTS.md).
+          umask 022
+          go build -mod=readonly -trimpath -o "$RUNNER_TEMP/sifruno-ci" ./cmd/sifruno
+          go test ./... -count=1 -timeout 30m
+
+  web:
+    name: UI build, Node tests and packaging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           package-manager-cache: false
           node-version: '24.19.0'
-      - name: Go tests
-        run: |
-          # The process test rebuilds with -trimpath under a short startup deadline.
-          # Prime this runner's local compiler cache from a cold checkout.
-          # One hostaccounts fixture needs the default umask (AGENTS.md).
-          umask 022
-          go build -mod=readonly -trimpath -o "$RUNNER_TEMP/sifruno-ci" ./cmd/sifruno
-          go test ./... -count=1 -timeout 30m
-      - name: Go vet
-        run: go vet ./...
       - name: Install pinned development dependencies
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
@@ -59,25 +82,47 @@ jobs:
         run: |
           npm run panel:typecheck
           npm run panel:build
-      - name: Private session, schedule, restore preview and website wizard UI contract checks
-        run: node --test web/src/lib/sites-api.test.mjs web/src/lib/access-api.test.mjs web/src/lib/backupSchedule.test.mjs web/src/lib/restorePreview.test.mjs web/src/lib/wordpress-api.test.mjs web/src/lib/websites-api.test.mjs web/src/lib/databases-api.test.mjs web/src/lib/site-backups-api.test.mjs web/src/lib/site-domains-api.test.mjs web/src/lib/files-api.test.mjs web/src/lib/customers-api.test.mjs web/src/lib/customer-routes.test.mjs
-      - name: Runtime package policy and controller layout report checks
-        run: node --test scripts/runtime-package.test.mjs lab/controller-layout-guest/report.test.mjs
-      - name: Native preview tool identities and report checks
-        run: node --test lab/native-web-preview-guest/tool-pins.test.mjs lab/native-web-preview-guest/report.test.mjs
+      - name: Node tests (UI contracts, scripts and lab harness reports)
+        run: node --test web/src/lib/*.test.mjs scripts/*.test.mjs lab/*/*.test.mjs
       - name: Approved brand integrity
         run: npm run brand:check
-      - name: Python fixture checks
-        run: |
-          python3 -m unittest discover -s lab -p test_capture.py
-          python3 -m unittest discover -s lab/hostweb-review -p test_web_runtime_fixture.py
-          python3 -m unittest discover -s lab -p test_web_package_prepare.py
-          python3 lab/native-restore-preview-review/prepare_test.py
       - name: Packaging and whitespace checks
         run: |
           node scripts/build-runtime.mjs --self-check
           node scripts/package-source.mjs
           git diff --check
 
-# These checks run on the owner's runner, which keeps its caches between runs. They do not activate hosting,
-# call paid providers, deploy a preview, qualify native daemons or certify parity.
+  python:
+    name: Python fixture tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Python fixture tests
+        run: |
+          python3 -m unittest discover -s lab -p test_capture.py
+          python3 -m unittest discover -s lab/hostweb-review -p test_web_runtime_fixture.py
+          python3 -m unittest discover -s lab -p test_web_package_prepare.py
+          python3 lab/native-restore-preview-review/prepare_test.py
+          python3 -m unittest discover -s lab/broker-paths-guest -p fixture_test.py
+          python3 -m unittest discover -s lab/stock-policy-guest -p fixture_test.py
+          python3 -m unittest discover -s lab/hostwebruntime-crash-guest -p test_guest.py
+          python3 -m unittest discover -s lab/hostwebruntime-mechanics -p test_guest.py
+          python3 -m unittest discover -s lab/hostwebruntime-serving-guest -p test_serving_guest.py
+          python3 -m unittest discover -s scripts/recovery -p test_restore_files.py
+
+  reuse:
+    name: REUSE licensing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every file has copyright and licence information
+        # Runs reuse lint (its default command) in the fsfe/reuse:6 image.
+        uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0

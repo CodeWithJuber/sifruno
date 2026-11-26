@@ -3,33 +3,42 @@ name: Nightly fresh install
 # The Phase 1 item "an installer that is tested every night on a fresh VM"
 # (decision D-0006). Each night this job builds the release, creates a
 # throwaway Linode (AlmaLinux 9, /home on its own XFS disk with quota, a Cloud
-# Firewall that admits SSH from this runner only), runs
+# Firewall that admits SSH from this job's runner only), runs
 # scripts/devvm/fresh-install-test.sh --existing-host on it, and deletes the
 # Linode and the firewall whatever happened. The logic is in
 # scripts/ci/nightly-fresh-install.sh, which also runs by hand.
 #
-# Transcripts stay on the runner's server, in
-# $CI_RESULTS_DIR/RUN_ID-RUN_ATTEMPT/: nightly-RUN_ID-RUN_ATTEMPT.txt (the
-# whole run, with the deletion check) and fresh-install-*.txt (the test).
+# It never runs for a pull request: it holds a token that creates servers,
+# which cost money. It runs on the schedule and from the Actions tab (Run
+# workflow), and only after a reviewer of the "nightly" environment approves
+# the run.
+#
+# The transcripts are uploaded as the run's artifact "nightly-install-RUN_ID-
+# RUN_ATTEMPT" and kept for 14 days: nightly-RUN_ID-RUN_ATTEMPT.txt (the whole
+# run, with the deletion check) and fresh-install-*.txt (the test). Logs and
+# artifacts of a public repository are public. The script never prints the
+# Linode token or the server's root password; the addresses and the throwaway
+# panel's output in the transcripts are gone with the Linode.
 #
 # Turning it on and off
-#   The test runs only when the repository secret SIFRUNO_NIGHTLY_LINODE_TOKEN
-#   exists. Adding it is the owner's approval to spend: one started hour of a
-#   g6-standard-2 Linode a night, $0.036 on 2026-11-25 (about $1.10 a month).
-#   Without it the job prints one line saying the test is off, and passes.
-#   1. Cloud Manager, your profile, API Tokens, Create a Personal Access
+#   1. GitHub, this repository, Settings, Environments, New environment:
+#      name it nightly. Add yourself under Required reviewers, so that no run
+#      starts a server without your approval.
+#   2. Cloud Manager, your profile, API Tokens, Create a Personal Access
 #      Token. Label sifruno-nightly. Scopes: Linodes Read/Write and Firewalls
 #      Read/Write; every other scope No Access. Those two cover everything the
 #      script calls: Linodes, their disks, configuration profiles, boot and
 #      delete, and the firewall and its attachment. Pick an expiry and renew
 #      the secret before it.
-#   2. GitHub, this repository, Settings, Secrets and variables, Actions, New
-#      repository secret: name SIFRUNO_NIGHTLY_LINODE_TOKEN, the token as value.
+#   3. In the nightly environment, under Environment secrets, add
+#      SIFRUNO_NIGHTLY_LINODE_TOKEN with the token as value. Adding it is the
+#      owner's approval to spend: one started hour of a g6-standard-2 Linode
+#      a night, $0.036 on 2026-11-25 (about $1.10 a month). Without it the job
+#      prints one line saying the test is off, and passes.
 #   Delete the secret to turn the test off; revoke the token in Cloud Manager
 #   to take its access away.
 #
-# The schedule runs from the default branch only, so it starts once this file
-# is on main. Run it at any time from the Actions tab (Run workflow).
+# The schedule runs from the default branch only.
 
 on:
   schedule:
@@ -48,8 +57,8 @@ concurrency:
 jobs:
   fresh-install:
     name: Fresh install on a throwaway Linode
-    # The owner's runner (github-runners kit); see source-checks.yml.
-    runs-on: [self-hosted, linux, x64, sifruno]
+    runs-on: ubuntu-24.04
+    environment: nightly
     timeout-minutes: 130
     env:
       GOTOOLCHAIN: local
@@ -59,8 +68,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Workflows use nothing GitHub bills for
-        run: bash scripts/ci/no-github-billing.sh
       - name: Is the test turned on?
         id: gate
         env:
@@ -69,7 +76,7 @@ jobs:
           if [ -n "$SIFRUNO_NIGHTLY_LINODE_TOKEN" ]; then
             echo on=true >>"$GITHUB_OUTPUT"
           else
-            echo 'The nightly fresh-install test is off. To turn it on, add the repository secret SIFRUNO_NIGHTLY_LINODE_TOKEN holding a Linode token, as the top of .github/workflows/nightly-install.yml explains.'
+            echo 'The nightly fresh-install test is off. To turn it on, add the secret SIFRUNO_NIGHTLY_LINODE_TOKEN holding a Linode token to the nightly environment, as the top of .github/workflows/nightly-install.yml explains.'
             echo on=false >>"$GITHUB_OUTPUT"
           fi
       - name: Set up Go
@@ -92,7 +99,7 @@ jobs:
       - name: SSH client and jq
         if: steps.gate.outputs.on == 'true'
         run: |
-          # The runner image has none of the hosted image's extra tools.
+          # GitHub's image has both today; install them if a later image does not.
           packages=()
           if ! command -v ssh >/dev/null || ! command -v scp >/dev/null || ! command -v ssh-keygen >/dev/null; then
             packages+=(openssh-client)
@@ -110,11 +117,7 @@ jobs:
         env:
           SIFRUNO_NIGHTLY_LINODE_TOKEN: ${{ secrets.SIFRUNO_NIGHTLY_LINODE_TOKEN }}
         run: |
-          if [ -z "${CI_RESULTS_DIR:-}" ]; then
-            echo "CI_RESULTS_DIR is not set. This job needs the owner's runner (github-runners kit), which keeps results on its server." >&2
-            exit 1
-          fi
-          export SIFRUNO_PROOF_OUT="$CI_RESULTS_DIR/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          export SIFRUNO_PROOF_OUT="$RUNNER_TEMP/nightly-results"
           bash scripts/ci/nightly-fresh-install.sh
       # The script deletes on every way out it sees. A step killed by its
       # timeout or a cancel gets no such chance, so this step checks again.
@@ -124,7 +127,13 @@ jobs:
         env:
           SIFRUNO_NIGHTLY_LINODE_TOKEN: ${{ secrets.SIFRUNO_NIGHTLY_LINODE_TOKEN }}
         run: |
-          if [ -n "${CI_RESULTS_DIR:-}" ]; then
-            export SIFRUNO_PROOF_OUT="$CI_RESULTS_DIR/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          fi
+          export SIFRUNO_PROOF_OUT="$RUNNER_TEMP/nightly-results"
           bash scripts/ci/nightly-fresh-install.sh cleanup
+      - name: Keep the transcripts
+        if: always() && steps.gate.outputs.on == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-install-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nightly-results/
+          if-no-files-found: ignore
+          retention-days: 14

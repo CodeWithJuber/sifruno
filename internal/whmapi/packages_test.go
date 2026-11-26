@@ -12,8 +12,9 @@ import (
 	"sifruno/internal/hostpkgs"
 )
 
-// Golden strings verbatim from the licensed 138 reference (batch-4 capture,
-// docs/reference/whm-api-contract-batch4.md). Server left clean afterwards.
+// The expected strings below are the package endpoints' compatibility
+// wording as packages.go and internal/hostpkgs write it; package names and
+// limits are made up.
 
 func pkgServer(t *testing.T) (*Server, *hostpkgs.Store, string) {
 	t.Helper()
@@ -89,7 +90,7 @@ func TestGetPkgInfoShapeAndDefaults(t *testing.T) {
 	if pkg["QUOTA"] != "1024" || pkg["MAXPOP"] != "10" || pkg["MAXADDON"] != "3" {
 		t.Fatalf("overrides = %v", pkg)
 	}
-	// Observed defaults on the reference getpkginfo.
+	// Defaults that internal/hostpkgs fills in for getpkginfo.
 	if pkg["CPMOD"] != "jupiter" || pkg["FEATURELIST"] != "default" || pkg["PACKAGE_TYPE"] != "standard" || pkg["MAX_TEAM_USERS"] != "7" {
 		t.Fatalf("defaults = %v", pkg)
 	}

@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-// UAPI goldens from licensed 138 captures (batch 3 + batch 7).
+// The UAPI envelope and errors below are this package's compatibility
+// wording (uapi.go); accounts and domains are made up.
 
 func uapiCall(t *testing.T, s *Server, token, path string) map[string]any {
 	t.Helper()
@@ -32,7 +33,7 @@ func uapiResultOf(t *testing.T, body map[string]any) map[string]any {
 func TestUAPIEnvelopeShape(t *testing.T) {
 	s, token := newLifecycleServer(t, &fakeHost{accounts: nil})
 	body := uapiCall(t, s, token, "/execute/ServerInformation/get_information?api.version=3")
-	// Envelope keys observed on the reference.
+	// Envelope keys the UAPI surface always carries.
 	if body["apiversion"].(float64) != 3 || body["module"] != "ServerInformation" || body["func"] != "get_information" {
 		t.Fatalf("envelope = %v", body)
 	}

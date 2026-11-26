@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// Token endpoint golden strings below are verbatim reference captures
-// (2026-10-15, docs/reference/whm-api-contract-batch3.md).
+// The expected strings below are the token endpoints' compatibility wording
+// as apitokens.go writes it; token names and values are made up.
 
 func tokenServer(t *testing.T) (*Server, *TokenStore, string) {
 	t.Helper()

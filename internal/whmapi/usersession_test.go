@@ -8,7 +8,8 @@ import (
 	"time"
 )
 
-// create_user_session goldens from licensed 138 captures (batch 3 + batch 6).
+// The create_user_session shapes and errors below are this package's
+// compatibility wording (usersession.go); users and hosts are made up.
 
 func sessionServer(t *testing.T) (*Server, *SessionStore, string) {
 	t.Helper()

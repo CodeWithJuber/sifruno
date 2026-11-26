@@ -121,7 +121,7 @@ func TestCreateAcctMissingUsername(t *testing.T) {
 	s, token := newLifecycleServer(t, &fakeHost{})
 	w := post(t, s, "/json-api/createacct?api.version=1&domain=x.example.com", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
-	// Observed verbatim on the reference.
+	// The package's fixed compatibility wording (lifecycle.go).
 	if md["reason"] != `No user name supplied: "username" is a required argument.` {
 		t.Fatalf("reason = %q", md["reason"])
 	}
@@ -252,7 +252,7 @@ func TestChangePackageLifecycle(t *testing.T) {
 	post(t, s, "/json-api/createacct?api.version=1&username=cpuser&domain=cp.example.com", token)
 	pkgCall(t, s, token, "/json-api/addpkg?api.version=1&pkgname=gold")
 
-	// Unknown package: observed verbatim error.
+	// Unknown package: the fixed compatibility error.
 	w := post(t, s, "/json-api/changepackage?api.version=1&user=cpuser&pkg=ghost", token)
 	md := metadataOf(t, decodeEnvelope(t, w))
 	if !regexp.MustCompile(`^API failure: \(XID [a-z0-9]{6}\) Specified package does not exist\.$`).MatchString(md["reason"].(string)) {

@@ -294,7 +294,7 @@ function AlwaysHttpsSection({ site, locked, saving, status, failure, onChange }:
     <Field orientation="horizontal" data-disabled={blocked ? true : undefined} className="gap-4">
       <FieldContent>
         <FieldLabel htmlFor="always-https">Always use HTTPS</FieldLabel>
-        <FieldDescription id="always-https-hint" className="text-start">Send visitors from http:// to https:// once a valid certificate is in force.</FieldDescription>
+        <FieldDescription id="always-https-hint" className="text-start" data-testid="always-https-hint">Send visitors from http:// to https:// once a valid certificate is in force.</FieldDescription>
       </FieldContent>
       <Switch id="always-https" checked={checked} disabled={blocked} readOnly={locked} aria-busy={saving !== undefined}
         aria-describedby={describedBy} onCheckedChange={(on) => { if (!locked) onChange(on); }} data-testid="always-https-switch" />

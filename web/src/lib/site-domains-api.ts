@@ -166,7 +166,10 @@ export function alwaysHttps(site: Pick<SiteDomains, "domain" | "state" | "https"
     if (site.aliases.some((alias) => alias.https === "off")) {
       return { kind: "no-certificates-here", why: "Certificates are not set up on this server, so the website has none and stays on http://.", next: "Ask whoever runs this server to set up certificates." };
     }
-    return { kind: "no-certificate", why: "This website has no certificate yet, so visitors cannot be sent to https:// without a security warning.", next: `Get a certificate on this tab first: point ${site.domain} at this server with the DNS record below. The panel asks for a certificate every few hours until it has one.` };
+    // The panel retries only a site it has tried before (one made before
+    // certificates were set up it leaves alone), so the step ends with who
+    // to ask.
+    return { kind: "no-certificate", why: "This website has no certificate yet, so visitors cannot be sent to https:// without a security warning.", next: `Get a certificate on this tab first: point ${site.domain} at this server with the DNS record below. The panel tries every few hours; if no certificate comes within a day, ask whoever runs this server.` };
   }
   const until = site.https.not_after ? new Date(site.https.not_after) : undefined;
   if (until && !Number.isNaN(until.getTime()) && until.getTime() <= now.getTime()) {

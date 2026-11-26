@@ -174,6 +174,8 @@ test("Always use HTTPS says when the switch can change, why not, and what to do 
   assert.equal(none.kind, "no-certificate");
   assert.match(none.why, /no certificate yet/);
   assert.match(none.next, /^Get a certificate on this tab first: point example\.com at this server/);
+  // The panel leaves alone a site made before certificates were set up.
+  assert.match(none.next, /if no certificate comes within a day, ask whoever runs this server\.$/);
 
   const expired = api.alwaysHttps({ ...site, https: { on: true, not_after: "2026-11-26T11:59:59Z" } }, now);
   assert.equal(expired.kind, "expired");

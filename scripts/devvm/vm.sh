@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Disposable AlmaLinux 9 dev VM for the proofs in docs/PRODUCT-PLAN.md.
+# Disposable AlmaLinux 9 dev VM for the proofs in docs/proofs.
 #
 # The VM runs under QEMU as an ordinary user: KVM when /dev/kvm is usable,
 # software emulation otherwise (works anywhere, several times slower). It is

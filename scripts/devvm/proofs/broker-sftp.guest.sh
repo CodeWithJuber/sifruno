@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proof 2 (docs/PRODUCT-PLAN.md, Phase 0 item 8), guest side. Runs as root in
+# Proof 2 (Phase 0 item 8 of the product plan), guest side. Runs as root in
 # the dev VM after provision.sh. It starts the real root broker, drives it as
 # the controller user, and checks the result from outside the broker with
 # ordinary tools: getent, stat, sftp, ssh.

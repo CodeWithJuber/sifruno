@@ -1,6 +1,6 @@
 # Sifruno development
 
-The plan is [docs/PRODUCT-PLAN.md](docs/PRODUCT-PLAN.md). Its roadmap and gates decide what is in scope: work on the current phase, and write a new idea into the plan's "Abhi nahi banega" list instead of building it.
+The maintainer's roadmap decides what is in scope: work on the current phase (the README's status section), and propose a new idea in an issue instead of building it.
 
 ## Slices
 
@@ -34,7 +34,7 @@ Work on the dev VM and on isolated temporary test state. Production servers, cus
 
 Linux, with the Go and Node versions pinned in `.github/workflows/source-checks.yml`; that workflow is the list of checks to run. Run Go tests under `umask 022`, because one `hostaccounts` fixture fails under `077`. The repo's `.gitignore` hides `cmd/sifruno` from ripgrep, so search it with `rg --no-ignore` or `grep`.
 
-The stack table in the plan is the approved dependency list. Anything outside it needs the owner's approval first.
+The dependencies already in `go.mod`, `package.json` and `web/package.json` are the approved list. Anything outside it needs the maintainer's approval first.
 
 Use Forgekit's substrate check before a non-trivial edit, the minimum useful Hikmah and Wisdom Lens skills, and ship-guard before reporting completion. Impact analysis is advisory; unknown impact needs inspection.
 

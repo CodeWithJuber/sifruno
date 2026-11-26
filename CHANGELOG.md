@@ -101,5 +101,5 @@
   backup recovery remain available in the same website workflow.
 
 Earlier deliveries and their original evidence are recorded in
-[the delivery plan](docs/archive/DELIVERY-PLAN.md). This section is an unreleased source
+the delivery plan (an internal document, not published). This section is an unreleased source
 change, not a production release or hosting-compatibility qualification.

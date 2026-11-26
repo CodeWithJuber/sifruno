@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proof 1 (docs/PRODUCT-PLAN.md, Phase 0 item 7), guest side. Runs as root in
+# Proof 1 (Phase 0 item 7 of the product plan), guest side. Runs as root in
 # the dev VM after provision.sh and the broker proof (it reuses that broker's
 # state). A WordPress site on OpenLiteSpeed, produced from config, running as
 # its own Linux user inside OpenLiteSpeed's namespace container, with a disk

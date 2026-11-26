@@ -224,7 +224,7 @@ These steps build the source and run a private loopback panel for development. T
 
 7. Optional: reach the panel from another machine. Add `--https-listen 0.0.0.0:2083 --panel-host panel.example.com` (your server's name or IP; several names are comma-separated). Without `--tls-cert` and `--tls-key` the panel makes a self-signed certificate and prints its SHA-256 fingerprint; your browser warns until you use a real certificate, so compare the fingerprint before you continue. Over HTTPS only the admin sign-in works: the access key and first-run setup stay on the server. Open the port in your firewall yourself; this guide does not change firewall rules.
 
-8. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP. Follow the [upload and recovery walkthrough](archive/site-file-upload.md) for the exact scope and limits.
+8. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP.
 
 9. Verify the panel and CLI using the commands below, from a second terminal in the repository root. Stop the panel with **Ctrl+C** in its original terminal. Preserve its state directory to retain sites, recovery history and operator state; deleting it is not an upgrade procedure.
 

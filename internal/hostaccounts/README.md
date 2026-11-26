@@ -47,9 +47,8 @@ allocate the subordinate UID and GID ranges from login.defs, which rootless
 containers need; the earlier system-account mode with a zero subordinate count
 ruled them out. Mail policy is a useradd default, not a login.defs -K key: with
 CREATE_MAIL_SPOOL=yes a regular user gets a spool file, and Delete removes that
-one file when it is a regular file owned by the account. The earlier
-[service-account contract](../../docs/archive/service-account-mail-policy.md)
-describes the system-account mode this replaced. Explicit --groups '' excludes
+one file when it is a regular file owned by the account. It replaced an
+earlier system-account mode. Explicit --groups '' excludes
 supplementary defaults; native verification requires the private primary group
 only and no member additions. The broker does not check the subordinate ranges
 itself; the dev VM proof does.
@@ -1425,7 +1424,7 @@ operation, which admits `xfs_quota` and knows the web server's user.
 
 ## Migration
 
-Migration v1 (docs/PRODUCT-PLAN.md, Phase 1) moves one website account
+Migration v1 (the product plan's Phase 1) moves one website account
 from a cPanel server, over root SSH, into a Sifruno account of the same
 name. Mail and DNS stay on the old server. The panel's website job
 (`internal/wizard`, kind `migration`) drives it; the broker does every

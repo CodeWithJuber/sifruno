@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proof 3 rehearsal (docs/PRODUCT-PLAN.md, Phase 0 item 9), guest side. Runs
+# Proof 3 rehearsal (Phase 0 item 9 of the product plan), guest side. Runs
 # as root in the dev VM after provision.sh.
 #
 # The real proof copies a HostLelo cPanel site over root SSH; that needs the

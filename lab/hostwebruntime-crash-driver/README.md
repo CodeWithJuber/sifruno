@@ -130,8 +130,8 @@ Windows admission/contract and canonical recovery unit suites passed; Linux ELF
 and native unit ELF compiled. These checks do not establish native behavior.
 Actual Linux unit and crash qualification execution belong to the root-owned
 fresh disposable QEMU harness. The later accepted actual run, its exact hashes,
-independent review, two retained failures and narrow limits are recorded in
-[the controller-death guide](../../docs/archive/native-web-crash-recovery.md); the source
+independent review, two retained failures and narrow limits were recorded in
+an internal delivery note that is not part of this repository; the source
 checks above are not that native receipt.
 
 Source review caught an initial candidate event-name mismatch (`applying` status

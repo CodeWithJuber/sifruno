@@ -2,7 +2,7 @@
 
 Publication refresh, 2026-10-07: PR44 was merged externally into main. Its
 archival status, missing parser and approval boundary are unchanged. This merge
-does not authorize running or completing the draft. See [current project state](../../docs/archive/PROJECT-STATE.md).
+does not authorize running or completing the draft.
 
 **NON-RUNNABLE. Not suitable for installation, qualification, or execution.**
 

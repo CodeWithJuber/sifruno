@@ -1,6 +1,6 @@
 # Dev VM
 
-A disposable AlmaLinux 9 guest for the proofs in the [product plan](../../docs/PRODUCT-PLAN.md). A slice is done when it runs here, not when it compiles.
+A disposable AlmaLinux 9 guest for the product's proofs (saved runs are in [docs/proofs](../../docs/proofs/README.md)). A slice is done when it runs here, not when it compiles.
 
 The VM runs under QEMU as an ordinary user and is reachable only through loopback port forwards. Root signs in with a key made for this VM alone. It uses KVM when `/dev/kvm` is usable and software emulation otherwise; emulation works on any machine but is several times slower (the first boot takes a few minutes and the package install about half an hour).
 

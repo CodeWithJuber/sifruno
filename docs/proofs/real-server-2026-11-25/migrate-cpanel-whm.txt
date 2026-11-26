@@ -1,0 +1,114 @@
+# Migration v1: one website account from a cPanel stand-in over root SSH
+# 2026-11-26T11:40:23Z  openlitespeed-1.9.4-3.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 podman-5.8.5-5.el9_9.x86_64 rsync-3.2.7-1.el9_8.x86_64 openssh-clients-9.9p1-17.el9_9.alma.1.x86_64
+# accounts shop93223, staff93223, odd93223, trig93223, race93223, hard93223; container sifruno-cpanel-standin-93223 from docker.io/library/almalinux@sha256:1d06c00a6025b4faf042d3827d9ea8dc6b7a75278cacc1c1399dcc7a89c07a01
+
+## 1. The broker and the panel
+PASS  the broker runs with the web operation on
+PASS  the panel answers on 127.0.0.1:54563 as sifpanel, its DNS address SERVER_IP
+PASS  /usr/bin/rsync is a root-owned program the broker admits
+PASS  /usr/bin/ssh is a root-owned program the broker admits
+PASS  /usr/bin/ssh-keyscan is a root-owned program the broker admits
+PASS  /usr/bin/cp is a root-owned program the broker admits
+PASS  /usr/bin/mariadb is a root-owned program the broker admits
+
+## 2. The cPanel stand-in (Podman, not cPanel)
+PASS  the stand-in's base image is the pinned digest
+  stand-in address: 10.88.0.3
+  stand-in PHP: 83 (reported to Sifruno as ea-php83)
+PASS  the stand-in has sshd, MariaDB, Apache, PHP-FPM, rsync and crontab
+PASS  this server has LSPHP 83 for the copy
+PASS  the stand-in's MariaDB, sshd and Apache run
+PASS  the stand-in's four accounts, sites and databases are made
+PASS  the stand-in WordPress keeps the stock Akismet .htaccess (deny all, <FilesMatch>, both branches)
+  Akismet , .htaccess sha256 63553e7f320285fe2417cdb00664a136958d70baa07d7325e86f0847f11dd17c (the converter's test pins WordPress 7.1.5's: 63553e7f...)
+PASS  the stand-in whmapi1 prints listaccts JSON for the six accounts
+PASS  the old WordPress site answers with its title
+PASS  the old staff site closes /private/ with 401
+PASS  the old staff site opens /private/ with the password (200)
+PASS  the old staff site denies /backups/backup.sql with 403
+PASS  the old staff site answers 401 for /pub/index.html, rewritten into /private/
+PASS  the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/
+PASS  the old staff site closes /office/ to this server (403) and opens /lobby/ (200)
+PASS  the old WordPress denies Akismet's folder with 403
+PASS  the old WordPress serves Akismet's allow-listed akismet.css with 200
+
+## 3. The WHM API stand-in on port 2087 (Python; not cPanel)
+511b2ba6614f32ace70516a6a9a2130f02f8383624f9d4eff829b49112ebfc77
+  WHM stand-in: https://10.88.0.3:2087, certificate SHA-256 09:A9:DB:18:80:8B:02:07:08:19:11:6F:8B:6D:4A:BE:85:E7:69:F6:B1:B2:0C:83:8B:3A:0A:60:A0:CC:59:69 (self-signed)
+PASS  the WHM stand-in answers on port 2087 over HTTPS
+PASS  the stand-in's whmapi1 refuses over SSH (exit 3, the preload message)
+PASS  the panel signs in with the server's access key
+
+## 4. The SSH path on that server: the classified cPanel-tool failure (D-0006)
+  GET .../accounts over SSH answered 422:
+    detail: cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them (a security problem on the old server) or when cPanel's files are damaged or being updated.
+    next: Check the old server's security and cPanel (cPanel support can help), or connect with the WHM login, then press Try again.
+    technical: step cpanel_tool; the old server printed: 2026/01/02 03:04:06 LD_Preload detected, refusing to run 2026/01/02 03:04:06 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369.
+PASS  listing over SSH fails with 422
+PASS  it says cPanel's own tools did not answer properly, and why
+PASS  its next step offers checking the server and the WHM login, then Try again
+PASS  the old server's words are under technical only
+PASS  the generic "Fix the value" step is gone
+PASS  stopping that connection removes its key line
+
+## 5. Connect with the WHM login: a WHM that prints no JSON, a wrong token
+  first POST .../whm answered 409: certificate 09:A9:DB:18:80:8B:02:07:08:19:11:6F:8B:6D:4A:BE:85:E7:69:F6:B1:B2:0C:83:8B:3A:0A:60:A0:CC:59:69
+PASS  an untrusted certificate is shown first (409), with its fingerprint
+PASS  no request, so no login, reached WHM before the certificate was confirmed
+  POST .../whm with a WHM that prints no JSON answered 422:
+    detail: WHM on the old server did not answer with the data cPanel documents. This happens when cPanel's files are damaged or being updated, or when something on the old server interferes with cPanel (a security problem). WHM's answer to listaccts is not the JSON cPanel documents.
+    next: Check the old server's security and cPanel (cPanel support can help), or use SSH instead, then press Try again.
+    technical: step whm_output; the old server printed: 2026/01/02 03:04:05 LD_Preload detected, refusing to run 2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369.
+PASS  a WHM that prints no JSON fails with 422
+PASS  it says WHM did not answer with the data cPanel documents, and what to do
+PASS  what WHM printed is under technical only
+  POST .../whm with a wrong token answered 422:
+    detail: WHM on the old server refused the login. WHM at https://10.88.0.3:2087 answered HTTP 403 to listaccts.
+    next: Check the API token (in WHM: Development, Manage API Tokens) or root's password, and that it is root's, not a reseller's, then press Try again.
+    technical: step whm_login; the old server printed: Access denied
+PASS  a wrong token: WHM refused the login (422), the token not echoed
+
+## 6. Connect with the WHM login, confirm the SSH key once, choose
+  POST .../whm answered 200: migration 9b43a8399fa3d0630ff235ddefe79907 via whm, accounts shop93223 staff93223 trig93223 race93223 hard93223 odd93223
+PASS  WHM's login connects (200): the source is via whm and lists the six accounts
+PASS  the token is not in the answer
+PASS  WHM added the migration key for root with restrict (one line)
+PASS  no command was copied to the old server: the key came through WHM's importsshkey and authorizesshkey
+  SSH key shown once: ssh-ed25519 SHA256:K9+rvDipoV/4QyjXNfDhWFXcuyl3jNvAAroSzqkIcjA (the old server's own: SHA256:K9+rvDipoV/4QyjXNfDhWFXcuyl3jNvAAroSzqkIcjA)
+PASS  one confirm pins it (200), the old server's own ed25519 key
+PASS  listing again goes through WHM (200, six accounts)
+
+## 7. Move shop93223.proof.test with cPanel's tools refusing over SSH
+  job aac7a2985052de9e5bdf3ef4b72220f9: succeeded
+    source   done     Found shop93223.proof.test: 1 database(s), 1 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 1 .htaccess file(s) with access rules are converted into the web server's config: /wp-content/plugins/akismet/ (closed
+    account  done     Created the hosting account shop93223, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. It is a WordPress site. Protected folders went into the web server's config before the files did: /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akism
+    database done     Copied 1 database(s) with the same names and users (same passwords): 12 tables, 159 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s); they run as the site's user on this server's clock.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server now refuses the migration key. WHM's API also deleted the key's file /root/.ssh/sifruno-migration-9b43a8399fa3d0630ff235ddefe79907.pub. This server deleted its own copy of the key.
+  WHM calls:  2 authorizesshkey, 1 deletesshkey, 1 domainuserdata, 1 importsshkey, 4 listaccts, 2 listaccts refused, 1 listsshkeys, 1 php_get_vhost_versions, 2 uapi_cpanel
+PASS  the move succeeded
+PASS  the job is via whm
+PASS  WHM answered what the copy asked of cPanel (domainuserdata, php_get_vhost_versions, uapi_cpanel)
+PASS  wp-config.php arrived unchanged (same sha256), over SSH with the pinned key
+PASS  the database user shop93223_wpu has the same password hash
+PASS  the database shop93223_wp has the same rows (wp_posts 5 = 5)
+PASS  the copy answers with the site's title on this server
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  key step: The old server now refuses the migration key. WHM's API also deleted the key's file /root/.ssh/sifruno-migration-9b43a8399fa3d0630ff235ddefe79907.pub. This server deleted its own copy of the key.
+PASS  the key step says how the key went
+PASS  the old server no longer has the key line
+PASS  WHM deleted the key's file from /root/.ssh
+PASS  this server deleted the migration's private key
+
+## 8. The WHM login is nowhere but in the panel's memory
+PASS  not in the panel's state or log
+PASS  not in the broker's state
+PASS  not in any process's arguments while it ran
+PASS  not in the job record
+PASS  the connection's login is forgotten: listing it again is refused
+
+RESULT: every check passed
+# kept: the stand-in sifruno-cpanel-standin-93223 and its /etc/hosts lines

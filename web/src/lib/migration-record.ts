@@ -114,7 +114,11 @@ export function certificateNote(m: Pick<MigrationRecord, "certificate">, locale?
 }
 
 // The line a person adds to their computer's hosts file to see the copy
-// before DNS changes.
+// before DNS changes: the domain and its www. form, or for a domain that
+// starts with www. the domain without it (when that is still a domain), so
+// the line never says www.www.
 export function hostsLine(address: string, domain: string): string {
-  return `${address} ${domain} www.${domain}`;
+  if (!domain.startsWith("www.")) return `${address} ${domain} www.${domain}`;
+  const bare = domain.slice("www.".length);
+  return bare.includes(".") ? `${address} ${domain} ${bare}` : `${address} ${domain}`;
 }

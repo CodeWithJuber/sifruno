@@ -14,6 +14,14 @@ const migration = (change = {}) => ({
   activity: [{ at: "2026-11-26T10:00:00Z", actor: "admin", what: "Started moving the account shopone." }], ...change,
 });
 
+test("the hosts file line names the domain and its other form, never www.www.", () => {
+  assert.equal(record.hostsLine("203.0.113.7", "shop.example.test"), "203.0.113.7 shop.example.test www.shop.example.test");
+  assert.equal(record.hostsLine("203.0.113.7", "www.shop.example.test"), "203.0.113.7 www.shop.example.test shop.example.test");
+  // www. and one label after it: that label alone is no domain.
+  assert.equal(record.hostsLine("203.0.113.7", "www.test"), "203.0.113.7 www.test");
+  assert.equal(record.hostsLine("2001:db8::7", "blog.www.example.test"), "2001:db8::7 blog.www.example.test www.blog.www.example.test");
+});
+
 test("the certificate step's outcome is read, and the cutover says when https comes", () => {
   const copied = record.parseMigration(migration({ certificate: { copied: true, not_after: "2027-03-01T12:00:00Z", issuer: "Old CA" } }));
   assert.deepEqual(copied.certificate, { copied: true, not_after: "2027-03-01T12:00:00Z", issuer: "Old CA", why: "" });

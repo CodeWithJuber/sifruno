@@ -364,7 +364,7 @@ func serverNotCarried(x sitesource.ServerSite) []sitemodel.Item {
 		items = append(items, sitemodel.Item{Part: "domain", Text: "The site's other domains (" + strings.Join(x.Aliases, ", ") + ") are not added; this version moves the main domain. Add them on the website's Domains tab.", Where: x.Where})
 	}
 	if x.Server == "nginx" {
-		items = append(items, sitemodel.Item{Part: "rule", Text: ".htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead."})
+		items = append(items, sitemodel.Item{Part: "info", Text: ".htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead."})
 	}
 	return items
 }
@@ -423,7 +423,7 @@ func (s *store) planServer(ctx context.Context, m migrationRecord, in MigrationP
 			plan.Databases = append(plan.Databases, cpsource.Database{Name: d.name, Users: []string{d.user}})
 			plan.Users = append(plan.Users, cpsource.DatabaseUser{Name: d.user, Hash: d.hash,
 				Grants: []cpsource.Grant{{Database: d.name, Privileges: []string{"ALL PRIVILEGES"}}}})
-			plan.NotCarried = append(plan.NotCarried, sitemodel.Item{Part: "database", Text: "The database " + d.source + " becomes " + d.name + " and its user " + d.sourceUser + " becomes " + d.user + " with the same password: names here start with the account's name. wp-config.php is changed to the new names."})
+			plan.NotCarried = append(plan.NotCarried, sitemodel.Item{Part: "info", Text: "The database " + d.source + " becomes " + d.name + " and its user " + d.sourceUser + " becomes " + d.user + " with the same password: names here start with the account's name. wp-config.php is changed to the new names."})
 		} else {
 			plan.NotCarried = append(plan.NotCarried, sitemodel.Item{Part: "database", Text: d.problem, Where: site.DocRoot + "/wp-config.php"})
 		}
@@ -585,5 +585,5 @@ func leftOutItems(files []string) []sitemodel.Item {
 	if more := len(files) - len(shown); more > 0 {
 		text += " and " + strconv.Itoa(more) + " more"
 	}
-	return []sitemodel.Item{{Part: "rule", Text: installDetail([]byte(text)) + "."}}
+	return []sitemodel.Item{{Part: "info", Text: installDetail([]byte(text)) + "."}}
 }

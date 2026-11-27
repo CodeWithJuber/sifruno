@@ -1,0 +1,85 @@
+# guest: AlmaLinux release 9.8 (Olive Jaguar), kernel 5.14.0-687.60.1.el9_8.x86_64, SELinux Enforcing
+PASS  the broker runs
+PASS  the panel answers on 127.0.0.1:34253 as sifpanel
+PASS  the panel answers over HTTPS for panel.sifruno.test
+PASS  the start-up note says customers sign in over HTTPS
+## Admin: first-run setup and sign-in
+PASS  the admin is signed in
+## Two websites
+PASS  the wizard starts a PHP site for a.cl76443.proof.test
+PASS  the site a.cl76443.proof.test is made
+PASS  the wizard starts a PHP site for b.cl76443.proof.test
+PASS  the site b.cl76443.proof.test is made
+PASS  the admin's list has both websites
+  websites: a.cl76443.proof.test (the customer's) and b.cl76443.proof.test (not the customer's)
+## Admin: a login for the first website
+PASS  Customers opens the customer logins page at /customers
+PASS  the old hosting-accounts screen is in the menu, under Advanced
+PASS  the admin gets a one-time setup link with its secret after #
+PASS  the new login waits for setup
+## Customer: setup from the link over HTTPS
+PASS  the setup page takes the secret out of the address bar
+PASS  the password field asks for a new password
+PASS  a wrong code does not finish the setup
+PASS  setup signs the customer in and opens Websites
+PASS  the setup link works only once
+## Customer: what it sees
+PASS  the customer's menu is Home, Websites and Account
+PASS  the customer sees one website
+PASS  the customer's list shows a.cl76443.proof.test and not b.cl76443.proof.test
+PASS  the customer opens its own website's page
+## Customer: only what it can use
+PASS  the customer's session lists the routes it may use
+PASS  the customer is not offered new-website-link
+PASS  the customer is not offered static-sites-link
+PASS  the customer is not offered site-action-php
+PASS  the customer is not offered use-current-folder
+PASS  the customer is not offered change-state
+PASS  the customer is not offered delete-website
+PASS  the customer is not offered back-up-now
+PASS  the customer is not offered drill-now
+PASS  the customer is not offered restore-snapshot
+PASS  the customer is not offered go-backup-storage
+## Customer: another website is refused
+PASS  the address of b.cl76443.proof.test does not show it
+PASS  the API refuses the other website like one that does not exist
+PASS  a change to the other website is refused
+PASS  the customer cannot use GET /api/v1/server
+PASS  the customer cannot use GET /api/v1/accounts
+PASS  the customer cannot use GET /api/v1/session/customers
+PASS  the customer cannot use GET /api/v1/websites/jobs
+PASS  the customer cannot use POST /api/v1/websites/sites/536c9c97b64afb151602152ffcd5724f/state
+PASS  an admin page shows a notice to the customer, not its data
+## Customer: sign out and sign in again
+PASS  the customer signs in with its password and a fresh code
+PASS  the customer's Websites has no horizontal overflow at 390
+## Customer: changes its password on Account
+PASS  Account offers the password and authenticator changes
+PASS  a wrong current code is refused, saying what, why and what next
+PASS  the password change works and this session stays
+PASS  the old password stops working
+PASS  the new password signs in
+## Admin: view as the customer
+PASS  viewing as the customer shows a banner naming whose account it is
+PASS  while viewing, the admin sees only the customer's website
+PASS  while viewing, New website is not offered
+PASS  while viewing, the menu is the customer's
+PASS  while viewing, the other website is refused
+PASS  the banner fits at 390 with no horizontal overflow
+PASS  Back to admin view ends viewing and returns to Customers
+PASS  the admin sees every website again
+## Admin: the controls the customer is not offered
+PASS  the admin is offered new-website-link
+PASS  the admin is offered static-sites-link
+PASS  the admin is offered site-action-php
+PASS  the admin is offered change-state
+PASS  the admin is offered delete-website
+PASS  the admin is offered Back up now, or Set up backup storage before any
+PASS  the admin's menu has Account, with the same password change
+## Admin: turn the login off
+PASS  turning the login off signs the customer out at once
+PASS  no unexpected browser errors
+63 passed, 0 failed
+PASS  customers.json is the panel's and private (0600)
+PASS  it keeps an Argon2id hash, never a password or a setup link
+PASS  the panel log holds no setup link

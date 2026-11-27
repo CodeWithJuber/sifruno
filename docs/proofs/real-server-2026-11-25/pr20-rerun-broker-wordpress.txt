@@ -1,0 +1,50 @@
+# Broker WordPress install: dbhost database, WP-CLI as the site user, passwords on stdin
+# 2026-11-27T10:27:02Z  openlitespeed-1.9.5-1.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64
+# site user wp75222, domain wp75222.proof.test
+
+## 1. The broker runs with the web operation on
+PASS  the broker started with --web-user nobody
+PASS  WP-CLI 2.12.0 is installed root-owned and matches its pinned sha512
+
+## 2. An account with a live site
+PASS  the site is live with PHP 8.3
+
+## 3. The database, through the panel's database code
+  database wp75222_wp with user wp75222_wp@localhost
+PASS  dbhost created the database and its user
+PASS  the database user signs in over 127.0.0.1 and sees its database
+
+## 4. The broker installs WordPress as the site user
+  took 17 s
+PASS  the broker installed WordPress
+  WordPress version: 7.1.5
+PASS  the result names the installed version
+  process-argument samples taken during the install: 33
+PASS  no process argument held either password during the install
+PASS  the WordPress files belong to the site user
+PASS  wp-config.php is the site user's and mode 0600
+PASS  wp-config.php points at 127.0.0.1
+PASS  WordPress's tables are in the site's database
+PASS  the admin user exists
+  stored title: Sifruno WordPress proof 100% $HOME %h %n
+PASS  the title reached WordPress exactly, $ and % untouched
+PASS  the LiteSpeed Cache plugin is active
+
+## 5. The site serves WordPress
+  first page after 3 s
+PASS  the home page carries the site title
+PASS  wp-login.php answers 200
+PASS  wp-config.php is not served as text
+
+## 6. A second install into the same site is refused and changes nothing
+  broker answered: broker refused: WordPress download step failed: Error: WordPress files seem to already be present here.
+PASS  the broker refused to install over an existing WordPress, naming the step
+PASS  neither password appears in the broker's answers
+PASS  wp-config.php is unchanged
+PASS  the site still serves
+
+## 7. The account can be deleted after the install
+PASS  the Linux user is gone
+PASS  OpenLiteSpeed is still running
+
+RESULT: all checks passed

@@ -1,0 +1,154 @@
+# PR #20 proven as a whole on one server
+#
+# Run 2026-11-27 (times UTC) on one new server the nightly script made and
+# kept (scripts/ci/nightly-fresh-install.sh with SIFRUNO_NIGHTLY_KEEP=1: a
+# g6-standard-2 Linode, 112057424, with Cloud Firewall 233409523; AlmaLinux
+# 9.8, kernel 5.14.0-687.60.1.el9_8, SELinux enforcing, OpenLiteSpeed
+# 1.9.5, LSPHP 8.3.37, MariaDB 10.11.18, Podman 5.8.5). Both were deleted
+# afterwards; the Linode API answers 404 for each by ID.
+#
+# Release on the server: built from da7176e, the branch head with the UX
+# follow-ups (release sha256 d8a8414b340b9a2700ef22e9b019be408b2fc5ed5e5
+# 24db3f1aa95a45ccc9386), installed by the real installer through
+# fresh-install-test.sh --existing-host: 17 passed, 0 failed
+# (pr20-rerun-fresh-install.txt). The installed units were then turned off,
+# as scripts/devvm/README.md says, because each proof starts its own broker
+# and panel.
+#
+# Each proof builds its programs from the checkout and copies them in. Every
+# build's Go and web code is da7176e's: the four commits made during this
+# run change only scripts/devvm/proofs. The "scripts" column names the
+# commit whose proof scripts each saved run used.
+#
+# Proof                          Result                Scripts  Transcript
+# fresh install (installer)      17 passed, 0 failed   da7176e  pr20-rerun-fresh-install.txt
+# migrate-cpanel (live SSH)     194 passed, 0 failed   da7176e  pr20-rerun-migrate-cpanel.txt
+# migrate-cpanel whm             72 passed, 0 failed   da7176e  pr20-rerun-migrate-cpanel-whm.txt
+# migrate-cpanel cert            89 passed, 0 failed   da7176e  pr20-rerun-migrate-cpanel-cert.txt
+# migrate-cpanel archive         80 passed, 0 failed   6f2b725  pr20-rerun-migrate-cpanel-archive.txt
+# migrate-verify                 19 passed, 0 failed   da7176e  pr20-rerun-migrate-verify.txt
+# htaccess-reload                19 passed, 0 failed   da7176e  pr20-rerun-htaccess-reload.txt
+# broker-web                     27 passed, 0 failed   0eb9d5e  pr20-rerun-broker-web.txt
+# broker-wordpress               24 passed, 0 failed   da7176e  pr20-rerun-broker-wordpress.txt
+# site-domains                   54 passed, 0 failed   fb5c108  pr20-rerun-site-domains.txt
+# wordpress-wizard               98 passed, 0 failed   fb5c108  pr20-rerun-wordpress-wizard.txt
+# panel-shell                    51 passed, 0 failed   9aac67c  pr20-rerun-panel-shell.txt
+# customer-login                 70 passed, 0 failed   da7176e  pr20-rerun-customer-login.txt
+# All 13 runs                   814 passed, 0 failed
+#
+# The migrate-cpanel file of 6f2b725 differs from da7176e's only inside the
+# archive mode, so the ssh, whm and cert runs used the same checks.
+#
+# In the transcripts the server's public address is written SERVER_IP and
+# its reverse-DNS name (which holds the address) SERVER_HOSTNAME; spaces
+# that ended a line are removed. Nothing else is changed. No sslip.io name
+# was used: every proof's domains are .proof.test or .sifruno.test.
+# 10.88.0.x is Podman's private network, and the 64 hex digits alone on a
+# line in the whm and cert transcripts are Podman's id for the WHM
+# stand-in's process.
+
+## Runs that failed first, and why
+
+Evidence is what the server showed; the cause of each is named after it.
+No product bug was found. Every failure was in a proof: checks that later
+changes to the product made stale (panel-shell, site-domains, the wizard,
+the archive mode), one race in a check (broker-web), and two runs that
+failed because panel-shell had left its panel running. Each fix is its own
+commit, and every rerun passed on the same server.
+
+1. panel-shell, 30 passed, 3 failed (stale expectations, fixed in 9aac67c).
+   - "breadcrumb shows Websites > Static site files (old)": the page reads
+     "Static sites (old) > Static site files (old)" since a93102a put it
+     under Static sites (old) in the Advanced group.
+   - "run completed": at phone width the run opened a browser that was not
+     signed in, which since 4fa1858 sees only the sign-in form, so the
+     Files heading never came. Once that was fixed, the HTTPS part looked
+     for the static site under Websites, which lists WordPress and PHP
+     websites since 9432391 (seen in a local run, the same panel and
+     browser script).
+   - "no page errors": console lines "Failed to load resource: ... 503".
+     This proof runs the panel without the account service, and
+     Websites (9432391), Files (21eb4dd) and Get started (4bdb95d) read
+     /api/v1/websites/sites, /jobs and /backup-storage, which then answer
+     503 with the reason. The proof now keeps those 503s apart, checks that
+     only those reads answer it and that Websites shows the reason; any
+     other console error still fails it.
+   Local run of the fixed script against the same build: 51 passed, 0
+   failed; then on the server: 51 passed, 0 failed.
+
+2. broker-web, 26 passed, 1 failed (a race in the proof, fixed in 0eb9d5e).
+   "the broker's config test passes this output for another account's
+   change" failed, yet the same test binary on the same saved
+   openlitespeed -t output passed by hand. The check piped the test into
+   grep -q under set -o pipefail: grep stops at the match, the test's next
+   write dies of SIGPIPE (exit 141), and the pipeline fails. Run 200 times
+   on the server: PIPESTATUS "141 0" 46 times with grep -q, never when grep
+   reads all the output. The check is unchanged otherwise.
+
+3. site-domains, 41 passed, 17 failed, and migrate-verify, 12 passed,
+   8 failed (proof order, nothing changed). panel-shell, run first, leaves
+   its panel running on 0.0.0.0:443 and 127.0.0.1:8082. OpenLiteSpeed's
+   error.log: "Can't listen at address sifruno-https: Address already in
+   use!", and every https check of site-domains saw the panel's own
+   panel.sifruno.test certificate. The broker's journal then shows the
+   suspend stopping at its "site list" step as "unavailable", and that
+   unfinished change refusing every later one ("an unfinished operation
+   holds up every change") until the broker started again, which finished
+   it; that the failed listener caused the "unavailable" is inferred, not
+   shown. Apache, for migrate-verify's old site and Compat copy: "(98)Address
+   already in use: AH00072: make_sock: could not bind to address
+   127.0.0.1:8082". After that panel was stopped and the two half-made
+   site-domains accounts deleted, migrate-verify passed 19 of 19.
+
+4. site-domains, 52 passed, 1 failed, and wordpress-wizard, 96 passed,
+   1 failed (stale expectations, fixed in fb5c108). Since da3d2c1 a site
+   with a valid certificate sends plain http to https by default; both
+   proofs last passed before it. After the resume, the alias answered
+   plain http with the 301 to https, not the page; the wizard's wp-admin
+   answered plain http with "301 https://DOMAIN/wp-admin/", not
+   WordPress's 302. The checks now ask over https (trusting only Pebble's
+   root) and check the 301 over http. site-domains' check that a removed
+   alias no longer serves the site also checks that http no longer
+   redirects it, as a 301 alone would have passed it.
+
+5. migrate-cpanel archive, 78 passed, 2 failed (stale expectations, fixed
+   in 6f2b725). Its checks date from c9f5ee7, before f80526b put the
+   WordPress plugin blocks and 11f4a13 cPanel's MultiPHP INI block into
+   the stand-in shop's root .htaccess. The move succeeded and verify
+   allowed cutover. "the job names Akismet's .htaccess as converted"
+   expected Akismet alone; the job record lists the root's closed names,
+   Akismet's folder, two redirects, the error page and nine PHP settings,
+   exactly what the SSH mode checks for the same shop. "it says that mail
+   and the DNS zone do not move" expected two parts; the upload also names
+   session.save_path (one line in each IfModule branch) as not carried.
+
+## How panel-shell ran on a cloud server
+
+panel-shell was written for the QEMU dev VM, which forwards loopback ports
+to the guest's 80 and 443. On this server the run's ports file named two
+free local ports as HTTP_PORT and HTTPS_PORT, and one SSH connection
+forwarded the first to the panel's loopback port on the server and the
+second to the server's 127.0.0.1:443, where the panel's HTTPS listener ran.
+The proof's port-80 relay could not bind (OpenLiteSpeed holds port 80) and
+was not needed. Requests over the HTTPS forward reach the panel by the
+host name panel.sifruno.test, so the panel treats them as remote, as it
+would another machine's.
+
+Two proofs cannot share a server in every order: panel-shell needs port
+443 free, so it runs before any site has a certificate, and its panel must
+be stopped (pkill -x sifruno) before site-domains or migrate-verify. The
+other proofs share the server in any order; their accounts have their own
+names per run.
+
+## What this run does not show
+
+- A real cPanel server: the migrations move sites from the Podman
+  stand-in, as before.
+- broker-sftp, wordpress-ols, backups, files, broker-isolation,
+  account-limits, site-tools, phpmyadmin, whmcs-module, installer-sshd,
+  create-recovery and broker-site-actions: not in this run's list, so not
+  rerun at da7176e.
+- A public CA and public DNS: Pebble stands in for Let's Encrypt, and the
+  certificate proof uses its own throwaway CA.
+- panel-shell's screenshots and the browser proofs' screenshots were made
+  but are not kept here; the transcripts are.

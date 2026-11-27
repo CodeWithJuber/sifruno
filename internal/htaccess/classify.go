@@ -180,6 +180,7 @@ func unreadFile(name, urlPath, cause, reason string) FileResult {
 func Classify(f *File, name, urlPath string) FileResult {
 	c := &classifier{file: name, urlPath: urlPath, root: urlPath == "/", problems: append([]Problem(nil), f.Problems...)}
 	c.envFeedsAccess = feedsAccess(f.Nodes)
+	c.envRead = rewriteEnvReads(f.Lines)
 	c.walk(f.Nodes, scope{})
 	if stop := olsStopLine(f.Lines); stop > 0 {
 		for i := range c.findings {
@@ -267,8 +268,10 @@ type classifier struct {
 	problems       []Problem
 	marker         bool
 	envFeedsAccess bool
-	satisfyAny     bool
-	plain          facts
+	// envRead holds the environment variables rewrite lines read.
+	envRead    map[string]bool
+	satisfyAny bool
+	plain      facts
 }
 
 func (c *classifier) walk(nodes []*Node, sc scope) {
@@ -317,7 +320,10 @@ func (c *classifier) section(n *Node, sc scope) {
 	if len(n.Args) > 0 {
 		arg = n.Args[0]
 	}
-	f := Finding{File: c.file, Line: n.Line, Directive: "<" + n.Name + ">", Label: "<" + n.Name + ">", Category: CategoryStructure}
+	f := Finding{File: c.file, Line: n.Line, Directive: "<" + n.Name + ">", Label: unknownPlaceholder, Category: CategoryStructure}
+	if directiveName.MatchString(n.Name) {
+		f.Label = "<" + n.Name + ">"
+	}
 	inner := sc
 	switch name {
 	case "ifmodule":
@@ -504,7 +510,7 @@ func (c *classifier) directive(n *Node, sc scope) Finding {
 	}
 	if !f.Honoured {
 		var reason string
-		f.Handling, reason, f.PHP = handle(name, n.Args)
+		f.Handling, reason, f.PHP = handle(name, n.Args, c.envRead)
 		if f.Handling != "" {
 			f.Reason = reason
 		}

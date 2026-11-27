@@ -104,6 +104,8 @@ func TestHandlingOfEachClass(t *testing.T) {
 		{"RequestHeader append Accept-Encoding \"gzip,deflate\" env=HAVE_Accept-Encoding", HandlingIgnored},
 		{"AddType image/avif .avif", HandlingIgnored},
 		{"AddType application/font-woff2 woff2", HandlingIgnored},
+		{"AddType image/svg+xml svg svgz", HandlingIgnored},
+		{"AddType application/javascript js mjs", HandlingIgnored},
 		{"AddDefaultCharset UTF-8", HandlingIgnored},
 		{"AddCharset UTF-8 .css .js", HandlingIgnored},
 		// Handled by Sifruno.
@@ -128,6 +130,12 @@ func TestHandlingOfEachClass(t *testing.T) {
 		{"AddType text/plain .php", ""},
 		{"AddType application/x-httpd-php .html", ""},
 		{"AddType text/html .shtml", ""},
+		// Uploads hardening: HTML, SVG and scripts sent as text or a
+		// download do not run in the browser; OpenLiteSpeed would render
+		// them.
+		{"AddType text/plain .html .htm .svg", ""},
+		{"AddType application/octet-stream .svg", ""},
+		{"AddType text/plain js", ""},
 		{"AddHandler application/x-httpd-ea-php81 .php .html", ""},
 		{"AddHandler cgi-script .cgi", ""},
 		{"AddEncoding gzip .gz", ""},
@@ -175,6 +183,40 @@ func TestAccessRulesStayAccess(t *testing.T) {
 		r := ClassifyFile(".htaccess", "/", []byte(text+"\n"))
 		if r.Verdict != VerdictCompat || !reflect.DeepEqual(r.Causes, []string{CauseAccessControl}) {
 			t.Errorf("%q: verdict %s causes %v", text, r.Verdict, r.Causes)
+		}
+	}
+}
+
+func TestCompressionVariableARewriteReadsIsNotHarmless(t *testing.T) {
+	r := ClassifyFile(".htaccess", "/", []byte("SetEnvIfNoCase User-Agent BadBot no-gzip\nRewriteEngine On\nRewriteCond %{ENV:no-gzip} 1\nRewriteRule ^ - [F]\n"))
+	if r.Findings[0].Handling != "" || r.Verdict == VerdictNative {
+		t.Fatalf("verdict %s, SetEnvIf handling %q", r.Verdict, r.Findings[0].Handling)
+	}
+}
+
+func TestLabelShowsOnlyDirectiveNames(t *testing.T) {
+	r := ClassifyFile(".htaccess", "/", []byte("SECRET_KEY=abc123 x\nexample.com On\n"))
+	for _, g := range r.Findings {
+		if strings.Contains(g.Label, "abc123") || strings.Contains(g.Label, "example.com") || g.Label == "" {
+			t.Errorf("line %d label %q", g.Line, g.Label)
+		}
+	}
+}
+
+func TestConverterRefusalIsAnAccessRefusal(t *testing.T) {
+	// A password folder with WordPress's rewrite rules: the converter cannot
+	// carry the rule, so OpenLiteSpeed would open the folder. The refusal is
+	// an access refusal naming the line the converter stopped at.
+	got := ConvertSite(siteOf(map[string]string{
+		"members/.htaccess": "AuthType Basic\nAuthName Members\nAuthUserFile /home/u/.htpasswd\nRequire valid-user\nRewriteEngine On\nRewriteRule . /members/index.php [L]\n",
+		"club/.htaccess":    "<If \"%{HTTPS} == 'on'\">\nRequire all denied\n</If>\n",
+	}))
+	if got.Native || len(got.Refused) != 2 {
+		t.Fatalf("%+v", got.Refused)
+	}
+	for _, r := range got.Refused {
+		if r.Cause != CauseAccessControl || r.Line == 0 {
+			t.Errorf("%+v", r)
 		}
 	}
 }

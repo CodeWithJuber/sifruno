@@ -26,10 +26,12 @@ import (
 //	               compression variables, RequestHeader on
 //	               Accept-Encoding
 //	             AddType of a plain media type for file        MIME detail
-//	               suffixes that are not scripts
+//	               suffixes that are not scripts, and of the
+//	               usual type for HTML, SVG, JS and XML
 //	             AddDefaultCharset, AddCharset                 character set hint
 //	handled      AddHandler/AddType of cPanel's PHP handler    the PHP version comes from the
-//	               for PHP suffixes only                       migration plan (PHPHandler)
+//	               for PHP suffixes only                       migration plan (PHPHandler); the
+//	                                                           vhost refuses .phtml, .php8 ...
 //	             Options -Indexes, -MultiViews, +FollowSymLinks the vhost does the same
 //	             CacheLookup on                                the vhost's cache module looks up
 //	warning      php_value, php_flag                           no safe conversion yet; shown at
@@ -76,9 +78,10 @@ type PHPHandler struct {
 }
 
 // handle classifies one directive OpenLiteSpeed does not act on. name is
-// lower case. It returns no Handling for a line no class covers; php is the
-// PHP package a handler line names.
-func handle(name string, args []string) (h Handling, reason, php string) {
+// lower case; envRead holds the lower-case environment variables the file's
+// rewrite lines read (rewriteEnvReads). It returns no Handling for a line
+// no class covers; php is the PHP package a handler line names.
+func handle(name string, args []string, envRead map[string]bool) (h Handling, reason, php string) {
 	arg := func(i int) string {
 		if i < len(args) {
 			return args[i]
@@ -117,9 +120,11 @@ func handle(name string, args []string) (h Handling, reason, php string) {
 		// Purpose Environment Variables": no-gzip, dont-vary,
 		// gzip-only-text/html, force-gzip; no-brotli for mod_brotli) and the
 		// boilerplate's HAVE_Accept-Encoding. A variable the site's code
-		// could read is not covered. A variable an Allow, Deny or Require
-		// line tests made this line access control before handle runs.
-		if compressionVariables(name, args) {
+		// could read is not covered, nor one a rewrite line of the file
+		// reads (%{ENV:no-gzip}): OpenLiteSpeed would not set it, so that
+		// rule would change. A variable an Allow, Deny or Require line tests
+		// made this line access control before handle runs.
+		if compressionVariables(name, args, envRead) {
 			return HandlingIgnored, "compression hint: OpenLiteSpeed compresses by its own settings", ""
 		}
 	case "addtype":
@@ -170,7 +175,7 @@ func handle(name string, args []string) (h Handling, reason, php string) {
 	return "", "", ""
 }
 
-const phpHandlerReason = "PHP handler: this server runs the site's .php files with the PHP version the migration reads from the old server's settings for the site"
+const phpHandlerReason = "PHP handler: this server runs the site's .php files with the PHP version the migration reads from the old server's settings for the site, and refuses (403) the other PHP suffixes, such as .phtml and .php8, so their source is never sent"
 
 func phpSettingReason(setting string) string {
 	const base = "OpenLiteSpeed does not apply PHP settings from .htaccess, and this server's PHP does not read .user.ini files, so the copy uses this server's default for this setting."
@@ -226,9 +231,10 @@ func compressionFilters(list string) bool {
 var compressionVars = map[string]bool{"no-gzip": true, "dont-vary": true, "gzip-only-text/html": true, "force-gzip": true, "no-brotli": true, "have_accept-encoding": true}
 
 // compressionVariables reports a SetEnvIf-family line that sets only
-// compression variables. SetEnvIf takes an attribute and a regex before
-// them, BrowserMatch and SetEnvIfExpr one argument.
-func compressionVariables(name string, args []string) bool {
+// compression variables that no rewrite line reads. SetEnvIf takes an
+// attribute and a regex before them, BrowserMatch and SetEnvIfExpr one
+// argument.
+func compressionVariables(name string, args []string, envRead map[string]bool) bool {
 	skip := 2
 	if strings.HasPrefix(name, "browsermatch") || name == "setenvifexpr" {
 		skip = 1
@@ -238,11 +244,30 @@ func compressionVariables(name string, args []string) bool {
 	}
 	for _, v := range args[skip:] {
 		v, _, _ = strings.Cut(strings.TrimPrefix(v, "!"), "=")
-		if !compressionVars[strings.ToLower(v)] {
+		if v = strings.ToLower(v); !compressionVars[v] || envRead[v] {
 			return false
 		}
 	}
 	return true
+}
+
+var envReference = regexp.MustCompile(`(?i)%\{ENV:([^}]*)\}`)
+
+// rewriteEnvReads lists, lower case, the environment variables the file's
+// RewriteCond and RewriteRule lines read with %{ENV:name}.
+func rewriteEnvReads(lines []Line) map[string]bool {
+	read := map[string]bool{}
+	for _, l := range lines {
+		if l.Kind != LineDirective || (!strings.EqualFold(l.Node.Name, "RewriteCond") && !strings.EqualFold(l.Node.Name, "RewriteRule")) {
+			continue
+		}
+		for _, a := range l.Node.Args {
+			for _, m := range envReference.FindAllStringSubmatch(a, -1) {
+				read[strings.ToLower(m[1])] = true
+			}
+		}
+	}
+	return read
 }
 
 // phpHandlerType matches the handler names cPanel's MultiPHP writes
@@ -253,9 +278,11 @@ var phpHandlerType = regexp.MustCompile(`(?i)^(?:application/)?x-httpd-((?:ea-|a
 // phpHandler reads AddHandler or AddType naming a PHP handler for PHP
 // suffixes only. On this server only .php runs as PHP, with the version
 // the migration plan reads from the old server, so the line chooses
-// nothing here. A handler that also names another suffix (.html) would
-// run that suffix as PHP on Apache; OpenLiteSpeed would serve its source,
-// so it is not covered.
+// nothing here; every vhost answers 403 for the other PHP suffixes
+// (olsweb denyRules), which OpenLiteSpeed would otherwise send as files
+// with their source. A handler that also names another suffix (.html)
+// would run that suffix as PHP on Apache; OpenLiteSpeed would serve its
+// source, so it is not covered.
 func phpHandler(args []string) (string, bool) {
 	if len(args) < 2 {
 		return "", false
@@ -292,7 +319,11 @@ var suffixName = regexp.MustCompile(`^\.?[A-Za-z0-9_-]{1,16}$`)
 // (x-httpd-..., server-parsed) runs files on Apache, and a type for a
 // script suffix (AddType text/plain .php) can be what stops a script from
 // running there; OpenLiteSpeed ignoring either changes what runs, so
-// neither is covered.
+// neither is covered. A suffix a browser renders or runs (renderedTypes)
+// is covered only with its usual type: AddType text/plain .html or
+// application/octet-stream .svg is uploads hardening that keeps a browser
+// from running what someone uploaded, and OpenLiteSpeed would serve those
+// files with their usual type.
 func plainType(args []string) bool {
 	if len(args) < 2 || !mediaType.MatchString(args[0]) {
 		return false
@@ -307,8 +338,25 @@ func plainType(args []string) bool {
 		if !suffixName.MatchString(ext) || scriptSuffix(ext) {
 			return false
 		}
+		if usual, rendered := renderedTypes[strings.ToLower(strings.TrimPrefix(ext, "."))]; rendered && !strings.Contains(usual, " "+t+" ") {
+			return false
+		}
 	}
 	return true
+}
+
+// renderedTypes are the suffixes a browser renders or runs, each with the
+// types that let it: OpenLiteSpeed 1.9.4's dist/conf/mime.properties gives
+// these suffixes one of them.
+var renderedTypes = map[string]string{
+	"html":  " text/html ",
+	"htm":   " text/html ",
+	"xhtml": " application/xhtml+xml ",
+	"svg":   " image/svg+xml ",
+	"svgz":  " image/svg+xml ",
+	"js":    " application/javascript text/javascript application/x-javascript ",
+	"mjs":   " application/javascript text/javascript ",
+	"xml":   " application/xml text/xml ",
 }
 
 func scriptSuffix(ext string) bool {
@@ -354,8 +402,13 @@ func optionsHandled(args []string) bool {
 var labelToken = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9_-]{0,63}|[0-9]{1,9}[A-Za-z]?)$`)
 
 // label is a directive's name with its first arguments while they are safe
-// to show, at most four: what a person searches the file for.
+// to show, at most four: what a person searches the file for. A first word
+// that does not look like a directive name (an unknown line can hold any
+// text) is not shown, as in the scan's TopUnknown.
 func label(n *Node) string {
+	if !directiveName.MatchString(n.Name) {
+		return unknownPlaceholder
+	}
 	parts := []string{n.Name}
 	for _, a := range n.Args {
 		if len(parts) > 4 || !labelToken.MatchString(a) {

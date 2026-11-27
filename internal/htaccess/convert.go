@@ -875,12 +875,15 @@ func ConvertSite(site SiteResult) SiteConversion {
 			rule.File = f.Path
 			out.Rules = append(out.Rules, rule)
 		case convertible(f) && f.Conversion != nil:
-			// A refusal of the whole file names its first access rule.
-			line, directive, cause := f.Conversion.Line, labelAt(f, f.Conversion.Line), causeAt(f, f.Conversion.Line)
+			// Whatever line the converter stopped at, the file's access rules
+			// are not carried, so OpenLiteSpeed would open its folder: an
+			// access refusal. A refusal of the whole file names its first
+			// access rule.
+			line, directive := f.Conversion.Line, labelAt(f, f.Conversion.Line)
 			if line == 0 {
 				line, directive = firstAccess(f)
 			}
-			out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: line, Directive: directive, Cause: cause, Reason: f.Conversion.Refused})
+			out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: line, Directive: directive, Cause: CauseAccessControl, Reason: f.Conversion.Refused})
 		default:
 			out.Refused = append(out.Refused, fileRefusals(f)...)
 		}
@@ -1053,32 +1056,10 @@ func firstAccess(f FileResult) (int, string) {
 
 // labelAt is the label of the directive at a line of a file, if any.
 func labelAt(f FileResult, line int) string {
-	if g := findingAt(f, line); g != nil {
-		return g.Label
-	}
-	return ""
-}
-
-// causeAt says why the converter stopped at a line: an access rule it
-// cannot carry, or, when the line holds no access rule, that line itself
-// (an unknown directive or one OpenLiteSpeed ignores). A refusal of the
-// file as a whole (line 0) concerns its access rules.
-func causeAt(f FileResult, line int) string {
-	g := findingAt(f, line)
-	switch {
-	case g == nil || g.Category == CategoryAccessControl:
-		return CauseAccessControl
-	case g.Category == CategoryUnknown:
-		return CauseUnknown
-	}
-	return CauseNotConverted
-}
-
-func findingAt(f FileResult, line int) *Finding {
-	for i := range f.Findings {
-		if line > 0 && f.Findings[i].Line == line {
-			return &f.Findings[i]
+	for _, g := range f.Findings {
+		if line > 0 && g.Line == line {
+			return g.Label
 		}
 	}
-	return nil
+	return ""
 }

@@ -159,6 +159,16 @@ func writeMove(b *strings.Builder, conv htaccess.SiteConversion) {
 	for _, rule := range conv.Rules {
 		fmt.Fprintf(b, "    converted: %s for %s\n", rule.File, rule.Path)
 	}
+	for _, r := range conv.Redirects {
+		from := r.Prefix
+		if from == "" {
+			from = r.Pattern
+		}
+		fmt.Fprintf(b, "    converted: line %d, redirect (%d) of %s to %s\n", r.Line, r.Status, from, r.Target)
+	}
+	for _, p := range conv.ErrorPages {
+		fmt.Fprintf(b, "    converted: line %d, error page %s for %d\n", p.Line, p.URL, p.Status)
+	}
 	for _, w := range conv.Warnings {
 		fmt.Fprintf(b, "    warning: %s: %s\n", where(w.File, w.Line, w.Directive), w.Reason)
 	}

@@ -12,6 +12,15 @@
   refusal names the file, line and directive, says a folder would open only
   when an access rule is the reason, and names the lines to change on the
   old server; `panelctl htaccess scan --details` shows the same.
+- Moving a website from cPanel carries the `.htaccess` lines WordPress
+  plugins write: `<Files>` and `<FilesMatch>` rules that close
+  `wp-config.php`, `xmlrpc.php`, Wordfence's `.user.ini` and other names
+  answer 403 on the new server, at the root or in a folder, and the root
+  `.htaccess`'s `Redirect` and `RedirectMatch` (301 and 302) and
+  `ErrorDocument` pages move into the site's web server config. CORS and
+  `X-Robots-Tag` headers, which this server cannot send yet, are notes to
+  accept before cutover. What still cannot move is refused, naming the
+  line.
 - Every website answers 403 for PHP files under `.phtml`, `.php3` to `.php8`,
   `.phar`, `.pht` and `.phps` instead of sending their source: only `.php`
   runs as PHP here.

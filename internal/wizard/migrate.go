@@ -82,9 +82,10 @@ type Migration struct {
 	// Notes are what a person must check; each keeps the gate closed until
 	// it is accepted.
 	Notes []string `json:"notes"`
-	// Converted lists the .htaccess files whose access rules were converted
-	// into the site's web server config, and what each became: the plan's,
-	// then the copy's.
+	// Converted lists the .htaccess rules converted into the site's web
+	// server config (access rules by file, and the root .htaccess's
+	// redirects and error pages), and what each became: the plan's, then
+	// the copy's.
 	Converted []hostaccounts.MigrationFolder `json:"converted"`
 	// Probes are the URLs of the converted rules verify checks: 403, 401,
 	// 200 for files a closed folder leaves open, and folders open to some
@@ -631,7 +632,7 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 	m.Converted = slices.Clone(plan.Converted)
 	converted := ""
 	if len(plan.Converted) > 0 {
-		converted = fmt.Sprintf(" %d .htaccess file(s) with access rules are converted into the web server's config: %s.", len(plan.Converted), folderPaths(plan.Converted))
+		converted = fmt.Sprintf(" %d .htaccess rule(s) are converted into the web server's config: %s.", len(plan.Converted), folderPaths(plan.Converted))
 	}
 	return fmt.Sprintf("Found %s: %d database(s), %d scheduled job(s), PHP %s (%s), .htaccess rules OpenLiteSpeed acts on.%s", plan.Domain, len(plan.Databases), len(plan.Cron), php, plan.PHPSource, converted), nil
 }
@@ -714,7 +715,7 @@ func (j *run) migrateFiles(ctx context.Context) (string, *stepError) {
 		j.job.Migration.Converted = slices.Clone(res.Folders)
 	}
 	if len(res.Folders) > 0 {
-		protected = " Protected folders went into the web server's config before the files did: " + folderPaths(res.Folders) + "."
+		protected = " The converted .htaccess rules went into the web server's config before the files did: " + folderPaths(res.Folders) + "."
 	}
 	if res.WordPress {
 		return "Copied the home folder with public_html. It is a WordPress site." + protected, nil

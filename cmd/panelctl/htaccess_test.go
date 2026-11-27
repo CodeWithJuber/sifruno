@@ -142,7 +142,8 @@ func TestHtaccessScanDetailsNameEachLine(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
 		".htaccess": "# php -- BEGIN cPanel-generated handler, do not edit\n<IfModule mime_module>\n  AddHandler application/x-httpd-ea-php81 .php .php8 .phtml\n</IfModule>\n" +
-			"# php -- END cPanel-generated handler, do not edit\nphp_value upload_max_filesize 64M\nHeader set Cache-Control \"max-age=600\"\n" + testWordPressHtaccess,
+			"# php -- END cPanel-generated handler, do not edit\nphp_value upload_max_filesize 64M\nHeader set Cache-Control \"max-age=600\"\n" +
+			"Redirect 301 /old /new\nErrorDocument 404 /404.html\n<Files wp-config.php>\nRequire all denied\n</Files>\n" + testWordPressHtaccess,
 		"tools/.htaccess": "ExpiresActive On\nSifrunoUnknown On\n",
 	}
 	for rel, content := range files {
@@ -176,6 +177,15 @@ func TestHtaccessScanDetailsNameEachLine(t *testing.T) {
 	}
 	if out, err = runCLI(t, "htaccess", "scan", "--root", root, "--details"); err != nil || !strings.Contains(out, "  moves to OpenLiteSpeed: yes\n") {
 		t.Fatalf("err=%v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"    converted: .htaccess for /\n",
+		"    converted: line 8, redirect (301) of /old to /new\n",
+		"    converted: line 9, error page /404.html for 404\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("details lack %q:\n%s", want, out)
+		}
 	}
 }
 

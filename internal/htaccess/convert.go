@@ -1147,10 +1147,21 @@ func ConvertSite(site SiteResult) SiteConversion {
 			rule.File = f.Path
 			out.Rules = append(out.Rules, rule)
 		case convertible(f) && f.Conversion != nil:
-			// Whatever line the converter stopped at, the file's access rules
-			// are not carried, so OpenLiteSpeed would open its folder: an
-			// access refusal. A refusal of the whole file names its first
-			// access rule.
+			// A line the converter stopped at that OpenLiteSpeed ignores,
+			// that no class covers and that is no access rule (such as
+			// Wordfence's php_value auto_prepend_file beside its <Files
+			// ".user.ini"> rule) is the reason by itself: the site does not
+			// move, and without that line the access rules would convert.
+			// It is named with its own reason, as in a file without access
+			// rules.
+			if g, ok := notConvertedAt(f, f.Conversion.Line); ok {
+				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: g.Line, Directive: g.Label, Cause: CauseNotConverted, Reason: g.Reason})
+				continue
+			}
+			// Whatever other line the converter stopped at, the file's
+			// access rules are not carried, so OpenLiteSpeed would open its
+			// folder: an access refusal. A refusal of the whole file names
+			// its first access rule.
 			line, directive := f.Conversion.Line, labelAt(f, f.Conversion.Line)
 			if line == 0 {
 				line, directive = firstAccess(f)
@@ -1352,6 +1363,18 @@ func firstAccess(f FileResult) (int, string) {
 		}
 	}
 	return 0, ""
+}
+
+// notConvertedAt is the finding at a line of a file when it is a line
+// OpenLiteSpeed ignores that is no access rule and that no handling class
+// covers, the kind fileRefusals names as not converted.
+func notConvertedAt(f FileResult, line int) (Finding, bool) {
+	for _, g := range f.Findings {
+		if line > 0 && g.Line == line && g.Category != CategoryStructure && g.Category != CategoryAccessControl && g.Category != CategoryUnknown && !g.Honoured && g.Handling == "" {
+			return g, true
+		}
+	}
+	return Finding{}, false
 }
 
 // labelAt is the label of the directive at a line of a file, if any.

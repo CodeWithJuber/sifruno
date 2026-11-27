@@ -109,11 +109,12 @@ func TestWordPressPluginLines(t *testing.T) {
 
 // WP Rocket's cache block with gzip (rocket_force_gzip_htaccess_rules on)
 // serves .html_gzip files through AddEncoding, which OpenLiteSpeed ignores:
-// it would send them without Content-Encoding. That still refuses.
+// it would send them without Content-Encoding. That still refuses, named as
+// the line to change: the file's access rules would convert without it.
 func TestWPRocketGzipCacheStillRefuses(t *testing.T) {
 	gzip := "<IfModule mod_mime.c>\nAddType text/html .html_gzip\nAddEncoding gzip .html_gzip\n</IfModule>\n<IfModule mod_setenvif.c>\nSetEnvIfNoCase Request_URI \\.html_gzip$ no-gzip\n</IfModule>\n"
 	got := ConvertSite(siteOf(map[string]string{".htaccess": wordpressPlugins(t) + gzip}))
-	if got.Native || len(got.Refused) != 1 || got.Refused[0].Directive != "AddEncoding gzip" || got.Refused[0].Cause != CauseAccessControl {
+	if got.Native || len(got.Refused) != 1 || got.Refused[0].Directive != "AddEncoding gzip" || got.Refused[0].Cause != CauseNotConverted {
 		t.Fatalf("%+v", got.Refused)
 	}
 }

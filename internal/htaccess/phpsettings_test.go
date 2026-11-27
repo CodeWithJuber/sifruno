@@ -133,6 +133,25 @@ func TestPHPLinesCarryFromTheRootTopLevelOnly(t *testing.T) {
 	}
 }
 
+// Wordfence's mod_php block holds its auto_prepend_file line beside a
+// <Files ".user.ini"> rule: the line is the reason, named with its own,
+// not the access rule the converter would carry without it.
+func TestWordfenceModPHPBlockRefusesItsPrependLine(t *testing.T) {
+	got := ConvertSite(siteOf(map[string]string{".htaccess": wordfenceBlock}))
+	if got.Native || len(got.Refused) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	r := got.Refused[0]
+	if r.File != ".htaccess" || r.Line != 3 || r.Directive != "php_value auto_prepend_file" || r.Cause != CauseNotConverted || !strings.Contains(r.Reason, "firewall") {
+		t.Fatalf("%+v", r)
+	}
+	// Without the line, the rule converts.
+	got = ConvertSite(siteOf(map[string]string{".htaccess": strings.Replace(wordfenceBlock, "\tphp_value auto_prepend_file '/home/alice/public_html/wordfence-waf.php'\n", "", 1)}))
+	if !got.Native || len(got.Rules) != 1 || got.Rules[0].Deny == nil {
+		t.Fatalf("%+v", got)
+	}
+}
+
 func TestCPanelINIBlockMovesWithItsSettings(t *testing.T) {
 	got := ConvertSite(siteOf(map[string]string{".htaccess": cpanelWordPress + cpanelINIBlock}))
 	if !got.Native || len(got.Refused) != 0 || len(got.Warnings) != 0 {

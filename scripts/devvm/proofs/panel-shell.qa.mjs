@@ -45,6 +45,14 @@ function totp(secret, step) {
 const stepNow = () => Math.floor(Date.now() / 30000);
 
 const remoteHost = httpsOrigin ? new URL(httpsOrigin).hostname : "";
+// This panel runs without the account service (proof.sh gives it no
+// --accounts-socket). Since Websites lists the websites (9432391), Files
+// picks one (21eb4dd) and Home has Get started (4bdb95d), those pages read
+// /api/v1/websites/*, which then answers 503 with its reason. Each such
+// answer is kept here and checked at the end, not counted as a page error.
+const panelOrigins = new Set([origin, ...(httpsOrigin ? [new URL(httpsOrigin).origin] : [])]);
+const websiteRead = (url) => { try { const u = new URL(url); return panelOrigins.has(u.origin) && u.pathname.startsWith("/api/v1/websites/"); } catch { return false; } };
+const noAccountService = new Set();
 const browser = await chromium.launch({ headless: true, ...(chrome ? { executablePath: chrome } : {}), ...(remoteHost ? { args: [`--host-resolver-rules=MAP ${remoteHost} 127.0.0.1`] } : {}) });
 async function context(viewport, preview = false, options = {}) {
   const ctx = await browser.newContext({ viewport, ...options });
@@ -57,8 +65,14 @@ async function context(viewport, preview = false, options = {}) {
   }
   const page = await ctx.newPage();
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
-  // Refused sign-ins (401, 422, 429) are expected here; the browser logs each one.
-  page.on("console", (m) => { if (m.type() === "error" && !/\b(401|403|421|422|429)\b|Unauthorized/.test(m.text())) errors.push(`console: ${m.text()}`); });
+  page.on("response", (r) => { if (r.status() === 503 && websiteRead(r.url())) noAccountService.add(`${r.request().method()} ${new URL(r.url()).pathname}`); });
+  // Refused sign-ins (401, 422, 429) are expected here; the browser logs each
+  // one, and each 503 of a website read (see noAccountService above).
+  page.on("console", (m) => {
+    if (m.type() !== "error" || /\b(401|403|421|422|429)\b|Unauthorized/.test(m.text())) return;
+    if (/\b503\b/.test(m.text()) && websiteRead(m.location().url)) return;
+    errors.push(`console: ${m.text()}`);
+  });
   return { ctx, page };
 }
 
@@ -134,6 +148,8 @@ try {
   await page.screenshot({ path: join(outDir, "1440-light-home.png") });
   await page.getByTestId("nav-websites").click();
   check("Websites menu item opens /websites", path(page) === "/websites", path(page));
+  const why = await page.getByText("WordPress websites are not set up on this server. The panel needs the account service").first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+  check("without the account service, Websites says why it cannot list the websites", why);
 
   // Create a static site so the Files handoff has something to carry. Static
   // sites live at /websites/static since Websites lists the WordPress sites.
@@ -154,7 +170,10 @@ try {
   await page.getByTestId("file-manager-inventory").waitFor();
   check("Open File Manager goes to /websites/static/files", path(page) === "/websites/static/files", path(page));
   check("Files opens the same website", (await page.getByTestId("file-manager-inventory").getAttribute("data-site-id")) === siteId);
-  check("breadcrumb shows Websites › Static site files (old)", (await page.locator('[data-slot="breadcrumb"]').innerText()).replace(/\s+/g, " ").includes("Websites"));
+  // Static site files (old) sits under Static sites (old) since a93102a.
+  const crumb = page.locator('[data-slot="breadcrumb"]');
+  check("breadcrumb shows Static sites (old) › Static site files (old), the first linking back", (await crumb.innerText()).replace(/\s+/g, " ").trim() === "Static sites (old) Static site files (old)"
+    && (await crumb.locator('[data-slot="breadcrumb-link"]').getAttribute("href")) === "/websites/static");
 
   await page.goBack();
   await page.getByTestId("website-details").waitFor();
@@ -201,10 +220,12 @@ try {
   await page.getByTestId("website-details").waitFor();
   await page.screenshot({ path: join(outDir, "1440-dark-websites.png") });
   await page.getByRole("button", { name: "Switch to light theme" }).click();
+  const signedIn = await ctx.storageState();
   await ctx.close();
 
-  // Phone width.
-  const phone = await context({ width: 390, height: 844 });
+  // Phone width, signed in as the same admin: since 4fa1858 a browser that is
+  // not signed in sees only the sign-in form.
+  const phone = await context({ width: 390, height: 844 }, false, { storageState: signedIn });
   await phone.page.goto(origin + "/websites/files");
   await phone.page.getByRole("heading", { name: "Files", level: 1 }).waitFor();
   check("no horizontal overflow at 390", await noOverflow(phone.page));
@@ -272,7 +293,10 @@ try {
     check("an admin signs in over HTTPS and sees the server readings", (await net.page.getByTestId("signed-in-as").innerText()).includes("admin"));
     const cookie = (await net.ctx.cookies()).find((c) => c.name === "sifruno_operator");
     check("the session cookie over HTTPS is Secure, HttpOnly and SameSite=Strict", cookie?.secure === true && cookie?.httpOnly === true && cookie?.sameSite === "Strict");
-    await net.page.getByTestId("nav-websites").click();
+    // The static site made above is under Static sites (old): Websites lists
+    // the WordPress and PHP websites since 9432391, and the old static sites
+    // are in the menu's Advanced group since a93102a.
+    await net.page.getByTestId("nav-static-sites").click();
     await net.page.getByRole("button", { name: `Open website ${siteName}`, exact: true }).waitFor();
     check("websites made on the server are there over HTTPS", true);
     await net.page.screenshot({ path: join(outDir, "1440-light-https-websites.png") });
@@ -304,6 +328,9 @@ try {
   key = "";
   await browser.close();
 }
+const refused = [...noAccountService].sort();
+check("the only 503s are the website reads a panel without the account service refuses", refused.includes("GET /api/v1/websites/sites")
+  && refused.every((r) => ["GET /api/v1/websites/backup-storage", "GET /api/v1/websites/jobs", "GET /api/v1/websites/sites"].includes(r)), refused.join(", "));
 check("no page errors", errors.length === 0, errors.slice(0, 5).join(" | "));
 const passed = checks.filter((c) => c.ok).length;
 writeFileSync(join(outDir, "report.json"), JSON.stringify({ origin, passed, failed: checks.length - passed, checks }, null, 2) + "\n");

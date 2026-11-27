@@ -35,7 +35,7 @@ func ParseWPConfig(data []byte) (WPConfig, error) {
 	if len(data) > maxWPConfig {
 		return WPConfig{}, ErrWPConfig
 	}
-	text := stripPHPComments(string(data))
+	text := blankPHPComments(string(data))
 	var c WPConfig
 	seen := map[string]bool{}
 	for _, m := range wpDefine.FindAllStringSubmatch(text, -1) {
@@ -115,10 +115,19 @@ func phpString(lit string) string {
 	return b.String()
 }
 
-// stripPHPComments removes // and # line comments and /* */ blocks outside
-// string literals, so a commented-out define is not read.
-func stripPHPComments(s string) string {
-	var b strings.Builder
+// blankPHPComments turns // and # line comments and /* */ blocks outside
+// string literals into spaces, keeping every other byte where it is, so a
+// commented-out define is not read and a match's offsets are the file's.
+// An unclosed block blanks the rest of the file.
+func blankPHPComments(s string) string {
+	b := []byte(s)
+	blank := func(from, to int) {
+		for k := from; k < to; k++ {
+			if b[k] != '\n' {
+				b[k] = ' '
+			}
+		}
+	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
@@ -130,30 +139,67 @@ func stripPHPComments(s string) string {
 				}
 				j++
 			}
-			if j >= len(s) {
-				j = len(s) - 1
-			}
-			b.WriteString(s[i : j+1])
-			i = j
+			i = min(j, len(s)-1)
 		case c == '#' || (c == '/' && i+1 < len(s) && s[i+1] == '/'):
-			for i < len(s) && s[i] != '\n' {
-				i++
+			j := i
+			for j < len(s) && s[j] != '\n' {
+				j++
 			}
-			b.WriteByte('\n')
+			blank(i, j)
+			i = j
 		case c == '/' && i+1 < len(s) && s[i+1] == '*':
 			end := strings.Index(s[i+2:], "*/")
 			if end < 0 {
-				return b.String()
+				blank(i, len(s))
+				return string(b)
 			}
-			for _, r := range s[i : i+2+end+2] {
-				if r == '\n' {
-					b.WriteByte('\n')
-				}
-			}
+			blank(i, i+2+end+2)
 			i += 2 + end + 1
-		default:
-			b.WriteByte(c)
 		}
 	}
-	return b.String()
+	return string(b)
+}
+
+// wpName is a database or user name this server writes into wp-config.php.
+var wpName = regexp.MustCompile(`^[A-Za-z0-9_]{1,64}$`)
+
+// RewriteWPConfig points wp-config.php at the database here: the string
+// literal of the first DB_NAME, DB_USER and DB_HOST define (the ones PHP
+// keeps) becomes 'name', 'user' and 'localhost', and nothing else in the
+// file changes. The password stays: the user here has the same one. A file
+// ParseWPConfig does not read is ErrWPConfig and is not changed.
+func RewriteWPConfig(data []byte, name, user string) ([]byte, error) {
+	if !wpName.MatchString(name) || !wpName.MatchString(user) {
+		return nil, ErrWPConfig
+	}
+	if _, err := ParseWPConfig(data); err != nil {
+		return nil, err
+	}
+	text := blankPHPComments(string(data))
+	values := map[string]string{"DB_NAME": name, "DB_USER": user, "DB_HOST": "localhost"}
+	type change struct {
+		from, to int
+		value    string
+	}
+	var changes []change
+	seen := map[string]bool{}
+	for _, m := range wpDefine.FindAllStringSubmatchIndex(text, -1) {
+		constant := text[m[2]:m[3]]
+		if seen[constant] {
+			continue
+		}
+		seen[constant] = true
+		if v, ok := values[constant]; ok {
+			changes = append(changes, change{m[4], m[5], "'" + v + "'"})
+		}
+	}
+	out := make([]byte, 0, len(data)+64)
+	last := 0
+	for _, c := range changes {
+		out = append(out, data[last:c.from]...)
+		out = append(out, c.value...)
+		last = c.to
+	}
+	out = append(out, data[last:]...)
+	return out, nil
 }

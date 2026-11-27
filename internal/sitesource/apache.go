@@ -21,9 +21,13 @@ type ApacheSite struct {
 	Root      string
 	User      string
 	PHPSource string
-	TLS       *TLSFiles
-	Refused   []sitemodel.Item
-	Notes     []sitemodel.Item
+	// PHPHandler is the first SetHandler or AddHandler that hands PHP to
+	// PHP-FPM, as written ("proxy:unix:/run/php-fpm/www.sock|fcgi://localhost"),
+	// so the caller can find the pool behind a socket that names no version.
+	PHPHandler string
+	TLS        *TLSFiles
+	Refused    []sitemodel.Item
+	Notes      []sitemodel.Item
 }
 
 var (
@@ -121,8 +125,12 @@ func apacheSite(file string, vh *htaccess.Node) ApacheSite {
 					s.TLS.Key = arg(0)
 				}
 			case "sethandler", "addhandler":
-				if m := apachePHP.FindStringSubmatch(strings.Join(n.Args, " ")); m != nil && s.PHPSource == "" {
+				joined := strings.Join(n.Args, " ")
+				if m := apachePHP.FindStringSubmatch(joined); m != nil && s.PHPSource == "" {
 					s.PHPSource = "php" + m[1] + "." + m[2] + "-fpm"
+				}
+				if strings.Contains(joined, "proxy:") && s.PHPHandler == "" {
+					s.PHPHandler = joined
 				}
 			case "require":
 				// "Require all granted" is every virtual host's default;

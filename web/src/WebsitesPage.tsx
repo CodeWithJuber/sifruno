@@ -172,7 +172,7 @@ export function WebsitesList() {
     {sites && sites.length === 0 && <NoWebsites canCreate={canCreate} canMove={canMove} />}
     {sites && sites.length > 0 && <SiteTable sites={sites} />}
     {canStatic && <div className="text-sm text-muted-foreground">
-      Websites made with the older static-file model are under <Link to="/websites/static" className="text-primary underline underline-offset-4" data-testid="static-sites-link">Static sites (old)</Link>.
+      Websites made with the older static-file model are under <Link to="/websites/static" className="text-primary! underline! underline-offset-4" data-testid="static-sites-link">Static sites (old)</Link>.
     </div>}
   </div>;
 }
@@ -231,7 +231,7 @@ function SiteTable({ sites }: { sites: Website[] }) {
           {sites.map((site) => <TableRow key={site.account_id} data-testid="website-row" data-domain={site.domain} data-account-id={site.account_id}
             className={`${stacked} @max-[62rem]:rounded-lg @max-[62rem]:border @max-[62rem]:border-border @max-[62rem]:p-3 @max-[62rem]:hover:bg-transparent`}>
             <th scope="row" className={`p-2 text-start align-middle font-medium text-foreground ${stacked} @max-[62rem]:px-0 @max-[62rem]:pt-0 @max-[62rem]:pb-2`}>
-              <Link to="/websites/sites/$accountId" params={{ accountId: site.account_id }} className="wrap-anywhere text-foreground underline-offset-4 hover:text-primary hover:underline" data-testid="website-name-link">{site.domain}</Link>
+              <Link to="/websites/sites/$accountId" params={{ accountId: site.account_id }} className="wrap-anywhere underline-offset-4 hover:text-primary! hover:underline!" data-testid="website-name-link">{site.domain}</Link>
               <OtherDomains site={site} />
             </th>
             <TableCell data-label="Status" className={stackedCell}><StatusBadge state={site.state} /></TableCell>

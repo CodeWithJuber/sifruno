@@ -59,6 +59,10 @@ serves() { # serves HOST: the site's own page over http
   curl -s -H "Host: $1" http://127.0.0.1/ | grep -q "$PROOF_TEXT"
 }
 wait_serves() { local _; for _ in $(seq 1 90); do serves "$1" && return 0; sleep 2; done; return 1; }
+serves_https() { # serves_https HOST: the site's own page over https, trusting only Pebble's root
+  curl -s --resolve "$1:443:127.0.0.1" --cacert "$WORK/pebble-root.pem" "https://$1/" | grep -q "$PROOF_TEXT"
+}
+wait_serves_https() { local _; for _ in $(seq 1 90); do serves_https "$1" && return 0; sleep 2; done; return 1; }
 wait_answer() { local _; for _ in $(seq 1 90); do [ "$(answer "$1" "$2")" = "$3" ] && return 0; sleep 2; done; return 1; }
 # domains_file NAME JSON: a domains input file sifpanel can read.
 domains_file() { printf '%s\n' "$2" > "$WORK/$1.json"; chown sifpanel:sifpanel "$WORK/$1.json"; echo "$WORK/$1.json"; }
@@ -209,7 +213,10 @@ check "www answers 403, not a redirect" test "$(answer "$WWW" /)" = "403 "
 check "the suspended vhost has no redirect rule" bash -c "! grep -q 'R=301' $vhost"
 resumed="$(drive state --id "$id" --revision "$rev" --state active --reason 'Paid')" || fail "the broker resumes the account"
 rev="$(printf '%s' "$resumed" | revision)"
-check "after the resume, $SHOP serves the site again" wait_serves "$SHOP"
+# The certificate from section 6 is still valid, so "Always use HTTPS", on
+# by default since da3d2c1, sends plain http for the names it covers to https.
+check "after the resume, $SHOP serves the site again over https" wait_serves_https "$SHOP"
+check "and plain http for $SHOP goes to https again" wait_answer "$SHOP" / "301 https://$SHOP/"
 check "and the redirect answers again" wait_answer "$DOMAIN" /old-page "301 https://$DOMAIN/new-page"
 
 echo
@@ -217,7 +224,7 @@ echo "## 8. Removing an alias takes it out; the certificate keeps the name until
 smaller="{\"aliases\":[\"$WWW\",\"$OTHER\",\"$NODNS\"],\"redirects\":[{\"path\":\"/old-page\",\"target\":\"https://$DOMAIN/new-page\",\"status\":301},{\"domain\":\"$WWW\",\"target\":\"https://$DOMAIN\",\"status\":301}]}"
 changed="$(drive domains --id "$id" --revision "$rev" --input-file "$(domains_file smaller "$smaller")" --reason 'Remove the shop domain')" || fail "the broker removes the alias"
 rev="$(printf '%s' "$changed" | revision)"
-check "$SHOP no longer serves the site" bash -c "! curl -s -H 'Host: $SHOP' http://127.0.0.1/ | grep -q '$PROOF_TEXT'"
+check "$SHOP no longer serves the site, nor sends plain http to https" bash -c "! curl -s -H 'Host: $SHOP' http://127.0.0.1/ | grep -q '$PROOF_TEXT' && [ \"\$(curl -s -o /dev/null -w '%{redirect_url}' -H 'Host: $SHOP' http://127.0.0.1/)\" != 'https://$SHOP/' ]"
 check "the HTTPS listener no longer maps $SHOP" bash -c "! sed -n '/listener sifruno-https/,/^}/p' $LSWS/conf/sifruno.conf | grep -q ' $SHOP'"
 removed_rev="$rev"
 out="$(drive secure --id "$id" --acme-directory "$ACME_DIRECTORY" --acme-ca-file "$PEBBLE_API_CA" --acme-test-probe-loopback --acme-state "$WORK/acme" --acme-email admin@proof.test 2>"$WORK/secure.err")" || fail "the certificate is brought up to date"

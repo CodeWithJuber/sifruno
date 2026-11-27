@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,7 +36,39 @@ func TestCPanelPlanIsAWebsiteModel(t *testing.T) {
 		t.Fatalf("not carried:\n%s", strings.Join(texts, "\n"))
 	}
 	// The model never holds the hash.
+	if strings.Contains(strings.Join(texts, ""), testHash) {
+		t.Fatal("the model holds a password hash")
+	}
 	if raw := strings.Join(texts, ""); strings.Contains(raw, "0123456789ABCDEF") {
 		t.Fatal("the model holds a password hash")
+	}
+}
+
+// A move from a cPanel backup file is the same job: no fingerprint to
+// confirm, the file named as the source, its own step titles, what the
+// file holds that does not move as notes, and the file deleted last.
+func TestBackupFileMoveIsTheSameJob(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.via, f.broker.pinned = hostaccounts.ViaArchive, false
+	f.broker.plan.NotCarried = []sitemodel.Item{{Part: "mail", Text: "Email accounts and their mail stay with the old host."}}
+	job := f.migrate(t)
+	if job.State != StateSucceeded || job.Migration.SourceHost != "a cPanel backup file" || !job.Migration.KeyRemoved {
+		t.Fatalf("job: %+v %+v", job, job.Error)
+	}
+	titles := map[string]string{}
+	for _, s := range job.Steps {
+		titles[s.Name] = s.Title + ": " + s.Message
+	}
+	for name, want := range map[string]string{
+		StepSource:   "Read the website from the backup file",
+		StepKey:      "Delete the uploaded backup file: Deleted the uploaded backup file from this server.",
+		StepDatabase: "Loaded 1 database(s) from the backup file",
+	} {
+		if !strings.Contains(titles[name], want) {
+			t.Errorf("step %s = %q, want %q", name, titles[name], want)
+		}
+	}
+	if !slices.Contains(job.Migration.Notes, "Email accounts and their mail stay with the old host.") {
+		t.Fatalf("notes: %v", job.Migration.Notes)
 	}
 }

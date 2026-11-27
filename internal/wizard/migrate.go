@@ -14,7 +14,6 @@ import (
 	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/migrateverify"
-	"sifruno/internal/sitemodel"
 	"sifruno/internal/whmsource"
 )
 
@@ -302,7 +301,7 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 		return Job{}, refuse(ErrConflict, "That connection to the old server has ended (it lasts 24 hours). Connect to the old server again.")
 	case err != nil:
 		return Job{}, refuse(ErrUnavailable, "The account service is not answering, so nothing was moved. Check that it is running, then try again.")
-	case source.Pinned == "":
+	case source.Pinned == "" && source.Via != hostaccounts.ViaArchive:
 		return Job{}, refuse(ErrConflict, "Confirm the old server's fingerprint first, so Sifruno knows it talks to the right server.")
 	case source.Via == hostaccounts.ViaWHM && !o.WHM.Has(in.Source):
 		return Job{}, refuse(ErrConflict, "This panel no longer holds the WHM login for that connection: it keeps it in memory only, and the panel restarted. Press Stop and remove the key, then connect with the WHM login again.")
@@ -321,9 +320,12 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 	now := time.Now()
 	job := newKindJob(id, KindMigration, "", actor, now)
 	job.Username = in.Username
-	job.Migration = &Migration{Source: in.Source, SourceHost: source.Host, SourceUser: in.Username, Via: source.Via, Gate: GateClosed, Address: o.Address,
+	if source.Via == hostaccounts.ViaArchive {
+		retitle(&job)
+	}
+	job.Migration = &Migration{Source: in.Source, SourceHost: sourceName(source), SourceUser: in.Username, Via: source.Via, Gate: GateClosed, Address: o.Address,
 		Databases: []string{}, DatabaseUsers: []string{}, Tables: []TableDifference{}, Notes: []string{}, Probes: []migrateverify.Probe{},
-		Activity: []Activity{{At: timestamp(now), Actor: actor, What: "Started moving the account " + in.Username + " from " + source.Host + "."}}}
+		Activity: []Activity{{At: timestamp(now), Actor: actor, What: "Started moving the account " + in.Username + " from " + sourceName(source) + "."}}}
 	if err = r.store.put(job); err != nil {
 		r.store.forget(id)
 		return Job{}, refuse(ErrUnavailable, "The panel could not save the job record, so nothing was moved. Check the panel's state directory, then try again.")
@@ -470,6 +472,7 @@ var migrationCases = map[string]migrationCase{
 	"import":           {why: "A database could not be copied: this server could not load the old server's dump.", next: "Open Technical details for MariaDB's message and check that MariaDB runs on this server", detail: true},
 	"compare":          {why: "A database could not be copied: its rows could not be counted afterwards.", next: "Check that MariaDB runs on both servers", detail: true},
 	"remove_key":       {why: "The migration key could not be removed from the old server.", next: "Remove the line ending in sifruno-migration- from /root/.ssh/authorized_keys on the old server", detail: true},
+	"archive":          {why: "The backup file could not be used.", next: "Check that it is the whole file cPanel's backup made for one account (cpmove-USER.tar.gz, USER.tar.gz or backup-..._USER.tar.gz), then upload it again", detail: true},
 	// The WHM login's own failures (internal/whmsource).
 	"whm_unreachable": {why: "Sifruno could not reach WHM on the old server: nothing answered at that address and port, or the connection was cut.", next: "Check the WHM address (WHM listens on port 2087), that the old server is running, and that its firewall accepts connections from this server", detail: true},
 	"whm_login":       {why: "WHM on the old server refused the login.", next: "Check the API token (in WHM: Development, Manage API Tokens) or root's password, and that it is root's, not a reseller's", detail: true},
@@ -608,7 +611,7 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		j.note(fmt.Sprintf("The old server runs PHP %q; this server offers 8.1 to 8.4, so the copy runs PHP %s. Check the preview for errors.", clip(plan.PHPSource), php))
 	}
 	// The plan as the website model: what it does not carry is a note.
-	site := cpanelSite(plan, sitemodel.SourceCPanel, php, exact)
+	site := cpanelSite(plan, siteSource(m.Via), php, exact)
 	for _, item := range site.NotCarried {
 		j.note(item.Text)
 	}
@@ -770,6 +773,10 @@ func (j *run) migrateDatabases(ctx context.Context) (string, *stepError) {
 				}
 			}
 		}
+	}
+	if m.Via == hostaccounts.ViaArchive {
+		// A backup file has no live database to count against.
+		return fmt.Sprintf("Loaded %d database(s) from the backup file with the same names and users (same passwords): %d tables, %d rows.", len(plan.Databases), j.migration.dbTables, j.migration.dbRows), nil
 	}
 	if j.migration.dbDiffers > 0 {
 		j.note(fmt.Sprintf("%d table(s) have a different number of rows on the old server than in the copy. The old site may have changed during the copy; check them.", j.migration.dbDiffers))
@@ -978,6 +985,14 @@ func (j *run) removeKey() {
 	res, err := j.migration.options.WHM.Finish(ctx, m.Source, j.migration.options.Broker, hostaccounts.MigrationFinishInput{Reason: migrateReason}, j.actor)
 	var message string
 	switch {
+	case m.Via == hostaccounts.ViaArchive && err == nil && res.RemovedFromSource:
+		m.KeyRemoved = true
+		message = "Deleted the uploaded backup file from this server."
+		j.end(i, StepDone, message)
+	case m.Via == hostaccounts.ViaArchive:
+		// No server holds a key; only the file is left, and it expires.
+		message = "The uploaded backup file could not be deleted yet; the account service deletes it 24 hours after the upload."
+		j.end(i, StepFailed, message)
 	case errors.Is(err, hostaccounts.ErrNotFound):
 		message = "The account service no longer knows this migration, so the panel cannot tell whether the old server still has its key line. " + manual
 		j.end(i, StepFailed, message)

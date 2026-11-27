@@ -43,5 +43,41 @@ func cpanelSite(plan hostaccounts.MigrationPlan, source, php string, exact bool)
 	for _, r := range plan.TierRefusals {
 		s.Skip("rule", r, "")
 	}
+	// A backup file's adapter says itself what does not move.
+	for _, item := range plan.NotCarried {
+		s.Skip(item.Part, item.Text, item.Where)
+	}
 	return s
+}
+
+// siteSource is the model's name for where a migration reads from.
+func siteSource(via string) string {
+	if via == hostaccounts.ViaArchive {
+		return sitemodel.SourceArchive
+	}
+	return sitemodel.SourceCPanel
+}
+
+// sourceName names the old server, or the backup file, in the job's words.
+func sourceName(m hostaccounts.Migration) string {
+	if m.Via == hostaccounts.ViaArchive {
+		return "a cPanel backup file"
+	}
+	return m.Host
+}
+
+// archiveStepTitles are the steps whose words differ for a move from a
+// backup file: the source is the file, and the last step deletes it.
+var archiveStepTitles = map[string]string{
+	StepSource: "Read the website from the backup file",
+	StepKey:    "Delete the uploaded backup file",
+}
+
+// retitle gives a backup file's move its own step titles.
+func retitle(job *Job) {
+	for i, s := range job.Steps {
+		if title, ok := archiveStepTitles[s.Name]; ok {
+			job.Steps[i].Title = title
+		}
+	}
 }

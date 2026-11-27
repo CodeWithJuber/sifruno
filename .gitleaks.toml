@@ -28,4 +28,8 @@ regexes = [
   # The fake WHM SSH key ID in internal/whmsource/whmsource_test.go: the hex
   # digits 0 to f, twice.
   '''0123456789abcdef0123456789abcdef''',
+  # Made-up PEM text in the migration tests (internal/whmsource/whmtest,
+  # internal/cpsource): a private key block with a body of at most 16
+  # characters, which no real key has.
+  '''-----BEGIN (RSA )?PRIVATE KEY-----\\n[A-Za-z0-9+/=]{1,16}\\n-----END (RSA )?PRIVATE KEY-----''',
 ]

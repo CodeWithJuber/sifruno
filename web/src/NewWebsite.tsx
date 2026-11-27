@@ -309,7 +309,7 @@ export function NewWebsite() {
             </Field>
             {wordpress && <Field data-invalid={errors.title ? true : undefined}>
               <FieldLabel htmlFor={fieldId("title")}>{labels.title}</FieldLabel>
-              <Hint name="title">Shown at the top of the site. Up to 200 bytes: a plain letter is 1, letters with accents or from other scripts are 2 to 4. You can change it later in WordPress.</Hint>
+              <Hint name="title">Shown at the top of the site. Up to 200 characters, or fewer with accented letters or other scripts, which count as 2 to 4. You can change it later in WordPress.</Hint>
               <Input {...bind("title")} className={`${control} user-invalid:border-destructive`} type="text" autoComplete="off" required
                 value={values.title} onChange={(e) => change("title", e.target.value)} />
               <FieldProblem name="title" message={errors.title} />
@@ -332,7 +332,7 @@ export function NewWebsite() {
             </RadioGroup>
             {withDatabase && <Field data-invalid={errors.database_password ? true : undefined}>
               <FieldLabel htmlFor={fieldId("database_password")}>{labels.database_password}</FieldLabel>
-              <Hint name="database_password">For the database user. 12 to 128 bytes, with no space at the start or end. Keep it: the panel does not store it. You can set a new one later on the site's Databases page.</Hint>
+              <Hint name="database_password">For the database user. 12 to 128 characters, with no space at the start or end. Keep it: the panel does not store it. You can set a new one later on the site's Databases page.</Hint>
               <div className="flex gap-2">
                 <Input {...bind("database_password")} className={`${control} min-w-0 flex-1 user-invalid:border-destructive`} type={showDatabasePassword ? "text" : "password"} autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} required
                   value={values.database_password} onChange={(e) => change("database_password", e.target.value)} />
@@ -363,7 +363,7 @@ export function NewWebsite() {
             </Field>
             <Field data-invalid={errors.admin_password ? true : undefined}>
               <FieldLabel htmlFor={fieldId("admin_password")}>{labels.admin_password}</FieldLabel>
-              <Hint name="admin_password">12 to 128 bytes (a plain letter or digit is 1), with no space at the start or end. Your password manager can suggest one. The panel does not keep it.</Hint>
+              <Hint name="admin_password">12 to 128 characters, with no space at the start or end. Your password manager can suggest one. The panel does not keep it.</Hint>
               <div className="flex gap-2">
                 <Input {...bind("admin_password")} className={`${control} min-w-0 flex-1 user-invalid:border-destructive`} type={showPassword ? "text" : "password"} autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} required
                   value={values.admin_password} onChange={(e) => change("admin_password", e.target.value)} />
@@ -603,7 +603,7 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
       <JobFacts job={job} result={result} />
       {php && <UploadFiles job={job} />}
       <div className="flex flex-wrap gap-2">
-        <a href={result.url} target="_blank" rel="noopener noreferrer" className={linkButton("default")} data-testid="open-site">
+        <a href={result.url} target="_blank" rel="noopener noreferrer" className={linkButton("outline")} data-testid="open-site">
           Open site<ExternalLink aria-hidden="true" /><span className="sr-only"> (opens in a new tab)</span>
         </a>
         {!php && <a href={result.admin_url} target="_blank" rel="noopener noreferrer" className={linkButton("outline")} data-testid="open-admin">
@@ -614,10 +614,16 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
       </div>
       <DnsHelp id="dns-help" domain={job.domain} hidden={!dnsOpen} />
       <Separator />
-      <div className="flex flex-wrap items-center gap-3">
-        <Link to="/websites" className={linkButton("outline")} data-testid="go-to-websites">Go to Websites<ArrowRight className="rtl:rotate-180" aria-hidden="true" /></Link>
+      {result.account_id ? <div className="flex flex-col gap-3">
+        <div className="text-sm"><span className="font-medium text-foreground">Next:</span> on the website's own page you check its certificate, set up backups and give your customer a login.</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link to="/websites/sites/$accountId" params={{ accountId: result.account_id }} className={linkButton("default")} data-testid="manage-new-website">Manage this website<ArrowRight className="rtl:rotate-180" aria-hidden="true" /></Link>
+          <Link to="/websites" className={linkButton("ghost")} data-testid="go-to-websites">All websites</Link>
+        </div>
+      </div> : <div className="flex flex-wrap items-center gap-3">
+        <Link to="/websites" className={linkButton("default")} data-testid="go-to-websites">Go to Websites<ArrowRight className="rtl:rotate-180" aria-hidden="true" /></Link>
         <p className="text-sm">The new site is listed there with your other websites.</p>
-      </div>
+      </div>}
     </section>;
   }
 

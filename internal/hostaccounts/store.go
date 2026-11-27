@@ -3,6 +3,7 @@ package hostaccounts
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -243,6 +244,13 @@ type store struct {
 	// reads the source, then takes backupMu, as a restore does.
 	migrate   migrateEngine
 	migrateMu sync.Mutex
+	// uploading holds the ids of backup files being uploaded, under
+	// migrateMu, so the sweep leaves their folders alone.
+	uploading map[string]bool
+	// certRoots are the authorities a certificate copied from an old
+	// server must chain to; nil is this system's trust store. Tests set
+	// their own.
+	certRoots *x509.CertPool
 	// usageMu lets one usage read run at a time, outside mu: it reads logs,
 	// which takes a moment, and keeps each site's traffic counter.
 	usageMu sync.Mutex

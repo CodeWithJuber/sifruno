@@ -201,7 +201,7 @@ func TestScanCPanelLayout(t *testing.T) {
 			"alice/public_html/members/.htaccess /members/ compat",
 		}},
 		{Name: "bob/public_html", Verdict: VerdictConvertible, Files: []string{
-			"bob/public_html/.htaccess / convertible",
+			"bob/public_html/.htaccess / native",
 			"bob/public_html/addon.example/.htaccess /addon.example/ convertible",
 		}},
 		{Name: "erin/public_html", Verdict: VerdictCompat, Causes: []string{CauseSymlinkNotFollowed}, Links: []string{"erin/public_html"}},

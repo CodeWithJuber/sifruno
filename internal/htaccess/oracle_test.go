@@ -3,6 +3,9 @@ package htaccess
 import (
 	"net"
 	"net/netip"
+	"path"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -224,5 +227,167 @@ func TestOracleAgreesOnPatterns(t *testing.T) {
 				t.Errorf("%q for %s: rule %v, Apache %v (ok %v)", text, ip, ruleAllows(*c.Rule, ip), apache, ok)
 			}
 		}
+	}
+}
+
+// apacheClosesName is a second, independent model of Apache 2.4's <Files>
+// handling, written from server/core.c (filesection) and server/request.c
+// (ap_file_walk) rather than from convert.go: <Files name> compares the
+// file's name whole, a wildcard name with fnmatch, <FilesMatch re> and
+// <Files ~ re> search the name for re; every section that matches applies
+// in file order, and a later one's access lines replace an earlier one's.
+// It reads files of top-level comments and such sections holding Require
+// all, Order, Allow from all and Deny from all (inside <IfModule
+// [!]mod_authz_core.c>, read as Apache 2.4), and declines (ok false)
+// anything else.
+func apacheClosesName(f *File, name string) (closed, ok bool) {
+	for _, n := range f.Nodes {
+		switch {
+		case n.Kind == KindComment:
+		case n.Kind == KindSection && (strings.EqualFold(n.Name, "Files") || strings.EqualFold(n.Name, "FilesMatch")):
+			match, ok := oracleSectionMatches(n, name)
+			if !ok {
+				return false, false
+			}
+			if !match {
+				continue
+			}
+			verdict, set, ok := oracleSectionCloses(n.Children)
+			if !ok {
+				return false, false
+			}
+			if set {
+				closed = verdict
+			}
+		default:
+			return false, false
+		}
+	}
+	return closed, true
+}
+
+func oracleSectionMatches(n *Node, name string) (bool, bool) {
+	expr := ""
+	switch {
+	case strings.EqualFold(n.Name, "Files") && len(n.Args) == 1:
+		if strings.ContainsAny(n.Args[0], "*?[") {
+			m, err := path.Match(n.Args[0], name)
+			return m, err == nil
+		}
+		return n.Args[0] == name, true
+	case strings.EqualFold(n.Name, "Files") && len(n.Args) == 2 && n.Args[0] == "~":
+		expr = n.Args[1]
+	case strings.EqualFold(n.Name, "FilesMatch") && len(n.Args) == 1:
+		expr = n.Args[0]
+	default:
+		return false, false
+	}
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return false, false
+	}
+	return re.MatchString(name), true
+}
+
+// oracleSectionCloses reads one section's access lines as Apache 2.4 with
+// the default Satisfy All: mod_access_compat (Order, Deny from all, Allow
+// from all) and mod_authz_core (Require all) must both admit the client.
+func oracleSectionCloses(nodes []*Node) (closed, set, ok bool) {
+	compat, allowThenDeny, denyAll, allowAll := false, false, false, false
+	authz, denied := false, false
+	var walk func([]*Node) bool
+	walk = func(nodes []*Node) bool {
+		for _, n := range nodes {
+			args := n.Args
+			switch {
+			case n.Kind == KindComment:
+			case n.Kind == KindSection && strings.EqualFold(n.Name, "IfModule") && len(args) == 1 && authzCoreNames[args[0]]:
+				if !walk(n.Children) {
+					return false
+				}
+			case n.Kind == KindSection && strings.EqualFold(n.Name, "IfModule") && len(args) == 1 && authzCoreNames[strings.TrimPrefix(args[0], "!")]:
+			case n.Kind == KindSection:
+				return false
+			case strings.EqualFold(n.Name, "Order") && len(args) == 1:
+				compat, allowThenDeny = true, strings.EqualFold(args[0], "allow,deny")
+			case strings.EqualFold(n.Name, "Deny") && len(args) == 2 && strings.EqualFold(args[1], "all"):
+				compat, denyAll = true, true
+			case strings.EqualFold(n.Name, "Allow") && len(args) == 2 && strings.EqualFold(args[1], "all"):
+				compat, allowAll = true, true
+			case strings.EqualFold(n.Name, "Require") && len(args) == 2 && strings.EqualFold(args[0], "all"):
+				authz, denied = true, strings.EqualFold(args[1], "denied")
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	if !walk(nodes) {
+		return false, false, false
+	}
+	compatCloses := compat && ((allowThenDeny && (denyAll || !allowAll)) || (!allowThenDeny && denyAll && !allowAll))
+	return compatCloses || (authz && denied), compat || authz, true
+}
+
+// oracleNames are the file names the names check asks about, beside each
+// name a rule lists and a name with each ending it lists.
+var oracleNames = []string{
+	"wp-config.php", "xmlrpc.php", ".user.ini", ".htaccess", "readme.html", "readme.txt", "index.php",
+	"index.html", "style.css", "dump.sql", "a.bak", "index.php~", "error_log", "debug.log", "x.php.save",
+	"wp-config.php.bak", "my-wp-config.php", "a.sql.gz", "secret.json",
+}
+
+// checkNamesOracle fails when the converter's names differ from Apache's
+// for a sample name, in a file the model reads: the converter claims the
+// exact set.
+func checkNamesOracle(t *testing.T, data []byte, rule *FolderRule) {
+	t.Helper()
+	f, err := Parse(data)
+	if err != nil || rule == nil {
+		return
+	}
+	names := slices.Clone(oracleNames)
+	if rule.Deny != nil {
+		names = append(names, rule.Deny.Exact...)
+		for _, e := range rule.Deny.Endings {
+			names = append(names, "x"+e, e, e+"x")
+		}
+		for _, n := range rule.Deny.Exact {
+			names = append(names, "x"+n, n+"x")
+		}
+	}
+	for _, name := range names {
+		apache, ok := apacheClosesName(f, name)
+		if !ok {
+			return
+		}
+		ours := rule.Deny != nil && rule.Deny.Match(name)
+		if apache != ours {
+			t.Fatalf("%q: rule closes it %v, Apache %v: %q", name, ours, apache, data)
+		}
+	}
+}
+
+func TestNamesOracleAgreesOnPatterns(t *testing.T) {
+	for _, text := range []string{
+		"<files wp-config.php>\norder allow,deny\ndeny from all\n</files>\n",
+		"<Files xmlrpc.php>\nOrder Deny,Allow\nDeny from all\n</Files>\n",
+		"<Files \".user.ini\">\n<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n</Files>\n",
+		"<FilesMatch \"^(wp-config\\.php|readme\\.(html|txt))$\">\nRequire all denied\n</FilesMatch>\n",
+		"<FilesMatch \"\\.(sql|bak|log)$\">\nRequire all denied\n</FilesMatch>\n",
+		"<FilesMatch \"wp-config\\.php$\">\nRequire all denied\n</FilesMatch>\n",
+		"<Files ~ \"(~|\\.save)$\">\nDeny from all\n</Files>\n",
+		"<Files *.php>\ndeny from all\n</Files>\n",
+		"<Files a.php>\nOrder Allow,Deny\n</Files>\n",
+	} {
+		r := ClassifyFile(".htaccess", "/", []byte(text))
+		if r.Conversion == nil || r.Conversion.Rule == nil || r.Conversion.Rule.Deny == nil {
+			t.Fatalf("%q: %+v", text, r.Conversion)
+		}
+		f, _ := Parse([]byte(text))
+		if _, ok := apacheClosesName(f, "x"); !ok {
+			t.Fatalf("the model declines %q", text)
+		}
+		checkNamesOracle(t, []byte(text), r.Conversion.Rule)
 	}
 }

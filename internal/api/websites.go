@@ -62,6 +62,7 @@ type WebsiteLimits struct {
 type WebsiteHTTPS struct {
 	On       bool   `json:"on"`
 	NotAfter string `json:"not_after"`
+	Source   string `json:"source,omitempty" doc:"copied: the certificate in force is the one copied from the old server when the website was moved here; the panel replaces it with a Let's Encrypt certificate before it runs out, once the domain points here. Left out otherwise."`
 }
 
 // WebsiteDetail is one site as its own page needs it.
@@ -484,6 +485,12 @@ func website(a hostaccounts.Account, j wizard.Job, certs SiteCertificates) Websi
 	https := WebsiteHTTPS{On: a.Certificate != (hostaccounts.CertificateState{})}
 	if a.Certificate.NotAfter > 0 {
 		https.NotAfter = time.Unix(a.Certificate.NotAfter, 0).UTC().Format(time.RFC3339)
+		// Copied only while the certificate in force is the copied one.
+		if certs != nil {
+			if until, ok := certs.CopiedUntil(a.ID); ok && until.Unix() == a.Certificate.NotAfter {
+				https.Source = "copied"
+			}
+		}
 	}
 	site := Website{
 		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: siteKind(j), State: a.State, HTTPS: https, AlwaysHTTPS: !a.PlainHTTP,

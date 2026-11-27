@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { RadioGroup as RadioGroupPrimitive } from "@base-ui/react/radio-group";
-import { Archive, ArrowDown, ArrowUp, ArrowUpRight, Clock3, Cpu, Database, Folder, Globe, Info, Layers, LockKeyhole, MemoryStick, Monitor, Network, Search, Server, Users } from "lucide-react";
+import { ArrowDown, ArrowRightLeft, ArrowUp, ArrowUpRight, Clock3, Cpu, Database, DatabaseBackup, Globe, Info, Layers, LockKeyhole, MemoryStick, Monitor, Network, Search, Server, Users } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -93,23 +93,24 @@ export function ChartLegend({ first, second }: { first: string; second: string }
 export const chartGrid = "stroke-border";
 export const chartText = "fill-muted-foreground text-[11px] max-[480px]:text-sm";
 
-type HostingTarget = "websites" | "accounts" | "backups" | "files" | "access";
+// Home's tiles, each named by its job. Websites leads. The old static-site
+// screens are not here: they are under Advanced in the menu.
 const hostingModules = [
-  { id: "websites", label: "Websites", description: "Create and manage your websites.", detail: "WordPress sites", icon: Globe },
-  { id: "accounts", label: "Customers", description: "Customer accounts and their home folders.", detail: "Linux broker required", icon: Users },
-  { id: "backups", label: "Static site backups (old)", description: "ZIP backups of the websites made with the old static-file model.", detail: "Native ZIP snapshots", icon: Archive },
-  { id: "files", label: "Files", description: "View and edit your website's files.", detail: "Website files", icon: Folder },
-  { id: "access", label: "Security", description: "Sessions signed in to this panel.", detail: "Operator sessions", icon: LockKeyhole },
+  { id: "websites", to: "/websites", label: "Websites", description: "Create, open and change your websites.", detail: "WordPress and PHP sites", icon: Globe },
+  { id: "move", to: "/websites/move", label: "Move a website here", description: "Copy a website from your cPanel server, then point its DNS here.", detail: "", icon: ArrowRightLeft },
+  { id: "accounts", to: "/customers", label: "Customers", description: "Logins your customers use to manage their own websites.", detail: "", icon: Users },
+  { id: "backup-storage", to: "/server/backups", label: "Backups", description: "Where every website is backed up each night.", detail: "", icon: DatabaseBackup },
+  { id: "access", to: "/security", label: "Security", description: "Who is signed in, and API tokens for your billing system.", detail: "", icon: LockKeyhole },
 ] as const;
 
-export function HostingWorkspace({ publicPreview, platform, onNavigate, onPreview }: { publicPreview: boolean; platform?: PlatformReport; onNavigate: (target: HostingTarget) => void; onPreview: () => void }) {
+export function HostingWorkspace({ publicPreview, platform, onNavigate, onPreview }: { publicPreview: boolean; platform?: PlatformReport; onNavigate: (to: string) => void; onPreview: () => void }) {
   return <section className={`${panel} min-w-0 overflow-hidden`} aria-labelledby="hosting-heading" data-testid="hosting-workspace">
     <div className="flex items-center justify-between gap-4 border-b border-border px-4 py-4 md:px-5">
       <div className="min-w-0">
-        <h2 id="hosting-heading">{publicPreview ? "Public panel preview" : "Hosting"}</h2>
-        <div className="mt-1 text-sm text-muted-foreground">{publicPreview ? "Host monitoring and a tour of the workspace." : "Open a module to work on this server."}</div>
+        <h2 id="hosting-heading">{publicPreview ? "Public panel preview" : "Work on this server"}</h2>
+        <div className="mt-1 text-sm text-muted-foreground">{publicPreview ? "Host monitoring and a tour of the workspace." : "The jobs you do most often."}</div>
       </div>
-      <Badge variant="outline" className="text-muted-foreground">{publicPreview ? "Preview" : "Local panel"}</Badge>
+      {publicPreview && <Badge variant="outline" className="text-muted-foreground">Preview</Badge>}
     </div>
     {publicPreview ? <div className="flex flex-wrap items-center gap-4 px-4 py-5 md:px-5">
       <Layers className="size-7 text-primary" aria-hidden="true" />
@@ -119,10 +120,10 @@ export function HostingWorkspace({ publicPreview, platform, onNavigate, onPrevie
       </div>
       <Button variant="outline" className="h-9 pointer-coarse:h-11" onClick={onPreview} data-testid="open-panel-preview">Explore panel</Button>
     </div> : <>
-      <ul role="list" className="grid sm:grid-cols-2">{hostingModules.map(({ id, label, description, detail, icon: Icon }, index) => {
+      <ul role="list" className="grid sm:grid-cols-2">{hostingModules.map(({ id, to, label, description, detail, icon: Icon }, index) => {
         const lead = id === "websites";
         return <li key={id} className={`min-w-0 border-b border-border ${lead ? "sm:col-span-2" : index % 2 === 1 ? "sm:border-e" : ""}`}>
-          <button type="button" onClick={() => onNavigate(id)} aria-label={`Open ${label}`} data-testid={`workspace-${id}`}
+          <button type="button" onClick={() => onNavigate(to)} aria-label={`Open ${label}`} data-testid={`workspace-${id}`}
             className={`group/module flex h-full min-h-18 w-full min-w-0 items-center gap-3.5 px-4 py-4 text-start text-foreground hover:bg-muted focus-visible:relative focus-visible:z-10 focus-visible:-outline-offset-3! md:px-5 ${lead ? "bg-secondary" : ""}`}>
             <Icon className="size-5 text-primary" aria-hidden="true" />
             <span className="min-w-0 flex-1">
@@ -134,10 +135,10 @@ export function HostingWorkspace({ publicPreview, platform, onNavigate, onPrevie
           </button>
         </li>;
       })}</ul>
-      <div className="flex items-start gap-2 px-4 py-2.5 text-xs text-muted-foreground md:px-5">
+      {platform && platform.os !== "linux" && <div className="flex items-start gap-2 px-4 py-2.5 text-xs text-muted-foreground md:px-5">
         <Info className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-        <span>{platform && platform.os !== "linux" ? "Native account actions require Linux. Static-site tools and monitoring remain separate modules." : "Account availability is checked after sign-in. A configured, admitted Linux broker is required for native account actions."}</span>
-      </div>
+        <span>Websites need a Linux server. On this computer the panel shows monitoring only.</span>
+      </div>}
     </>}
   </section>;
 }

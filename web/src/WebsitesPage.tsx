@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { ComponentProps, FormEvent, ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "cn";
-import { CircleAlert, CircleCheck, CirclePause, ExternalLink, Globe, Lock, LockOpen, Plus, RefreshCw, TriangleAlert } from "lucide-react";
+import { ArrowRightLeft, CircleAlert, CircleCheck, CirclePause, ExternalLink, Globe, Lock, LockOpen, Plus, RefreshCw, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -150,14 +150,18 @@ export function WebsitesList() {
   // A customer's login cannot make websites or reach the old static sites,
   // so it is not offered either.
   const canCreate = viewer.can("POST /api/v1/websites/wordpress");
+  const canMove = viewer.can("POST /api/v1/websites/migrations/whm");
   const canStatic = viewer.can("GET /api/v1/sites");
+  // With no websites the empty state offers the move, so it is not offered
+  // twice; New website stays the page's one primary action.
+  const empty = sites?.length === 0;
   return <div className="flex w-full flex-col gap-4" data-testid="websites-page">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="text-sm text-muted-foreground" data-testid="websites-count">
         {sites?.length ? (sites.length === 1 ? "1 website" : `${sites.length} websites`) : ""}
       </div>
-      {(canStatic || canCreate) && <div className="flex flex-wrap items-center gap-2">
-        {canStatic && <Link to="/websites/static" className={linkButton("ghost")} data-testid="static-sites-link">Static sites (old)</Link>}
+      {(canMove || canCreate) && <div className="flex flex-wrap items-center gap-2">
+        {canMove && !empty && <Link to="/websites/move" className={linkButton("outline")} data-testid="move-website-link"><ArrowRightLeft aria-hidden="true" />Move a website here</Link>}
         {canCreate && <Link to="/websites/new" className={linkButton("default")} data-testid="new-website-link"><Plus aria-hidden="true" />New website</Link>}
       </div>}
     </div>
@@ -165,8 +169,11 @@ export function WebsitesList() {
       ? <ProblemAlert problem={{ ...problem, next: `${problem.next} The list below is from the last successful read.` }} onRetry={retry} />
       : <ProblemAlert problem={problem} onRetry={retry} />)}
     {!sites && loading && <ListLoading />}
-    {sites && sites.length === 0 && <NoWebsites canCreate={canCreate} />}
+    {sites && sites.length === 0 && <NoWebsites canCreate={canCreate} canMove={canMove} />}
     {sites && sites.length > 0 && <SiteTable sites={sites} />}
+    {canStatic && <div className="text-sm text-muted-foreground">
+      Websites made with the older static-file model are under <Link to="/websites/static" className="text-primary! underline! underline-offset-4" data-testid="static-sites-link">Static sites (old)</Link>.
+    </div>}
   </div>;
 }
 
@@ -179,17 +186,17 @@ function ListLoading() {
   </div>;
 }
 
-function NoWebsites({ canCreate }: { canCreate: boolean }) {
+function NoWebsites({ canCreate, canMove }: { canCreate: boolean; canMove: boolean }) {
   return <Empty className={`${panel} border-dashed py-12`} data-testid="websites-empty">
     <EmptyHeader>
       <EmptyMedia variant="icon"><Globe aria-hidden="true" /></EmptyMedia>
       <EmptyTitle><h2 className="text-sm font-medium">No websites yet</h2></EmptyTitle>
       <EmptyDescription>{canCreate
-        ? "Create a WordPress website or a PHP site. The panel sets up the hosting account and the site, and the site is listed here."
+        ? `Press New website to create a WordPress website or a PHP site: the panel sets up the hosting account and the site, and lists it here.${canMove ? " Or move one from your cPanel server: it keeps running there until you change its DNS." : ""}`
         : "Your login has no websites at the moment. Ask whoever gave you the login to add yours; they then show here."}</EmptyDescription>
     </EmptyHeader>
-    {canCreate && <EmptyContent>
-      <Link to="/websites/new" className={linkButton("default")} data-testid="empty-new-website"><Plus aria-hidden="true" />New website</Link>
+    {canMove && <EmptyContent>
+      <Link to="/websites/move" className={linkButton("outline")} data-testid="empty-move-website"><ArrowRightLeft aria-hidden="true" />Move a website here</Link>
     </EmptyContent>}
   </Empty>;
 }
@@ -224,7 +231,7 @@ function SiteTable({ sites }: { sites: Website[] }) {
           {sites.map((site) => <TableRow key={site.account_id} data-testid="website-row" data-domain={site.domain} data-account-id={site.account_id}
             className={`${stacked} @max-[62rem]:rounded-lg @max-[62rem]:border @max-[62rem]:border-border @max-[62rem]:p-3 @max-[62rem]:hover:bg-transparent`}>
             <th scope="row" className={`p-2 text-start align-middle font-medium text-foreground ${stacked} @max-[62rem]:px-0 @max-[62rem]:pt-0 @max-[62rem]:pb-2`}>
-              <span className="wrap-anywhere">{site.domain}</span>
+              <Link to="/websites/sites/$accountId" params={{ accountId: site.account_id }} className="wrap-anywhere underline-offset-4 hover:text-primary! hover:underline!" data-testid="website-name-link">{site.domain}</Link>
               <OtherDomains site={site} />
             </th>
             <TableCell data-label="Status" className={stackedCell}><StatusBadge state={site.state} /></TableCell>
@@ -237,13 +244,13 @@ function SiteTable({ sites }: { sites: Website[] }) {
               : <span className="text-muted-foreground">Not reported</span>}</TableCell>
             <TableCell className={`text-end ${stacked} @max-[62rem]:px-0 @max-[62rem]:pt-3 @max-[62rem]:text-start`}>
               <div className="inline-flex flex-nowrap gap-2 @max-[62rem]:flex @max-[62rem]:flex-wrap">
-                {site.state !== "partly_deleted" && <>
-                  <SiteLink href={site.url} label="Open site" domain={site.domain} variant="outline" testId="open-site" />
-                  {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />}
-                </>}
-                <Link to="/websites/sites/$accountId" params={{ accountId: site.account_id }} className={linkButton("ghost")} data-testid="website-details-link">
-                  Details<span className="sr-only"> for {site.domain}</span>
+                <Link to="/websites/sites/$accountId" params={{ accountId: site.account_id }} className={linkButton("outline")} data-testid="website-details-link">
+                  Manage<span className="sr-only"> {site.domain}</span>
                 </Link>
+                {site.state !== "partly_deleted" && <>
+                  <SiteLink href={site.url} label="Open site" domain={site.domain} variant="ghost" testId="open-site" />
+                  {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="ghost" testId="open-admin" />}
+                </>}
               </div>
             </TableCell>
           </TableRow>)}

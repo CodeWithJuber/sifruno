@@ -67,7 +67,11 @@ type SiteResult struct {
 	SymlinkedDirs  []string     `json:"symlinked_dirs_not_followed,omitempty"`
 	UnreadableDirs []string     `json:"unreadable_dirs,omitempty"`
 	Files          []FileResult `json:"files"`
-	nestedOnly     bool
+	// UserINI warns about the site root's .user.ini: a file it makes PHP
+	// run before or after every script, which this server's PHP does not
+	// read (phpsettings.go).
+	UserINI    []FileWarning `json:"user_ini_warnings,omitempty"`
+	nestedOnly bool
 }
 
 type NameCount struct {
@@ -86,6 +90,9 @@ type Totals struct {
 	UnreadableFiles      int              `json:"unreadable_files"`
 	Directives           int              `json:"directives"`
 	DirectivesByCategory map[Category]int `json:"directives_by_category"`
+	// DirectivesByHandling counts the directives OLS ignores that a
+	// handling class covers (handling.go).
+	DirectivesByHandling map[Handling]int `json:"directives_by_handling"`
 	// TopUnknown holds lower-cased unknown directive names. Names that do not
 	// look like a directive are counted under one placeholder so stray text
 	// cannot leak customer data into the aggregate.
@@ -267,9 +274,14 @@ func (s *scanner) scanSite(base string) SiteResult {
 					continue
 				}
 				site.Files = append(site.Files, s.readFile(rel, urlPath))
+			case e.Name() == ".user.ini" && cur.rel == base && t.IsRegular():
+				site.UserINI = s.readUserINI(rel)
 			case t&fs.ModeSymlink != 0:
 				if s.linkHidesDir(rel) {
 					site.SymlinkedDirs = append(site.SymlinkedDirs, rel)
+				}
+				if e.Name() == ".user.ini" && cur.rel == base {
+					site.UserINI = []FileWarning{userINIUnread(rel, "a link, which the check does not follow")}
 				}
 			case t.IsDir():
 				if cur.depth >= s.limits.MaxDepth {
@@ -348,33 +360,53 @@ func (s *scanner) linkHidesDir(rel string) bool {
 // readFile opens a .htaccess without following links and without blocking
 // on a FIFO or device swapped in after Lstat.
 func (s *scanner) readFile(rel, urlPath string) FileResult {
+	data, cause, why := s.readRegular(rel)
+	if cause != "" {
+		return unreadFile(rel, urlPath, cause, why)
+	}
+	return ClassifyFile(rel, urlPath, data)
+}
+
+// readUserINI reads the site root's .user.ini the same way and warns about
+// what this server's PHP will not run.
+func (s *scanner) readUserINI(rel string) []FileWarning {
+	data, cause, why := s.readRegular(rel)
+	if cause != "" {
+		return []FileWarning{userINIUnread(rel, why)}
+	}
+	return UserINIWarnings(rel, data)
+}
+
+// readRegular reads a regular file of at most MaxFileBytes, or returns the
+// cause and reason it could not.
+func (s *scanner) readRegular(rel string) ([]byte, string, string) {
 	before, err := s.root.Lstat(osPath(rel))
 	if err != nil {
-		return unreadFile(rel, urlPath, CauseUnreadableFile, "could not be read")
+		return nil, CauseUnreadableFile, "could not be read"
 	}
 	if !before.Mode().IsRegular() {
-		return unreadFile(rel, urlPath, CauseIrregularFile, "not a regular file")
+		return nil, CauseIrregularFile, "not a regular file"
 	}
 	if before.Size() > MaxFileBytes {
-		return unreadFile(rel, urlPath, CauseOversizeFile, "larger than 1 MiB")
+		return nil, CauseOversizeFile, "larger than 1 MiB"
 	}
 	f, err := s.root.OpenFile(osPath(rel), openFlags, 0)
 	if err != nil {
-		return unreadFile(rel, urlPath, CauseUnreadableFile, "could not be read")
+		return nil, CauseUnreadableFile, "could not be read"
 	}
 	defer f.Close()
 	after, err := f.Stat()
 	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
-		return unreadFile(rel, urlPath, CauseIrregularFile, "changed during the scan")
+		return nil, CauseIrregularFile, "changed during the scan"
 	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
 	if err != nil {
-		return unreadFile(rel, urlPath, CauseUnreadableFile, "could not be read")
+		return nil, CauseUnreadableFile, "could not be read"
 	}
 	if len(data) > MaxFileBytes {
-		return unreadFile(rel, urlPath, CauseOversizeFile, "larger than 1 MiB")
+		return nil, CauseOversizeFile, "larger than 1 MiB"
 	}
-	return ClassifyFile(rel, urlPath, data)
+	return data, "", ""
 }
 
 func finishSite(site *SiteResult) {
@@ -419,6 +451,7 @@ func totals(sites []SiteResult, withoutDocroot int) Totals {
 		SitesByVerdict:         map[Verdict]int{},
 		FilesByVerdict:         map[Verdict]int{},
 		DirectivesByCategory:   map[Category]int{},
+		DirectivesByHandling:   map[Handling]int{HandlingIgnored: 0, HandlingSifruno: 0, HandlingWarning: 0},
 		CompatSitesByCause:     map[string]int{},
 		CompatSitesByCauseSet:  map[string]int{},
 		TopUnknown:             []NameCount{},
@@ -463,6 +496,9 @@ func totals(sites []SiteResult, withoutDocroot int) Totals {
 			for _, g := range f.Findings {
 				t.Directives++
 				t.DirectivesByCategory[g.Category]++
+				if g.Handling != "" {
+					t.DirectivesByHandling[g.Handling]++
+				}
 				if g.Category == CategoryUnknown {
 					name := strings.Trim(g.Directive, "<>")
 					if !directiveName.MatchString(name) {

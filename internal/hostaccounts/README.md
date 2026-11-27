@@ -961,7 +961,8 @@ as the leaf's DNS names sorted and joined with commas) for each account
 that has one, so the panel can renew in time and see which domains are
 covered; the journal's before and after rows record it too. A certificate
 installed before the broker kept its names has none listed and covers the
-account's own domain only. Delete takes the site out of the config first,
+account's own domain only; so does one copied from an old server whose
+names are not all plain domains (see Migration). Delete takes the site out of the config first,
 then removes the site's TLS directory with the user: only the live and
 staged pairs and `writeAt`'s temporary names, and an unexpected file keeps
 the delete pending rather than being removed.
@@ -1525,8 +1526,10 @@ root step. The design, with the owner's choices recorded from Jev on
   broker's public key line through WHM's API, and fetches over HTTPS what
   the copy asks of cPanel: WHM API 1 `listaccts` for the account,
   `domainuserdata`, `php_get_vhost_versions` for its virtual host, and
-  UAPI `Mysql list_databases` and `list_users` through `uapi_cpanel`. Plan,
-  `migrate-files` and `migrate-database` carry them as `cpanel` (at most 1
+  UAPI `Mysql list_databases` and `list_users` through `uapi_cpanel`, and
+  for the certificate step alone `fetch_vhost_ssl_components` for the
+  site's virtual host. Plan, `migrate-files`, `migrate-database` and
+  `migrate-certificate` carry them as `cpanel` (at most 1
   MiB a request) and the broker reads them with the same `cpsource`
   parsers and checks as the same answers over SSH: they are the old
   server's word either way. For such a migration the broker runs no
@@ -1542,25 +1545,43 @@ root step. The design, with the owner's choices recorded from Jev on
   this server come from (`client_address`, empty when its sshd does not
   say: verify then fails every folder open to some addresses only), and
   the tier. For the tier
-  rsync fetches only the `.htaccess` files of the home and public_html into
-  a root-only staging folder, and `internal/htaccess` scans and converts
-  them there. The answer carries the hashes: the panel hands them to its
+  rsync fetches only the `.htaccess` files of the home and public_html, and
+  public_html's own `.user.ini`, into a root-only staging folder, and
+  `internal/htaccess` scans and converts them there. The answer carries the hashes: the panel hands them to its
   database service on standard input and records none.
 - Tier (Jev: refuse what is not Native, 0.96; then D-0003, 0.93: build a
   fail-closed converter first). Only OpenLiteSpeed serves hosted accounts
-  today. Native means rewrite rules only, or access rules the converter
+  today. Native means rewrite rules, access rules the converter
   turns into OpenLiteSpeed config (`internal/htaccess` convert.go: deny
   all, deny all with a `<Files>`/`<FilesMatch>` allow-list such as
   Akismet's, IP lists, `<IfModule [!]mod_authz_core.c>` pairs that agree,
-  Basic password folders). The plan lists each converted file and what it
-  became (`converted`), or why a file was refused (`tier_refusals`). A site
-  with anything else OpenLiteSpeed would ignore (an unconverted access
-  rule, an unknown directive, a `.htaccess` below a converted folder or in
-  the home above public_html, or a rewrite rule whose result could be a
-  file path, which OpenLiteSpeed would serve without the folder's check) is not put live, not even on the preview:
-  OpenLiteSpeed would open the protected folder. The panel stops before it
-  creates anything, and `migrate-files` scans and converts the copied files
-  again and refuses before they reach the home.
+  Basic password folders), and lines OpenLiteSpeed ignores that a handling
+  class covers (`internal/htaccess` handling.go): harmless to ignore
+  (Expires, FileETag, compression, caching and security headers, plain
+  `AddType`, `AddDefaultCharset`), handled by Sifruno (cPanel's PHP handler
+  block, `Options -Indexes`), converted (redirects, error pages, and the
+  root `.htaccess`'s `php_value` and `php_flag` lines of the settings
+  phpsettings.go lists, with checked values), or a warning (CORS and
+  `X-Robots-Tag` headers). The
+  plan lists each converted file and what it became (`converted`), the
+  warnings (`tier_warnings`: those headers; a `memory_limit` above the
+  1024 MiB a new account's PHP may use, which the copy lowers to it; a
+  `.user.ini` in public_html that makes PHP run a file before or after
+  every script, such as Wordfence's extended protection, which this
+  server's PHP does not read; and a PHP handler naming
+  another version than the plan's, which the panel shows as notes that keep
+  the cutover gate closed until accepted), or why a site was refused, line by
+  line (`tier_refusals`, "file line N (directive): reason", paths relative
+  to public_html), with `tier_access` when an access rule is the reason and
+  `tier_fix` naming the lines to change. A site with anything else
+  OpenLiteSpeed would ignore (an unconverted access rule, an unknown
+  directive, a line no class covers, a `.htaccess` below a converted folder
+  or in the home above public_html, or a rewrite rule whose result could be
+  a file path, which OpenLiteSpeed would serve without the folder's check)
+  is not put live, not even on the preview. The panel stops before it
+  creates anything; only an access rule would open a folder, and only then
+  does its message say so. `migrate-files` scans and converts the copied
+  files again and refuses before they reach the home.
 - Protected folders (`folders.go`, needs human review). When the copy
   converts, `migrate-files` puts the folders live before `cp` runs: each
   realm's user file is read from the root-only staging copy by handle,
@@ -1583,6 +1604,11 @@ root step. The design, with the owner's choices recorded from Jev on
   for up to three real files a closed folder leaves open, and each folder
   open to some addresses only with its rule, from which verify works out
   what each site must answer the address it sees verify come from (D-0002).
+  The root `.htaccess`'s redirects, error pages and PHP settings join the
+  same journaled set; olsweb writes the PHP settings as the vhost's
+  `phpIniOverride`, `memory_limit` no larger than the account's memory
+  (each lsphp process's address space), so they are in force before `cp`
+  makes the files reachable.
   A delete removes the site's realm files. The folders are a
   snapshot: a later edit of the tenant's `.htaccess` or user file changes
   nothing.
@@ -1643,6 +1669,31 @@ root step. The design, with the owner's choices recorded from Jev on
   MariaDB user. Every table's rows are then counted on both sides (the
   source after its dump); the answer lists them, and the panel reports a
   difference.
+- `POST /v1/accounts/{id}/migrate-certificate` (`migration`,
+  `expected_revision`, `reason`) copies the certificate the old site
+  serves, so the moved site answers https before its DNS changes. The
+  account must be live, the old server's account of the same name and
+  domain (as for `migrate-files`), and the old server is asked for WHM API
+  1 `fetch_vhost_ssl_components`, filtered to the virtual host whose
+  `servername` is the account's domain, so no other site's key is printed.
+  It is copied only when the leaf is not self-signed, is valid now and for
+  7 days more, covers the account's own domain as a browser checks it
+  (a wildcard counts), chains through its own text and the CA bundle (in
+  any order) to an authority in this system's trust store, with at most 4
+  certificates served (the root left out), and its key is an EC P-256 or
+  P-384 or RSA 2048 to 4096 key that matches it. It is then installed by
+  the certificate operation's own steps (staged, journaled, tested), with
+  one difference from `SetCertificate`'s fit: a copied leaf may name more
+  than the site's domains (its `www.`, `mail.` and other names there),
+  and only the site's domains among them are mapped on the HTTPS listener;
+  a leaf whose names are not all plain domains, or more than a site has,
+  records no `names` and covers the account's own domain. One that cannot
+  be used, or none, answers `copied: false` with `refused` (`no_certificate`,
+  `self_signed`, `not_yet_valid`, `expired`, `expires_soon`,
+  `other_domain`, `untrusted`, `key_mismatch` or `unusable`) and plain
+  words in `detail`, and changes nothing; the move goes on. The key is in
+  no record, journal row, answer or error: only in the staged pair and the
+  site's live files, as an issued certificate's.
 - `POST /v1/migrations/{id}/finish` (`reason`) removes the key's line from
   the source (`sed` on whole lines `restrict ssh-ed25519 <blob>
   sifruno-migration-<id>`), proves
@@ -1673,10 +1724,10 @@ root step. The design, with the owner's choices recorded from Jev on
   the temporary users), and their root-side leftovers go through the
   backup leftover list.
 
-Not in v1: IPv6 source addresses, the site's own certificate (the copy
-runs over http until DNS points here), parked and addon domains (listed,
-not added), the Compat tier, and a panel page to change a converted
-password folder's users.
+Not in v1: IPv6 source addresses, a certificate the old server's
+authority does not vouch for (the copy then runs over http until DNS
+points here), parked and addon domains (listed, not added), the Compat
+tier, and a panel page to change a converted password folder's users.
 
 Known gaps, found in review and not fixed in v1:
 
@@ -1702,6 +1753,37 @@ Known gaps, found in review and not fixed in v1:
   from. If the site's HTTP reaches the old server another way (a proxy or
   CDN in front of it, IPv6 where SSH used IPv4), the check can fail; it
   fails closed, and a person checks the folder and accepts.
+
+### From a cPanel backup file
+
+`POST /v1/migrations/archive` takes a backup file the admin uploaded
+(`cpmove-USER.tar.gz`, `USER.tar.gz`, `backup-…_USER.tar.gz`): one framing
+line with its exact `size` (at most 32 GiB) and the reason, then the bytes
+(`decodeFramed`, as a file upload). The broker writes it as
+`<state>/migrate/<id>/archive`, root 0600, in a folder of its own (root
+0700), after a room check, and reads it with `cpmove.Read`
+(docs/migration-design.md): one TAR stream, every size, count and path
+bounded, names outside the archive's one top folder refused, links out of
+the home, hard links and special files left out with a reason, setuid,
+setgid and sticky bits dropped. The record has `via: "archive"`, no host,
+port or keys, and what the file holds (account, domain, databases, the
+old home's path, what does not move); it lives 24 hours like any
+migration, and finishing or expiring it deletes the folder. The upload runs
+outside `migrateMu`; its id is reserved meanwhile so the sweep does not
+take its folder for a stray one.
+
+The steps are the SSH path's with the file as the source: the plan reads
+the file's metadata and stages only its `.htaccess` files for the tier;
+the copy extracts the home (`homedir/`, the same parts left out as the
+SSH copy's excludes) through an `os.Root` into the root-only staging
+folder, within the free space margin, and from there it is the same
+`placeFiles` as rsync's staged copy: groups and modes, the scan and
+conversion again, protected folders first, `cp` as the site's user. A
+database step extracts `mysql/DB.sql` alone and loads it as the site's user
+through the temporary MariaDB user; with no live database to count
+against, each table's source count is the copy's. The certificate step
+reads `apache_tls/DOMAIN` and checks it as an SSH move's certificate. No
+command runs on any other server.
 
 ## Verification cost
 

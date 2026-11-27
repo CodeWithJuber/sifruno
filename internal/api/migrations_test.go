@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,6 +30,8 @@ type migrationSpy struct {
 	accountsErr error
 	stale       []hostaccounts.StaleMigrationKey
 	cleared     []string
+	// uploaded is the last backup file's bytes.
+	uploaded string
 }
 
 func (m *migrationSpy) view() hostaccounts.Migration {
@@ -47,6 +50,18 @@ func (m *migrationSpy) OpenMigration(_ context.Context, in hostaccounts.Migratio
 	}
 	m.via = in.Via
 	return m.view(), nil
+}
+func (m *migrationSpy) OpenArchiveMigration(_ context.Context, in hostaccounts.MigrationArchiveInput, body io.Reader, _ string) (hostaccounts.Migration, error) {
+	data, err := io.ReadAll(body)
+	if err != nil || int64(len(data)) != in.Size {
+		return hostaccounts.Migration{}, hostaccounts.ErrInvalid
+	}
+	m.uploaded = string(data)
+	if strings.HasPrefix(m.uploaded, "not a backup") {
+		return hostaccounts.Migration{}, &hostaccounts.MigrationError{Step: "archive", Detail: "The file is not a cPanel account backup."}
+	}
+	return hostaccounts.Migration{ID: testSourceID, Via: hostaccounts.ViaArchive, HostKeys: []hostaccounts.MigrationHostKey{}, ExpiresAt: time.Now().Add(24 * time.Hour),
+		Archive: &hostaccounts.MigrationArchive{User: "shopone", Domain: "shop.example.test", Databases: []string{"shopone_wp"}, Bytes: in.Size, Home: "/home/shopone"}}, nil
 }
 func (m *migrationSpy) GetMigration(context.Context, string) (hostaccounts.Migration, error) {
 	return m.view(), nil
@@ -75,6 +90,9 @@ func (m *migrationSpy) MigrateFiles(context.Context, string, hostaccounts.Migrat
 }
 func (m *migrationSpy) MigrateDatabase(context.Context, string, hostaccounts.MigrateDatabaseInput, string) (hostaccounts.MigrateDatabaseResult, error) {
 	return hostaccounts.MigrateDatabaseResult{}, nil
+}
+func (m *migrationSpy) MigrateCertificate(context.Context, string, hostaccounts.MigrateCertificateInput, string) (hostaccounts.MigrateCertificateResult, error) {
+	return hostaccounts.MigrateCertificateResult{}, nil
 }
 func (m *migrationSpy) FinishMigration(context.Context, string, hostaccounts.MigrationFinishInput, string) (hostaccounts.MigrationFinishResult, error) {
 	m.finished++

@@ -22,7 +22,9 @@
 //     site's own lsphp extprocessor (lsapi over uds://tmp/lshttpd/
 //     sifruno-NAME.sock, started through the CGI daemon as extUser/extGroup =
 //     the account, with rlimits and LSAPI children), the php script handler
-//     that uses it, namespace 2 and cgroups 2 when an active site asks for
+//     that uses it, the PHP settings a migration carried from the site's
+//     root .htaccess as a phpIniOverride block (phpini.go), namespace 2 and
+//     cgroups 2 when an active site asks for
 //     them, a static context that maps /.well-known/acme-challenge/ to
 //     ACMEChallengeDir, a "module cache" block, and a rewrite
 //     block with .htaccess autoload plus vhost-level deny rules, then the
@@ -60,7 +62,12 @@
 //     outside every home, and one "context exp:" regex context per folder,
 //     with allowBrowse 0 for a folder closed to all (its <Files> names left
 //     out of the regex), or accessControl lists and the realm, and always a
-//     rewrite block with enable 0. A suspended site renders none of them.
+//     rewrite block with enable 0; before them, one more regex context with
+//     allowBrowse 0 per folder that closes file names (Folder.Deny), which
+//     may be the site root. The redirect and ErrorDocument lines of the
+//     migrated site's root .htaccess (moved.go) follow the https rules in
+//     the rewrite block and are errorPage blocks. A suspended site renders
+//     none of them.
 //
 // # Certificates
 //

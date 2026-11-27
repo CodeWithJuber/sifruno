@@ -33,7 +33,7 @@ func loadSpec(t *testing.T, path string) Server {
 // TestGolden renders each testdata/golden/<case>/spec.json and compares the
 // whole file set, both ways, with testdata/golden/<case>/want/.
 func TestGolden(t *testing.T) {
-	cases := []string{"wordpress", "second-php", "suspended", "namespace-limits", "certificate", "no-certificate", "account-limits", "aliases-redirects", "protected-folders", "panel-challenge"}
+	cases := []string{"wordpress", "second-php", "suspended", "namespace-limits", "certificate", "no-certificate", "account-limits", "aliases-redirects", "protected-folders", "panel-challenge", "htaccess-wordpress"}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join("testdata", "golden", name)
@@ -403,6 +403,13 @@ func TestDenyRules(t *testing.T) {
 		"/wp-config.php.orig", "/.wp-config.php.swp", "/blog/wp-config.php.old", "/WP-CONFIG.PHP.BAK",
 		"/wp-config.bak", "/wp-config.old", "/wp-config.orig", "/wp-config.save", "/wp-config.swp", "/wp-config.txt",
 		"/wp-content/debug.log", ".htaccess", "wp-config.php.bak",
+		// PHP files under suffixes only .php runs with here: OpenLiteSpeed
+		// would send their source (mime.properties default octet-stream).
+		"/page.phtml", "/old/index.php5", "/new/index.php8", "/wp-content/uploads/x.PHP7", "/lib.phar", "/source.phps",
+		"/a.pht", "/a.php3", "/a.php4",
+		// Backup copies and database dumps: source code and passwords.
+		"/index.php.bak", "/wp-content/plugins/x/x.php~", "/wp-login.php.save", "/wp-settings.php.orig",
+		"/backup.sql", "/db/DUMP.SQL", "/style.css.BAK", "/notes~",
 	} {
 		if !denied(path) {
 			t.Errorf("%s is not denied", path)
@@ -415,6 +422,9 @@ func TestDenyRules(t *testing.T) {
 		"/wp-content/themes/twentytwentyfive/style.css", "/wp-includes/js/jquery/jquery.min.js",
 		"/.well-known/acme-challenge/abc123", "/.well-known/security.txt", "/environment.html", "/feed/",
 		"/sitemap.xml", "/wp-sitemap.xml", "/2026/11/hello-world/", "/wp-content/cache/debug.log.html",
+		"/php5-notes/", "/photos.phtml-gallery/", "/phtml.html",
+		"/sql/", "/sql-tips/", "/bakery/", "/save-the-date/", "/original.jpg", "/a.sql.gz", "/backup.zip",
+		"/~user/", "/sql.html",
 	} {
 		if denied(path) {
 			t.Errorf("%s is denied but WordPress needs it", path)

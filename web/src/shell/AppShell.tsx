@@ -174,8 +174,11 @@ export function AppShell() {
   }, [auth.session, switchView]);
 
   const pageId = page?.id;
-  // A customer's setup link opens before anyone is signed in.
-  const gated = !publicPreview && pageId !== "setup" && (page?.audience === "private" || remote) && !signedIn;
+  // A customer's setup link opens before anyone is signed in. Until the
+  // first admin exists, every page is the first-run setup, so a new owner
+  // meets it on Home instead of only after opening a private page; until
+  // the check answers, a page waits for it rather than flash the panel.
+  const gated = !publicPreview && pageId !== "setup" && (page?.audience === "private" || remote || auth.adminRequired || !auth.checked) && !signedIn;
   // A page a customer has no use for; the server refuses its data anyway.
   const adminPage = Boolean(signedIn && limited && page && !customerPage(page));
   useEffect(() => {
@@ -386,6 +389,10 @@ function PanelSidebar({ direction, page, publicPreview, role, status, theme, onT
       {top("admin").length > 0 && <SidebarGroup>
         <SidebarGroupLabel className="text-sidebar-muted-foreground">Administration</SidebarGroupLabel>
         <SidebarGroupContent><SidebarMenu className="gap-0.5">{top("admin").map(item)}</SidebarMenu></SidebarGroupContent>
+      </SidebarGroup>}
+      {top("advanced").length > 0 && <SidebarGroup>
+        <SidebarGroupLabel className="text-sidebar-muted-foreground">Advanced</SidebarGroupLabel>
+        <SidebarGroupContent><SidebarMenu className="gap-0.5">{top("advanced").map(item)}</SidebarMenu></SidebarGroupContent>
       </SidebarGroup>}
       </nav>
     </SidebarContent>

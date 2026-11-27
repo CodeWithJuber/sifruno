@@ -1,5 +1,7 @@
-// Package cpmove characterizes local TAR streams. It does not restore archives
-// or establish compatibility with any cPanel version or licensed reference.
+// Package cpmove characterizes local TAR streams (Inspect) and reads a cPanel
+// account backup into a website model (Read, read.go). Neither restores an
+// account by itself or establishes compatibility with any cPanel version or
+// licensed reference.
 package cpmove
 
 import (

@@ -1,4 +1,6 @@
-import { csrfToken, getWebsiteJob, parseJobResponse, readTimeoutMs, request, WordPressApiError } from "./wordpress-api";
+import { checkArchiveFile, parseArchiveSource } from "./migration-archive";
+import type { ArchiveSource } from "./migration-archive";
+import { csrfToken, getWebsiteJob, parseJobResponse, problemError, readTimeoutMs, request, WordPressApiError } from "./wordpress-api";
 import type { WebsiteJob } from "./wordpress-api";
 
 // Client for "Move a website here": migration v1 from a cPanel server over
@@ -146,6 +148,48 @@ const unexpected = (what: string, where: string) =>
 
 const slowMs = 4 * 60 * 1000;
 const base = "/api/v1/websites/migrations";
+
+// ---- A cPanel backup file ----------------------------------------------------
+
+const archiveTimeoutMs = 2 * 60 * 60 * 1000;
+
+// uploadArchive sends the backup file's own bytes, reporting progress.
+// XMLHttpRequest is used because fetch() reports no upload progress.
+export async function uploadArchive(file: File, onProgress: (sent: number, total: number) => void, options: { signal?: AbortSignal } = {}): Promise<ArchiveSource> {
+  const what = "The backup file was not taken.";
+  const problem = checkArchiveFile(file);
+  if (problem) throw new WordPressApiError(0, what, problem, "Choose the right file, then press Upload again.", "file refused before upload");
+  const csrf = await csrfToken(options.signal);
+  const url = `${base}/archive`;
+  const where = `POST ${url}`;
+  return new Promise<ArchiveSource>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.timeout = archiveTimeoutMs;
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("X-CSRF-Token", csrf);
+    xhr.upload.addEventListener("progress", (event) => onProgress(event.loaded, event.lengthComputable ? event.total : file.size));
+    const abort = () => xhr.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const done = () => options.signal?.removeEventListener("abort", abort);
+    xhr.addEventListener("load", () => {
+      done();
+      let value: unknown;
+      try { value = JSON.parse(xhr.responseText); } catch { value = undefined; }
+      if (xhr.status < 200 || xhr.status > 299) { reject(problemError("move", xhr.status, value, what, where)); return; }
+      const source = parseArchiveSource(value);
+      if (!source) { reject(unexpected(what, where)); return; }
+      resolve(source);
+    });
+    const lost = (why: string, technical: string) => { done(); reject(new WordPressApiError(0, what, why, "Check that this computer is online, then press Upload again.", `${where}: ${technical}`)); };
+    xhr.addEventListener("error", () => lost("The connection to the server broke during the upload. The server keeps nothing of a file that did not arrive whole.", "network error"));
+    xhr.addEventListener("timeout", () => lost("The upload did not finish within two hours.", "no answer in time"));
+    xhr.addEventListener("abort", () => lost("The upload was cancelled. The server keeps nothing of a file that did not arrive whole.", "cancelled"));
+    xhr.send(file);
+  });
+}
 
 export async function openSource(host: string, port: number, options: { signal?: AbortSignal } = {}): Promise<MigrationSource> {
   const what = "Sifruno could not connect to the old server.";

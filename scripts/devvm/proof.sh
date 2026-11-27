@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel [whm] | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel [whm|cert|archive] | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -42,7 +42,15 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 WHM API stub on port 2087 lists the accounts and adds the
                 key, one site moves, and the key goes; plus the classified
                 errors of a cPanel tool over SSH and of a WHM that prints no
-                JSON. KEEP_STANDIN=1 keeps the stand-in for screenshots.
+                JSON. With cert, the old sites serve https with certificates
+                from a throwaway CA: two moves copy them (one over SSH, one
+                with the WHM login) and answer https at once, and an expired
+                one is not copied while its move finishes. With archive,
+                the stand-in makes backup files of two accounts in the
+                layout cPanel documents (a pkgacct stand-in, not cPanel),
+                each is uploaded through the panel and moved, and a file
+                that climbs out of its folder or is not a backup is refused.
+                KEEP_STANDIN=1 keeps the stand-in for screenshots.
   broker-web    The broker's web operation: OpenLiteSpeed may read the home,
                 a quota is set, the vhost is rendered, tested and reloaded,
                 a rejected config changes nothing, a symlinked public_html is
@@ -249,7 +257,7 @@ case "${1:-}" in
     ;;
   migrate-cpanel)
     mode="${2:-}"
-    case "$mode" in ''|whm) ;; *) usage >&2; exit 2 ;; esac
+    case "$mode" in ''|whm|cert|archive) ;; *) usage >&2; exit 2 ;; esac
     keep="${KEEP_STANDIN:-0}"
     case "$keep" in 0|1) ;; *) usage >&2; exit 2 ;; esac
     stage="$(mktemp -d)"
@@ -259,6 +267,7 @@ case "${1:-}" in
     port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
     build "$stage/sifruno" ./cmd/sifruno
     build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/panelctl" ./cmd/panelctl
     (cd "$REPO" && npm run --silent panel:build >/dev/null)
     # Seed the panel's state here, as the wizard proof does: a few seconds
     # make it, with its access key, which the guest script signs in with.
@@ -268,11 +277,15 @@ case "${1:-}" in
     tar -czf "$stage/state.tgz" -C "$stage" state
     "$HERE/vm.sh" ssh "systemctl stop sifruno-broker-proof 2>/dev/null; pkill -x sifruno; install -d -m 0755 /opt/sifruno-proof; install -d -o sifpanel -g sifpanel -m 0700 $guest" || true
     "$HERE/vm.sh" put "$stage/hostbroker" /opt/sifruno-proof/hostbroker
+    "$HERE/vm.sh" put "$stage/panelctl" /opt/sifruno-proof/panelctl
     for file in sifruno dist.tgz state.tgz; do
       "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
     done
     "$HERE/vm.sh" put "$HERE/proofs/migrate-cpanel.guest.sh" /opt/sifruno-proof/migrate-cpanel.guest.sh
-    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/migrate-cpanel.guest.sh; restorecon -R /opt/sifruno-proof'
+    # The shop site's .htaccess starts with the converter's test file of
+    # WordPress plugin blocks.
+    "$HERE/vm.sh" put "$REPO/internal/htaccess/testdata/wordpress-plugins.htaccess" /opt/sifruno-proof/wordpress-plugins.htaccess
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/panelctl /opt/sifruno-proof/migrate-cpanel.guest.sh; restorecon -R /opt/sifruno-proof'
     mkdir -p "$OUT"
     transcript="$OUT/migrate-cpanel-$stamp.txt"
     status=0

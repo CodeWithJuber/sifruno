@@ -4,6 +4,42 @@
 
 ### Changed
 
+- Moving a website from cPanel no longer refuses `.htaccess` lines
+  OpenLiteSpeed can safely ignore or that Sifruno handles: cPanel's PHP
+  handler block, Expires, compression, caching and security headers,
+  `FileETag`, `Options -Indexes`, `AddType` and `AddDefaultCharset`. A
+  refusal names the file, line and directive, says a folder would open only
+  when an access rule is the reason, and names the lines to change on the
+  old server; `panelctl htaccess scan --details` shows the same.
+- Moving a website from cPanel carries the root `.htaccess`'s `php_value`
+  and `php_flag` lines for memory and upload sizes, time and input limits,
+  error display and reporting, output buffering, session cookies and the
+  time zone into the site's web server config, so the copy's PHP runs with
+  the old site's settings; `memory_limit` stays within the account's
+  memory. Settings that name a file (such as `auto_prepend_file`),
+  `open_basedir`, `disable_functions`, `php_admin_*` lines and settings in
+  a folder's `.htaccess` refuse the move, naming the line. A `.user.ini`
+  that loads a file before every script, such as Wordfence's firewall, is
+  a note to accept before cutover: this server's PHP does not read
+  `.user.ini` files. `proof.sh migrate-cpanel` shows it on a real server
+  (`docs/proofs/real-server-2026-11-25/migrate-php-settings.txt`).
+- Moving a website from cPanel carries the `.htaccess` lines WordPress
+  plugins write: `<Files>` and `<FilesMatch>` rules that close
+  `wp-config.php`, `xmlrpc.php`, Wordfence's `.user.ini` and other names
+  answer 403 on the new server, at the root or in a folder, and the root
+  `.htaccess`'s `Redirect` and `RedirectMatch` (301 and 302) and
+  `ErrorDocument` pages move into the site's web server config. CORS and
+  `X-Robots-Tag` headers, which this server cannot send yet, are notes to
+  accept before cutover. What still cannot move is refused, naming the
+  line. `proof.sh migrate-cpanel` shows it on a real server
+  (`docs/proofs/real-server-2026-11-25/migrate-htaccess-wp.txt`).
+- Every website answers 403 for PHP files under `.phtml`, `.php3` to `.php8`,
+  `.phar`, `.pht` and `.phps` instead of sending their source: only `.php`
+  runs as PHP here.
+- Every website answers 403 for backup copies and database dumps (names
+  ending in `.bak`, `.orig`, `.save`, `~` or `.sql`, such as
+  `index.php.bak`) instead of sending them: they can hold source code and
+  passwords.
 - A session ends after 30 minutes without use and at 12 hours, instead of
   15 minutes after sign-in. Before sign-in the panel shows only the sign-in
   form.
@@ -47,6 +83,33 @@
 
 ### Added
 
+- Move a website here from a cPanel backup file: "Move a website here" now
+  asks where the website is, and for a backup file (cpmove-USER.tar.gz,
+  USER.tar.gz or backup-…_USER.tar.gz, up to 32 GiB) shows what it holds
+  and what will not move before anything is made, then moves its files,
+  databases with the same users and passwords, PHP version, cron and
+  certificate as a move from a cPanel server does. The file is read with
+  bounded sizes and refused when a name climbs out of its folder; it is
+  kept only for the move and deleted at its end or after 24 hours.
+- Get started on Home: the panel's own address and certificate, the first
+  website, moving a website (optional), backups with one restore test, a
+  customer login and Always use HTTPS, each read from the server's state,
+  with why it matters and one button to the screen that does it. It can be
+  hidden once done. From a UX audit of every journey on a real server
+  (`docs/ux-audit.md`), whose top fixes also land: first-run setup on
+  every page until an admin exists, job names on Home's tiles, the old
+  static-site screens and Linux accounts in an Advanced menu group, the
+  certificate's state on Domains and SSL, "Manage" and "Move a website
+  here" on Websites, "Manage this website" after the wizard, "restore
+  test" for drill, and plain words on Backups and Security.
+- A website moved from cPanel keeps its https: the move copies the
+  certificate the old site serves, with its key, so the copy answers https
+  before the DNS changes. It is copied only when it is not self-signed, is
+  valid for 7 more days, covers the site's domain and comes from an
+  authority this server trusts; otherwise the step says why and the move
+  goes on over http. The panel replaces a copied certificate with a Let's
+  Encrypt one before it runs out, once the domain points here, and the
+  Domains tab says where the certificate came from.
 - Passkeys. An admin or customer adds one on Account, with the current
   password and a code, and then signs in with it alone. They work when the
   panel is opened by its name over a trusted certificate.
@@ -143,6 +206,10 @@
 
 ### Fixed
 
+- The hosts file line for previewing a moved website no longer says
+  www.www. for a site whose domain starts with www..
+- phpMyAdmin no longer answers "Token mismatch": the panel's proxy now passes
+  phpMyAdmin's own `__Secure-` session cookies, which it uses over HTTPS.
 - The database tools sent each SQL statement to the mysql client as an
   argument, so a statement that sets a password exposed it to every local
   user; the SQL now goes on stdin (needs human review).

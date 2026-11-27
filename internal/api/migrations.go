@@ -50,6 +50,8 @@ func migrationRoute(p string) string {
 		return "migration-whm"
 	case "/api/v1/websites/migrations":
 		return "migration"
+	case migrationArchivePath:
+		return "migration-archive"
 	}
 	if migrationStalePath.MatchString(p) {
 		return "migration-stale-cleared"
@@ -79,12 +81,13 @@ type MigrationSource struct {
 	InstallCommand string                          `json:"install_command" doc:"Run as root on the old server to add the key line."`
 	HostKeys       []hostaccounts.MigrationHostKey `json:"host_keys"`
 	Pinned         string                          `json:"pinned_fingerprint" doc:"The confirmed fingerprint; empty until the admin confirms one."`
-	Via            string                          `json:"via" doc:"whm when connected with the old server's WHM login, empty for the SSH path."`
+	Via            string                          `json:"via" doc:"whm when connected with the old server's WHM login, archive for an uploaded cPanel backup file, empty for the SSH path."`
+	Archive        *hostaccounts.MigrationArchive  `json:"archive,omitempty" doc:"For an uploaded backup file: the account, domain and databases it holds, and what will not move."`
 	ExpiresAt      time.Time                       `json:"expires_at"`
 }
 
 func migrationSource(m hostaccounts.Migration) MigrationSource {
-	return MigrationSource{ID: m.ID, Host: m.Host, Port: m.Port, KeyLine: m.PublicKey, InstallCommand: m.InstallCommand, HostKeys: m.HostKeys, Pinned: m.Pinned, Via: m.Via, ExpiresAt: m.ExpiresAt}
+	return MigrationSource{ID: m.ID, Host: m.Host, Port: m.Port, KeyLine: m.PublicKey, InstallCommand: m.InstallCommand, HostKeys: m.HostKeys, Pinned: m.Pinned, Via: m.Via, Archive: m.Archive, ExpiresAt: m.ExpiresAt}
 }
 
 // migrationWHMInput is the WHM login form. The token and the password are

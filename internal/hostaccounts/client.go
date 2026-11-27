@@ -432,6 +432,30 @@ func (c *client) exchange(ctx context.Context, h *http.Client, method, path stri
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	return c.answer(h, req, output, limit)
+}
+
+// exchangeStream sends body, of exactly length bytes, as
+// application/octet-stream and reads the answer as exchange does.
+func (c *client) exchangeStream(ctx context.Context, h *http.Client, path string, body io.Reader, length int64, output any, limit int64) error {
+	if ctx == nil || body == nil || length <= 0 {
+		return ErrInvalid
+	}
+	if !c.configured {
+		return ErrUnavailable
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix"+path, body)
+	if err != nil {
+		return ErrInvalid
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = length
+	return c.answer(h, req, output, limit)
+}
+
+// answer sends req and reads the broker's answer into output, or its
+// error as the package's errors.
+func (c *client) answer(h *http.Client, req *http.Request, output any, limit int64) error {
 	response, err := h.Do(req)
 	if err != nil {
 		return ErrUnavailable

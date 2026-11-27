@@ -46,8 +46,12 @@ type CertificateState struct {
 	NotAfter    int64  `json:"not_after"`   // Unix seconds of the leaf's NotAfter
 	Fingerprint string `json:"fingerprint"` // SHA-256 of the leaf DER, lowercase hex
 	// Names are the leaf's DNS names, sorted and joined with commas, each
-	// one of the site's domains when it was installed. Empty for a
-	// certificate installed before the broker kept them: it named the
+	// one of the site's domains when it was installed. A certificate
+	// copied from the old server when the site moved here may name more
+	// (its www., mail. and other names there); only the site's domains
+	// among them are served. Empty for a certificate installed before the
+	// broker kept them, or a copied one whose names are not all plain
+	// domains (a wildcard) or are more than a site has: it covers the
 	// account's own domain. A string, so an Account stays comparable.
 	Names string `json:"names,omitempty"`
 }
@@ -210,6 +214,24 @@ func (b certificateBundle) fits(domains []string, primary string, now time.Time)
 		}
 	}
 	if !slices.Contains(leaf.DNSNames, primary) || now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+		return ErrCertificateRejected
+	}
+	return nil
+}
+
+// fitsCopy is fits for a certificate copied from the old server when the
+// site moved here (migrateCertificate): it was made for that server, so it
+// may name more than the site's domains here (www., mail., a wildcard),
+// and the HTTPS listener serves only the site's domains among its names
+// (coveredDomains). It must cover the account's own domain (primary) as a
+// browser checks a name, wildcards included, name no IP address, email or
+// URI, and be valid now.
+func (b certificateBundle) fitsCopy(primary string, now time.Time) error {
+	leaf := b.leaf
+	if len(leaf.IPAddresses) != 0 || len(leaf.EmailAddresses) != 0 || len(leaf.URIs) != 0 || leaf.VerifyHostname(primary) != nil {
+		return ErrCertificateRejected
+	}
+	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
 		return ErrCertificateRejected
 	}
 	return nil

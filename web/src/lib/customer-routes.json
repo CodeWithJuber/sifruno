@@ -99,6 +99,7 @@
   "POST /api/v1/websites/backup-storage/password": "adminOnly",
   "POST /api/v1/websites/backup-storage/password-saved": "adminOnly",
   "POST /api/v1/websites/migrations": "adminOnly",
+  "POST /api/v1/websites/migrations/archive": "adminOnly",
   "POST /api/v1/websites/migrations/sources": "adminOnly",
   "POST /api/v1/websites/migrations/sources/{id}/cancel": "adminOnly",
   "POST /api/v1/websites/migrations/sources/{id}/host-key": "adminOnly",

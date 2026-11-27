@@ -450,6 +450,53 @@ func (c *Client) Answers(ctx context.Context, user string) (*hostaccounts.CPanel
 	return answers, nil
 }
 
+// Certificate fetches the certificate, private key and CA bundle installed
+// on the domain's virtual host, for the broker's copy of the old site's
+// certificate, in the shape whmapi1 --output=json prints. The documented
+// filter asks for that virtual host only, and only its components are
+// kept, even from a WHM that answers for every site, so no other site's
+// key goes further. The answer holds a private key: the caller sends it to
+// the broker with the certificate step alone and keeps no copy.
+// WHM API 1 fetch_vhost_ssl_components: https://api.docs.cpanel.net/openapi/whm/operation/fetch_vhost_ssl_components/
+// Filters: https://api.docs.cpanel.net/whm/filter-output
+func (c *Client) Certificate(ctx context.Context, domain string) (json.RawMessage, error) {
+	if !cpsource.ValidDomain(domain) {
+		return nil, hostaccounts.ErrInvalid
+	}
+	out, err := c.call(ctx, "fetch_vhost_ssl_components", url.Values{"api.filter.enable": {"1"}, "api.filter.a.field": {"servername"}, "api.filter.a.arg0": {domain}, "api.filter.a.type": {"eq"}})
+	if err != nil {
+		return nil, err
+	}
+	defer clear(out)
+	var raw struct {
+		Data struct {
+			Components []json.RawMessage `json:"components"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(out, &raw) != nil {
+		return nil, &hostaccounts.MigrationError{Step: "whm_output", Detail: "The old server's certificates could not be read (WHM API 1 fetch_vhost_ssl_components)."}
+	}
+	var shaped struct {
+		Data struct {
+			Components []json.RawMessage `json:"components"`
+		} `json:"data"`
+	}
+	shaped.Data.Components = []json.RawMessage{}
+	for _, v := range raw.Data.Components {
+		var entry struct {
+			ServerName string `json:"servername"`
+		}
+		if json.Unmarshal(v, &entry) == nil && entry.ServerName == domain {
+			shaped.Data.Components = append(shaped.Data.Components, v)
+		}
+	}
+	answer, err := json.Marshal(shaped)
+	for _, v := range raw.Data.Components {
+		clear(v)
+	}
+	return answer, err
+}
+
 // onlyVhost keeps the domain's entry of php_get_vhost_versions' list, in
 // the same shape.
 func onlyVhost(out []byte, domain string) ([]byte, error) {

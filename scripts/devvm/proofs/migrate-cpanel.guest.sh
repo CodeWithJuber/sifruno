@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Migration v1 proof, guest side (proof.sh migrate-cpanel copies it in).
-# Runs as root in the dev VM:  migrate-cpanel.guest.sh DIR PORT [whm]
+# Runs as root in the dev VM:  migrate-cpanel.guest.sh DIR PORT [whm|cert]
 # DIR holds the panel (sifruno, dist.tgz, state.tgz); the panel listens on
 # 127.0.0.1:PORT as sifpanel with the broker and the MariaDB option file.
 # With whm, the SSH path's sections are left out and the WHM login path
-# runs instead (whm_proof below). KEEP_STANDIN=1 keeps the stand-in
+# runs instead (whm_proof below). With cert, the old sites serve https with
+# certificates from a throwaway CA and the moves copy them (cert_proof
+# below). KEEP_STANDIN=1 keeps the stand-in
 # container running afterwards, for screenshots; remove it with
 # podman rm -f NAME.
 #
@@ -17,11 +19,23 @@
 # documentation gives for listaccts, domainuserdata,
 # php_get_vhost_versions, Mysql list_databases and list_users, for exactly
 # the accounts this script makes. Six accounts:
-#   shop<id>   WordPress with its rewrite rules and the stock Akismet
-#              plugin, whose .htaccess (deny all, a <FilesMatch> allow-list,
-#              Apache 2.2 and 2.4 branches) the converter turns into an
-#              OpenLiteSpeed rule: the full path, from discovery to the DNS
-#              records, with the closed folder and its open files checked
+#   shop<id>   WordPress with the .htaccess blocks of WP Rocket, Wordfence,
+#              Solid Security and the hardening guide (<Files> rules for
+#              wp-config.php, xmlrpc.php, .user.ini ...), cPanel's PHP
+#              handler block, an ErrorDocument and two redirects, which
+#              move Native, the CORS and X-Robots-Tag headers as notes to
+#              accept, a backup index.php.bak the copy refuses, cPanel's
+#              MultiPHP INI block of php_value and php_flag lines, which
+#              the copy carries into its vhost's phpIniOverride (each
+#              setting reads back the same through PHP on both servers),
+#              a .user.ini with the same settings and Wordfence's
+#              auto_prepend_file, whose note keeps the gate closed until
+#              accepted, and the
+#              stock Akismet plugin, whose .htaccess
+#              (deny all, a <FilesMatch> allow-list, Apache 2.2 and 2.4
+#              branches) the converter turns into an OpenLiteSpeed rule: the
+#              full path, from discovery to the DNS records, with the closed
+#              folder and its open files checked
 #   staff<id>  a password-protected folder (.htaccess + a user file in
 #              .htpasswds, as cPanel's Directory Privacy keeps it) and a
 #              folder closed with Deny from all, two address-list folders
@@ -30,7 +44,9 @@
 #              password, 200 with it, 403 for the closed folder, the lists
 #              by client address, and every other spelling of the paths
 #   odd<id>    an .htaccess with a directive the converter does not know:
-#              refused before anything is created
+#              refused before anything is created, naming its file and line;
+#              then Wordfence's mod_php block, whose php_value
+#              auto_prepend_file line is refused the same way
 #   trig<id>   a PHP site whose database has a trigger: the copy fails at
 #              the database and the job removes what it created
 #   race<id>   a tenant that swaps a folder for a link to /root while the
@@ -41,8 +57,8 @@
 # Every check prints PASS or FAIL; the exit status is the number of FAILs.
 set -uo pipefail
 
-DIR="${1:?usage: migrate-cpanel.guest.sh DIR PORT [whm]}"
-PORT="${2:?usage: migrate-cpanel.guest.sh DIR PORT [whm]}"
+DIR="${1:?usage: migrate-cpanel.guest.sh DIR PORT [whm|cert]}"
+PORT="${2:?usage: migrate-cpanel.guest.sh DIR PORT [whm|cert]}"
 MODE="${3:-ssh}"
 BIN=/opt/sifruno-proof
 SOCKET=/run/sifruno-broker/control.sock
@@ -89,6 +105,9 @@ sample_stop() { kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null; }
 # shellcheck disable=SC2317 # called by the EXIT trap below
 cleanup() {
   sample_stop 2>/dev/null
+  if [ -n "${ANCHOR:-}" ] && [ -e "$ANCHOR" ]; then
+    rm -f "$ANCHOR" && update-ca-trust extract
+  fi
   if [ "${KEEP_STANDIN:-0}" = 1 ]; then
     echo "# kept: the stand-in $CTR and its /etc/hosts lines"
     return
@@ -101,6 +120,55 @@ trap cleanup EXIT
 echo "# Migration v1: one website account from a cPanel stand-in over root SSH"
 echo "# $(date -u +%FT%TZ)  $(rpm -q openlitespeed mariadb-server podman rsync openssh-clients | paste -sd ' ')"
 echo "# accounts $SHOP, $STAFF, $ODD, $TRIG, $RACE, $HARD; container $CTR from $IMAGE"
+
+# cert mode: a throwaway CA, root and intermediate, and certificates for
+# the old sites: shop and staff valid for 90 days, race expired on
+# 2026-10-01. The root stands for a public CA: it joins this server's trust
+# store for the run (cleanup removes it), so the broker's check and the
+# comparison trust it as they would a public one. The panel gets website
+# certificates on (--acme-email) with an ACME directory nothing answers at,
+# so it records the copied certificates and orders none.
+CA="$WORK/ca"
+ACME_ARGS=""
+ca_leaf() { # ca_leaf NAME DOMAIN [START END]: an RSA 2048 key and a leaf from the intermediate
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$CA/$1.key" 2>/dev/null
+  openssl req -new -key "$CA/$1.key" -subj "/CN=$2" -out "$CA/$1.csr" 2>/dev/null
+  printf 'basicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s,DNS:www.%s,DNS:mail.%s\n' "$2" "$2" "$2" > "$CA/$1.ext"
+  if [ -n "${3:-}" ]; then
+    openssl ca -batch -config "$CA/ca.cnf" -cert "$CA/inter.pem" -keyfile "$CA/inter.key" -in "$CA/$1.csr" -out "$CA/$1.pem" \
+      -startdate "$3" -enddate "$4" -extfile "$CA/$1.ext" -notext -md sha256 >/dev/null 2>&1
+  else
+    openssl x509 -req -in "$CA/$1.csr" -CA "$CA/inter.pem" -CAkey "$CA/inter.key" -set_serial "0x$(openssl rand -hex 8)" -days 90 -sha256 -extfile "$CA/$1.ext" -out "$CA/$1.pem" 2>/dev/null
+  fi
+}
+fingerprint_of() { openssl x509 -noout -fingerprint -sha256 -in "$1" 2>/dev/null | sed 's/.*=//'; }
+if [ "$MODE" = cert ]; then
+  echo
+  echo "## 0. A throwaway certificate authority (the proof's, not public)"
+  install -d -m 0700 "$CA" "$CA/new"
+  : > "$CA/index.txt"
+  echo 1000 > "$CA/serial"
+  printf '[ ca ]\ndefault_ca = proof\n[ proof ]\ndatabase = %s/index.txt\nnew_certs_dir = %s/new\nserial = %s/serial\ndefault_md = sha256\npolicy = any\nunique_subject = no\n[ any ]\ncommonName = supplied\n' "$CA" "$CA" "$CA" > "$CA/ca.cnf"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$CA/root.key" 2>/dev/null
+  openssl req -x509 -new -key "$CA/root.key" -subj "/CN=Sifruno proof root $RUNID" -days 30 -sha256 \
+    -addext basicConstraints=critical,CA:true -addext keyUsage=critical,keyCertSign,cRLSign -out "$CA/root.pem" 2>/dev/null
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$CA/inter.key" 2>/dev/null
+  openssl req -new -key "$CA/inter.key" -subj "/CN=Sifruno proof intermediate $RUNID" -out "$CA/inter.csr" 2>/dev/null
+  printf 'basicConstraints=critical,CA:true,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n' > "$CA/inter.ext"
+  openssl x509 -req -in "$CA/inter.csr" -CA "$CA/root.pem" -CAkey "$CA/root.key" -set_serial 2 -days 30 -sha256 -extfile "$CA/inter.ext" -out "$CA/inter.pem" 2>/dev/null
+  ca_leaf shop "$SHOP_DOMAIN"
+  ca_leaf staff "$STAFF_DOMAIN"
+  ca_leaf race "$RACE_DOMAIN" 20260801000000Z 20261001000000Z
+  for leaf in shop staff race; do
+    echo "  $leaf: $(openssl x509 -noout -subject -enddate -ext subjectAltName -in "$CA/$leaf.pem" 2>/dev/null | tr '\n' ' ' | tr -s ' ' | sed 's/ *$//')"
+  done
+  check "the shop and staff certificates chain to the proof's root through the intermediate" bash -c "openssl verify -CAfile $CA/root.pem -untrusted $CA/inter.pem $CA/shop.pem $CA/staff.pem"
+  check "the race certificate expired on 2026-10-01" bash -c "! openssl x509 -checkend 0 -noout -in $CA/race.pem && openssl x509 -noout -enddate -in $CA/race.pem | grep -q 'Oct  1 00:00:00 2026 GMT'"
+  ANCHOR="/etc/pki/ca-trust/source/anchors/sifruno-proof-$RUNID.pem"
+  cp "$CA/root.pem" "$ANCHOR" && update-ca-trust extract
+  check "this server's trust store holds the proof's root for the run" grep -q "$(sed -n 2p "$CA/root.pem")" /etc/pki/tls/certs/ca-bundle.crt
+  ACME_ARGS="--acme-email proof@example.com --acme-directory https://127.0.0.1:9/directory"
+fi
 
 echo
 echo "## 1. The broker and the panel"
@@ -117,7 +185,7 @@ tar -xzf dist.tgz && tar -xzf state.tgz && chown -R sifpanel:sifpanel "$DIR" && 
 restorecon -R "$DIR" 2>/dev/null
 pkill -x sifruno 2>/dev/null
 runuser -u sifpanel -- sh -c "nohup ./sifruno --listen 127.0.0.1:$PORT --sites-listen '' --state ./state --ui ./dist \
-  --accounts-socket $SOCKET --db-defaults-file /var/lib/sifpanel/db-admin.cnf --dns-ip $VMIP > panel.log 2>&1 &"
+  --accounts-socket $SOCKET --db-defaults-file /var/lib/sifpanel/db-admin.cnf --dns-ip $VMIP $ACME_ARGS > panel.log 2>&1 &"
 for _ in $(seq 1 90); do curl -fs -o /dev/null "$API/" && break; sleep 2; done
 check "the panel answers on 127.0.0.1:$PORT as sifpanel, its DNS address $VMIP" curl -fs -o /dev/null "$API/"
 for tool in /usr/bin/rsync /usr/bin/ssh /usr/bin/ssh-keyscan /usr/bin/cp /usr/bin/mariadb; do
@@ -144,8 +212,15 @@ if [ -n "$PHPXY" ] && [ ! -x "$LSWS/lsphp$PHPXY/bin/lsphp" ]; then
   dnf -y -q install "lsphp$PHPXY" "lsphp$PHPXY-common" "lsphp$PHPXY-mysqlnd" >/dev/null 2>&1
 fi
 check "this server has LSPHP $PHPXY for the copy" test -x "$LSWS/lsphp$PHPXY/bin/lsphp"
+# OpenSSH 9.8 and later (the stand-in's packages now bring 9.9) block a
+# source address for a while after refused sign-ins (PerSourcePenalties:
+# authfail 5 s each, from 15 s). The proof refuses sign-ins from this
+# server on purpose, before a key is installed and after each removal, so
+# the stand-in turns that off; an sshd that does not know the keyword
+# keeps its file as it was.
 in_ctr "ssh-keygen -A >/dev/null; mkdir -p /root/.ssh && chmod 700 /root/.ssh && : > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys; \
-  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config; /usr/sbin/sshd; \
+  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config; \
+  echo 'PerSourcePenalties no' >> /etc/ssh/sshd_config; /usr/sbin/sshd -t || sed -i '/^PerSourcePenalties no$/d' /etc/ssh/sshd_config; /usr/sbin/sshd; \
   mariadb-install-db --user=mysql >/dev/null 2>&1; (mysqld_safe --user=mysql >/dev/null 2>&1 &); \
   mkdir -p /run/php-fpm && php-fpm -D; httpd -k start" >/dev/null 2>&1
 for _ in $(seq 1 30); do in_ctr "mysql -e 'select 1'" >/dev/null 2>&1 && break; sleep 1; done
@@ -202,19 +277,86 @@ secret > "$WORK/admin.pw"
 podman cp "$WORK/admin.pw" "$CTR:/root/admin.pw"
 in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN core install --url=http://$SHOP_DOMAIN --title='$TITLE' --admin_user=standin --admin_email=standin@proof.test --skip-email --prompt=admin_password < /root/admin.pw && rm -f /root/admin.pw" >/dev/null 2>&1
 wp "post create --post_title='Moved with Sifruno' --post_status=publish" >/dev/null 2>&1
-# WordPress's own rewrite block, and a rewrite deny OpenLiteSpeed honours.
-in_ctr "cat > /home/$SHOP/public_html/.htaccess <<'HT'
-# BEGIN WordPress
-<IfModule mod_rewrite.c>
-RewriteEngine On
-RewriteBase /
-RewriteRule ^index\.php\$ - [L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /index.php [L]
+# Pretty permalinks, so WordPress's rewrite block serves the post's address.
+wp "rewrite structure '/%postname%/'" >/dev/null 2>&1
+# A WordPress .htaccess with the blocks plugins write on cPanel:
+# internal/htaccess/testdata/wordpress-plugins.htaccess (WP Rocket with
+# its CDN fonts block, Solid Security's protected files and disabled
+# XML-RPC, WordPress's rewrite block, Wordfence's .user.ini rule and the
+# hardening guide's wp-config.php rule), then cPanel's PHP handler block,
+# the common xmlrpc.php rule, an X-Robots-Tag header for PDFs, an
+# ErrorDocument and two redirects. The access rules close names at the
+# root; the redirects and error page move into the vhost; the CORS and
+# X-Robots-Tag headers cannot be carried and are notes to accept.
+podman cp "$BIN/wordpress-plugins.htaccess" "$CTR:/root/wordpress-plugins.htaccess"
+# The site's PHP settings, as cPanel's MultiPHP INI Editor writes them into
+# the root .htaccess for the DSO and LSAPI handlers. The stand-in runs
+# PHP-FPM, for which those <IfModule> blocks are inert: it reads the same
+# settings from the document root's .user.ini, where Wordfence's
+# extended protection adds its auto_prepend_file (its "cgi" case). So the
+# old site's PHP has these settings and runs wordfence-waf.php first; the
+# copy gets the settings from the converted .htaccess lines, and the note
+# says the firewall file does not run there.
+{
+  echo '# BEGIN cPanel-generated php ini directives, do not edit'
+  echo '# Manual editing of this file may result in unexpected behavior.'
+  for module in php8_module lsapi_module; do
+    printf '<IfModule %s>\n' "$module"
+    printf '   php_flag display_errors Off\n   php_value max_execution_time 300\n   php_value max_input_time 600\n   php_value max_input_vars 3000\n'
+    printf '   php_value memory_limit 512M\n   php_value post_max_size 128M\n   php_value session.gc_maxlifetime 7200\n'
+    printf '   php_value session.save_path "/var/cpanel/php/sessions/ea-php%s"\n' "$PHPXY"
+    printf '   php_value upload_max_filesize 128M\n   php_flag zlib.output_compression Off\n</IfModule>\n'
+  done
+  echo '# END cPanel-generated php ini directives, do not edit'
+} > "$WORK/php-ini.htaccess"
+{
+  echo '; cPanel-generated php ini directives, do not edit'
+  printf 'display_errors = Off\nmax_execution_time = 300\nmax_input_time = 600\nmax_input_vars = 3000\nmemory_limit = 512M\n'
+  printf 'post_max_size = 128M\nsession.gc_maxlifetime = 7200\nupload_max_filesize = 128M\nzlib.output_compression = Off\n\n'
+  printf '; Wordfence WAF\nauto_prepend_file = '"'"'/home/%s/public_html/wordfence-waf.php'"'"'\n; END Wordfence WAF\n' "$SHOP"
+} > "$WORK/user.ini"
+# Stand-ins for Wordfence's loader and a page that prints the settings.
+printf '<?php\ndefine("SIFRUNO_PROOF_WAF", true);\n' > "$WORK/wordfence-waf.php"
+cat > "$WORK/sifruno-ini.php" <<'PHP'
+<?php
+header('Content-Type: application/json');
+$out = ['sapi' => PHP_SAPI, 'waf' => defined('SIFRUNO_PROOF_WAF')];
+foreach (['display_errors', 'max_execution_time', 'max_input_time', 'max_input_vars', 'memory_limit', 'post_max_size', 'session.gc_maxlifetime', 'upload_max_filesize', 'zlib.output_compression'] as $k) {
+    $v = ini_get($k);
+    // A flag reads back as "", "0" or "Off" when off: compare its meaning.
+    $out[$k] = in_array($k, ['display_errors', 'zlib.output_compression'], true) ? (filter_var($v, FILTER_VALIDATE_BOOLEAN) ? 'on' : 'off') : $v;
+}
+echo json_encode($out);
+PHP
+for file in php-ini.htaccess user.ini wordfence-waf.php sifruno-ini.php; do podman cp "$WORK/$file" "$CTR:/root/$file"; done
+in_ctr "{ cat /root/wordpress-plugins.htaccess; cat <<'HT'
+# php -- BEGIN cPanel-generated handler, do not edit
+# Set the \"ea-php$PHPXY\" package as the default \"PHP\" programming language.
+<IfModule mime_module>
+  AddHandler application/x-httpd-ea-php$PHPXY .php .php${PHPXY:0:1} .phtml
 </IfModule>
-# END WordPress
+# php -- END cPanel-generated handler, do not edit
+
+# Block WordPress xmlrpc.php requests
+<Files xmlrpc.php>
+order deny,allow
+deny from all
+</Files>
+<FilesMatch \"\\.pdf\$\">
+Header set X-Robots-Tag \"noindex, nofollow\"
+</FilesMatch>
+ErrorDocument 403 /403.html
+Redirect 301 /old-page /moved-with-sifruno
+RedirectMatch 302 ^/archive/([0-9]+)/?\$ /?m=\$1
 HT
+} > /home/$SHOP/public_html/.htaccess; rm -f /root/wordpress-plugins.htaccess
+cat /root/php-ini.htaccess >> /home/$SHOP/public_html/.htaccess; rm -f /root/php-ini.htaccess
+mv /root/user.ini /home/$SHOP/public_html/.user.ini; mv /root/wordfence-waf.php /root/sifruno-ini.php /home/$SHOP/public_html/
+echo '<?php echo 1; // sifruno-phtml-source' > /home/$SHOP/public_html/info.phtml
+cp /home/$SHOP/public_html/index.php /home/$SHOP/public_html/index.php.bak
+echo '<!doctype html><title>Forbidden</title><p>sifruno-error-page-403' > /home/$SHOP/public_html/403.html
+install -d /home/$SHOP/public_html/wp-content/uploads/fonts
+echo 'font' > /home/$SHOP/public_html/wp-content/uploads/fonts/proof.woff2
 chown -R $SHOP:apache /home/$SHOP/public_html
 find /home/$SHOP/public_html -type d -exec chmod 0750 {} +; find /home/$SHOP/public_html -type f -exec chmod 0640 {} +"
 in_ctr "echo '*/15 * * * * php /home/$SHOP/public_html/wp-cron.php >/dev/null 2>&1' | crontab -u $SHOP -"
@@ -234,6 +376,7 @@ printf '# Directory Privacy\nstaff:%s\n' \"\$(openssl passwd -apr1 '$HT_PW')\" >
 printf 'AuthType Basic\nAuthName \"Staff area\"\nAuthUserFile /home/$STAFF/.htpasswds/public_html/private/passwd\nRequire valid-user\n' > /home/$STAFF/public_html/private/.htaccess
 printf 'Order Deny,Allow\nDeny from all\n' > /home/$STAFF/public_html/backups/.htaccess
 echo 'dump' > /home/$STAFF/public_html/backups/backup.sql
+echo 'notes' > /home/$STAFF/public_html/backups/notes.txt
 printf 'Order Deny,Allow\nDeny from all\nAllow from 127.0.0.2\n' > /home/$STAFF/public_html/office/.htaccess
 echo 'Office' > /home/$STAFF/public_html/office/index.html
 printf 'Order Allow,Deny\nAllow from all\nDeny from 127.0.0.2\n' > /home/$STAFF/public_html/lobby/.htaccess
@@ -281,6 +424,21 @@ php_get_vhost_versions)
     printf '%s{"account":"%s","vhost":"%s","version":"ea-php%s","documentroot":"/home/%s/public_html","homedir":"/home/%s","main_domain":1,"php_fpm":1}' "$sep" "$u" "$d" "$php" "$u" "$u"; sep=,
   done < /etc/standin-accounts
   printf ']},"metadata":{"command":"php_get_vhost_versions","reason":"OK","result":1,"version":1}}\n' ;;
+fetch_vhost_ssl_components)
+  want=""
+  for a in "$@"; do case "$a" in api.filter.a.arg0=*) want="${a#api.filter.a.arg0=}" ;; esac; done
+  python3 - "$want" <<'PY'
+import json, os, sys
+want, root, comps = sys.argv[1], '/etc/standin-ssl', []
+for d in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+    if want and d != want:
+        continue
+    part = lambda n: open(os.path.join(root, d, n)).read()
+    comps.append({'servername': d, 'certificate': part('cert.pem'), 'key': part('key.pem'), 'cabundle': part('cabundle.pem'),
+                  'certificate_id': d.replace('.', '_'), 'key_id': d.replace('.', '_'), 'cabundle_id': 'proof'})
+print(json.dumps({'data': {'components': comps}, 'metadata': {'command': 'fetch_vhost_ssl_components', 'reason': 'OK', 'result': 1, 'version': 1}}))
+PY
+  ;;
 *) echo "stand-in whmapi1: $fn is not part of the proof" >&2; exit 1 ;;
 esac
 STUB
@@ -322,12 +480,59 @@ check "the old WordPress site answers with its title" bash -c "curl -s http://$S
 status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 check "the old staff site closes /private/ with 401" test "$(status "http://$STAFF_DOMAIN/private/")" = 401
 check "the old staff site opens /private/ with the password (200)" test "$(status -u "staff:$HT_PW" "http://$STAFF_DOMAIN/private/")" = 200
-check "the old staff site denies /backups/backup.sql with 403" test "$(status "http://$STAFF_DOMAIN/backups/backup.sql")" = 403
+check "the old staff site denies /backups/backup.sql and /backups/notes.txt with 403" test "$(status "http://$STAFF_DOMAIN/backups/backup.sql")" = 403 -a "$(status "http://$STAFF_DOMAIN/backups/notes.txt")" = 403
 check "the old staff site answers 401 for /pub/index.html, rewritten into /private/" test "$(status "http://$STAFF_DOMAIN/pub/index.html")" = 401
 check "the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/" test "$(status "http://$STAFF_DOMAIN/old-backups/backup.sql")" = 403
 check "the old staff site closes /office/ to this server (403) and opens /lobby/ (200)" test "$(status "http://$STAFF_DOMAIN/office/")" = 403 -a "$(status "http://$STAFF_DOMAIN/lobby/")" = 200
 check "the old WordPress denies Akismet's folder with 403" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/akismet.php")" = 403
 check "the old WordPress serves Akismet's allow-listed akismet.css with 200" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/_inc/akismet.css")" = 200
+# The plugin blocks on Apache: what the copy must answer the same.
+for path in /wp-config.php /xmlrpc.php /xmlrpc.php/x /readme.html /.user.ini /.htaccess; do
+  check "the old WordPress answers 403 for $path (<Files> rules)" test "$(status "http://$SHOP_DOMAIN$path")" = 403
+done
+check "the old WordPress serves the post at its pretty address (200)" bash -c "curl -s http://$SHOP_DOMAIN/moved-with-sifruno/ | grep -q 'Moved with Sifruno'"
+check "the old WordPress answers its 403 with the ErrorDocument page" bash -c "curl -s http://$SHOP_DOMAIN/wp-config.php | grep -q sifruno-error-page-403"
+old_redirect="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$SHOP_DOMAIN/old-page/sub?x=1")"
+old_match="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$SHOP_DOMAIN/archive/2026/")"
+echo "  old: /old-page/sub?x=1 -> $old_redirect; /archive/2026/ -> $old_match"
+check "the old WordPress redirects /old-page (Redirect 301) and /archive/2026/ (RedirectMatch 302)" bash -c "[ '${old_redirect%% *}' = 301 ] && [ '${old_match%% *}' = 302 ]"
+old_cors="$(curl -s -o /dev/null -D - "http://$SHOP_DOMAIN/wp-content/uploads/fonts/proof.woff2" | tr -d '\r' | grep -i '^access-control-allow-origin:')"
+echo "  old: fonts/proof.woff2 sends '$old_cors'"
+check "the old WordPress sends the CORS header on a font (WP Rocket)" test -n "$old_cors"
+check "the old WordPress serves the backup index.php.bak with its PHP source (200): the leak the copy closes" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://$SHOP_DOMAIN/index.php.bak)\" = 200 ] && curl -s http://$SHOP_DOMAIN/index.php.bak | grep -q wp-blog-header"
+old_ini="$(curl -s "http://$SHOP_DOMAIN/sifruno-ini.php")"
+echo "  old: sifruno-ini.php says $old_ini"
+check "the old WordPress's PHP (PHP-FPM) has the site's settings (memory_limit 512M, upload_max_filesize 128M ...) and ran Wordfence's file before the script" \
+  python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d['sapi']=='fpm-fcgi' and d['waf'] is True and d['memory_limit']=='512M' and d['upload_max_filesize']=='128M' and d['max_input_vars']=='3000' and d['session.gc_maxlifetime']=='7200'" "$old_ini"
+
+if [ "$MODE" = cert ]; then
+  echo
+  echo "## 2b. The old sites serve https: shop, staff and race with the proof CA's certificates"
+  # As cPanel keeps a virtual host's certificate: the certificate, its key and
+  # the CA bundle, which the stand-in whmapi1 prints as
+  # fetch_vhost_ssl_components does. mod_ssl's own ssl.conf (a localhost
+  # certificate made at boot) is replaced by these virtual hosts.
+  in_ctr "dnf -y -q install mod_ssl >/dev/null 2>&1; rm -f /etc/httpd/conf.d/ssl.conf; install -d -m 0700 /etc/standin-ssl"
+  {
+    echo "Listen 443 https"
+    for pair in "shop:$SHOP:$SHOP_DOMAIN" "staff:$STAFF:$STAFF_DOMAIN" "race:$RACE:$RACE_DOMAIN"; do
+      IFS=: read -r leaf u d <<<"$pair"
+      in_ctr "install -d -m 0700 /etc/standin-ssl/$d"
+      podman cp "$CA/$leaf.pem" "$CTR:/etc/standin-ssl/$d/cert.pem"
+      podman cp "$CA/$leaf.key" "$CTR:/etc/standin-ssl/$d/key.pem"
+      podman cp "$CA/inter.pem" "$CTR:/etc/standin-ssl/$d/cabundle.pem"
+      printf '<VirtualHost *:443>\n  ServerName %s\n  ServerAlias www.%s\n  DocumentRoot /home/%s/public_html\n  SSLEngine on\n  SSLCertificateFile /etc/standin-ssl/%s/cert.pem\n  SSLCertificateKeyFile /etc/standin-ssl/%s/key.pem\n  SSLCertificateChainFile /etc/standin-ssl/%s/cabundle.pem\n  CustomLog /var/log/httpd/ssl_access_log "%%h %%{SSL_PROTOCOL}x %%r %%>s %%{User-Agent}i"\n  <Directory /home/%s/public_html>\n    AllowOverride All\n    Require all granted\n  </Directory>\n</VirtualHost>\n' "$d" "$d" "$u" "$d" "$d" "$d" "$u"
+    done
+  } > "$WORK/standin-ssl.conf"
+  podman cp "$WORK/standin-ssl.conf" "$CTR:/etc/httpd/conf.d/standin-ssl.conf"
+  in_ctr "chmod 0600 /etc/standin-ssl/*/key.pem; httpd -t && httpd -k graceful" >/dev/null 2>&1
+  for _ in $(seq 1 20); do curl -s -o /dev/null --cacert "$CA/root.pem" "https://$SHOP_DOMAIN/" && break; sleep 1; done
+  check "the old shop site answers https with its certificate, which this server trusts" bash -c "curl -s --cacert $CA/root.pem https://$SHOP_DOMAIN/ | grep -q '$TITLE' && curl -s -o /dev/null https://$SHOP_DOMAIN/"
+  check "the old staff site answers https with its certificate" bash -c "curl -s https://$STAFF_DOMAIN/ | grep -q 'Staff site'"
+  check "the old race site serves its expired certificate (curl refuses it)" bash -c "! curl -s -o /dev/null https://$RACE_DOMAIN/ && curl -sk https://$RACE_DOMAIN/ | grep -q Race"
+  echo "  the old servers' certificates (SHA-256): shop $(fingerprint_of "$CA/shop.pem"), staff $(fingerprint_of "$CA/staff.pem"), race $(fingerprint_of "$CA/race.pem")"
+  check "the stand-in whmapi1 prints shop's certificate, key and bundle for fetch_vhost_ssl_components, filtered to its virtual host" bash -c "podman exec $CTR /usr/local/cpanel/bin/whmapi1 --output=json fetch_vhost_ssl_components api.filter.enable=1 api.filter.a.field=servername api.filter.a.arg0=$SHOP_DOMAIN api.filter.a.type=eq | python3 -c 'import json,sys; c=json.load(sys.stdin)[\"data\"][\"components\"]; assert [x[\"servername\"] for x in c] == [\"$SHOP_DOMAIN\"] and \"PRIVATE KEY\" in c[0][\"key\"]'"
+fi
 
 
 # ---- The WHM login path (D-0005) ------------------------------------------------
@@ -339,9 +544,9 @@ check "the old WordPress serves Akismet's allow-listed akismet.css with 200" tes
 # php_get_vhost_versions, uapi_cpanel and the key calls (importsshkey,
 # authorizesshkey, deletesshkey, listsshkeys) as cPanel's public API
 # documentation gives them, for root's API token only.
-whm_proof() {
+whm_standin() { # whm_standin SECTION: writes and starts the WHM API stub; STUB_FP
   echo
-  echo "## 3. The WHM API stand-in on port 2087 (Python; not cPanel)"
+  echo "## $1. The WHM API stand-in on port 2087 (Python; not cPanel)"
   cat > "$WORK/whm-standin.py" <<'STUB'
 #!/usr/bin/python3
 # STAND-IN for WHM API 1 over HTTPS in the migration proof: not cPanel. It
@@ -410,10 +615,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         LOG.write('%s\n' % function)
         if os.path.exists('/etc/standin-whm/broken'):
             return self.text(200, '2026/01/02 03:04:05 LD_Preload detected, refusing to run\n2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369.\n')
-        if function in ('listaccts', 'domainuserdata', 'php_get_vhost_versions'):
+        if function in ('listaccts', 'domainuserdata', 'php_get_vhost_versions', 'fetch_vhost_ssl_components'):
             args = ['/usr/local/cpanel/bin/whmapi1', '--output=json', function]
             if function == 'domainuserdata':
                 args.append('domain=' + q.get('domain', ''))
+            for k in ('api.filter.enable', 'api.filter.a.field', 'api.filter.a.arg0', 'api.filter.a.type'):
+                if function == 'fetch_vhost_ssl_components' and k in q:
+                    args.append('%s=%s' % (k, q[k]))
             out = tool(args)
             if out.returncode != 0:
                 return self.answer(function, 0, 'The function failed.')
@@ -484,6 +692,10 @@ STUB
   STUB_FP="$(in_ctr "openssl x509 -noout -fingerprint -sha256 -in /etc/standin-whm/cert.pem" | sed 's/.*=//')"
   echo "  WHM stand-in: https://$CIP:2087, certificate SHA-256 $STUB_FP (self-signed)"
   check "the WHM stand-in answers on port 2087 over HTTPS" bash -c "curl -sk -o /dev/null -w '%{http_code}' https://$CIP:2087/json-api/listaccts?api.version=1 | grep -qx 403"
+}
+
+whm_proof() {
+  whm_standin 3
   # As on the owner's server: cPanel's own tools refuse when started over
   # SSH. The stand-in scripts print what the owner's screen showed.
   cat > "$WORK/preload-guard" <<'GUARD'
@@ -620,6 +832,187 @@ print(json.dumps(b))" "$CIP" "$1" "$2" > "$WORK/whm.json"
   check "the connection's login is forgotten: listing it again is refused" bash -c "code=\$(curl -s -o /dev/null -w '%{http_code}' -b $JAR -H 'Origin: $API' $API/api/v1/websites/migrations/sources/$SRC/accounts); [ \$code != 200 ]"
 }
 
+# ---- A cPanel backup file (archive mode) ----------------------------------------
+# With "archive" as the third argument, sections 3 to 9 (the SSH path) are
+# left out and this runs instead: the stand-in makes a backup file of the
+# shop and staff accounts in the layout cPanel's public "Backup Tarball
+# Contents" page describes (mkcpmove.sh below stands in for pkgacct; it is
+# not cPanel), the admin uploads each through the panel, and the move is
+# the same job as over SSH: files, the database with the same user and
+# hash, PHP, cron, the converted .htaccess rules, verify against the old
+# site, ready. Then two hostile files are refused before anything is made.
+cat > "$WORK/mkcpmove.sh" <<'MK'
+#!/bin/bash
+# STAND-IN for pkgacct in the migration proof: not cPanel. Makes
+# /root/cpmove-USER.tar.gz with cp/, userdata/, cron/, mysql/ (dumps and
+# CREATE statements), mysql.sql (SHOW GRANTS, as MariaDB prints them) and
+# homedir/, as cPanel's "Backup Tarball Contents" page lists them.
+set -euo pipefail
+u="$1" d="$2" php="$3"
+T="/root/pkg/cpmove-$u"
+rm -rf /root/pkg
+mkdir -p "$T/cp" "$T/userdata" "$T/cron" "$T/mysql" "$T/homedir" "$T/dnszones"
+printf 'pkgacct version: 10\narchive version: 4\n' > "$T/version"
+printf 'DNS=%s\nUSER=%s\nPLAN=default\n' "$d" "$u" > "$T/cp/$u"
+printf -- '---\naddon_domains: {}\nmain_domain: %s\nparked_domains: []\nsub_domains: []\n' "$d" > "$T/userdata/main"
+printf -- '---\ndocumentroot: /home/%s/public_html\ngroup: %s\nhomedir: /home/%s\nphpversion: ea-php%s\nserveralias: www.%s\nservername: %s\nuser: %s\n' "$u" "$u" "$u" "$php" "$d" "$d" "$u" > "$T/userdata/$d"
+printf '$ORIGIN %s.\n@ 14400 IN A 192.0.2.10\n' "$d" > "$T/dnszones/$d.db"
+crontab -l -u "$u" > "$T/cron/$u" 2>/dev/null || :
+for db in $(mysql -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE '${u}\\_%'"); do
+  mysqldump --single-transaction "$db" > "$T/mysql/$db.sql"
+  printf 'CREATE DATABASE `%s`;\n' "$db" > "$T/mysql/$db.create"
+done
+: > "$T/mysql.sql"
+for user in $(mysql -N -B -e "SELECT User FROM mysql.user WHERE User LIKE '${u}\\_%' AND Host='localhost'"); do
+  mysql -N -B -r -e "SHOW GRANTS FOR '$user'@'localhost'" | sed 's/$/;/' >> "$T/mysql.sql"
+done
+cp -a "/home/$u/." "$T/homedir/"
+mkdir -p "$T/homedir/mail" && echo 'mail stays with the old host' > "$T/homedir/mail/inbox"
+cd /root/pkg && tar -czf "/root/cpmove-$u.tar.gz" "cpmove-$u"
+rm -rf /root/pkg
+MK
+archive_proof() {
+  jm() { json "$WORK/job.json" "d['job']['migration']$1"; }
+  archive_move() { # archive_move USER: the move of $SRC and its comparison; JOB and $WORK/job.json
+    call POST /api/v1/websites/migrations "$(body start "{\"source\":\"$SRC\",\"username\":\"$1\"}")"
+    JOB="$(json "$WORK/answer.json" "d['job']['id']")"
+    [ "$code" = 202 ] || echo "  start answered $code: $(head -c 400 "$WORK/answer.json")"
+    for _ in $(seq 1 450); do
+      call GET "/api/v1/websites/jobs/$JOB"
+      cp "$WORK/answer.json" "$WORK/job.json"
+      state="$(json "$WORK/job.json" "d['job']['state']")"
+      [ "$state" != running ] && break
+      sleep 2
+    done
+    for _ in $(seq 1 150); do
+      [ "$(json "$WORK/job.json" "(d['job']['migration'].get('verify') or {}).get('running')")" = False ] && break
+      sleep 2; call GET "/api/v1/websites/jobs/$JOB"; cp "$WORK/answer.json" "$WORK/job.json"
+    done
+    echo "  job $JOB: $state"
+    python3 -c "import json,sys; [print('    %-8s %-8s %s' % (s['name'], s['state'], s['message'][:400].rstrip())) for s in json.load(open(sys.argv[1]))['job']['steps']]" "$WORK/job.json"
+  }
+  echo
+  echo "## 3. Backup files of $SHOP and $STAFF, in the layout cPanel documents"
+  podman cp "$WORK/mkcpmove.sh" "$CTR:/root/mkcpmove.sh"
+  for u in "$SHOP:$SHOP_DOMAIN" "$STAFF:$STAFF_DOMAIN"; do
+    in_ctr "bash /root/mkcpmove.sh ${u%%:*} ${u#*:} $PHPXY" && podman cp "$CTR:/root/cpmove-${u%%:*}.tar.gz" "$WORK/cpmove-${u%%:*}.tar.gz"
+  done
+  check "the stand-in made cpmove-$SHOP.tar.gz with cp/, userdata/, cron/, mysql/ and homedir/" bash -c "tar -tzf $WORK/cpmove-$SHOP.tar.gz | grep -qx 'cpmove-$SHOP/cp/$SHOP' && tar -tzf $WORK/cpmove-$SHOP.tar.gz | grep -qx 'cpmove-$SHOP/homedir/public_html/wp-config.php' && tar -tzf $WORK/cpmove-$SHOP.tar.gz | grep -qx 'cpmove-$SHOP/mysql/${SHOP}_wp.sql'"
+  check "its mysql.sql holds the user's grants as MariaDB prints them, with the hash" bash -c "tar -xzOf $WORK/cpmove-$SHOP.tar.gz cpmove-$SHOP/mysql.sql | grep -q 'TO \`${SHOP}_wpu\`@\`localhost\` IDENTIFIED BY PASSWORD'"
+  echo "  cpmove-$SHOP.tar.gz: $(stat -c %s "$WORK/cpmove-$SHOP.tar.gz") bytes, $(tar -tzf "$WORK/cpmove-$SHOP.tar.gz" | wc -l) entries; cpmove-$STAFF.tar.gz: $(stat -c %s "$WORK/cpmove-$STAFF.tar.gz") bytes"
+  python3 -c "import json,sys; print(json.dumps({'access_key': open(sys.argv[1]).read().strip()}))" "$DIR/state/operator/access.key" > "$WORK/login.json"
+  CSRF=""
+  call POST /api/v1/session/login "$WORK/login.json"
+  CSRF="$(json "$WORK/answer.json" "d['csrf_token']")"
+  check "the panel signs in with the server's access key" test "$code" = 200 -a -n "$CSRF"
+  upload() { # upload FILE: sends the backup file; $SRC and $WORK/answer.json
+    code="$(curl -s -o "$WORK/answer.json" -w '%{http_code}' -b "$JAR" -c "$JAR" -H "Origin: $API" -H "X-CSRF-Token: $CSRF" \
+      -H 'Content-Type: application/octet-stream' --data-binary "@$1" "$API/api/v1/websites/migrations/archive")"
+    SRC="$(json "$WORK/answer.json" "d['source']['id']")"
+  }
+  code="$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "Origin: $API" -H 'Content-Type: application/octet-stream' --data-binary "@$WORK/cpmove-$SHOP.tar.gz" "$API/api/v1/websites/migrations/archive")"
+  check "an upload without the CSRF token is refused (403)" test "$code" = 403
+
+  echo
+  echo "## 4. Move $SHOP_DOMAIN from its backup file"
+  upload "$WORK/cpmove-$SHOP.tar.gz"
+  echo "  answer: $(json "$WORK/answer.json" "{k: d['source']['archive'][k] for k in ('user','domain','databases','home_bytes')}")"
+  echo "  not carried: $(json "$WORK/answer.json" "[i['text'][:60] for i in d['source']['archive']['not_carried']]")"
+  check "the upload is read: account $SHOP, $SHOP_DOMAIN, the database ${SHOP}_wp" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['archive']['user']+' '+d['source']['archive']['domain']+' '+','.join(d['source']['archive']['databases'])")" = "$SHOP $SHOP_DOMAIN ${SHOP}_wp"
+  check "it says that mail and the DNS zone do not move" test "$(json "$WORK/answer.json" "sorted({i['part'] for i in d['source']['archive']['not_carried']})")" = "['dns', 'mail']"
+  check "the file is root's 0600 in the migration's own 0700 folder" test "$(stat -c '%U %a' "$STATE/migrate/$SRC/archive" "$STATE/migrate/$SRC" 2>/dev/null | paste -sd ' ')" = "root 600 root 700"
+  check "the file is the one uploaded (same sha256)" test "$(sha256sum < "$STATE/migrate/$SRC/archive" | cut -d' ' -f1)" = "$(sha256sum < "$WORK/cpmove-$SHOP.tar.gz" | cut -d' ' -f1)"
+  check "no migration key was made for a backup file" test ! -e "$STATE/migrate/$SRC/ssh_key"
+  call GET "/api/v1/websites/migrations/sources/$SRC/accounts"
+  check "the source lists the file's one account" test "$code" = 200 -a "$(json "$WORK/answer.json" "[a['user'] for a in d['accounts']]")" = "['$SHOP']"
+  sample_start
+  archive_move "$SHOP"
+  sample_stop
+  check "the move succeeded" test "$state" = succeeded
+  check "its first and last steps name the backup file" test "$(json "$WORK/job.json" "[s['title'] for s in d['job']['steps'] if s['name'] in ('source','key')]")" = "['Read the website from the backup file', 'Delete the uploaded backup file']"
+  check "the tier is Native (rewrite rules, and Akismet's access rules converted)" test "$(jm "['tier']")" = native
+  check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.json" "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
+  check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
+  src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
+  dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"
+  check "wp-config.php arrived unchanged (same sha256) and is the site user's" test -n "$src_sum" -a "$src_sum" = "$dst_sum" -a "$(stat -c %U "/home/$SHOP/public_html/wp-config.php" 2>/dev/null)" = "$SHOP"
+  check "the backup's mail folder was left out" test ! -e "/home/$SHOP/mail"
+  src_hash="$(in_ctr "mysql -N -e \"SELECT authentication_string FROM mysql.user WHERE User='${SHOP}_wpu' AND Host='localhost'\"")"
+  dst_hash="$(mysql --protocol=socket -uroot -N -e "SELECT authentication_string FROM mysql.user WHERE User='${SHOP}_wpu' AND Host='localhost'" 2>/dev/null)"
+  check "the database user ${SHOP}_wpu has the same password hash as in the backup" test -n "$src_hash" -a "$src_hash" = "$dst_hash"
+  src_posts="$(in_ctr "mysql -N -e 'SELECT COUNT(*) FROM ${SHOP}_wp.wp_posts'")"
+  dst_posts="$(mysql --protocol=socket -uroot -N -e "SELECT COUNT(*) FROM ${SHOP}_wp.wp_posts" 2>/dev/null)"
+  check "the database ${SHOP}_wp has the same rows (wp_posts $src_posts = $dst_posts)" test -n "$src_posts" -a "$src_posts" = "$dst_posts"
+  check "the site's own user signs in to its database with the old password (wp-config unchanged)" bash -c "mysql --protocol=socket -u${SHOP}_wpu -p\"\$(cat $WORK/shop.pw)\" -N -e 'SELECT 1' ${SHOP}_wp 2>/dev/null | grep -qx 1"
+  echo "  database step: $(json "$WORK/job.json" "[s['message'] for s in d['job']['steps'] if s['name']=='database'][0]")"
+  account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  vhconf="$LSWS/conf/vhosts/sifruno-u${account:0:31}/vhconf.conf"
+  check "the copy runs PHP ${PHPXY:0:1}.${PHPXY:1} (lsphp$PHPXY), the backup's version" grep -q "lsphp$PHPXY/bin/lsphp" "$vhconf"
+  new() { status -H "Host: $1" "http://127.0.0.1$2" "${@:3}"; }
+  for path in /wp-content/plugins/akismet/ /wp-content/plugins/akismet/akismet.php; do
+    check "the copy answers 403 for $path, as the old site" test "$(new "$SHOP_DOMAIN" "$path")" = 403
+  done
+  check "the copy answers 200 for the allow-listed akismet.css, as the old site" test "$(new "$SHOP_DOMAIN" /wp-content/plugins/akismet/_inc/akismet.css)" = 200
+  check "the scheduled job arrived in the site user's crontab" grep -q "wp-cron.php" "/var/spool/cron/$SHOP"
+  check "the preview (this server, the site's Host header) serves the site's title" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/ | grep -q '$TITLE'"
+  check "the preview serves the moved post" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' 'http://127.0.0.1/?s=Moved' | grep -q 'Moved with Sifruno'"
+  echo "  verify: $(jm "['verify']['verdict']")"
+  echo "  pages $(jm "['verify']['pages_compared']") compared, $(jm "['verify']['pages_pass']") pass, $(jm "['verify']['pages_fail']") fail; notes: $(jm "['notes']")"
+  check "verify compared the copy with the old site and found no difference" test "$(jm "['verify']['cutover_allowed']")" = True
+  gate="$(jm "['gate']")"
+  if [ "$gate" = closed ]; then
+    call POST "/api/v1/websites/migrations/$JOB/accept" "$(body accept '{"reason":"Proof run: the notes were read and accepted"}')"
+    cp "$WORK/answer.json" "$WORK/job.json"; gate="$(jm "['gate']")"
+  fi
+  check "the cutover gate is open (gate: $gate)" test "$gate" = open -o "$gate" = accepted
+  call POST "/api/v1/websites/migrations/$JOB/ready" "$(body ready '{}')"
+  cp "$WORK/answer.json" "$WORK/job.json"
+  check "marked ready, the panel names A records for the domain at $VMIP" test "$(jm "['dns'][0]['value']")" = "$VMIP" -a "$(jm "['gate']")" = ready
+  check "the uploaded file is deleted from this server, its folder too" test ! -e "$STATE/migrate/$SRC"
+  check "the job says the file was deleted" test "$(jm "['key_removed']")" = True
+  check "no password or hash was in any process's arguments during the upload and the move" bash -c "! grep -qF -e \"$(cat "$WORK/shop.pw")\" -e '$src_hash' $WORK/ps-samples.txt"
+  check "the job record holds no password or hash" bash -c "! grep -qF -e \"$(cat "$WORK/shop.pw")\" -e '$src_hash' $DIR/state/wizard/jobs.json"
+
+  echo
+  echo "## 5. Move $STAFF_DOMAIN from its backup file: a password folder, a closed folder and address lists, converted"
+  upload "$WORK/cpmove-$STAFF.tar.gz"
+  check "the staff backup is read" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['archive']['user']")" = "$STAFF"
+  archive_move "$STAFF"
+  check "the move succeeded" test "$state" = succeeded
+  echo "  converted: $(jm "['converted']")"
+  check "the copy closes /private/ with 401" test "$(new "$STAFF_DOMAIN" /private/)" = 401
+  check "the copy opens /private/ with the password from the backup's user file (200)" test "$(new "$STAFF_DOMAIN" /private/ -u "staff:$HT_PW")" = 200
+  check "the copy denies /backups/backup.sql with 403" test "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403
+  check "the copy answers 401 for /pub/index.html, rewritten into /private/" test "$(new "$STAFF_DOMAIN" /pub/index.html)" = 401
+  check "the uploaded staff file is deleted" test ! -e "$STATE/migrate/$SRC"
+
+  echo
+  echo "## 6. Hostile and wrong files are refused before anything is made"
+  before="$(find "$STATE/migrate" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"
+  python3 - "$WORK/evil.tar.gz" "$RUNID" <<'PY'
+import io, sys, tarfile
+out, runid = sys.argv[1], sys.argv[2]
+with tarfile.open(out, "w:gz") as t:
+    for name, body in [("cpmove-evil%s/cp/evil%s" % (runid, runid), b"DNS=evil.proof.test\n"),
+                       ("cpmove-evil%s/homedir/../../../../tmp/sifruno-evil-%s" % (runid, runid), b"escaped\n")]:
+        i = tarfile.TarInfo(name); i.size = len(body); t.addfile(i, io.BytesIO(body))
+PY
+  upload "$WORK/evil.tar.gz"
+  check "a file with a name that climbs out of its folder is refused (422)" test "$code" = 422
+  echo "  why: $(json "$WORK/answer.json" "d['detail']")"
+  check "and says it is damaged or in a form Sifruno does not read" grep -q "damaged or in a form Sifruno does not read" "$WORK/answer.json"
+  check "nothing was written outside, nor kept" test ! -e "/tmp/sifruno-evil-$RUNID" -a "$(find "$STATE/migrate" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" = "$before"
+  head -c 200000 /dev/urandom | gzip > "$WORK/random.tar.gz"
+  upload "$WORK/random.tar.gz"
+  check "a file that is not a backup is refused (422) and nothing is kept" test "$code" = 422 -a "$(find "$STATE/migrate" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" = "$before"
+}
+if [ "$MODE" = archive ]; then
+  archive_proof
+  echo
+  if [ "$fails" -eq 0 ]; then echo "RESULT: every check passed"; else echo "RESULT: $fails check(s) failed"; fi
+  exit "$fails"
+fi
+
 if [ "$MODE" = whm ]; then
   whm_proof
   echo
@@ -666,6 +1059,151 @@ call GET "/api/v1/websites/migrations/sources/$SRC/accounts"
 echo "  accounts listed: $(json "$WORK/answer.json" "' '.join(a['user'] for a in d['accounts'])")"
 check "discovery lists the six accounts with whmapi1 listaccts" test "$(json "$WORK/answer.json" "len(d['accounts'])")" = 6
 
+# ---- Certificates (cert mode) -------------------------------------------------
+# With "cert" as the third argument, after section 3 this runs instead of
+# the SSH path's own moves: shop moves over SSH and its certificate is
+# copied, so the copy answers https at once with the old site's certificate
+# and is compared with the old site over https; race's certificate expired,
+# so it is not copied and the move still finishes; staff moves with the
+# WHM login (the WHM stand-in, started here) and its certificate comes
+# through WHM's API.
+cert_move() { # cert_move USER: the move and its comparison; JOB and $WORK/job.json
+  call POST /api/v1/websites/migrations "$(body start "{\"source\":\"$SRC\",\"username\":\"$1\"}")"
+  JOB="$(json "$WORK/answer.json" "d['job']['id']")"
+  [ "$code" = 202 ] || echo "  start answered $code: $(head -c 400 "$WORK/answer.json")"
+  for _ in $(seq 1 450); do
+    call GET "/api/v1/websites/jobs/$JOB"
+    cp "$WORK/answer.json" "$WORK/job.json"
+    state="$(json "$WORK/job.json" "d['job']['state']")"
+    [ "$state" != running ] && break
+    sleep 2
+  done
+  for _ in $(seq 1 150); do
+    [ "$(json "$WORK/job.json" "(d['job']['migration'].get('verify') or {}).get('running')")" = False ] && break
+    sleep 2; call GET "/api/v1/websites/jobs/$JOB"; cp "$WORK/answer.json" "$WORK/job.json"
+  done
+  echo "  job $JOB: $state"
+  python3 -c "import json,sys; [print('    %-8s %-8s %s' % (s['name'], s['state'], s['message'][:400].rstrip())) for s in json.load(open(sys.argv[1]))['job']['steps']]" "$WORK/job.json"
+}
+jm() { json "$WORK/job.json" "d['job']['migration']$1"; }
+ssl_step() { json "$WORK/job.json" "[s for s in d['job']['steps'] if s['name']=='ssl'][0]['$1']"; }
+served() { # served DOMAIN HOST:PORT: the SHA-256 fingerprint of the certificate served there for DOMAIN
+  openssl s_client -connect "$2" -servername "$1" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//'
+}
+cert_ready() { # accepts the notes when they keep the gate closed, then marks the website ready
+  if [ "$(jm "['gate']")" = closed ]; then
+    call POST "/api/v1/websites/migrations/$JOB/accept" "$(body accept '{"reason":"Proof run: the notes were read and accepted"}')"
+    cp "$WORK/answer.json" "$WORK/job.json"
+  fi
+  call POST "/api/v1/websites/migrations/$JOB/ready" "$(body ready '{}')"
+  cp "$WORK/answer.json" "$WORK/job.json"
+  echo "  marked ready: gate $(jm "['gate']"), DNS records $(jm "['dns']")"
+}
+site_https() { # site_https ACCOUNT: the website's https as the panel's API answers it
+  call GET "/api/v1/websites/sites/$1"
+  json "$WORK/answer.json" "d['https']"
+}
+key_line() { sed -n 2p "$1"; } # a line of a key's base64, to look for it elsewhere
+
+cert_proof() {
+  echo
+  echo "## 4. $SHOP_DOMAIN over SSH: its certificate is copied"
+  sample_start
+  cert_move "$SHOP"
+  sample_stop
+  check "the move succeeded" test "$state" = succeeded
+  echo "  certificate step: $(ssl_step state): $(ssl_step message)"
+  check "the certificate step copied the old server's certificate, issued by the proof's intermediate" bash -c "[ '$(ssl_step state)' = done ] && grep -q 'Copied the old server.s certificate for $SHOP_DOMAIN, issued by Sifruno proof intermediate $RUNID, valid until' <<< \"\$1\"" _ "$(ssl_step message)"
+  account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  site="u${account:0:31}"
+  echo "  job record: certificate $(jm "['certificate']"); links $(json "$WORK/job.json" "d['job']['result']['url']") $(json "$WORK/job.json" "d['job']['result']['admin_url']")"
+  check "the job's links use https" test "$(json "$WORK/job.json" "d['job']['result']['url']")" = "https://$SHOP_DOMAIN/"
+  old_fp="$(fingerprint_of "$CA/shop.pem")"
+  new_fp="$(served "$SHOP_DOMAIN" 127.0.0.1:443)"
+  echo "  this server serves $SHOP_DOMAIN on 443 with SHA-256 $new_fp (the old server's: $old_fp)"
+  check "this server serves the old site's own certificate for $SHOP_DOMAIN" test -n "$new_fp" -a "$new_fp" = "$old_fp"
+  check "curl --resolve $SHOP_DOMAIN:443:127.0.0.1 with the proof's CA gets the moved site over https" bash -c "curl -s --cacert $CA/root.pem --resolve $SHOP_DOMAIN:443:127.0.0.1 https://$SHOP_DOMAIN/ | grep -q '$TITLE'"
+  check "and www.$SHOP_DOMAIN, which the certificate also names, the same way" bash -c "curl -s -o /dev/null --cacert $CA/root.pem --resolve www.$SHOP_DOMAIN:443:127.0.0.1 https://www.$SHOP_DOMAIN/"
+  check "plain http on the copy goes to https (Always use HTTPS, on by default)" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/)\" = '301 https://$SHOP_DOMAIN/' ]"
+  tls="/etc/sifruno/tls/$site"
+  echo "  the broker's certificate path: $(stat -c '%U:%G %a %n' "$tls" "$tls"/* 2>/dev/null | paste -sd ';' -)"
+  check "the key is in the broker's certificate path only: root's, 0600, and it matches the certificate" bash -c "[ \"\$(stat -c '%U %a' $tls/key.pem)\" = 'root 600' ] && [ \"\$(openssl pkey -in $tls/key.pem -pubout | sha256sum)\" = \"\$(openssl x509 -in $tls/cert.pem -noout -pubkey | sha256sum)\" ]"
+  needle="$(key_line "$CA/shop.key")"
+  check "the key is in no panel state, panel log, broker state, job record or process argument" bash -c "! grep -rqaF -- '$needle' $DIR/state $DIR/panel.log $STATE $WORK/job.json $WORK/ps-samples.txt"
+  check "nor in the broker's journal or any answer the panel saw" bash -c "! journalctl -u sifruno-broker-proof --no-pager 2>/dev/null | grep -qF -- '$needle' && ! grep -qF -- '$needle' $WORK/answer.json"
+  echo "  verify: $(jm "['verify']['verdict']")"
+  echo "  pages $(jm "['verify']['pages_compared']") compared, $(jm "['verify']['pages_pass']") pass, $(jm "['verify']['pages_fail']") fail"
+  check "the comparison ran over https on both sides (the old server's https log has its requests)" bash -c "[ '$(jm "['verify']['ran']")' = True ] && podman exec $CTR grep -q 'Sifruno-MigrationVerify' /var/log/httpd/ssl_access_log"
+  https="$(site_https "$account")"
+  echo "  the Domains tab's record: https $https"
+  check "the website's https says the certificate was copied from the old server, with its expiry" test "$(json "$WORK/answer.json" "d['https'].get('source')")" = copied -a "$(json "$WORK/answer.json" "d['https']['not_after']")" = "$(date -u -d "$(openssl x509 -noout -enddate -in "$CA/shop.pem" | cut -d= -f2)" +%FT%TZ)"
+  echo "  the certificate manager's record: $(python3 -c "import json,sys; print([s for s in json.load(open(sys.argv[1]))['sites'] if s['account_id']==sys.argv[2]])" "$DIR/state/acme/certificates.json" "$account")"
+  check "the certificate manager records it as copied, so the renewal loop replaces it before it runs out" test "$(python3 -c "import json,sys; print([s.get('copied') for s in json.load(open(sys.argv[1]))['sites'] if s['account_id']==sys.argv[2]])" "$DIR/state/acme/certificates.json" "$account")" = "[True]"
+  check "the panel logged the copy, with no key" bash -c "grep -q 'certificate copied from the old server, valid until' $DIR/panel.log"
+  cert_ready
+  check "the move is ready for cutover" test "$(jm "['gate']")" = ready
+
+  echo
+  echo "## 5. $RACE_DOMAIN over SSH: its certificate expired, so it is not copied and the move finishes"
+  connect race; pin race >/dev/null 2>&1; install_key race
+  cert_move "$RACE"
+  check "the move succeeded" test "$state" = succeeded
+  echo "  certificate step: $(ssl_step state): $(ssl_step message)"
+  check "the step says plainly that the expired certificate was not copied and https follows the DNS" bash -c "[ '$(ssl_step state)' = skipped ] && grep -q \"The old server's certificate was not copied. It expired on 2026-10-01. The site uses http on this server until $RACE_DOMAIN points here; then the panel gets it a certificate by itself.\" <<< \"\$1\"" _ "$(ssl_step message)"
+  echo "  job record: certificate $(jm "['certificate']")"
+  race_account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  check "the copy answers over http" bash -c "curl -s -H 'Host: $RACE_DOMAIN' http://127.0.0.1/ | grep -q Race"
+  race_fp="$(served "$RACE_DOMAIN" 127.0.0.1:443)"
+  check "this server does not serve the expired certificate ($race_fp)" test "$race_fp" != "$(fingerprint_of "$CA/race.pem")"
+  check "the broker staged and installed nothing for it" test ! -e "/etc/sifruno/tls/u${race_account:0:31}/cert.pem" -a ! -e "/etc/sifruno/tls/u${race_account:0:31}/key.pem"
+  echo "  the Domains tab's record: https $(site_https "$race_account")"
+  check "the website has no certificate yet" test "$(json "$WORK/answer.json" "d['https']['on']")" = False
+  check "the comparison ran over http, as before" test "$(jm "['verify']['ran']")" = True
+  cert_ready
+  check "the move is ready for cutover all the same" test "$(jm "['gate']")" = ready
+
+  whm_standin 6
+  echo
+  echo "## 7. $STAFF_DOMAIN with the WHM login: its certificate comes through WHM's API"
+  python3 -c "import json,sys; print(json.dumps({'address': 'https://' + sys.argv[1] + ':2087', 'token': open(sys.argv[2]).read().strip(), 'tls_fingerprint': sys.argv[3]}))" "$CIP" "$WORK/whm.token" "$STUB_FP" > "$WORK/whm.json"
+  call POST /api/v1/websites/migrations/whm "$WORK/whm.json"
+  SRC="$(json "$WORK/answer.json" "d['source']['id']")"
+  check "WHM's login connects (200)" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['via']")" = whm
+  shown="$(json "$WORK/answer.json" "[k['fingerprint'] for k in d['source']['host_keys'] if k['type']=='ssh-ed25519'][0]")"
+  call POST "/api/v1/websites/migrations/sources/$SRC/host-key" "$(body fp "{\"fingerprint\":\"$shown\"}")"
+  check "the old server's SSH key is confirmed (200)" test "$code" = 200
+  sample_start
+  cert_move "$STAFF"
+  sample_stop
+  check "the move succeeded" test "$state" = succeeded
+  echo "  certificate step: $(ssl_step state): $(ssl_step message)"
+  check "the certificate step copied the old server's certificate" bash -c "[ '$(ssl_step state)' = done ] && grep -q 'Copied the old server.s certificate for $STAFF_DOMAIN' <<< \"\$1\"" _ "$(ssl_step message)"
+  check "WHM was asked for it: fetch_vhost_ssl_components" in_ctr "grep -qx fetch_vhost_ssl_components /var/log/whm-standin.log"
+  echo "  WHM calls: $(in_ctr "sort /var/log/whm-standin.log | uniq -c | tr -s ' ' | paste -sd ',' -")"
+  check "this server serves the old site's own certificate for $STAFF_DOMAIN" test "$(served "$STAFF_DOMAIN" 127.0.0.1:443)" = "$(fingerprint_of "$CA/staff.pem")"
+  check "curl --resolve $STAFF_DOMAIN:443:127.0.0.1 with the proof's CA gets the moved site over https" bash -c "curl -s --cacert $CA/root.pem --resolve $STAFF_DOMAIN:443:127.0.0.1 https://$STAFF_DOMAIN/ | grep -q 'Staff site'"
+  check "its password folder answers 401 over https without the password, 200 with it" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' --cacert $CA/root.pem --resolve $STAFF_DOMAIN:443:127.0.0.1 https://$STAFF_DOMAIN/private/)\" = 401 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -u 'staff:$HT_PW' --cacert $CA/root.pem --resolve $STAFF_DOMAIN:443:127.0.0.1 https://$STAFF_DOMAIN/private/)\" = 200 ]"
+  staff_account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  echo "  verify: $(jm "['verify']['verdict']")"
+  echo "  the Domains tab's record: https $(site_https "$staff_account")"
+  check "the website's https says the certificate was copied" test "$(json "$WORK/answer.json" "d['https'].get('source')")" = copied
+  needle="$(key_line "$CA/staff.key")"
+  check "the key is in no panel state, panel log, broker state, job record or process argument" bash -c "! grep -rqaF -- '$needle' $DIR/state $DIR/panel.log $STATE $WORK/job.json $WORK/ps-samples.txt"
+  check "the key went to the broker's certificate path" bash -c "[ \"\$(openssl pkey -in /etc/sifruno/tls/u${staff_account:0:31}/key.pem -pubout | sha256sum)\" = \"\$(openssl pkey -in $CA/staff.key -pubout | sha256sum)\" ]"
+  check "the WHM login is in no panel state or log" bash -c "! grep -rqF \"\$(cat $WORK/whm.token)\" $DIR/state $DIR/panel.log"
+  echo
+  echo "## 8. The proof's root leaves this server's trust store"
+  rm -f "$ANCHOR" && update-ca-trust extract
+  check "the trust store no longer holds the proof's root" bash -c "! grep -q '$(sed -n 2p "$CA/root.pem")' /etc/pki/tls/certs/ca-bundle.crt"
+}
+
+if [ "$MODE" = cert ]; then
+  cert_proof
+  echo
+  if [ "$fails" -eq 0 ]; then echo "RESULT: every check passed"; else echo "RESULT: $fails check(s) failed"; fi
+  exit "$fails"
+fi
+
 echo
 echo "## 4. Move $SHOP_DOMAIN"
 run_job() { # run_job USER: starts the move and waits for its end; JOB and $WORK/job.json
@@ -692,10 +1230,20 @@ done
 sample_stop
 m() { json "$WORK/job.json" "d['job']['migration']$1"; }
 check "the move succeeded" test "$state" = succeeded
-check "the tier is Native (rewrite rules, and Akismet's access rules converted)" test "$(m "['tier']")" = native
+check "the tier is Native (rewrite rules kept; the <Files> rules, Akismet's access rules, redirects and error page converted)" test "$(m "['tier']")" = native
+echo "  notes:"
+json "$WORK/job.json" "'\n'.join('    ' + n for n in d['job']['migration']['notes'])"
+check "the notes are what the copy does not do as the old site: WP Rocket's SetEnvIf and two CORS headers, the X-Robots-Tag header, and the .user.ini's auto_prepend_file" test "$(json "$WORK/job.json" "len(d['job']['migration']['notes']) == 5 and sum('CORS header' in n for n in d['job']['migration']['notes']) == 2 and sum('X-Robots-Tag' in n for n in d['job']['migration']['notes']) == 1")" = True
+check "a note names .user.ini line 13 (auto_prepend_file): Wordfence's firewall file does not run on the copy" test "$(json "$WORK/job.json" "sum(n.startswith('Check before cutover: .user.ini line 13 (auto_prepend_file):') and 'Wordfence' in n and 'firewall' in n for n in d['job']['migration']['notes'])")" = 1
 echo "  converted: $(m "['converted']")"
-check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.json" "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
+check "the job names the root .htaccess's closed names, Akismet's folder, the two redirects, the error page and nine PHP settings as converted" test "$(json "$WORK/job.json" "[(x['file'], x['path']) for x in d['job']['migration']['converted']]")" = "[('.htaccess', '/'), ('wp-content/plugins/akismet/.htaccess', '/wp-content/plugins/akismet/'), ('.htaccess', '/old-page'), ('.htaccess', '^/archive/([0-9]+)/?\$'), ('.htaccess', '/403.html'), ('.htaccess', 'display_errors'), ('.htaccess', 'max_execution_time'), ('.htaccess', 'max_input_time'), ('.htaccess', 'max_input_vars'), ('.htaccess', 'memory_limit'), ('.htaccess', 'post_max_size'), ('.htaccess', 'session.gc_maxlifetime'), ('.htaccess', 'upload_max_filesize'), ('.htaccess', 'zlib.output_compression')]"
 check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
+src_ht="$(in_ctr "sha256sum /home/$SHOP/public_html/.htaccess" | cut -d' ' -f1)"
+check "the copy's .htaccess is the old site's, byte for byte" test -n "$src_ht" -a "$src_ht" = "$(sha256sum "/home/$SHOP/public_html/.htaccess" 2>/dev/null | cut -d' ' -f1)"
+if [ -x "$BIN/panelctl" ]; then
+  echo "  panelctl htaccess scan --details of the copy's public_html (as the panel decides the move):"
+  "$BIN/panelctl" htaccess scan --root "/home/$SHOP/public_html" --layout single --details 2>&1 | sed -n '/^site /,$p' | sed 's/^/    /'
+fi
 src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
 dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"
 check "wp-config.php arrived unchanged (same sha256) and is the site user's" test -n "$src_sum" -a "$src_sum" = "$dst_sum" -a "$(stat -c %U "/home/$SHOP/public_html/wp-config.php" 2>/dev/null)" = "$SHOP"
@@ -711,6 +1259,19 @@ account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
 vhconf="$LSWS/conf/vhosts/sifruno-u${account:0:31}/vhconf.conf"
 check "the copy runs PHP ${PHPXY:0:1}.${PHPXY:1} (lsphp$PHPXY), the old site's version" grep -q "lsphp$PHPXY/bin/lsphp" "$vhconf"
 check "the vhost has Akismet's folder as a regex context closed to all" grep -q '^context exp:(?s)^/wp-content/plugins/akismet/(?!' "$vhconf"
+echo "  the vhost's phpIniOverride:"
+sed -n '/^phpIniOverride/,/^}/p' "$vhconf" | sed 's/^/    /'
+check "the vhost carries the nine settings as php_value and php_flag lines (session.save_path, cPanel's own folder, left to this server)" \
+  test "$(sed -n '/^phpIniOverride/,/^}/p' "$vhconf" | grep -c '^php_')" = 9 -a "$(sed -n '/^phpIniOverride/,/^}/p' "$vhconf" | grep -cE '^php_value memory_limit 512M$|^php_value upload_max_filesize 128M$|^php_flag display_errors off$')" = 3 -a "$(grep -c session.save_path "$vhconf")" = 0
+new_ini="$(curl -s -H "Host: $SHOP_DOMAIN" http://127.0.0.1/sifruno-ini.php)"
+echo "  copy: sifruno-ini.php says $new_ini"
+check "each PHP setting reads back the same through PHP on both servers" \
+  python3 -c "import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); keys=[k for k in a if k not in ('sapi','waf')]; assert len(keys)==9 and all(a[k]==b[k] for k in keys), [(k,a[k],b.get(k)) for k in keys if a[k]!=b.get(k)]" "$old_ini" "$new_ini"
+# shellcheck disable=SC2016 # PHP's own variables, for PHP
+defaults="$(runuser -u "$SHOP" -- "$LSWS/lsphp$PHPXY/bin/php" -r 'foreach (["memory_limit","upload_max_filesize","post_max_size","max_input_vars","max_input_time","session.gc_maxlifetime"] as $k) echo $k, "=", ini_get($k), " ";' 2>/dev/null)"
+echo "  this server's PHP defaults (lsphp$PHPXY php.ini): $defaults"
+check "the copy's values are the old site's, not this server's defaults" python3 -c "import json,sys; b=json.loads(sys.argv[1]); d=dict(x.split('=',1) for x in sys.argv[2].split()); assert d and all(b[k]!=d[k] for k in d), d" "$new_ini" "$defaults"
+check "the copy's PHP is LSPHP, and Wordfence's file ran on the old site but not on the copy, as the note says" python3 -c "import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); assert b['sapi']=='litespeed' and a['waf'] is True and b['waf'] is False" "$old_ini" "$new_ini"
 new() { status -H "Host: $1" "http://127.0.0.1$2" "${@:3}"; }
 for path in /wp-content/plugins/akismet/ /wp-content/plugins/akismet/akismet.php /wp-content/plugins/akismet/readme.txt /wp-content/plugins/akismet/_inc/ /wp-content/plugins/akismet/akismet.php/akismet.css; do
   check "the copy answers 403 for $path, as the old site" test "$(new "$SHOP_DOMAIN" "$path")" = 403
@@ -720,6 +1281,30 @@ for path in /wp-content/plugins/akismet/_inc/akismet.css /wp-content/plugins/aki
 done
 echo "  probes: $(m "['probes']")"
 check "verify checked Akismet's closed folder and its open files, all passing" test "$(m "['verify']['probes_fail']")" = 0 -a "$(m "['verify']['probes_pass']")" -ge 2
+# The plugin blocks on this server: the <Files> rules close the same names,
+# a script's path info and the spellings OpenLiteSpeed cleans included.
+check "the vhost closes the root .htaccess's names in a regex context ahead of Akismet's" bash -c "grep -n '^context exp:' $vhconf | head -1 | grep -q 'wp-config\[.\]php|xmlrpc\[.\]php'"
+check "verify asked for the closed files on both servers and both answered 403" test "$(json "$WORK/job.json" "sorted(p['path'] for p in d['job']['migration']['probes'] if p['kind'] == 'deny' and p['path'] in ('/wp-config.php', '/xmlrpc.php', '/readme.html', '/.user.ini', '/.htaccess'))")" = "['/.htaccess', '/.user.ini', '/readme.html', '/wp-config.php', '/xmlrpc.php']"
+for path in /wp-config.php /xmlrpc.php /xmlrpc.php/x /readme.html /readme.txt /.user.ini /.htaccess /wp-admin/wp-config.php //wp-config.php /./xmlrpc.php /%77p-config.php /x/../wp-config.php; do
+  check "the copy answers 403 for $path (the old site: $(status --path-as-is "http://$SHOP_DOMAIN$path"))" test "$(new "$SHOP_DOMAIN" "$path" --path-as-is)" = 403
+done
+echo "  the copy answers $(new "$SHOP_DOMAIN" /WP-CONFIG.PHP) for /WP-CONFIG.PHP (the old site $(status "http://$SHOP_DOMAIN/WP-CONFIG.PHP"))"
+check "the copy answers its 403 with the ErrorDocument page, as the old site" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/wp-config.php | grep -q sifruno-error-page-403"
+check "the copy serves the post at its pretty address: WordPress's rewrite block still runs after WP Rocket's" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/moved-with-sifruno/ | grep -q 'Moved with Sifruno'"
+new_redirect="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --resolve "$SHOP_DOMAIN:80:127.0.0.1" "http://$SHOP_DOMAIN/old-page/sub?x=1")"
+new_match="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --resolve "$SHOP_DOMAIN:80:127.0.0.1" "http://$SHOP_DOMAIN/archive/2026/")"
+echo "  copy: /old-page/sub?x=1 -> $new_redirect; /archive/2026/ -> $new_match"
+echo "  copy's Location header for /old-page/sub?x=1: $(curl -s -o /dev/null -D - --resolve "$SHOP_DOMAIN:80:127.0.0.1" "http://$SHOP_DOMAIN/old-page/sub?x=1" | tr -d '\r' | grep -i '^location:')"
+check "the copy's Redirect answers 301 to the same address as the old site" test "$new_redirect" = "$old_redirect"
+check "the copy's RedirectMatch answers 302 to the same address as the old site" test "$new_match" = "$old_match"
+new_cors="$(curl -s -o /dev/null -D - -H "Host: $SHOP_DOMAIN" "http://127.0.0.1/wp-content/uploads/fonts/proof.woff2" | tr -d '\r' | grep -i '^access-control-allow-origin:')"
+echo "  copy: fonts/proof.woff2 sends '${new_cors:-no CORS header}'"
+check "the copy does not send the CORS header, and the job's notes say so for a person to accept" bash -c "[ -z '$new_cors' ] && python3 -c \"import json,sys; n=json.load(open('$WORK/job.json'))['job']['migration']['notes']; sys.exit(0 if any('Access-Control-Allow-Origin' in x and 'CORS header' in x for x in n) else 1)\""
+check "the copy answers 403 for the backup index.php.bak, and its source is not sent" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/index.php.bak)\" = 403 ] && ! curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/index.php.bak | grep -q wp-blog-header"
+token="proofToken$RUNID"
+install -d -m 0755 /var/lib/sifruno-acme && echo "$token.challenge" > "/var/lib/sifruno-acme/$token" && chmod 0644 "/var/lib/sifruno-acme/$token"
+check "the certificate challenge path is still served (200) beside the root's closed names" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/.well-known/acme-challenge/$token | grep -qx '$token.challenge'"
+rm -f "/var/lib/sifruno-acme/$token"
 # D-0001: the stand-in's Apache read this site through the group alone
 # (0640 files, 0750 folders, group apache). The copy keeps those modes with
 # the site's own group, and this server's web server reads them through one
@@ -735,10 +1320,14 @@ check "the scheduled job arrived in the site user's crontab" grep -q "wp-cron.ph
 page="$(curl -s -H "Host: $SHOP_DOMAIN" http://127.0.0.1/)"
 check "the preview (this server, the site's Host header) serves the site's title" grep -q "$TITLE" <<<"$page"
 check "the preview serves the moved post" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' 'http://127.0.0.1/?s=Moved' | grep -q 'Moved with Sifruno'"
+# cPanel's handler block maps .phtml to PHP; only .php runs here, so the
+# copy refuses a .phtml file rather than send its source.
+check "the copy answers 403 for info.phtml, and its source is not sent" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/info.phtml)\" = 403 ] && ! curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/info.phtml | grep -q sifruno-phtml-source"
 echo "  verify: $(m "['verify']['verdict']")"
 echo "  pages $(m "['verify']['pages_compared']") compared, $(m "['verify']['pages_pass']") pass, $(m "['verify']['pages_fail']") fail; notes: $(m "['notes']")"
 check "verify ran and found no difference (cutover allowed by verify)" test "$(m "['verify']['cutover_allowed']")" = True
 gate="$(m "['gate']")"
+check "with verify green but notes to check (the .user.ini's among them), the cutover gate stays closed until a person accepts them (gate: $gate)" test "$gate" = closed
 if [ "$gate" = closed ]; then
   # Only notes (such as a PHP version this server maps) close it; the
   # proof accepts them on purpose, as an admin would, with a reason.
@@ -786,7 +1375,7 @@ check "the copy answers 401 for /private/ with a wrong password" test "$(new "$S
 check "the copy answers 200 for /private/ with the password, and serves the page" bash -c "curl -s -u 'staff:$HT_PW' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private/ | grep -qx Payroll"
 check "the copy answers 200 for /private/sub/ with the password" test "$(new "$STAFF_DOMAIN" /private/sub/ -u "staff:$HT_PW")" = 200
 check "the copy runs PHP in the password folder with the password" bash -c "curl -s -u 'staff:$HT_PW' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private/report.php | grep -qx 'Payroll from PHP'"
-check "the copy answers 403 for /backups/ and /backups/backup.sql" test "$(new "$STAFF_DOMAIN" /backups/)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403
+check "the copy answers 403 for /backups/, /backups/backup.sql and /backups/notes.txt" test "$(new "$STAFF_DOMAIN" /backups/)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/notes.txt)" = 403
 # Other spellings of the same paths answer exactly as the folder does. A
 # folder named without its slash gets OpenLiteSpeed's redirect to the
 # slash form first (which then answers 401 or 403); a name in another case
@@ -800,14 +1389,16 @@ for path in //private/index.html /./private/index.html /x/../private/index.html 
   /%2e/private/index.html /private/%2e%2e/private/index.html /private/index.html/ /private/sub/ /private//index.html; do
   spelled "$path" 401
 done
-for path in //backups/backup.sql /%62ackups/backup.sql /backups/./backup.sql /backups/%2e/backup.sql /backups/backup.sql/ /backups//backup.sql; do
+# notes.txt, not backup.sql: every site refuses a .sql name anyway, and
+# these spellings are for the folder's own context.
+for path in //backups/notes.txt /%62ackups/notes.txt /backups/./notes.txt /backups/%2e/notes.txt /backups/notes.txt/ /backups//notes.txt; do
   spelled "$path" 403
 done
 spelled /private 301
 check "and that redirect names /private/" bash -c "curl -s -o /dev/null -w '%{redirect_url}' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private | grep -q '/private/\$'"
 spelled /backups 301
 spelled /PRIVATE/index.html 404
-spelled /Backups/backup.sql 404
+spelled /Backups/notes.txt 404
 # A rewrite from the root .htaccess into a closed folder is checked again
 # in that folder's context.
 check "the copy answers 401 for /pub/index.html, rewritten into /private/" test "$(new "$STAFF_DOMAIN" /pub/index.html)" = 401
@@ -852,12 +1443,44 @@ echo "## 5b. $ODD_DOMAIN: a directive the converter does not know is refused"
 connect odd; pin odd >/dev/null 2>&1; install_key odd
 run_job "$ODD"
 echo "  why: $(json "$WORK/job.json" "d['job']['error']['why']")"
+echo "  next: $(json "$WORK/job.json" "d['job']['error']['next']")"
 echo "  technical: $(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
 check "the move stops at the old server's site, before anything is created" test "$state" = failed -a "$(json "$WORK/job.json" "d['job']['error']['step']")" = source
 check "the reason names the directives this panel does not know" grep -q 'directives this panel does not know' "$WORK/job.json"
+check "Technical details names the file, line and directive (tools/.htaccess line 2 (SifrunoProofUnknown On))" grep -qF 'tools/.htaccess line 2 (SifrunoProofUnknown On): a directive this panel does not know' <<<"$(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
+check "the next step names that line to remove or change on the old server" grep -qF 'remove or change tools/.htaccess line 2 (SifrunoProofUnknown On)' <<<"$(json "$WORK/job.json" "d['job']['error']['next']")"
+check "the reason does not claim a protected folder would open: the unknown line is the cause" bash -c "! grep -q 'open to everyone' <<<\"\$1\"" _ "$(json "$WORK/job.json" "d['job']['error']['why']")"
 check "no account $ODD was created" bash -c "! getent passwd $ODD"
 check "the key is removed after the refusal too" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 check "no staging folder or migration folder is left" bash -c "[ -z \"\$(ls -A /var/lib/sifruno-restore 2>/dev/null)\" ] && [ ! -e $STATE/migrate/$SRC ]"
+
+echo
+echo "## 5c. $ODD_DOMAIN again: Wordfence's mod_php block, whose php_value auto_prepend_file is refused"
+# Wordfence 9's .htaccess for mod_php: its loader through php_value, and
+# the <Files ".user.ini"> rule. The stand-in's Apache has no mod_php, so the
+# old site serves as before; the folder rule of 5b stays, without the
+# unknown line.
+{
+  echo '# Wordfence WAF'
+  for module in mod_php7.c mod_php.c; do
+    printf '<IfModule %s>\n\tphp_value auto_prepend_file '"'"'/home/%s/public_html/wordfence-waf.php'"'"'\n</IfModule>\n' "$module" "$ODD"
+  done
+  printf '<Files ".user.ini">\n<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n</Files>\n# END Wordfence WAF\n'
+} > "$WORK/odd.htaccess"
+podman cp "$WORK/odd.htaccess" "$CTR:/home/$ODD/public_html/.htaccess"
+in_ctr "printf 'Deny from all\n' > /home/$ODD/public_html/tools/.htaccess; chown $ODD:apache /home/$ODD/public_html/.htaccess /home/$ODD/public_html/tools/.htaccess; chmod 0644 /home/$ODD/public_html/.htaccess"
+check "the old odd site still serves its page with Wordfence's block (200)" test "$(status "http://$ODD_DOMAIN/")" = 200
+connect odd; pin odd >/dev/null 2>&1; install_key odd
+run_job "$ODD"
+echo "  why: $(json "$WORK/job.json" "d['job']['error']['why']")"
+echo "  next: $(json "$WORK/job.json" "d['job']['error']['next']")"
+echo "  technical: $(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
+check "the move stops at the old server's site, before anything is created" test "$state" = failed -a "$(json "$WORK/job.json" "d['job']['error']['step']")" = source
+check "Technical details names the line and why: .htaccess line 3 (php_value auto_prepend_file), a file PHP runs before every script, often a firewall" grep -qF '.htaccess line 3 (php_value auto_prepend_file): auto_prepend_file names a file PHP runs before every script, often a security plugin' <<<"$(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
+check "the next step names that line to remove or change on the old server" grep -qF 'remove or change .htaccess line 3 (php_value auto_prepend_file)' <<<"$(json "$WORK/job.json" "d['job']['error']['next']")"
+check "the reason does not claim a protected folder would open: the PHP line is the cause, and Wordfence's <Files> rule converts" bash -c "! grep -q 'open to everyone' <<<\"\$1\"" _ "$(json "$WORK/job.json" "d['job']['error']['why']")"
+check "no account $ODD was created" bash -c "! getent passwd $ODD"
+check "the key is removed after the refusal too" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 
 echo
 echo "## 6. $TRIG_DOMAIN: a database with a trigger fails the copy, which is undone"

@@ -110,6 +110,7 @@ func build(o Options) (http.Handler, *routeMux) {
 	registerSiteBackups(api, o)
 	registerSiteTools(api, o)
 	registerWebsiteFiles(mux, api, o)
+	registerMigrationArchive(mux, api, o)
 	registerSiteTransfers(mux, api, o)
 	documentOperator(api)
 	registerWebPreview(mux, api, o)
@@ -373,6 +374,9 @@ func build(o Options) (http.Handler, *routeMux) {
 				}
 				if allowedFileMutation(r) {
 					prepare = prepareFileJSON
+				}
+				if isMigrationArchive(r) {
+					prepare = prepareMigrationArchive
 				}
 				if !prepare(w, r) {
 					return

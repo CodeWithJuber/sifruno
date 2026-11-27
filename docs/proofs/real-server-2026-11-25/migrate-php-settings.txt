@@ -1,0 +1,691 @@
+# PHP settings from .htaccess move into the site's phpIniOverride and read
+# back the same through PHP on both servers; a .user.ini that loads a
+# firewall is a note that keeps the gate closed; Wordfence's mod_php line
+# is refused, named
+#
+# Run 2026-11-27 on a new server the nightly script made and kept
+# (scripts/ci/nightly-fresh-install.sh with SIFRUNO_NIGHTLY_KEEP=1: a
+# g6-standard-2 Linode, AlmaLinux 9.8, OpenLiteSpeed 1.9.5, LSPHP 8.3.37;
+# its fresh-install test passed 17 checks), deleted afterwards. The release
+# on it was built from e823f84; scripts/devvm/proof.sh migrate-cpanel, from
+# 60cb975, built and ran the panel, broker and panelctl of that commit.
+# SERVER_IP stands for the server's public address. The old server is the
+# cPanel stand-in (a Podman container running Apache 2.4 with PHP-FPM, not
+# cPanel), as in migrate-cpanel.txt.
+#
+# What this run adds to migrate-htaccess-wp.txt:
+#   - shop: the root .htaccess also holds cPanel's MultiPHP INI block
+#     (php_flag and php_value lines inside <IfModule php8_module> and
+#     <IfModule lsapi_module>, among them session.save_path for cPanel's
+#     own session folder), and the document root's .user.ini holds the same
+#     settings and Wordfence's auto_prepend_file. EL9's PHP 8.3 has no
+#     mod_php, so the stand-in stays on PHP-FPM, which reads the .user.ini:
+#     section 2 shows the old site's PHP with those settings and Wordfence's
+#     stand-in file run first. Section 4: the nine settings are converted
+#     (cPanel's session folder is left to this server), the vhost's
+#     phpIniOverride holds them, a page asked on both servers reads every
+#     one back the same through PHP and none is this server's default, and
+#     the firewall file runs on the old site but not on the copy. The
+#     .user.ini's auto_prepend_file is a note naming .user.ini line 13;
+#     verify allows cutover, the gate stays closed until the proof accepts
+#     the notes.
+#   - odd (5c): moved again with Wordfence's mod_php block in its root
+#     .htaccess; the move stops before anything is created, naming
+#     .htaccess line 3 (php_value auto_prepend_file) and why, not an
+#     access rule.
+#   - The stand-in's sshd sets PerSourcePenalties no. The first two runs
+#     of this proof failed 7 checks each: with the extra move, OpenSSH
+#     9.9's penalties for the proof's deliberate refused sign-ins blocked
+#     this server from section 6 on (fixed in 60cb975).
+# How PHP runs on such a server (the evidence for writing phpIniOverride
+# and not a .user.ini) is at the end, from the same server before the
+# proof.
+
+# Migration v1: one website account from a cPanel stand-in over root SSH
+# 2026-11-27T06:57:23Z  openlitespeed-1.9.5-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 podman-5.8.5-5.el9_9.x86_64 rsync-3.2.7-4.el9_9.x86_64 openssh-clients-9.9p1-17.el9_9.alma.1.x86_64
+# accounts shop62643, staff62643, odd62643, trig62643, race62643, hard62643; container sifruno-cpanel-standin-62643 from docker.io/library/almalinux@sha256:1d06c00a6025b4faf042d3827d9ea8dc6b7a75278cacc1c1399dcc7a89c07a01
+
+## 1. The broker and the panel
+PASS  the broker runs with the web operation on
+PASS  the panel answers on 127.0.0.1:54295 as sifpanel, its DNS address SERVER_IP
+PASS  /usr/bin/rsync is a root-owned program the broker admits
+PASS  /usr/bin/ssh is a root-owned program the broker admits
+PASS  /usr/bin/ssh-keyscan is a root-owned program the broker admits
+PASS  /usr/bin/cp is a root-owned program the broker admits
+PASS  /usr/bin/mariadb is a root-owned program the broker admits
+
+## 2. The cPanel stand-in (Podman, not cPanel)
+PASS  the stand-in's base image is the pinned digest
+  stand-in address: 10.88.0.6
+  stand-in PHP: 83 (reported to Sifruno as ea-php83)
+PASS  the stand-in has sshd, MariaDB, Apache, PHP-FPM, rsync and crontab
+PASS  this server has LSPHP 83 for the copy
+PASS  the stand-in's MariaDB, sshd and Apache run
+PASS  the stand-in's four accounts, sites and databases are made
+PASS  the stand-in WordPress keeps the stock Akismet .htaccess (deny all, <FilesMatch>, both branches)
+  Akismet , .htaccess sha256 63553e7f320285fe2417cdb00664a136958d70baa07d7325e86f0847f11dd17c (the converter's test pins WordPress 7.1.5's: 63553e7f...)
+PASS  the stand-in whmapi1 prints listaccts JSON for the six accounts
+PASS  the old WordPress site answers with its title
+PASS  the old staff site closes /private/ with 401
+PASS  the old staff site opens /private/ with the password (200)
+PASS  the old staff site denies /backups/backup.sql and /backups/notes.txt with 403
+PASS  the old staff site answers 401 for /pub/index.html, rewritten into /private/
+PASS  the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/
+PASS  the old staff site closes /office/ to this server (403) and opens /lobby/ (200)
+PASS  the old WordPress denies Akismet's folder with 403
+PASS  the old WordPress serves Akismet's allow-listed akismet.css with 200
+PASS  the old WordPress answers 403 for /wp-config.php (<Files> rules)
+PASS  the old WordPress answers 403 for /xmlrpc.php (<Files> rules)
+PASS  the old WordPress answers 403 for /xmlrpc.php/x (<Files> rules)
+PASS  the old WordPress answers 403 for /readme.html (<Files> rules)
+PASS  the old WordPress answers 403 for /.user.ini (<Files> rules)
+PASS  the old WordPress answers 403 for /.htaccess (<Files> rules)
+PASS  the old WordPress serves the post at its pretty address (200)
+PASS  the old WordPress answers its 403 with the ErrorDocument page
+  old: /old-page/sub?x=1 -> 301 http://shop62643.proof.test/moved-with-sifruno/sub?x=1; /archive/2026/ -> 302 http://shop62643.proof.test/?m=2026
+PASS  the old WordPress redirects /old-page (Redirect 301) and /archive/2026/ (RedirectMatch 302)
+  old: fonts/proof.woff2 sends 'Access-Control-Allow-Origin: *'
+PASS  the old WordPress sends the CORS header on a font (WP Rocket)
+PASS  the old WordPress serves the backup index.php.bak with its PHP source (200): the leak the copy closes
+  old: sifruno-ini.php says {"sapi":"fpm-fcgi","waf":true,"display_errors":"off","max_execution_time":"300","max_input_time":"600","max_input_vars":"3000","memory_limit":"512M","post_max_size":"128M","session.gc_maxlifetime":"7200","upload_max_filesize":"128M","zlib.output_compression":"off"}
+PASS  the old WordPress's PHP (PHP-FPM) has the site's settings (memory_limit 512M, upload_max_filesize 128M ...) and ran Wordfence's file before the script
+
+## 3. Sign in, connect, confirm the host key
+PASS  the panel signs in with the server's access key
+  migration 8c28a0a21754ca20a86ff0fca98e70dd; key line ends sifruno-migration-8c28a0a21754ca20a86ff0fca98e70dd
+PASS  connecting makes a key for this migration only
+PASS  its private key is root's, mode 0600, in a 0700 folder
+PASS  the old server is not read before its host key is confirmed (422)
+PASS  a fingerprint the server did not offer is refused (422)
+PASS  the fingerprint ssh-keygen shows on the old server is confirmed
+PASS  known_hosts holds only that key, under the migration alias
+PASS  without the key line on the old server, the sign-in is refused (422)
+PASS  the admin's command adds one restricted key line to root's authorized_keys
+  accounts listed: shop62643 staff62643 trig62643 race62643 hard62643 odd62643
+PASS  discovery lists the six accounts with whmapi1 listaccts
+
+## 4. Move shop62643.proof.test
+  job b1ce011eb5a82c9dadff57145a77eb29: succeeded
+    source   done     Found shop62643.proof.test: 1 database(s), 1 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 14 .htaccess rule(s) are con
+    account  done     Created the hosting account shop62643, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. It is a WordPress site. The converted .htaccess rules went into the web server's config before the files did:
+    database done     Copied 1 database(s) with the same names and users (same passwords): 12 tables, 159 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s); they run as the site's user on this server's clock.
+    ssl      skipped  The old server has no certificate for shop62643.proof.test. The site uses http on this server: certificates are not set up here.
+    verify   running  
+    key      pending  
+PASS  the move succeeded
+PASS  the tier is Native (rewrite rules kept; the <Files> rules, Akismet's access rules, redirects and error page converted)
+  notes:
+    Check before cutover: .htaccess line 38 (SetEnvIf Origin): sets a variable only this file's Header lines test, and those headers are not sent here: the copy does not set it. Check that the site's code does not read it before cutover.
+    Check before cutover: .htaccess line 39 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.
+    Check before cutover: .htaccess line 47 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.
+    Check before cutover: .htaccess line 292 (Header set X-Robots-Tag): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send X-Robots-Tag: search engines may list pages or files the old site kept out of their results. Check them before cutover.
+    Check before cutover: .user.ini line 13 (auto_prepend_file): the old server's PHP ran a file before every script (auto_prepend_file), often a security plugin's firewall such as Wordfence's extended protection. This server's PHP does not read .user.ini files, so after the move that file does not run and the firewall's extended protection is off, while the plugin itself still runs. Check the plugin's firewall settings on the copy before cutover.
+PASS  the notes are what the copy does not do as the old site: WP Rocket's SetEnvIf and two CORS headers, the X-Robots-Tag header, and the .user.ini's auto_prepend_file
+PASS  a note names .user.ini line 13 (auto_prepend_file): Wordfence's firewall file does not run on the copy
+  converted: [{'file': '.htaccess', 'path': '/', 'rule': 'files named .htaccess, .user.ini, readme.html, readme.txt, wp-config.php, xmlrpc.php closed to everyone (403)'}, {'file': 'wp-content/plugins/akismet/.htaccess', 'path': '/wp-content/plugins/akismet/', 'rule': 'closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akismet-frontend.js, akismet-refresh-logo.svg, akismet-refresh-logo@2x.png, akismet-rtl.css, akismet.css, akismet.js, arrow-left.svg, copy.svg, form.js, inter.css, logo-a-2x.png)'}, {'file': '.htaccess', 'path': '/old-page', 'rule': 'redirect (301) to /moved-with-sifruno'}, {'file': '.htaccess', 'path': '^/archive/([0-9]+)/?$', 'rule': 'redirect (302) to /?m=$1'}, {'file': '.htaccess', 'path': '/403.html', 'rule': 'error page for 403'}, {'file': '.htaccess', 'path': 'display_errors', 'rule': 'PHP setting off'}, {'file': '.htaccess', 'path': 'max_execution_time', 'rule': 'PHP setting 300'}, {'file': '.htaccess', 'path': 'max_input_time', 'rule': 'PHP setting 600'}, {'file': '.htaccess', 'path': 'max_input_vars', 'rule': 'PHP setting 3000'}, {'file': '.htaccess', 'path': 'memory_limit', 'rule': 'PHP setting 512M'}, {'file': '.htaccess', 'path': 'post_max_size', 'rule': 'PHP setting 128M'}, {'file': '.htaccess', 'path': 'session.gc_maxlifetime', 'rule': 'PHP setting 7200'}, {'file': '.htaccess', 'path': 'upload_max_filesize', 'rule': 'PHP setting 128M'}, {'file': '.htaccess', 'path': 'zlib.output_compression', 'rule': 'PHP setting off'}]
+PASS  the job names the root .htaccess's closed names, Akismet's folder, the two redirects, the error page and nine PHP settings as converted
+PASS  the account has the same name and /home/shop62643/public_html
+PASS  the copy's .htaccess is the old site's, byte for byte
+  panelctl htaccess scan --details of the copy's public_html (as the panel decides the move):
+    site .: compat access_control
+      .htaccess (/): compat access_control 
+        line 18 AddDefaultCharset [mime_handlers, ignored]: character set hint for static files: PHP pages send their own
+        line 21 AddCharset [mime_handlers, ignored]: character set hint for static files: PHP pages send their own
+        line 26 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 31 FileETag [caching, ignored]: ETag format: OpenLiteSpeed makes its own ETags
+        line 38 SetEnvIf [environment, warning]: sets a variable only this file's Header lines test, and those headers are not sent here: the copy does not set it. Check that the site's code does not read it before cutover.
+        line 39 Header [headers, warning]: OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.
+        line 47 Header [headers, warning]: OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.
+        line 54 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 55 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 56 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 57 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 63 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 64 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 70 AddType [mime_handlers, ignored]: MIME type for files that are not scripts: OpenLiteSpeed names types from its own list
+        line 71 AddType [mime_handlers, ignored]: MIME type for files that are not scripts: OpenLiteSpeed names types from its own list
+        line 75 ExpiresActive [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 76 ExpiresDefault [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 78 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 80 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 82 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 83 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 84 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 86 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 87 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 89 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 91 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 92 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 93 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 94 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 95 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 96 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 97 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 98 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 99 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 100 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 102 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 104 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 105 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 106 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 107 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 108 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 109 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 111 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 112 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 113 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 119 SetOutputFilter [compression, ignored]: compression: OpenLiteSpeed compresses by its own settings
+        line 123 SetEnvIfNoCase [environment, ignored]: compression hint: OpenLiteSpeed compresses by its own settings
+        line 124 RequestHeader [headers, ignored]: compression hint: OpenLiteSpeed compresses by its own settings
+        line 126 SetEnvIfNoCase [environment, ignored]: compression hint: OpenLiteSpeed compresses by its own settings
+        line 133 AddOutputFilterByType [compression, ignored]: compression: OpenLiteSpeed compresses by its own settings
+        line 152 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 177 <files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 179 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 182 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 183 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 186 <files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 188 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 191 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 192 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 195 <files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 197 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 200 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 201 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 204 <files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 206 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 209 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 210 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 215 Options [other, handled]: OpenLiteSpeed does this already here: every Sifruno vhost has autoIndex 0 (no folder listings), OpenLiteSpeed 1.9.4 has no content negotiation (MultiViews), and the vhost follows links that stay inside the home (allowSymbolLink 1, restrained 1)
+        line 234 <files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 236 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 239 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 240 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 262 <Files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 264 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 267 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 268 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 275 <files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 276 order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 277 deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 282 AddHandler [vendor, handled]: PHP handler: this server runs the site's .php files with the PHP version the migration reads from the old server's settings for the site, and refuses (403) the other PHP suffixes, such as .phtml and .php8, so their source is never sent
+        line 287 <Files> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 288 order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 289 deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 292 Header [headers, warning]: OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send X-Robots-Tag: search engines may list pages or files the old site kept out of their results. Check them before cutover.
+        line 294 ErrorDocument [error_documents, converted]: error page: OpenLiteSpeed does not read it from .htaccess, so this server writes the same page for this status into the site's web server configuration
+        line 295 Redirect [redirect_alias, converted]: redirect (301): OpenLiteSpeed does not read it from .htaccess, so this server writes the same redirect into the site's web server configuration
+        line 296 RedirectMatch [redirect_alias, converted]: redirect (302): OpenLiteSpeed does not read it from .htaccess, so this server writes the same redirect into the site's web server configuration
+        line 300 php_flag [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 301 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 302 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 303 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 304 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 305 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 306 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 307 php_value [vendor, handled]: cPanel's own session folder for its PHP package: this server's PHP keeps the site's sessions in its own session folder
+        line 308 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 309 php_flag [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 312 php_flag [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 313 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 314 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 315 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 316 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 317 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 318 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 319 php_value [vendor, handled]: cPanel's own session folder for its PHP package: this server's PHP keeps the site's sessions in its own session folder
+        line 320 php_value [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        line 321 php_flag [vendor, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess, so this server writes it into the site's web server configuration, where the site's PHP reads it
+        access deny_allow / files=".htaccess" methods="" expect=0
+        access deny_allow / files="readme.html" methods="" expect=0
+        access deny_allow / files="readme.txt" methods="" expect=0
+        access deny_allow / files="wp-config.php" methods="" expect=0
+        access deny_allow / files="xmlrpc.php" methods="" expect=0
+        access deny_allow / files=".user.ini" methods="" expect=0
+      wp-content/plugins/akismet/.htaccess (/wp-content/plugins/akismet/): compat access_control 
+        line 5 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 6 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 11 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 15 <FilesMatch> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 17 Allow [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 21 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 26 <FilesMatch> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 28 Allow [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 32 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        access deny_allow /wp-content/plugins/akismet/ files="" methods="" expect=403
+        access deny_allow /wp-content/plugins/akismet/ files="^(form\\.js|akismet(-frontend|-admin)?\\.js|akismet(-admin)?(-rtl)?\\.css|inter\\.css)$" methods="" expect=0
+        access deny_allow /wp-content/plugins/akismet/ files="^(logo-a-2x\\.png|akismet-refresh-logo\\.svg|akismet-refresh-logo@2x\\.png|arrow-left\\.svg|akismet-activation-banner-elements\\.png|copy\\.svg)$" methods="" expect=0
+      moves to OpenLiteSpeed: yes
+        converted: .htaccess for /
+        converted: wp-content/plugins/akismet/.htaccess for /wp-content/plugins/akismet/
+        converted: line 295, redirect (301) of /old-page to /moved-with-sifruno
+        converted: line 296, redirect (302) of ^/archive/([0-9]+)/?$ to /?m=$1
+        converted: line 294, error page /403.html for 403
+        converted: line 312, PHP setting display_errors off
+        converted: line 313, PHP setting max_execution_time 300
+        converted: line 314, PHP setting max_input_time 600
+        converted: line 315, PHP setting max_input_vars 3000
+        converted: line 316, PHP setting memory_limit 512M
+        converted: line 317, PHP setting post_max_size 128M
+        converted: line 318, PHP setting session.gc_maxlifetime 7200
+        converted: line 320, PHP setting upload_max_filesize 128M
+        converted: line 321, PHP setting zlib.output_compression off
+        warning: .htaccess line 38 (SetEnvIf Origin): sets a variable only this file's Header lines test, and those headers are not sent here: the copy does not set it. Check that the site's code does not read it before cutover.
+        warning: .htaccess line 39 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.
+        warning: .htaccess line 47 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.
+        warning: .htaccess line 292 (Header set X-Robots-Tag): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send X-Robots-Tag: search engines may list pages or files the old site kept out of their results. Check them before cutover.
+        warning: .user.ini line 13 (auto_prepend_file): the old server's PHP ran a file before every script (auto_prepend_file), often a security plugin's firewall such as Wordfence's extended protection. This server's PHP does not read .user.ini files, so after the move that file does not run and the firewall's extended protection is off, while the plugin itself still runs. Check the plugin's firewall settings on the copy before cutover.
+        PHP handler: .htaccess line 282 for /: ea-php83
+PASS  wp-config.php arrived unchanged (same sha256) and is the site user's
+PASS  mail, .ssh and logs folders of the old home were left out
+PASS  the database user shop62643_wpu has the same password hash as on the old server
+PASS  the database shop62643_wp has the same rows (wp_posts 5 = 5)
+PASS  the site's own user signs in to its database with the old password (wp-config unchanged)
+PASS  the copy runs PHP 8.3 (lsphp83), the old site's version
+PASS  the vhost has Akismet's folder as a regex context closed to all
+  the vhost's phpIniOverride:
+    phpIniOverride  {
+    php_flag display_errors off
+    php_value max_execution_time 300
+    php_value max_input_time 600
+    php_value max_input_vars 3000
+    php_value memory_limit 512M
+    php_value post_max_size 128M
+    php_value session.gc_maxlifetime 7200
+    php_value upload_max_filesize 128M
+    php_flag zlib.output_compression off
+    }
+PASS  the vhost carries the nine settings as php_value and php_flag lines (session.save_path, cPanel's own folder, left to this server)
+  copy: sifruno-ini.php says {"sapi":"litespeed","waf":false,"display_errors":"off","max_execution_time":"300","max_input_time":"600","max_input_vars":"3000","memory_limit":"512M","post_max_size":"128M","session.gc_maxlifetime":"7200","upload_max_filesize":"128M","zlib.output_compression":"off"}
+PASS  each PHP setting reads back the same through PHP on both servers
+  this server's PHP defaults (lsphp83 php.ini): memory_limit=128M upload_max_filesize=2M post_max_size=8M max_input_vars=1000 max_input_time=-1 session.gc_maxlifetime=1440 
+PASS  the copy's values are the old site's, not this server's defaults
+PASS  the copy's PHP is LSPHP, and Wordfence's file ran on the old site but not on the copy, as the note says
+PASS  the copy answers 403 for /wp-content/plugins/akismet/, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/akismet.php, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/readme.txt, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/_inc/, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/akismet.php/akismet.css, as the old site
+PASS  the copy answers 200 for the allow-listed /wp-content/plugins/akismet/_inc/akismet.css, as the old site (200)
+PASS  the copy answers 200 for the allow-listed /wp-content/plugins/akismet/_inc/akismet-frontend.js, as the old site (200)
+PASS  the copy answers 200 for the allow-listed /wp-content/plugins/akismet/_inc/img/logo-a-2x.png, as the old site (200)
+  probes: [{'path': '/wp-content/plugins/akismet/', 'kind': 'deny'}, {'path': '/wp-content/plugins/akismet/_inc/', 'kind': 'deny'}, {'path': '/wp-content/plugins/akismet/_inc/akismet-admin.css', 'kind': 'allow'}, {'path': '/wp-content/plugins/akismet/_inc/akismet-admin.js', 'kind': 'allow'}, {'path': '/wp-content/plugins/akismet/_inc/akismet-frontend.js', 'kind': 'allow'}, {'path': '/.htaccess', 'kind': 'deny'}, {'path': '/.user.ini', 'kind': 'deny'}, {'path': '/readme.html', 'kind': 'deny'}, {'path': '/wp-config.php', 'kind': 'deny'}, {'path': '/xmlrpc.php', 'kind': 'deny'}]
+PASS  verify checked Akismet's closed folder and its open files, all passing
+PASS  the vhost closes the root .htaccess's names in a regex context ahead of Akismet's
+PASS  verify asked for the closed files on both servers and both answered 403
+PASS  the copy answers 403 for /wp-config.php (the old site: 403)
+PASS  the copy answers 403 for /xmlrpc.php (the old site: 403)
+PASS  the copy answers 403 for /xmlrpc.php/x (the old site: 403)
+PASS  the copy answers 403 for /readme.html (the old site: 403)
+PASS  the copy answers 403 for /readme.txt (the old site: 403)
+PASS  the copy answers 403 for /.user.ini (the old site: 403)
+PASS  the copy answers 403 for /.htaccess (the old site: 403)
+PASS  the copy answers 403 for /wp-admin/wp-config.php (the old site: 403)
+PASS  the copy answers 403 for //wp-config.php (the old site: 403)
+PASS  the copy answers 403 for /./xmlrpc.php (the old site: 403)
+PASS  the copy answers 403 for /%77p-config.php (the old site: 403)
+PASS  the copy answers 403 for /x/../wp-config.php (the old site: 403)
+  the copy answers 404 for /WP-CONFIG.PHP (the old site 404)
+PASS  the copy answers its 403 with the ErrorDocument page, as the old site
+PASS  the copy serves the post at its pretty address: WordPress's rewrite block still runs after WP Rocket's
+  copy: /old-page/sub?x=1 -> 301 http://shop62643.proof.test/moved-with-sifruno/sub?x=1; /archive/2026/ -> 302 http://shop62643.proof.test/?m=2026
+  copy's Location header for /old-page/sub?x=1: location: http://shop62643.proof.test/moved-with-sifruno/sub?x=1
+PASS  the copy's Redirect answers 301 to the same address as the old site
+PASS  the copy's RedirectMatch answers 302 to the same address as the old site
+  copy: fonts/proof.woff2 sends 'no CORS header'
+PASS  the copy does not send the CORS header, and the job's notes say so for a person to accept
+PASS  the copy answers 403 for the backup index.php.bak, and its source is not sent
+PASS  the certificate challenge path is still served (200) beside the root's closed names
+PASS  a moved 0640 file of group apache keeps its mode, has the site's group, and nobody reads it through its ACL
+PASS  a moved 0750 folder of group apache keeps its mode, and nobody reads and enters it through its ACL
+PASS  the home and public_html keep the web server's own ACL entries (--x, r-x)
+PASS  verify probed Akismet's _inc/ subfolder as closed (403)
+PASS  the scheduled job arrived in the site user's crontab
+PASS  the preview (this server, the site's Host header) serves the site's title
+PASS  the preview serves the moved post
+PASS  the copy answers 403 for info.phtml, and its source is not sent
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  pages 10 compared, 10 pass, 0 fail; notes: ["Check before cutover: .htaccess line 38 (SetEnvIf Origin): sets a variable only this file's Header lines test, and those headers are not sent here: the copy does not set it. Check that the site's code does not read it before cutover.", "Check before cutover: .htaccess line 39 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.", "Check before cutover: .htaccess line 47 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.", "Check before cutover: .htaccess line 292 (Header set X-Robots-Tag): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send X-Robots-Tag: search engines may list pages or files the old site kept out of their results. Check them before cutover.", "Check before cutover: .user.ini line 13 (auto_prepend_file): the old server's PHP ran a file before every script (auto_prepend_file), often a security plugin's firewall such as Wordfence's extended protection. This server's PHP does not read .user.ini files, so after the move that file does not run and the firewall's extended protection is off, while the plugin itself still runs. Check the plugin's firewall settings on the copy before cutover."]
+PASS  verify ran and found no difference (cutover allowed by verify)
+PASS  with verify green but notes to check (the .user.ini's among them), the cutover gate stays closed until a person accepts them (gate: closed)
+PASS  the accepted red lines are in the activity log with the reason
+PASS  the cutover gate is open (gate: accepted)
+  DNS records: [{'name': 'shop62643.proof.test', 'type': 'A', 'value': 'SERVER_IP'}, {'name': 'www.shop62643.proof.test', 'type': 'A', 'value': 'SERVER_IP'}]
+PASS  marked ready, the panel names A records for the domain and www at SERVER_IP
+PASS  the migration key is gone from the old server's authorized_keys
+PASS  and from this server
+PASS  the job says the old server refused the key afterwards
+PASS  no password or hash was in any process's arguments during the move
+PASS  the job record holds no password or hash
+PASS  the panel lists the moved site under Websites
+
+## 5. staff62643.proof.test: a password folder, a closed folder and two address lists move, converted
+  job c3c9640a0b10cb3d66d1b2c131fe8114: succeeded
+    source   done     Found staff62643.proof.test: 1 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 4 .htaccess rule(s) are con
+    account  done     Created the hosting account staff62643, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. Mail, logs and the old server's settings stayed there. The converted .htaccess rules went into the web server
+    database done     Copied 1 database(s) with the same names and users (same passwords): 0 tables, 0 rows, every table's rows match.
+    cron     skipped  No scheduled jobs to copy.
+    ssl      skipped  The old server has no certificate for staff62643.proof.test. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  converted: [{'file': 'backups/.htaccess', 'path': '/backups/', 'rule': 'closed to everyone (403)'}, {'file': 'lobby/.htaccess', 'path': '/lobby/', 'rule': 'closed to 127.0.0.2/32'}, {'file': 'office/.htaccess', 'path': '/office/', 'rule': 'open only to 127.0.0.2/32'}, {'file': 'private/.htaccess', 'path': '/private/', 'rule': 'password "Staff area" for any user in its password file (401)'}]
+PASS  the move succeeded (Native: four folders converted, the root rewrite rules kept)
+PASS  the job names the four converted .htaccess files
+PASS  the vhost has a realm whose user file is outside the home
+PASS  the realm file is root's, 0640, readable by the web server user (nobody) through its ACL
+PASS  the realm file holds the old user and hash, comments left out
+PASS  the realm's folder is root's, 0750
+PASS  the copy answers 401 for /private/ without the password
+PASS  the copy answers 401 for /private/sub/ without the password
+PASS  the copy answers 401 for /private/ with a wrong password
+PASS  the copy answers 200 for /private/ with the password, and serves the page
+PASS  the copy answers 200 for /private/sub/ with the password
+PASS  the copy runs PHP in the password folder with the password
+PASS  the copy answers 403 for /backups/, /backups/backup.sql and /backups/notes.txt
+PASS  the copy answers 401 for //private/index.html without the password (got 401)
+PASS  the copy answers 401 for /./private/index.html without the password (got 401)
+PASS  the copy answers 401 for /x/../private/index.html without the password (got 401)
+PASS  the copy answers 401 for /%70rivate/index.html without the password (got 401)
+PASS  the copy answers 401 for /private%2Findex.html without the password (got 401)
+PASS  the copy answers 401 for /%2e/private/index.html without the password (got 401)
+PASS  the copy answers 401 for /private/%2e%2e/private/index.html without the password (got 401)
+PASS  the copy answers 401 for /private/index.html/ without the password (got 401)
+PASS  the copy answers 401 for /private/sub/ without the password (got 401)
+PASS  the copy answers 401 for /private//index.html without the password (got 401)
+PASS  the copy answers 403 for //backups/notes.txt without the password (got 403)
+PASS  the copy answers 403 for /%62ackups/notes.txt without the password (got 403)
+PASS  the copy answers 403 for /backups/./notes.txt without the password (got 403)
+PASS  the copy answers 403 for /backups/%2e/notes.txt without the password (got 403)
+PASS  the copy answers 403 for /backups/notes.txt/ without the password (got 403)
+PASS  the copy answers 403 for /backups//notes.txt without the password (got 403)
+PASS  the copy answers 301 for /private without the password (got 301)
+PASS  and that redirect names /private/
+PASS  the copy answers 301 for /backups without the password (got 301)
+PASS  the copy answers 404 for /PRIVATE/index.html without the password (got 404)
+PASS  the copy answers 404 for /Backups/notes.txt without the password (got 404)
+PASS  the copy answers 401 for /pub/index.html, rewritten into /private/
+PASS  the copy does not show /private/ content through /pub/
+PASS  the copy answers 200 for /pub/index.html with the password
+PASS  the copy answers 403 for /old-backups/backup.sql, rewritten into /backups/
+PASS  the copy opens /office/ to 127.0.0.2, its one allowed address (200)
+PASS  the copy closes /office/ to 127.0.0.1 (403)
+PASS  the copy closes /lobby/ to 127.0.0.2, its one denied address (403)
+PASS  the copy opens /lobby/ to 127.0.0.1 (200)
+PASS  the vhost lists the address without a prefix length (OpenLiteSpeed refuses /32)
+  port 80 listeners: LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*
+PASS  port 80 listens on IPv4 only (0.0.0.0:80, no [::]:80 or *:80)
+PASS  a request over IPv6 to port 80 is not answered
+PASS  the site's own page is open (200)
+  probes: [{'path': '/backups/', 'kind': 'deny'}, {'path': '/lobby/', 'kind': 'hosts', 'hosts': 'except', 'networks': ['127.0.0.2/32']}, {'path': '/office/', 'kind': 'hosts', 'hosts': 'only', 'networks': ['127.0.0.2/32']}, {'path': '/private/', 'kind': 'auth'}, {'path': '/private/sub/', 'kind': 'auth'}]; verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+PASS  verify probed /private/ (401) and /backups/ (403)
+PASS  the job keeps the address the old server's sshd saw this server come from (10.88.0.1), the one its Apache saw verify come from (10.88.0.1)
+PASS  verify probed /private/sub/ (auth) and /lobby/ and /office/ by their address lists
+  verify problems: []
+PASS  verify allows cutover only if the copy answers /private/sub/ 401, /lobby/ 200 and /office/ 403 to 127.0.0.1 (copy: yes yes yes)
+PASS  a folder the copy answers against its address list is named in verify's plain problems
+PASS  with the copy right, verify passes all five folder checks
+PASS  the key is removed after the move
+
+## 5b. odd62643.proof.test: a directive the converter does not know is refused
+  job 1a4ff99e7fde703129767a353fb0f93e: failed
+    source   failed   The site's .htaccess files have directives this panel does not know. Moving the website as it is would change what it does. Nothing was created here.
+    account  skipped  
+    web      skipped  
+    files    skipped  
+    database skipped  
+    cron     skipped  
+    ssl      skipped  
+    verify   skipped  
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  why: The site's .htaccess files have directives this panel does not know. Moving the website as it is would change what it does. Nothing was created here.
+  next: On the old server, remove or change tools/.htaccess line 2 (SifrunoProofUnknown On) (Technical details says why for each), then move the website again. If the website needs those lines, leave it on the old server for now: it needs the Apache tier, which this server does not offer yet.
+  technical: tier compat; causes access_control,unknown; tools/.htaccess line 2 (SifrunoProofUnknown On): a directive this panel does not know
+PASS  the move stops at the old server's site, before anything is created
+PASS  the reason names the directives this panel does not know
+PASS  Technical details names the file, line and directive (tools/.htaccess line 2 (SifrunoProofUnknown On))
+PASS  the next step names that line to remove or change on the old server
+PASS  the reason does not claim a protected folder would open: the unknown line is the cause
+PASS  no account odd62643 was created
+PASS  the key is removed after the refusal too
+PASS  no staging folder or migration folder is left
+
+## 5c. odd62643.proof.test again: Wordfence's mod_php block, whose php_value auto_prepend_file is refused
+PASS  the old odd site still serves its page with Wordfence's block (200)
+  job d8cfc54d10b0d3f51ba5a2a6a8f1bb6b: failed
+    source   failed   The site's .htaccess files have lines OpenLiteSpeed does not act on that this server does not convert. Moving the website as it is would change what i
+    account  skipped  
+    web      skipped  
+    files    skipped  
+    database skipped  
+    cron     skipped  
+    ssl      skipped  
+    verify   skipped  
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  why: The site's .htaccess files have lines OpenLiteSpeed does not act on that this server does not convert. Moving the website as it is would change what it does. Nothing was created here.
+  next: On the old server, remove or change .htaccess line 3 (php_value auto_prepend_file) (Technical details says why for each), then move the website again. If the website needs those lines, leave it on the old server for now: it needs the Apache tier, which this server does not offer yet.
+  technical: tier compat; causes access_control,not_converted; .htaccess line 3 (php_value auto_prepend_file): auto_prepend_file names a file PHP runs before every script, often a security plugin's firewall (such as Wordfence's extended protection). This server does not carry PHP settings that name files, so moving the site would turn that file off
+PASS  the move stops at the old server's site, before anything is created
+PASS  Technical details names the line and why: .htaccess line 3 (php_value auto_prepend_file), a file PHP runs before every script, often a firewall
+PASS  the next step names that line to remove or change on the old server
+PASS  the reason does not claim a protected folder would open: the PHP line is the cause, and Wordfence's <Files> rule converts
+PASS  no account odd62643 was created
+PASS  the key is removed after the refusal too
+
+## 6. trig62643.proof.test: a database with a trigger fails the copy, which is undone
+  job 9916ae671258dab145e46a22b90db291: failed
+    source   done     Found trig62643.proof.test: 1 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on.
+    account  undone   Removed after a later step failed.
+    web      undone   Removed after a later step failed.
+    files    undone   Removed with the hosting account after a later step failed.
+    database failed   A database could not be copied. The database trig62643_app on the old server has trigger. This version copies tables and rows only, because those obje
+    cron     skipped  
+    ssl      skipped  
+    verify   skipped  
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  why: A database could not be copied. The database trig62643_app on the old server has trigger. This version copies tables and rows only, because those objects run as a named MariaDB user.
+PASS  the move fails at the database step
+PASS  the account step is marked undone
+PASS  the created account trig62643 is gone
+PASS  the created database and user are gone
+PASS  the key is removed after the failure too
+
+## 7. race62643.proof.test: a folder swapped for a link to /root during the copy
+  job 66a02ce58c0f05b80053a933df80e0d3: succeeded
+    source   done     Found race62643.proof.test: 0 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on.
+    account  done     Created the hosting account race62643, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. Mail, logs and the old server's settings stayed there.
+    database skipped  The account has no databases.
+    cron     skipped  No scheduled jobs to copy.
+    ssl      skipped  The old server has no certificate for race62643.proof.test. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  ended succeeded; why: 
+PASS  the move finished, or stopped on what the account may not read or on the copied link
+PASS  nothing of /root reached this server (homes, staging)
+PASS  the key is removed afterwards
+
+## 8. hard62643.proof.test: a hard link to a root-only file
+PASS  the stand-in tenant holds a hard link to a root-only file
+  job 56a4a13e9f9bda78e7508ba1addf847a: failed
+    source   done     Found hard62643.proof.test: 0 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on.
+    account  undone   Removed after a later step failed.
+    web      undone   Removed after a later step failed.
+    files    failed   The website's files could not be copied from the old server. Some files or folders in the old home cannot be read by the account itself, so they were 
+    database skipped  
+    cron     skipped  
+    ssl      skipped  
+    verify   skipped  
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  why: The website's files could not be copied from the old server. Some files or folders in the old home cannot be read by the account itself, so they were not copied and the copy stopped. Sifruno reads the home as the account, never as root. Give them to the account, or remove them, on the old server.
+PASS  the move stops on the file the account may not read
+PASS  the root-only content is nowhere on this server
+PASS  the failed move removed the account hard62643
+PASS  the key is removed after the failure too
+
+## 9. API tokens cannot move websites
+PASS  a token's request to open a source is refused (403 token_not_allowed)
+
+RESULT: every check passed
+
+# ---- How PHP runs for a Sifruno site, asked by hand on the same server before the proof ----
+# A site made through the installed broker (release of e823f84); a page printed
+# php_sapi_name, the loaded php.ini and ini_get of each setting. Section D wrote a
+# .user.ini (memory_limit 77M, auto_prepend_file) and a .htaccess php_value line
+# and restarted OpenLiteSpeed; section E appended a phpIniOverride block to the
+# rendered vhconf.conf, restarted, and section H put the rendered file back.
+
+# 2026-11-27T06:08:19Z openlitespeed-1.9.5-1.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64
+
+## A. The site's vhost: PHP app and handler (rendered by the broker)
+extprocessor sifruno-uf47069bc328102a1fcc73ce59d53239 {
+  type                    lsapi
+  address                 uds://tmp/lshttpd/sifruno-uf47069bc328102a1fcc73ce59d53239.sock
+  maxConns                4
+  env                     PHP_LSAPI_CHILDREN=4
+  env                     LSAPI_AVOID_FORK=200M
+  initTimeout             60
+  retryTimeout            0
+  persistConn             1
+  respBuffer              0
+  autoStart               2
+  path                    /usr/local/lsws/lsphp83/bin/lsphp
+  backlog                 100
+  instances               1
+  runOnStartUp            0
+  extUser                 phpq59699
+  extGroup                phpq59699
+  priority                0
+  memSoftLimit            1024M
+  memHardLimit            1024M
+  procSoftLimit           496
+  procHardLimit           496
+}
+scripthandler  {
+  add                     lsapi:sifruno-uf47069bc328102a1fcc73ce59d53239 php
+}
+
+## B. The site's PHP, asked through the web server, no .user.ini
+sapi=litespeed
+ini_file=/usr/local/lsws/lsphp83/etc/php.ini
+scanned=yes
+user_ini.filename='.user.ini'
+user_ini.cache_ttl=300
+env LSPHP_ENABLE_USER_INI=false
+memory_limit='128M'
+upload_max_filesize='2M'
+post_max_size='8M'
+max_execution_time='30'
+max_input_time='60'
+max_input_vars='1000'
+display_errors=''
+date.timezone='UTC'
+session.save_path=''
+auto_prepend_file=''
+error_reporting='22527'
+output_buffering='4096'
+short_open_tag=''
+zlib.output_compression=''
+session.gc_maxlifetime='1440'
+session.cookie_httponly=''
+register_globals=false
+magic_quotes_gpc=false
+safe_mode=false
+prepended=no
+ini_set_memory='128M' now 200M
+
+## C. lsphp processes' environment (LSPHP_ENABLE_USER_INI?)
+  pid 19442: LSAPI_PADDING=leave_some_room_to_avoid_overwrite_important_env
+  pid 19442: PHP_LSAPI_CHILDREN=4
+  pid 19442: LSAPI_AVOID_FORK=200M
+  pid 19445: LSAPI_PADDING=leave_some_room_to_avoid_overwrite_important_env
+  pid 19445: PHP_LSAPI_CHILDREN=4
+  pid 19445: LSAPI_AVOID_FORK=200M
+
+## D. A .user.ini in the document root, and a php_value in .htaccess, after a graceful restart
+user_ini.filename='.user.ini'
+user_ini.cache_ttl=300
+memory_limit='128M'
+upload_max_filesize='2M'
+auto_prepend_file=''
+prepended=no
+  (.user.ini over http answers 403)
+
+## E. The vhost's phpIniOverride, written by hand into a copy of the rendered vhconf.conf
+sapi=litespeed
+ini_file=/usr/local/lsws/lsphp83/etc/php.ini
+scanned=yes
+user_ini.filename='.user.ini'
+user_ini.cache_ttl=300
+env LSPHP_ENABLE_USER_INI=false
+memory_limit='256M'
+upload_max_filesize='64M'
+post_max_size='64M'
+max_execution_time='120'
+max_input_time='60'
+max_input_vars='3000'
+display_errors='1'
+date.timezone='Europe/Berlin'
+session.save_path=''
+auto_prepend_file=''
+error_reporting='32767'
+output_buffering='4096'
+short_open_tag='0'
+zlib.output_compression=''
+session.gc_maxlifetime='7200'
+session.cookie_httponly='1'
+register_globals=false
+magic_quotes_gpc=false
+safe_mode=false
+prepended=no
+ini_set_memory='256M' now 200M
+
+## F. Access levels in this PHP (1 user, 2 perdir, 4 system, 7 all)
+memory_limit 7
+upload_max_filesize 6
+post_max_size 6
+max_execution_time 7
+max_input_time 6
+max_input_vars 6
+max_input_nesting_level 6
+max_file_uploads 6
+session.gc_maxlifetime 7
+session.cookie_lifetime 7
+default_socket_timeout 7
+pcre.backtrack_limit 7
+pcre.recursion_limit 7
+error_reporting 7
+display_errors 7
+display_startup_errors 7
+log_errors 7
+html_errors 7
+short_open_tag 6
+session.cookie_httponly 7
+session.cookie_secure 7
+session.use_strict_mode 7
+session.use_only_cookies 7
+output_buffering 6
+zlib.output_compression 7
+date.timezone 7
+auto_prepend_file 6
+open_basedir 7
+disable_functions 4
+include_path 7
+sendmail_path 4
+allow_url_fopen 4
+file_uploads 4
+
+## G. Server limits around PHP settings
+      maxReqHeaderSize             65536 
+      maxReqBodySize               2047M 
+      maxDynRespSize               2047M 
+  php.ini: ;session.save_path = "/tmp"
+
+## H. Put the rendered vhconf.conf back
+memory_limit='128M'
+display_errors=''

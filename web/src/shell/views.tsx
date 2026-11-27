@@ -1,4 +1,4 @@
-import { lazy, useCallback, useEffect } from "react";
+import { lazy, Suspense, useCallback, useEffect } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Info, RefreshCw } from "lucide-react";
@@ -20,6 +20,7 @@ const ApiTokens = lazy(() => import("@/ApiTokens").then((m) => ({ default: m.Api
 const Storage = lazy(() => import("@/HostResources").then((m) => ({ default: m.Storage })));
 const NetworkResources = lazy(() => import("@/HostResources").then((m) => ({ default: m.NetworkResources })));
 const PanelPreview = lazy(() => import("@/PanelPreview"));
+const GetStarted = lazy(() => import("@/GetStarted").then((m) => ({ default: m.GetStarted })));
 const NewWebsite = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.NewWebsite })));
 const WebsiteJob = lazy(() => import("@/NewWebsite").then((m) => ({ default: m.WebsiteJob })));
 const MoveWebsite = lazy(() => import("@/MoveWebsite").then((m) => ({ default: m.MoveWebsite })));
@@ -61,8 +62,11 @@ export function HomeView() {
   const navigate = useNavigate();
   // A customer's Home is its websites; the server's readings are the admin's.
   if (shell.viewer.restricted) return <WebsitesList />;
+  // The checklist reads admin-only routes, so it waits for an admin's sign-in.
+  const admin = !shell.publicPreview && Boolean(shell.viewer.session);
   return <div className="flex min-w-0 flex-col gap-6">
-    <HostingWorkspace publicPreview={shell.publicPreview} platform={shell.platform.data} onNavigate={shell.open} onPreview={() => navigate({ to: "/tour" })} />
+    {admin && <Suspense fallback={<LoadingState label="Loading Get started" />}><GetStarted revision={shell.revision} origin={window.location.origin} /></Suspense>}
+    <HostingWorkspace publicPreview={shell.publicPreview} platform={shell.platform.data} onNavigate={(to) => navigate({ to })} onPreview={() => navigate({ to: "/tour" })} />
     <section className="flex min-w-0 flex-col gap-3.5" aria-labelledby="monitoring-heading">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0"><h2 id="monitoring-heading">Server monitoring</h2><div className="mt-1 text-sm text-muted-foreground">Measured resources and installed services.</div></div>

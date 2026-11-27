@@ -1,0 +1,144 @@
+# UX audit of every owner journey, and the guided owner experience, on a real server, 2026-11-27
+#
+# Server: a new g6-standard-2 Linode made by scripts/ci/nightly-fresh-install.sh with SIFRUNO_NIGHTLY_KEEP=1
+# and the owner's admin key added; AlmaLinux 9, SELinux enforcing, /home on its own XFS disk with quota.
+# The Cloud Firewall admitted 22, 8443 and 8444 from the runner only, 80 and 443 from anywhere; firewalld
+# opened the same ports for this boot. Deleted at the end (last part).
+# Browser: Chrome through agent-browser 0.45.0 on the runner, at 1440x900 and 390x844. The first run used an
+# SSH tunnel to the panel's loopback address, as docs/installation.md says ([::1]:8080 on the runner,
+# because the runner's own 127.0.0.1:8080 was taken; the panel admits http://[::1]:8080 as loopback).
+#
+# Edits to the captured output: the server's address is SERVER_IP (also in NAME.sslip.io names), the
+# runner's RUNNER_IP. Before each screenshot a script replaced both, and any other public IPv4 or IPv6
+# address, in the page's text; tesseract read all 57 committed screenshots afterwards and found no address.
+# Screenshots that showed an authenticator key, the backup password or a customer's setup link were kept
+# out. Passwords, codes and the access key reached the browser through stdin, never an argument or a file
+# in the repository.
+
+# Part 1. The server: fresh install of the branch head 47b6b5f, then the installer with the panel's name
+$ SIFRUNO_NIGHTLY_KEEP=1 ... scripts/ci/nightly-fresh-install.sh
+# release sha256 c11394472b35720601bd68b55d44d4dd4b33fe5bed8fc2b2282a66384f6a9e4d, source 47b6b5f
+PASS  sifruno-broker.service is active
+PASS  sifruno.service is active
+PASS  both units start at boot
+PASS  the panel answers on 127.0.0.1:8080
+PASS  the panel runs as sifpanel
+PASS  the broker socket exists
+PASS  the socket is sifpanel's, mode 0600
+PASS  hostbroker --check-host passes
+PASS  SELinux is still enforcing
+PASS  the programs have the SELinux type bin_t
+PASS  the broker runs as unconfined_service_t, not systemd's init_t
+PASS  the installed broker creates an account
+PASS  its Linux user exists
+PASS  the installed broker deletes it again
+PASS  the second run succeeds
+PASS  it reports that nothing changed
+PASS  both units are still active
+# 0 check(s) failed
+PASS: the fresh-install test passed 17 checks on a new g6-standard-2 Linode (linode/almalinux9).
+
+$ ./install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@example.com
+exit status 0
+# The installer accepted a contact address Let's Encrypt refuses. The panel's own log then blamed the network:
+acme: panel.SERVER_IP.sslip.io (account panel): no certificate: acme: the certificate authority did not issue a certificate: acme: error: 400 :: POST :: https://acme-v02.api.letsencrypt.org/acme/new-acct :: urn:ietf:params:acme:error:invalidContact :: Error validating contact(s) :: contact email has forbidden domain "example.com"
+Panel certificate: Let's Encrypt did not answer or did not issue a certificate for panel.SERVER_IP.sslip.io, so the panel keeps its self-signed certificate. Check that this server reaches acme-v02.api.letsencrypt.org on port 443; the panel asks again within 6 hours.
+# After a restart the panel would not ask again for an hour, and nothing in the panel showed any of this:
+Panel certificate: the panel asked Let's Encrypt for panel.SERVER_IP.sslip.io less than an hour ago, so it does not ask again now and keeps its self-signed certificate. The renewal check asks again within 6 hours of that try.
+# The wizard's first site met the same refusal ("Turn on https: Skipped. The certificate authority could not
+# be reached or did not issue a certificate"). Audit finding 5. The installer ran again with
+# --acme-email admin@panel.SERVER_IP.sslip.io; the panel's next try (Part 4) got its certificate.
+
+# Part 2. The audit walk, before any change (screenshots before-*.png)
+# First open of http://[::1]:8080/: Home with the whole menu, five tiles and live readings; no word that the
+#   panel has no admin. Setup appeared only on Websites. The key's hint: "It is in operator/access.key inside
+#   the panel's state folder on this server." The authenticator step showed a 32-letter key and no QR code.
+# Home after setup: "Hosting / Open a module", "A configured, admitted Linux broker is required for native
+#   account actions", a "Static site backups (old)" tile; the Customers tile opened Hosting accounts.
+# Wizard: WordPress site wp.SERVER_IP.sslip.io made in 25 s, https skipped (Part 1). The last screen led to
+#   "Go to Websites" only.
+# Websites: the name was plain text, "Details" a ghost link, "Static sites (old)" beside New website, no Move.
+# Domains and SSL: no certificate state; "Always use HTTPS" on but disabled; next step "ask whoever runs this
+#   server". Files: .lsns listed with Rename and Delete. Databases: Open phpMyAdmin landed on Chrome's "Your
+#   connection is not private" (the panel's name still had its self-signed certificate).
+# Backup storage: set to a second account on this server (a stand-in storage server), password dialog
+#   confirmed; the site's Backups tab: "Run restore drill now" disabled with no reason before the first
+#   backup, "Started by local-operator"; Back up now took 6 s, the restore test passed.
+# Move a website here: an unreachable WHM address gave what, why and next, with both "Try again" and "Connect".
+# Customers: a login and its setup link at https://panel.SERVER_IP.sslip.io:8443/setup#... (self-signed then).
+# Hosting accounts (under Customers): "Broker snapshot", "native identity drift", UID, GID, Revision,
+#   "Create Linux account", "Sign out locally". Security: "Local operator access", "Operator sessions",
+#   "Revoke". Activity: "Create and apply a scoped checkpoint through the local CLI". Settings: an AI ledger.
+# The findings, a table per journey and the ranked top 15 are in docs/ux-audit.md.
+
+# Part 3. The fixes, installed as upgrades from the branch (releases built from d6290bf, 7c39081, 0d924d2)
+$ ./install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@panel.SERVER_IP.sslip.io
+Changed in this run:
+  - panel UI installed in /usr/local/lib/sifruno/ui
+  - sifruno-broker.service restarted with the new files
+  - sifruno.service restarted with the new files
+# First run, shown by moving operator/admins.json aside (the installation guide's recovery step), then back:
+$ curl -s http://127.0.0.1:8080/api/v1/session/setup
+{"admin_required":true}
+#   Home (/) now shows the setup form, with "sudo cat /var/lib/sifpanel/state/operator/access.key".
+#   (after-first-open-home-*.png)
+$ curl -s http://127.0.0.1:8080/api/v1/session/setup
+{"admin_required":false}
+# Home through the tunnel, signed in (after-home-get-started-*.png): Get started, 2 of 5 steps done:
+#   Give the panel its own address   To do    "The panel has a name, panel.SERVER_IP.sslip.io:8443. Open it there"  [Open panel.SERVER_IP.sslip.io:8443]
+#   Create your first website        Done     "1 website on this server."
+#   Move a website (Optional)        To do    "Skip this if you have no other server."  [Move a website]
+#   Set up backups, test a restore   Done     "Every website is backed up each night, and a restore test passed on Nov 27, 2026."
+#   Give a customer their own login  Waiting  "Waiting for bakery to open the setup link and choose a password."
+#   Always use HTTPS                 Waiting  "No website has a certificate yet. wp.SERVER_IP.sslip.io gets one by itself once its domain points at this server."
+# The wizard made a PHP site shop.SERVER_IP.sslip.io, which got its certificate; the last screen's primary
+#   action is "Manage this website" (after-wizard-done-*.png). Always use HTTPS then read Done: "1 website
+#   sends visitors to https://. 1 website follows once its certificate comes."
+# At the panel's name with the self-signed certificate (after-home-at-name-no-certificate-*.png), the first
+#   step read Waiting: "Browsers warn at panel.SERVER_IP.sslip.io:8443: its certificate is not in place yet.
+#   Customers' setup links and phpMyAdmin open here too." with "Show what to check" and its three steps.
+# No horizontal scroll at 390 px on Home, Websites, Domains and SSL, Backups, Backup storage, Security and
+#   Hosting accounts (document.documentElement.scrollWidth <= innerWidth + 1 on each).
+
+# Part 4. The steps tick themselves
+$ systemctl restart sifruno        # 01:07, past the panel's one-hour wait
+acme: panel.SERVER_IP.sslip.io (account panel): certificate installed, valid until 2027-02-25
+Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-25. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+$ curl -sS -o /dev/null -w '%{ssl_verify_result}' https://panel.SERVER_IP.sslip.io:8443/
+0
+# A new Chrome session at the name, without --ignore-https-errors, signed in with password and code:
+#   Give the panel its own address  Done  "The panel answers at panel.SERVER_IP.sslip.io:8443 with a certificate browsers trust."  4 of 5.
+# The customer opened the setup link in its own browser, chose a password and entered its app's code; it
+#   landed on Websites with its one site and no New website, Move or Static sites links
+#   (after-customer-websites-390.png). Admin Home, reloaded:
+#   heading "Your server is ready for customers", "5 of 5 steps done", button "Hide this list";
+#   data-complete="true"; the optional move stays To do and is now the one primary button.
+# Hide this list: the list is gone, localStorage sifruno-get-started-hidden = "1". The first build showed the
+#   list for the seconds its readings took after a reload; 0d924d2 fixed that. After it, 20 samples of Home
+#   during a reload, 0.3 s apart: "0h" each time (no list, Home drawn).
+# A step stops being done: Always use HTTPS turned off for shop on its Domains and SSL tab ("Certificate:
+#   Valid until Feb 25, 2027. The panel renews it by itself."). Home: the list is back, 4 of 5, "Always use
+#   HTTPS  To do  shop.SERVER_IP.sslip.io still answers on plain http://." [Turn it on]
+#   (after-home-step-undone-*.png). Turn it on opened /websites/sites/ID/domains; the switch on:
+$ curl -sS -o /dev/null -w 'http answers %{http_code} -> %{redirect_url}' http://shop.SERVER_IP.sslip.io/
+http answers 301 -> https://shop.SERVER_IP.sslip.io/
+#   Home again: no list (complete and hidden).
+
+# Part 5. Checks on the branch (runner, Node 24, from the worktree)
+$ npm run panel:typecheck                 # no output, exit 0
+$ npm run panel:build                     # built
+$ node --test web/src/lib/*.test.mjs      # tests 268, pass 268, fail 0 (get-started.test.mjs: 8 new)
+$ npm run brand:check                     # contrast lines, exit 0
+$ bash scripts/ci/public-repo-guard.sh    # exit 0
+$ reuse lint                              # compliant with REUSE 3.3
+$ git diff --check 47b6b5f..HEAD          # clean
+# Not run: go vet and Go tests (no Go file changed), the dev-VM browser proofs panel-shell.qa.mjs and
+# customer-login.qa.mjs (their expectations were updated for setup on Home, the 11-item menu and the label).
+
+# Part 6. The server is deleted
+$ SIFRUNO_NIGHTLY_KEEP=1 SIFRUNO_NIGHTLY_ID=ux1127a scripts/ci/nightly-fresh-install.sh cleanup
+== 2026-11-27T01:15:54Z deleted: Linode (sifruno-owner-test-ux1127a)
+== 2026-11-27T01:16:10Z deleted: firewall (sifruno-owner-test-ux1127a)
+== 2026-11-27T01:16:12Z checked through the API: no Linode and no firewall named sifruno-owner-test-ux1127a is left
+$ GET /v4/linode/instances/<id> and GET /v4/networking/firewalls/<id>
+HTTP 404, HTTP 404

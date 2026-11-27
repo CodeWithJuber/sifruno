@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -233,18 +234,24 @@ func (m *migrator) Preflight(ctx context.Context, rec migrationRecord, home stri
 	}
 	defer stage.Close()
 	stagePath := filepath.Join(m.e.stage, l.Op)
-	if unix.Mkdirat(int(stage.Fd()), "htaccess", 0700) != nil {
-		return htaccess.SiteResult{}, false, ErrUnavailable
-	}
-	out, code, err := m.rsync(ctx, rec, func(rsh string) ([]string, bool) { return htaccessArgs(rsh, rec.Host, home, stagePath+"/htaccess") }, 10*time.Minute)
-	if err != nil {
-		return htaccess.SiteResult{}, false, err
-	}
-	if code == 23 {
-		return htaccess.SiteResult{}, false, unreadableByAccount("fetch", out)
-	}
-	if code != 0 && code != 24 {
-		return htaccess.SiteResult{}, false, sshFailure("fetch", out)
+	if rec.Via == ViaArchive {
+		if err := m.archivePreflight(ctx, rec, stage, stagePath); err != nil {
+			return htaccess.SiteResult{}, false, err
+		}
+	} else {
+		if unix.Mkdirat(int(stage.Fd()), "htaccess", 0700) != nil {
+			return htaccess.SiteResult{}, false, ErrUnavailable
+		}
+		out, code, err := m.rsync(ctx, rec, func(rsh string) ([]string, bool) { return htaccessArgs(rsh, rec.Host, home, stagePath+"/htaccess") }, 10*time.Minute)
+		if err != nil {
+			return htaccess.SiteResult{}, false, err
+		}
+		if code == 23 {
+			return htaccess.SiteResult{}, false, unreadableByAccount("fetch", out)
+		}
+		if code != 0 && code != 24 {
+			return htaccess.SiteResult{}, false, sshFailure("fetch", out)
+		}
 	}
 	files, err := openDirectoryAt(int(stage.Fd()), "htaccess")
 	if err != nil {
@@ -305,6 +312,14 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if unix.Mkdirat(int(stage.Fd()), "files", 0700) != nil {
 		return MigrateFilesResult{}, ErrUnavailable
 	}
+	if rec.Via == ViaArchive {
+		// The backup file's home, staged as rsync stages the old server's:
+		// root's, in the root-only staging folder, within the margin.
+		if err := m.extractArchive(ctx, rec, stagePath+"/files", math.MaxUint64, r.Account.GID, func(name string, _ bool) (string, bool) { return inHome(name) }); err != nil {
+			return MigrateFilesResult{}, err
+		}
+		return m.placeFiles(ctx, stage, stagePath, home, r, protect)
+	}
 	// The old server's figure may be wrong, so the disk is watched while
 	// rsync writes, and rsync is stopped before the margin is crossed.
 	copying, stop := context.WithCancel(ctx)
@@ -345,6 +360,14 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if code != 0 && code != 24 {
 		return MigrateFilesResult{}, sshFailure("fetch", out)
 	}
+	return m.placeFiles(ctx, stage, stagePath, home, r, protect)
+}
+
+// placeFiles takes a staged copy of the old home (stage/files) into the
+// account's home: the web server's group reads kept, groups and modes as a
+// restore's, the .htaccess check and conversion again on what was staged,
+// protected folders live first, then cp as the site's user.
+func (m *migrator) placeFiles(ctx context.Context, stage *os.File, stagePath, home string, r record, protect func(SiteProtection) error) (MigrateFilesResult, error) {
 	files, err := openDirectoryAt(int(stage.Fd()), "files")
 	if err != nil {
 		return MigrateFilesResult{}, ErrUnavailable
@@ -402,15 +425,17 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 		}
 		return MigrateFilesResult{}, &MigrationError{Step: "tier", Detail: installDetail([]byte(detail))}
 	}
-	result := MigrateFilesResult{Folders: migrationFolders(conv.Rules), Probes: foldersProbes(conv.Rules)}
-	if len(conv.Rules) > 0 {
-		p, err := readProtection(files, home, siteName(r.Account.ID), conv.Rules)
+	result := MigrateFilesResult{Folders: append(migrationFolders(conv.Rules), migrationMoved(conv)...), Probes: foldersProbes(conv.Rules)}
+	if converts(conv) {
+		p, err := readProtection(files, home, siteName(r.Account.ID), conv)
 		if err != nil {
 			return MigrateFilesResult{}, err
 		}
 		result.Probes = append(result.Probes, subfolderProbes(stagePath+"/files/public_html", conv.Rules)...)
 		result.Probes = append(result.Probes, openFileProbes(stagePath+"/files/public_html", conv.Rules)...)
-		// The folders are live before cp makes the files reachable.
+		result.Probes = append(result.Probes, deniedFileProbes(stagePath+"/files/public_html", conv.Rules)...)
+		// The folders, names and redirects are live before cp makes the
+		// files reachable.
 		if err := protect(p); err != nil {
 			return MigrateFilesResult{}, err
 		}
@@ -420,7 +445,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if m.e.chown(stage, m.e.owner, r.Account.GID) != nil || stage.Chmod(0750) != nil {
 		return MigrateFilesResult{}, ErrUnavailable
 	}
-	out, code, err = m.e.run(ctx, backupCommand{path: cpPath, args: copyArgs(stagePath+"/files", r.Account.Home), env: siteEnv(r), dir: r.Account.Home, uid: r.Account.UID, gid: r.Account.GID, limit: backupTimeout})
+	out, code, err := m.e.run(ctx, backupCommand{path: cpPath, args: copyArgs(stagePath+"/files", r.Account.Home), env: siteEnv(r), dir: r.Account.Home, uid: r.Account.UID, gid: r.Account.GID, limit: backupTimeout})
 	if err != nil || code != 0 {
 		return MigrateFilesResult{}, migrationFailed("copy", out)
 	}
@@ -438,9 +463,11 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 // what root reads here; the path is walked one folder at a time from
 // the staged home's handle, never following a link, and must lie in the
 // source home the copy came from.
-func readProtection(files *os.File, sourceHome, site string, rules []htaccess.FolderRule) (SiteProtection, error) {
-	folders, userFiles := protectionFolders(site, rules)
+func readProtection(files *os.File, sourceHome, site string, conv htaccess.SiteConversion) (SiteProtection, error) {
+	folders, userFiles := protectionFolders(site, conv.Rules)
 	p := SiteProtection{Folders: folders, Users: map[string][]byte{}}
+	p.Redirects, p.ErrorPages = protectionMoved(conv)
+	p.PHPSettings = protectionPHP(conv)
 	for _, f := range folders {
 		if f.Realm == nil {
 			continue
@@ -555,6 +582,57 @@ func openFileProbes(public string, rules []htaccess.FolderRule) []MigrationProbe
 		}
 		if len(open) > 0 {
 			walk(strings.Trim(rule.Path, "/"), 0)
+		}
+	}
+	return out
+}
+
+// probeFileName is a file name verify can put in a URL as it is.
+var probeFileName = regexp.MustCompile(`^[A-Za-z0-9._@~-]+$`)
+
+// deniedFileProbes finds, below each rule that closes file names, up to
+// five real files with a closed name in the staged public_html, nearest
+// the rule's folder first (wp-config.php before a plugin's readme.txt), in
+// folders whose names have no dot, so verify asks for them on both sites
+// and expects 403 from each.
+func deniedFileProbes(public string, rules []htaccess.FolderRule) []MigrationProbe {
+	out := []MigrationProbe{}
+	root, err := os.OpenRoot(public)
+	if err != nil {
+		return out
+	}
+	defer root.Close()
+	for _, rule := range rules {
+		if rule.Deny == nil {
+			continue
+		}
+		found, seen := 0, 0
+		queue := []string{strings.Trim(rule.Path, "/")}
+		for len(queue) > 0 && found < 5 && seen <= 5000 {
+			rel := queue[0]
+			queue = queue[1:]
+			dir := rel
+			if dir == "" {
+				dir = "."
+			}
+			d, err := root.Open(dir)
+			if err != nil {
+				continue
+			}
+			entries, _ := d.ReadDir(1000)
+			d.Close()
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+			for _, e := range entries {
+				seen++
+				child := strings.TrimPrefix(rel+"/"+e.Name(), "/")
+				switch t := e.Type(); {
+				case t.IsRegular() && rule.Deny.Match(e.Name()) && probeFileName.MatchString(e.Name()) && found < 5:
+					out = append(out, MigrationProbe{Path: "/" + child, Kind: "deny"})
+					found++
+				case t.IsDir() && probeFolderName.MatchString(e.Name()) && strings.Count(child, "/") < 8:
+					queue = append(queue, child)
+				}
+			}
 		}
 	}
 	return out
@@ -748,6 +826,9 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 	if strings.TrimSpace(string(out)) != "1" {
 		return MigrateDatabaseResult{}, &MigrationError{Step: "database", Detail: "The database " + db + " does not exist on this server yet, so it cannot be copied into."}
 	}
+	if rec.Via == ViaArchive {
+		return m.archiveDatabase(ctx, rec, db, r, l)
+	}
 	objects, _ := cpsource.ObjectsSQL(db)
 	found, err := m.remoteSQL(ctx, rec, objects)
 	if err != nil {
@@ -811,14 +892,7 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 		}
 		return MigrateDatabaseResult{}, err
 	}
-	copied, copiedTables, err := m.count(ctx, db, func(sql string) ([]byte, error) {
-		stdout := &boundedBuffer{max: cpsource.MaxOutput}
-		out, code, err := m.e.run(ctx, backupCommand{path: mariadbPath, args: rootSQLArgs(), env: []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + m.e.dir}, dir: m.e.dir, stdin: strings.NewReader(sql), stdout: stdout, limit: 10 * time.Minute})
-		if err != nil || code != 0 {
-			return nil, migrationFailed("compare", out)
-		}
-		return stdout.b, nil
-	})
+	copied, copiedTables, err := m.count(ctx, db, m.localSQL(ctx))
 	if err != nil {
 		return MigrateDatabaseResult{}, err
 	}
@@ -837,6 +911,18 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 	}
 	sort.Slice(result.Tables, func(i, j int) bool { return result.Tables[i].Table < result.Tables[j].Table })
 	return result, nil
+}
+
+// localSQL runs a query on this server's MariaDB as root, for count.
+func (m *migrator) localSQL(ctx context.Context) func(string) ([]byte, error) {
+	return func(sql string) ([]byte, error) {
+		stdout := &boundedBuffer{max: cpsource.MaxOutput}
+		out, code, err := m.e.run(ctx, backupCommand{path: mariadbPath, args: rootSQLArgs(), env: []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=" + m.e.dir}, dir: m.e.dir, stdin: strings.NewReader(sql), stdout: stdout, limit: 10 * time.Minute})
+		if err != nil || code != 0 {
+			return nil, migrationFailed("compare", out)
+		}
+		return stdout.b, nil
+	}
 }
 
 // count lists the database's tables and counts each one's rows through

@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"sifruno/internal/cpsource"
+	"sifruno/internal/sitemodel"
 )
 
 // Migration v1 (README, Migration): the broker reads one website account
@@ -67,7 +70,7 @@ func (e *MigrationError) Is(target error) bool { return target == ErrMigrationFa
 // (cpanel_output); an account the old server does not have
 // (account_missing); a WHM answer the panel did not send (whm_output);
 // and the copy's own steps.
-var migrationSteps = []string{"unreachable", "key_refused", "host_key_changed", "connect", "host_key", "cpanel_tool", "cpanel_output", "whm_output", "account_missing", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
+var migrationSteps = []string{"unreachable", "key_refused", "host_key_changed", "connect", "host_key", "cpanel_tool", "cpanel_output", "whm_output", "account_missing", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key", "archive"}
 
 func migrationFailed(step string, out []byte) error {
 	return &MigrationError{Step: step, Output: installDetail(out)}
@@ -113,19 +116,49 @@ type MigrationOpenInput struct {
 // ViaWHM is a migration connected with the old server's WHM login.
 const ViaWHM = "whm"
 
+// ViaArchive is a migration from a cPanel backup file the admin uploaded
+// (migrate_archive.go): no server, no key; the file is the source.
+const ViaArchive = "archive"
+
+// MigrationArchive is what an uploaded backup file holds, as the broker
+// read it: the account, its domain, its databases, the file's size, and
+// what does not move. It never holds a hash or a key.
+type MigrationArchive struct {
+	User       string           `json:"user"`
+	Domain     string           `json:"domain"`
+	Databases  []string         `json:"databases"`
+	Bytes      int64            `json:"bytes"`
+	HomeBytes  int64            `json:"home_bytes"`
+	NotCarried []sitemodel.Item `json:"not_carried"`
+	// Home is the home the old server gave the account (userdata), where
+	// its .htaccess files' AuthUserFile lines point.
+	Home string `json:"home"`
+}
+
+// MigrationArchiveInput is an upload's framing line: the file's exact
+// size, then the bytes.
+type MigrationArchiveInput struct {
+	Size   int64  `json:"size"`
+	Reason string `json:"reason"`
+}
+
 // CPanelAnswers are WHM API 1's answers for one account, which the panel
 // fetched over HTTPS with the old server's WHM login: listaccts for that
 // account, domainuserdata for its domain, php_get_vhost_versions for its
 // virtual host, and UAPI Mysql::list_databases and Mysql::list_users as
 // uapi --output=json prints them ({"result": ...}). The broker reads them
 // with the parsers and checks it uses for the same answers over SSH: they
-// are the old server's word either way.
+// are the old server's word either way. SSL is fetch_vhost_ssl_components
+// for the site's virtual host alone, with its private key: the panel
+// fetches it only for the certificate copy (MigrateCertificate) and sends
+// it with no other request.
 type CPanelAnswers struct {
 	Accounts      json.RawMessage `json:"listaccts"`
 	Site          json.RawMessage `json:"domainuserdata,omitempty"`
 	PHP           json.RawMessage `json:"php_get_vhost_versions,omitempty"`
 	Databases     json.RawMessage `json:"list_databases,omitempty"`
 	DatabaseUsers json.RawMessage `json:"list_users,omitempty"`
+	SSL           json.RawMessage `json:"fetch_vhost_ssl_components,omitempty"`
 }
 
 // maxCPanelRequest bounds a request that carries CPanelAnswers.
@@ -151,8 +184,11 @@ type Migration struct {
 	HostKeys       []MigrationHostKey `json:"host_keys"`
 	Pinned         string             `json:"pinned_fingerprint"`
 	Via            string             `json:"via"`
-	CreatedAt      time.Time          `json:"created_at"`
-	ExpiresAt      time.Time          `json:"expires_at"`
+	// Archive is the uploaded backup file's contents for a migration from
+	// one; Host, Port, the keys and the command are empty then.
+	Archive   *MigrationArchive `json:"archive,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+	ExpiresAt time.Time         `json:"expires_at"`
 }
 
 // MigrationPinInput confirms one of the offered host keys.
@@ -202,16 +238,31 @@ type MigrationPlan struct {
 	Tier          string                  `json:"tier"`
 	TierCauses    []string                `json:"tier_causes"`
 	// Converted lists the .htaccess files whose access rules were converted
-	// for OpenLiteSpeed (Native includes them); TierRefusals says, file by
-	// file, why a site is not Native.
+	// for OpenLiteSpeed (Native includes them); TierRefusals says, line by
+	// line, why a site is not Native: "<file> line N (<directive>):
+	// <reason>", with paths relative to public_html.
 	Converted    []MigrationFolder `json:"converted"`
 	TierRefusals []string          `json:"tier_refusals"`
-	Probes       []MigrationProbe  `json:"probes"`
-	Htaccess     int               `json:"htaccess_files"`
+	// TierAccess says a refusal concerns an access rule, which OpenLiteSpeed
+	// would leave open; TierFix names the lines to change ("<file> line N
+	// (<directive>)"): the access rules when TierAccess, else every refused
+	// line.
+	TierAccess bool     `json:"tier_access"`
+	TierFix    []string `json:"tier_fix"`
+	// TierWarnings are the lines of a Native site a person checks before
+	// cutover: PHP settings OpenLiteSpeed does not apply, and handlers for
+	// another PHP version than the site's.
+	TierWarnings []string         `json:"tier_warnings"`
+	Probes       []MigrationProbe `json:"probes"`
+	Htaccess     int              `json:"htaccess_files"`
 	// ClientAddress is the address the source sees this server's
 	// connections come from (its SSH_CONNECTION), or empty when it did not
 	// say: verify needs it for folders open to some addresses only.
 	ClientAddress string `json:"client_address"`
+	// NotCarried is what a backup file holds that does not move, each with
+	// its reason (sitemodel); empty for a move from a server, whose
+	// skipped grants and cron lines are listed above.
+	NotCarried []sitemodel.Item `json:"not_carried,omitempty"`
 }
 
 // MigrateFilesInput copies the source account of the same name into the
@@ -277,12 +328,14 @@ type MigrationFinishResult struct {
 // client.
 type MigrationService interface {
 	OpenMigration(context.Context, MigrationOpenInput, string) (Migration, error)
+	OpenArchiveMigration(context.Context, MigrationArchiveInput, io.Reader, string) (Migration, error)
 	GetMigration(context.Context, string) (Migration, error)
 	PinMigrationHostKey(context.Context, string, MigrationPinInput, string) (Migration, error)
 	MigrationAccounts(context.Context, string) ([]cpsource.Account, error)
 	PlanMigration(context.Context, string, MigrationPlanInput, string) (MigrationPlan, error)
 	MigrateFiles(context.Context, string, MigrateFilesInput, string) (MigrateFilesResult, error)
 	MigrateDatabase(context.Context, string, MigrateDatabaseInput, string) (MigrateDatabaseResult, error)
+	MigrateCertificate(context.Context, string, MigrateCertificateInput, string) (MigrateCertificateResult, error)
 	FinishMigration(context.Context, string, MigrationFinishInput, string) (MigrationFinishResult, error)
 	StaleMigrationKeys(context.Context) ([]StaleMigrationKey, error)
 	ClearStaleMigrationKey(context.Context, string, MigrationFinishInput, string) error
@@ -333,10 +386,15 @@ type migrationRecord struct {
 	Actor     string    `json:"actor"`
 	Reason    string    `json:"reason"`
 	CreatedAt time.Time `json:"created_at"`
+	// Archive is set for a migration from an uploaded backup file only.
+	Archive *MigrationArchive `json:"archive,omitempty"`
 }
 
 func (m migrationRecord) valid() bool {
-	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() || (m.Via != "" && m.Via != ViaWHM) {
+	if m.Via == ViaArchive {
+		return idPattern.MatchString(m.ID) && m.Host == "" && m.Port == 0 && len(m.HostKeys) == 0 && m.PublicKey == "" && m.Pinned == "" && !m.CreatedAt.IsZero() && validArchive(m.Archive)
+	}
+	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() || (m.Via != "" && m.Via != ViaWHM) || m.Archive != nil {
 		return false
 	}
 	if _, _, ok := normalizeSSHKey(m.PublicKey); !ok {
@@ -367,6 +425,12 @@ func fingerprint(line string) (MigrationHostKey, bool) {
 }
 
 func (m migrationRecord) view() Migration {
+	if m.Via == ViaArchive {
+		a := *m.Archive
+		a.Databases = slices.Clone(a.Databases)
+		a.NotCarried = slices.Clone(a.NotCarried)
+		return Migration{ID: m.ID, HostKeys: []MigrationHostKey{}, Via: ViaArchive, Archive: &a, CreatedAt: m.CreatedAt, ExpiresAt: m.CreatedAt.Add(migrationLifetime)}
+	}
 	out := Migration{ID: m.ID, Host: m.Host, Port: m.Port, PublicKey: cpsource.KeyLine(m.PublicKey, m.ID), InstallCommand: cpsource.InstallKeyCommand(m.PublicKey, m.ID), HostKeys: []MigrationHostKey{}, Via: m.Via, CreatedAt: m.CreatedAt, ExpiresAt: m.CreatedAt.Add(migrationLifetime)}
 	for _, k := range m.HostKeys {
 		if fp, ok := fingerprint(k); ok {
@@ -488,16 +552,17 @@ func fetchArgs(rsh, host, home, dest string, webMark int) ([]string, bool) {
 }
 
 // htaccessArgs copies only the .htaccess files of the home and its
-// public_html into dest, keeping the folders, so the scan sees the site's
-// tree of rules. The sender runs as the account, as for the copy; files
-// stay root's in the root-only staging folder.
+// public_html, and public_html's own .user.ini, into dest, keeping the
+// folders, so the scan sees the site's tree of rules and what the old
+// server's PHP ran before every script. The sender runs as the account, as
+// for the copy; files stay root's in the root-only staging folder.
 func htaccessArgs(rsh, host, home, dest string) ([]string, bool) {
 	sender, ok := senderPath(home)
 	if !ok {
 		return nil, false
 	}
 	return []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlt", "--prune-empty-dirs", "--one-file-system", "--timeout=300",
-		"--include=/public_html/", "--include=/public_html/**/", "--include=.htaccess", "--exclude=*",
+		"--include=/public_html/", "--include=/public_html/**/", "--include=.htaccess", "--include=/public_html/.user.ini", "--exclude=*",
 		"--", host + ":" + home + "/", dest + "/"}, true
 }
 

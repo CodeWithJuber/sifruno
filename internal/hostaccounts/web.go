@@ -148,16 +148,22 @@ func webSites(items []record, except string) []olsweb.Site {
 		// change in flight counts as done. olsweb renders the redirects for
 		// an active site only.
 		extra := recordSiteDomains(r)
+		// The migration's converted .htaccess rules: folders, and the
+		// root .htaccess's redirects, error pages and PHP settings.
+		protection := recordProtection(r)
 		site := olsweb.Site{
-			Name:       siteName(r.Account.ID),
-			Username:   r.Account.Username,
-			Group:      r.Account.Username,
-			Domains:    append([]string{r.Account.Domain}, extra.Aliases...),
-			Redirects:  olswebRedirects(extra.Redirects),
-			Folders:    recordFolders(r),
-			DocRoot:    r.Account.PublicHTML,
-			PHPVersion: w.PHPVersion,
-			Suspended:  state == "suspended",
+			Name:              siteName(r.Account.ID),
+			Username:          r.Account.Username,
+			Group:             r.Account.Username,
+			Domains:           append([]string{r.Account.Domain}, extra.Aliases...),
+			Redirects:         olswebRedirects(extra.Redirects),
+			Folders:           protection.Folders,
+			HtaccessRedirects: protection.Redirects,
+			ErrorPages:        protection.ErrorPages,
+			PHPSettings:       sitePHP(protection.PHPSettings, limits.MemoryMiB),
+			DocRoot:           r.Account.PublicHTML,
+			PHPVersion:        w.PHPVersion,
+			Suspended:         state == "suspended",
 			// The account's limits for its lsphp app: memory as each
 			// process's RLIMIT_AS, processes as RLIMIT_NPROC, raised to the
 			// floor OpenLiteSpeed keeps for these children (it would raise a

@@ -201,6 +201,18 @@ test("Always use HTTPS says when the switch can change, why not, and what to do 
   assert.match(suspended.next, /Resume the website/);
   assert.equal(api.alwaysHttps({ ...site, state: "recovery_required" }, now).kind, "not-live");
 
+  // An admin runs the server: never "ask whoever runs this server", but
+  // what to check on it.
+  const forAdmin = [
+    api.alwaysHttps({ ...site, https: { on: false, not_after: "" } }, now, true),
+    api.alwaysHttps({ ...site, https: { on: false, not_after: "" }, aliases: [{ name: "www.example.com", https: "off" }] }, now, true),
+    api.alwaysHttps({ ...site, state: "recovery_required" }, now, true),
+  ];
+  for (const state of forAdmin) assert.doesNotMatch(state.next, /ask whoever runs this server/i, state.kind);
+  assert.match(forAdmin[0].next, /keep port 80 open.*journalctl -u sifruno \| grep acme$/);
+  assert.match(forAdmin[1].next, /\.\/install\.sh --acme-email/);
+  assert.match(forAdmin[2].next, /Hosting accounts, under Advanced/);
+
   assert.match(api.alwaysHttpsOutcome(site, now), /is on\. Visitors on http:\/\/ now go to https:\/\//);
   assert.match(api.alwaysHttpsOutcome({ ...site, https: { on: false, not_after: "" } }, now), /starts once a valid certificate is in force/);
   assert.match(api.alwaysHttpsOutcome({ ...site, always_https: false }, now), /is off/);
@@ -269,4 +281,18 @@ test("a refused switch says what happened, why and what next; a 409 says the web
     await assert.rejects(api.setAlwaysHttps(site, false), (error) => error.status === 401);
   });
   assert.equal(posted, false);
+});
+
+test("a certificate copied from the old server says so, with its date", () => {
+  const copied = api.parseSiteDomains(detail({ https: { on: true, not_after: "2027-02-22T15:44:09Z", source: "copied" } }));
+  assert.deepEqual(copied.https, { on: true, not_after: "2027-02-22T15:44:09Z", source: "copied" });
+  const said = api.certificateOrigin(copied, "en-GB");
+  assert.equal(said, "Copied from the old server when the website moved here, valid until 22 Feb 2027. The panel replaces it with a Let's Encrypt certificate before then, once example.com points at this server.");
+  // Any other certificate, or none, has no such line.
+  assert.equal(api.certificateOrigin(api.parseSiteDomains(detail()), "en-GB"), undefined);
+  assert.equal(api.parseSiteDomains(detail()).https.source, undefined);
+  assert.equal(api.certificateOrigin(api.parseSiteDomains(detail({ https: { on: false, not_after: "", source: "copied" } })), "en-GB"), undefined);
+  for (const source of ["", "lets_encrypt", 1, null]) {
+    assert.equal(api.parseSiteDomains(detail({ https: { on: true, not_after: "2027-02-22T15:44:09Z", source } })), undefined, JSON.stringify(source));
+  }
 });

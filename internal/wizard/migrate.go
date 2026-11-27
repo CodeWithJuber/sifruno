@@ -43,6 +43,7 @@ var migrationStepTitles = []stepTitle{
 	{StepFiles, "Copy the website's files"},
 	{StepDatabase, "Copy the databases"},
 	{StepCron, "Copy the scheduled jobs"},
+	{StepSSL, "Copy the website's certificate"},
 	{StepVerify, "Compare the copy with the old site"},
 	{StepKey, "Remove the migration key from the old server"},
 }
@@ -81,9 +82,10 @@ type Migration struct {
 	// Notes are what a person must check; each keeps the gate closed until
 	// it is accepted.
 	Notes []string `json:"notes"`
-	// Converted lists the .htaccess files whose access rules were converted
-	// into the site's web server config, and what each became: the plan's,
-	// then the copy's.
+	// Converted lists the .htaccess rules converted into the site's web
+	// server config (access rules by file, and the root .htaccess's
+	// redirects and error pages), and what each became: the plan's, then
+	// the copy's.
 	Converted []hostaccounts.MigrationFolder `json:"converted"`
 	// Probes are the URLs of the converted rules verify checks: 403, 401,
 	// 200 for files a closed folder leaves open, and folders open to some
@@ -103,11 +105,28 @@ type Migration struct {
 	// tell what an address-list folder should answer it. Empty when the old
 	// server did not say: those folders' checks then fail.
 	ClientAddress string `json:"client_address,omitempty"`
+	// Certificate says whether the old site's certificate was copied, and
+	// until when it is valid, or why not; nil before that step ran.
+	Certificate *MigrationCertificate `json:"certificate,omitempty"`
+}
+
+// MigrationCertificate is the certificate step's outcome: Copied with the
+// certificate's expiry (RFC 3339) and issuer, or Why it was not copied, in
+// plain words. It never holds the key.
+type MigrationCertificate struct {
+	Copied   bool   `json:"copied"`
+	NotAfter string `json:"not_after,omitempty"`
+	Issuer   string `json:"issuer,omitempty"`
+	Why      string `json:"why,omitempty"`
 }
 
 // clone copies the record so callers never share its slices.
 func (m *Migration) clone() *Migration {
 	c := *m
+	if m.Certificate != nil {
+		cert := *m.Certificate
+		c.Certificate = &cert
+	}
 	c.Databases = slices.Clone(m.Databases)
 	c.DatabaseUsers = slices.Clone(m.DatabaseUsers)
 	c.Tables = slices.Clone(m.Tables)
@@ -200,6 +219,7 @@ type MigrationBroker interface {
 	PlanMigration(context.Context, string, hostaccounts.MigrationPlanInput, string) (hostaccounts.MigrationPlan, error)
 	MigrateFiles(context.Context, string, hostaccounts.MigrateFilesInput, string) (hostaccounts.MigrateFilesResult, error)
 	MigrateDatabase(context.Context, string, hostaccounts.MigrateDatabaseInput, string) (hostaccounts.MigrateDatabaseResult, error)
+	MigrateCertificate(context.Context, string, hostaccounts.MigrateCertificateInput, string) (hostaccounts.MigrateCertificateResult, error)
 	FinishMigration(context.Context, string, hostaccounts.MigrationFinishInput, string) (hostaccounts.MigrationFinishResult, error)
 	ClearStaleMigrationKey(context.Context, string, hostaccounts.MigrationFinishInput, string) error
 	SetCron(context.Context, string, hostaccounts.CronInput, string) (hostaccounts.CronResult, error)
@@ -282,7 +302,7 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 		return Job{}, refuse(ErrConflict, "That connection to the old server has ended (it lasts 24 hours). Connect to the old server again.")
 	case err != nil:
 		return Job{}, refuse(ErrUnavailable, "The account service is not answering, so nothing was moved. Check that it is running, then try again.")
-	case source.Pinned == "":
+	case source.Pinned == "" && source.Via != hostaccounts.ViaArchive:
 		return Job{}, refuse(ErrConflict, "Confirm the old server's fingerprint first, so Sifruno knows it talks to the right server.")
 	case source.Via == hostaccounts.ViaWHM && !o.WHM.Has(in.Source):
 		return Job{}, refuse(ErrConflict, "This panel no longer holds the WHM login for that connection: it keeps it in memory only, and the panel restarted. Press Stop and remove the key, then connect with the WHM login again.")
@@ -301,9 +321,12 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 	now := time.Now()
 	job := newKindJob(id, KindMigration, "", actor, now)
 	job.Username = in.Username
-	job.Migration = &Migration{Source: in.Source, SourceHost: source.Host, SourceUser: in.Username, Via: source.Via, Gate: GateClosed, Address: o.Address,
+	if source.Via == hostaccounts.ViaArchive {
+		retitle(&job)
+	}
+	job.Migration = &Migration{Source: in.Source, SourceHost: sourceName(source), SourceUser: in.Username, Via: source.Via, Gate: GateClosed, Address: o.Address,
 		Databases: []string{}, DatabaseUsers: []string{}, Tables: []TableDifference{}, Notes: []string{}, Probes: []migrateverify.Probe{},
-		Activity: []Activity{{At: timestamp(now), Actor: actor, What: "Started moving the account " + in.Username + " from " + source.Host + "."}}}
+		Activity: []Activity{{At: timestamp(now), Actor: actor, What: "Started moving the account " + in.Username + " from " + sourceName(source) + "."}}}
 	if err = r.store.put(job); err != nil {
 		r.store.forget(id)
 		return Job{}, refuse(ErrUnavailable, "The panel could not save the job record, so nothing was moved. Check the panel's state directory, then try again.")
@@ -350,7 +373,7 @@ func (j *run) executeMigration(ctx context.Context) {
 		}
 		j.secrets = nil
 	}()
-	steps := []func(context.Context) (string, *stepError){j.migrateSource, j.migrateAccount, j.migrateWeb, j.migrateFiles, j.migrateDatabases, j.migrateCron}
+	steps := []func(context.Context) (string, *stepError){j.migrateSource, j.migrateAccount, j.migrateWeb, j.migrateFiles, j.migrateDatabases, j.migrateCron, j.migrateCertificate}
 	failed := false
 	for i, step := range steps {
 		j.begin(i)
@@ -372,6 +395,9 @@ func (j *run) executeMigration(ctx context.Context) {
 	if !failed {
 		j.job.State = StateSucceeded
 		scheme := "http://"
+		if c := j.job.Migration.Certificate; c != nil && c.Copied {
+			scheme = "https://"
+		}
 		j.job.Result = &Result{URL: scheme + j.job.Domain + "/", AccountID: j.accountID}
 		if j.migration.wordpress {
 			j.job.Result.AdminURL = scheme + j.job.Domain + "/wp-admin/"
@@ -447,6 +473,7 @@ var migrationCases = map[string]migrationCase{
 	"import":           {why: "A database could not be copied: this server could not load the old server's dump.", next: "Open Technical details for MariaDB's message and check that MariaDB runs on this server", detail: true},
 	"compare":          {why: "A database could not be copied: its rows could not be counted afterwards.", next: "Check that MariaDB runs on both servers", detail: true},
 	"remove_key":       {why: "The migration key could not be removed from the old server.", next: "Remove the line ending in sifruno-migration- from /root/.ssh/authorized_keys on the old server", detail: true},
+	"archive":          {why: "The backup file could not be used.", next: "Check that it is the whole file cPanel's backup made for one account (cpmove-USER.tar.gz, USER.tar.gz or backup-..._USER.tar.gz), then upload it again", detail: true},
 	// The WHM login's own failures (internal/whmsource).
 	"whm_unreachable": {why: "Sifruno could not reach WHM on the old server: nothing answered at that address and port, or the connection was cut.", next: "Check the WHM address (WHM listens on port 2087), that the old server is running, and that its firewall accepts connections from this server", detail: true},
 	"whm_login":       {why: "WHM on the old server refused the login.", next: "Check the API token (in WHM: Development, Manage API Tokens) or root's password, and that it is root's, not a reseller's", detail: true},
@@ -481,9 +508,11 @@ func ExplainMigration(failed *hostaccounts.MigrationError, again string) Migrati
 	return MigrationExplanation{Why: why, Next: next, Technical: technical}
 }
 
-// tierCauses says in plain words why a site is not Native.
+// tierCauses says in plain words why a site is not Native. access_control
+// is left out: tierRefusal names access rules itself, and only when one is
+// the reason (plan.TierAccess).
 var tierCauses = map[string]string{
-	"access_control":       "password-protected folders or deny rules this server cannot convert yet",
+	"not_converted":        "lines OpenLiteSpeed does not act on that this server does not convert",
 	"unknown":              "directives this panel does not know",
 	"malformed":            "lines it cannot read",
 	"unreadable_file":      "files it could not read",
@@ -493,6 +522,49 @@ var tierCauses = map[string]string{
 	"scan_truncated":       "more files than the check reads",
 	"unreadable_dir":       "folders it could not read",
 	"home_htaccess":        "an .htaccess in the home folder above public_html",
+}
+
+// tierLinesShown is how many lines a refusal names before "and N more".
+const tierLinesShown = 5
+
+// tierRefusal explains a site that is not Native. Only an access rule this
+// server cannot convert would leave a folder open on OpenLiteSpeed, so only
+// then does the message say so, and the next step is the Apache tier. Any
+// other cause names the lines to change on the old server; Technical
+// details holds each refused line with its reason.
+func tierRefusal(plan hostaccounts.MigrationPlan) *stepError {
+	technical := clip("tier " + plan.Tier + "; causes " + strings.Join(plan.TierCauses, ",") + "; " + strings.Join(plan.TierRefusals, " | "))
+	lines := strings.Join(plan.TierFix[:min(len(plan.TierFix), tierLinesShown)], ", ")
+	if more := len(plan.TierFix) - tierLinesShown; more > 0 {
+		lines += fmt.Sprintf(" and %d more", more)
+	}
+	if plan.TierAccess {
+		why := "The site's .htaccess files have access rules this server cannot convert yet"
+		if lines != "" {
+			why += ": " + lines
+		}
+		return &stepError{
+			why:       why + ". This server's web server, OpenLiteSpeed, ignores access rules in .htaccess, so the folder such a rule protects would open to everyone. Nothing was created here.",
+			next:      "Leave this website on the old server for now: it needs the Apache tier, which this server does not offer yet. Technical details says why each rule cannot be converted.",
+			technical: technical}
+	}
+	causes := []string{}
+	for _, c := range plan.TierCauses {
+		if text, ok := tierCauses[c]; ok {
+			causes = append(causes, text)
+		}
+	}
+	if len(causes) == 0 {
+		causes = append(causes, "rules OpenLiteSpeed does not act on")
+	}
+	next := "Fix what the message names on the old server, then move the website again"
+	if lines != "" {
+		next = "On the old server, remove or change " + lines + " (Technical details says why for each), then move the website again"
+	}
+	return &stepError{
+		why:       "The site's .htaccess files have " + strings.Join(causes, ", ") + ". Moving the website as it is would change what it does. Nothing was created here.",
+		next:      next + ". If the website needs those lines, leave it on the old server for now: it needs the Apache tier, which this server does not offer yet.",
+		technical: technical}
 }
 
 func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
@@ -524,19 +596,13 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		return "", &stepError{why: plan.Domain + " already belongs to the hosting account " + owner + " on this server.", next: "Remove that website first, or move another one."}
 	}
 	if plan.Tier != "native" {
-		causes := make([]string, 0, len(plan.TierCauses))
-		for _, c := range plan.TierCauses {
-			if text, ok := tierCauses[c]; ok {
-				causes = append(causes, text)
-			}
-		}
-		if len(causes) == 0 {
-			causes = append(causes, "rules OpenLiteSpeed does not act on")
-		}
-		return "", &stepError{
-			why:       "The site's .htaccess files have " + strings.Join(causes, ", ") + ". This server's web server, OpenLiteSpeed, ignores those rules, so a protected folder would open to everyone. Nothing was created here.",
-			next:      "Leave this website on the old server for now: it needs the Apache tier, which this server does not offer yet. Websites whose .htaccess has only rewrite rules can move now.",
-			technical: clip("tier " + plan.Tier + "; causes " + strings.Join(plan.TierCauses, ",") + "; " + strings.Join(plan.TierRefusals, " | "))}
+		return "", tierRefusal(plan)
+	}
+	// Each warning names its file and line and says what differs: a
+	// header or error text not carried, a lower memory_limit, a .user.ini
+	// this server's PHP does not read.
+	for _, w := range plan.TierWarnings {
+		j.note("Check before cutover: " + w)
 	}
 	for _, u := range plan.Users {
 		if u.Hash == "" {
@@ -548,14 +614,10 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 	if !exact {
 		j.note(fmt.Sprintf("The old server runs PHP %q; this server offers 8.1 to 8.4, so the copy runs PHP %s. Check the preview for errors.", clip(plan.PHPSource), php))
 	}
-	if len(plan.Aliases) > 0 {
-		j.note("The site's other domains (" + strings.Join(plan.Aliases, ", ") + ") were not added; this version moves the main domain. Add them on the website's Domains tab.")
-	}
-	for _, s := range plan.GrantsSkipped {
-		j.note("A database grant was not copied: " + s + ".")
-	}
-	for _, s := range plan.CronSkipped {
-		j.note("A scheduled-job line was not copied: " + s + ".")
+	// The plan as the website model: what it does not carry is a note.
+	site := cpanelSite(plan, siteSource(m.Via), php, exact)
+	for _, item := range site.NotCarried {
+		j.note(item.Text)
 	}
 	for _, line := range plan.Cron {
 		job := hostaccounts.CronJob{Schedule: line.Schedule, Command: line.Command}
@@ -573,7 +635,7 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 	m.Converted = slices.Clone(plan.Converted)
 	converted := ""
 	if len(plan.Converted) > 0 {
-		converted = fmt.Sprintf(" %d .htaccess file(s) with access rules are converted into the web server's config: %s.", len(plan.Converted), folderPaths(plan.Converted))
+		converted = fmt.Sprintf(" %d .htaccess rule(s) are converted into the web server's config: %s.", len(plan.Converted), folderPaths(plan.Converted))
 	}
 	return fmt.Sprintf("Found %s: %d database(s), %d scheduled job(s), PHP %s (%s), .htaccess rules OpenLiteSpeed acts on.%s", plan.Domain, len(plan.Databases), len(plan.Cron), php, plan.PHPSource, converted), nil
 }
@@ -656,7 +718,7 @@ func (j *run) migrateFiles(ctx context.Context) (string, *stepError) {
 		j.job.Migration.Converted = slices.Clone(res.Folders)
 	}
 	if len(res.Folders) > 0 {
-		protected = " Protected folders went into the web server's config before the files did: " + folderPaths(res.Folders) + "."
+		protected = " The converted .htaccess rules went into the web server's config before the files did: " + folderPaths(res.Folders) + "."
 	}
 	if res.WordPress {
 		return "Copied the home folder with public_html. It is a WordPress site." + protected, nil
@@ -716,6 +778,10 @@ func (j *run) migrateDatabases(ctx context.Context) (string, *stepError) {
 			}
 		}
 	}
+	if m.Via == hostaccounts.ViaArchive {
+		// A backup file has no live database to count against.
+		return fmt.Sprintf("Loaded %d database(s) from the backup file with the same names and users (same passwords): %d tables, %d rows.", len(plan.Databases), j.migration.dbTables, j.migration.dbRows), nil
+	}
 	if j.migration.dbDiffers > 0 {
 		j.note(fmt.Sprintf("%d table(s) have a different number of rows on the old server than in the copy. The old site may have changed during the copy; check them.", j.migration.dbDiffers))
 		return fmt.Sprintf("Copied %d database(s) with the same names and users (same passwords), %d tables; %d table(s) differ in rows.", len(plan.Databases), j.migration.dbTables, j.migration.dbDiffers), nil
@@ -735,6 +801,81 @@ func (j *run) migrateCron(ctx context.Context) (string, *stepError) {
 	}
 	j.revision = res.Account.Revision
 	return fmt.Sprintf("Copied %d scheduled job(s); they run as the site's user on this server's clock.", len(jobs)), nil
+}
+
+// migrateCertificate copies the old site's certificate, so the moved site
+// answers https here before its DNS changes. It never fails the move: a
+// certificate the broker does not copy, or a step that fails, leaves the
+// site on http with the step skipped and the reason, and the renewal loop
+// gets a certificate once the domain points here. For a WHM move the
+// certificate, with its key, is fetched through WHM for this step alone and
+// sent with no other request.
+func (j *run) migrateCertificate(ctx context.Context) (string, *stepError) {
+	i := j.index(StepSSL)
+	m, mr := j.job.Migration, j.migration
+	answers := mr.cpanel
+	if m.Via == hostaccounts.ViaWHM {
+		ssl, err := mr.options.WHM.Certificate(ctx, m.Source, j.job.Domain)
+		if err != nil {
+			j.certificateSkipped(i, hostaccounts.MigrateCertificateResult{}, err)
+			return "", nil
+		}
+		defer clear(ssl)
+		withSSL := *mr.cpanel
+		withSSL.SSL = ssl
+		answers = &withSSL
+	}
+	res, err := mr.options.Broker.MigrateCertificate(ctx, j.accountID, hostaccounts.MigrateCertificateInput{Migration: m.Source, ExpectedRevision: j.revision, CPanel: answers, Reason: migrateReason}, j.actor)
+	if err != nil {
+		// The broker may have installed it after the panel stopped
+		// waiting, which moves the account's revision.
+		j.refreshRevision(ctx)
+		j.certificateSkipped(i, res, err)
+		return "", nil
+	}
+	j.revision = res.Revision
+	if !res.Copied {
+		j.certificateSkipped(i, res, nil)
+		return "", nil
+	}
+	until := time.Unix(res.Certificate.NotAfter, 0).UTC()
+	m.Certificate = &MigrationCertificate{Copied: true, NotAfter: until.Format(time.RFC3339), Issuer: clip(res.Issuer)}
+	renewal := " The panel replaces it with a Let's Encrypt certificate before then, once the domain points here."
+	if certs := j.runner.certificates; certs != nil {
+		certs.Copied(j.accountID, j.job.Domain, until)
+	} else {
+		renewal = " Certificates are not set up on this server, so it is not renewed here."
+	}
+	issuer := ""
+	if res.Issuer != "" {
+		issuer = ", issued by " + res.Issuer
+	}
+	return clip("Copied the old server's certificate for " + j.job.Domain + issuer + ", valid until " + until.Format(time.DateOnly) + ": the site answers https on this server already." + renewal), nil
+}
+
+// certificateSkipped ends the certificate step without one: it says why,
+// and when https comes. A failure's technical words go to the activity
+// log only.
+func (j *run) certificateSkipped(i int, res hostaccounts.MigrateCertificateResult, err error) {
+	var why string
+	switch {
+	case err != nil:
+		f := j.migrationFailure(err)
+		why = "The old server's certificate was not copied: " + f.why
+		if f.technical != "" {
+			j.activity(j.actor, "The old site's certificate was not copied ("+f.technical+").")
+		}
+	case res.Refused == "no_certificate" && res.Detail != "":
+		why = res.Detail
+	default:
+		why = strings.TrimSpace("The old server's certificate was not copied. " + res.Detail)
+	}
+	next := " The site uses http on this server until " + j.job.Domain + " points here; then the panel gets it a certificate by itself."
+	if j.runner.certificates == nil {
+		next = " The site uses http on this server: certificates are not set up here."
+	}
+	j.job.Migration.Certificate = &MigrationCertificate{Why: clip(why)}
+	j.skip(i, clip(why+next))
 }
 
 // verifyStep compares the copy with the old site. It never undoes the
@@ -761,8 +902,18 @@ func (r *Runner) runVerify(ctx context.Context, job Job) VerifySummary {
 	o := r.migrationOptions()
 	ctx, cancel := context.WithTimeout(ctx, verifyLimit)
 	defer cancel()
-	opts := migrateverify.Options{Old: "http://" + job.Domain, New: "http://" + job.Domain, NewConnect: o.Connect, Probes: job.Migration.Probes,
-		OldClient: job.Migration.ClientAddress, NewClient: copyClient(o.Connect)}
+	// A copy that answers https with the old site's own certificate is
+	// compared over https on both sides, the copy through this server's
+	// port 443: its "Always use HTTPS" sends plain http there, which the
+	// old site may not do, and the certificate is checked on the way.
+	scheme, connect := "http://", o.Connect
+	if c := job.Migration.Certificate; c != nil && c.Copied {
+		if host, _, err := net.SplitHostPort(o.Connect); err == nil {
+			scheme, connect = "https://", net.JoinHostPort(host, "443")
+		}
+	}
+	opts := migrateverify.Options{Old: scheme + job.Domain, New: scheme + job.Domain, NewConnect: connect, Probes: job.Migration.Probes,
+		OldClient: job.Migration.ClientAddress, NewClient: copyClient(connect)}
 	if job.Migration.WordPress {
 		opts.Paths = []string{"/wp-login.php", "/wp-admin/"}
 	}
@@ -838,6 +989,14 @@ func (j *run) removeKey() {
 	res, err := j.migration.options.WHM.Finish(ctx, m.Source, j.migration.options.Broker, hostaccounts.MigrationFinishInput{Reason: migrateReason}, j.actor)
 	var message string
 	switch {
+	case m.Via == hostaccounts.ViaArchive && err == nil && res.RemovedFromSource:
+		m.KeyRemoved = true
+		message = "Deleted the uploaded backup file from this server."
+		j.end(i, StepDone, message)
+	case m.Via == hostaccounts.ViaArchive:
+		// No server holds a key; only the file is left, and it expires.
+		message = "The uploaded backup file could not be deleted yet; the account service deletes it 24 hours after the upload."
+		j.end(i, StepFailed, message)
 	case errors.Is(err, hostaccounts.ErrNotFound):
 		message = "The account service no longer knows this migration, so the panel cannot tell whether the old server still has its key line. " + manual
 		j.end(i, StepFailed, message)

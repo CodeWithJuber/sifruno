@@ -295,6 +295,12 @@ func validateSite(field string, in Site, workers int) (site, error) {
 	if err := checkFolders(field, in.Name, in.Folders); err != nil {
 		return site{}, err
 	}
+	if err := checkMoved(field, in.HtaccessRedirects, in.ErrorPages); err != nil {
+		return site{}, err
+	}
+	if err := checkPHPSettings(field, in.PHPSettings, v.memoryMiB); err != nil {
+		return site{}, err
+	}
 	return v, nil
 }
 

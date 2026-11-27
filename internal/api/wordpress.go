@@ -87,10 +87,12 @@ var wizardFields = map[string][]wizardField{
 	"migration-host-key":      {{name: "fingerprint"}},
 	"migration-cancel":        {},
 	"migration-stale-cleared": {},
-	"migration":               {{name: "source"}, {name: "username"}},
-	"migration-verify":        {},
-	"migration-accept":        {{name: "reason"}},
-	"migration-ready":         {},
+	"migration-archive":       {}, // the backup file's bytes, read as a stream
+
+	"migration":        {{name: "source"}, {name: "username"}},
+	"migration-verify": {},
+	"migration-accept": {{name: "reason"}},
+	"migration-ready":  {},
 }
 
 var wholeNumber = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})$`)

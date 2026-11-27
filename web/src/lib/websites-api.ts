@@ -11,6 +11,9 @@ export interface WebsiteHttps {
   on: boolean;
   // RFC 3339, or empty when there is no certificate.
   not_after: string;
+  // "copied": the certificate in force was copied from the old server when
+  // the website moved here.
+  source?: "copied";
 }
 // What all of the hosting account's processes may use together. The plan
 // sets them; the site page only shows them.
@@ -32,6 +35,9 @@ export interface Website {
   // word is shown as unknown.
   state: string;
   https: WebsiteHttps;
+  // Always use HTTPS: on unless the site's owner turned it off. Left out by
+  // a server from before the switch.
+  always_https?: boolean;
   // Empty when the account service reports none.
   php_version: string;
   wordpress_version: string;
@@ -120,7 +126,7 @@ export function parseWebsite(v: unknown): Website | undefined {
   if (!object(v) || !validAccountId(v.account_id) || !text(v.username) || !/^[a-z][a-z0-9_]{2,31}$/.test(v.username)) return undefined;
   if (!shortText(v.domain, 253) || !v.domain || !text(v.state) || !/^[a-z_]{1,40}$/.test(v.state)) return undefined;
   const https = v.https;
-  if (!object(https) || typeof https.on !== "boolean" || !(https.not_after === "" || date(https.not_after))) return undefined;
+  if (!object(https) || typeof https.on !== "boolean" || !(https.not_after === "" || date(https.not_after)) || !(https.source === undefined || https.source === "copied")) return undefined;
   if (v.kind !== "wordpress" && v.kind !== "php") return undefined;
   if (!shortText(v.php_version, 10) || !shortText(v.wordpress_version, 40) || !webURL(v.url) || !date(v.created_at)) return undefined;
   if (v.kind === "wordpress" ? !webURL(v.admin_url) : v.admin_url !== "" || v.wordpress_version !== "") return undefined;
@@ -132,9 +138,11 @@ export function parseWebsite(v: unknown): Website | undefined {
   const aliases = parseAliasSummaries(v.aliases);
   const redirectCount = v.redirect_count === undefined ? 0 : v.redirect_count;
   if (!aliases || !Number.isSafeInteger(redirectCount) || (redirectCount as number) < 0) return undefined;
+  if (v.always_https !== undefined && typeof v.always_https !== "boolean") return undefined;
   return {
     account_id: v.account_id, username: v.username, domain: v.domain, kind: v.kind, state: v.state,
-    https: { on: https.on, not_after: https.not_after as string },
+    https: { on: https.on, not_after: https.not_after as string, ...(https.source === "copied" ? { source: "copied" as const } : {}) },
+    ...(typeof v.always_https === "boolean" ? { always_https: v.always_https } : {}),
     php_version: v.php_version, wordpress_version: v.wordpress_version, url: v.url, admin_url: v.admin_url as string, created_at: v.created_at,
     revision: v.revision as number, site_folder_changed: v.site_folder_changed,
     ...(limits ? { limits } : {}),

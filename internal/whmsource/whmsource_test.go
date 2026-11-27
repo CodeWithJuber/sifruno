@@ -211,6 +211,48 @@ func TestAnswersParseAsOverSSH(t *testing.T) {
 	if users, err := cpsource.ParseDatabaseUsers(a.DatabaseUsers, whmtest.User); err != nil || len(users) != 1 {
 		t.Fatalf("users: %+v %v", users, err)
 	}
+	// The site's certificate is no part of the answers every step carries.
+	if len(a.SSL) != 0 {
+		t.Fatalf("the answers carry a certificate: %s", a.SSL)
+	}
+}
+
+// The certificate of the site's virtual host comes with the documented
+// filter, and only that virtual host's components are kept, even from a
+// WHM that answers for every site: no other site's key goes further.
+func TestCertificateKeepsOnlyTheSitesVirtualHost(t *testing.T) {
+	whm := whmtest.New()
+	defer whm.Close()
+	c := client(t, whm, whmsource.Login{Token: whm.Token})
+	raw, err := c.Certificate(context.Background(), whmtest.Domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ssl, err := cpsource.ParseVhostSSL(raw, whmtest.Domain)
+	if err != nil || ssl.Certificate != whmtest.SSLCertificate || ssl.Key != whmtest.SSLKey || ssl.CABundle != whmtest.SSLBundle {
+		t.Fatalf("ssl: %+v %v", ssl, err)
+	}
+	if strings.Contains(string(raw), "other.example.test") || strings.Contains(string(raw), whmtest.OtherSSLKey) {
+		t.Fatalf("another site's components were kept: %s", raw)
+	}
+	if q := whm.Query("fetch_vhost_ssl_components"); q.Get("api.filter.enable") != "1" || q.Get("api.filter.a.field") != "servername" || q.Get("api.filter.a.arg0") != whmtest.Domain || q.Get("api.filter.a.type") != "eq" {
+		t.Fatalf("filter: %v", q)
+	}
+	// A WHM that lists none for the site: the broker reads no certificate.
+	if raw, err = c.Certificate(context.Background(), "none.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cpsource.ParseVhostSSL(raw, "none.example.test"); !errors.Is(err, cpsource.ErrNoCertificate) {
+		t.Fatalf("none: %v %s", err, raw)
+	}
+	if _, err = c.Certificate(context.Background(), "bad domain"); !errors.Is(err, hostaccounts.ErrInvalid) {
+		t.Fatalf("a bad domain: %v", err)
+	}
+	whm.Broken = "not JSON"
+	var failed *hostaccounts.MigrationError
+	if _, err = c.Certificate(context.Background(), whmtest.Domain); !errors.As(err, &failed) || failed.Step != "whm_output" {
+		t.Fatalf("broken: %v", err)
+	}
 }
 
 // A redirect is not followed: the login goes nowhere else.

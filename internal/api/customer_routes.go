@@ -197,6 +197,7 @@ var customerRoutes = map[string]customerAccess{
 	// server and makes a hosting account, so it is the operator's.
 	"POST /api/v1/websites/migrations/sources":               adminOnly,
 	"POST /api/v1/websites/migrations/whm":                   adminOnly,
+	"POST /api/v1/websites/migrations/archive":               adminOnly,
 	"GET /api/v1/websites/migrations/sources/{id}":           adminOnly,
 	"POST /api/v1/websites/migrations/sources/{id}/host-key": adminOnly,
 	"GET /api/v1/websites/migrations/sources/{id}/accounts":  adminOnly,

@@ -14,8 +14,10 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	"sifruno/internal/cpmove"
 	"sifruno/internal/cpsource"
 	"sifruno/internal/htaccess"
+	"sifruno/internal/olsweb"
 )
 
 // Migrations are not written to the accounts' journal, as backups are not:
@@ -79,6 +81,15 @@ type migrateEngine interface {
 	// as the site's user through l's temporary MariaDB user, then compares
 	// every table's rows.
 	Database(ctx context.Context, m migrationRecord, db string, r record, l backupLeftover) (MigrateDatabaseResult, error)
+	// SaveArchive makes the migration's folder for an uploaded backup file
+	// and writes exactly size bytes of body into it, root's and 0600, within
+	// the disk margin; then it reads the file once (cpmove.Read) without
+	// extracting anything. For a backup file's migration, Preflight, Files
+	// and Database take their part from the file instead of the old server.
+	SaveArchive(ctx context.Context, id string, size int64, body io.Reader) (*cpmove.Archive, error)
+	// ReadArchive reads the migration's backup file again, extracting
+	// nothing.
+	ReadArchive(ctx context.Context, m migrationRecord) (*cpmove.Archive, error)
 	// Forget removes the migration's folder: its private key goes.
 	Forget(id string) error
 	// Folders names the migration folders on disk.
@@ -235,6 +246,10 @@ func manualRemoval(m migrationRecord) string {
 // the exact line and server, before the migration and its key are
 // forgotten. Callers hold migrateMu.
 func (s *store) expireMigration(ctx context.Context, m migrationRecord) error {
+	if m.Via == ViaArchive {
+		// No server holds a key: the file goes with the folder.
+		return s.forgetMigration(m.ID)
+	}
 	result := MigrationFinishResult{Detail: "The old server's host key was never confirmed, so Sifruno never signed in there. If the key line was added there, it is still there. " + manualRemoval(m)}
 	if m.Pinned != "" {
 		result = s.removeSourceKey(ctx, m)
@@ -301,6 +316,9 @@ func (s *store) sweepMigrations(ctx context.Context, now time.Time) error {
 	}
 	failed := false
 	known := map[string]bool{}
+	for id := range s.uploading {
+		known[id] = true
+	}
 	for _, m := range items {
 		if m.expired(now) {
 			work, cancel := backupContext(ctx, migrateFinishTimeout)
@@ -365,7 +383,7 @@ func (s *store) migration(id string, pinned bool) (migrationRecord, error) {
 	if m.expired(time.Now().UTC()) {
 		return migrationRecord{}, ErrNotFound
 	}
-	if pinned && m.Pinned == "" {
+	if pinned && m.Pinned == "" && m.Via != ViaArchive {
 		return migrationRecord{}, &MigrationError{Step: "host_key", Detail: "The old server's host key has not been confirmed yet."}
 	}
 	return m, nil
@@ -548,6 +566,9 @@ func (s *store) migrationAccounts(ctx context.Context, id string) ([]cpsource.Ac
 	if err != nil {
 		return nil, err
 	}
+	if m.Via == ViaArchive {
+		return archiveAccounts(m), nil
+	}
 	work, cancel := backupContext(ctx, migrateRemoteTimeout)
 	defer cancel()
 	// A WHM migration's accounts are listed by the panel through WHM.
@@ -608,13 +629,16 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	}
 	work, cancel := backupContext(ctx, 10*time.Minute)
 	defer cancel()
+	if m.Via == ViaArchive {
+		return s.planArchive(work, m, in)
+	}
 	account, site, err := s.sourceSite(work, m, in.Username, "", in.CPanel)
 	if err != nil {
 		return MigrationPlan{}, err
 	}
 	plan := MigrationPlan{Username: account.User, Domain: account.Domain, Aliases: site.Aliases, WWW: site.WWW, DiskUsedMiB: account.DiskUsedMiB, DiskLimitMiB: account.DiskLimitMiB,
 		Databases: []cpsource.Database{}, Users: []cpsource.DatabaseUser{}, GrantsSkipped: []string{}, Cron: []cpsource.CronLine{}, CronSkipped: []string{}, Probes: []MigrationProbe{}, TierCauses: []string{},
-		Converted: []MigrationFolder{}, TierRefusals: []string{}}
+		Converted: []MigrationFolder{}, TierRefusals: []string{}, TierFix: []string{}, TierWarnings: []string{}}
 	out, err := s.cpanelAnswer(work, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.PHP }, cpsource.VhostPHPCommand())
 	if err != nil {
 		return MigrationPlan{}, err
@@ -754,6 +778,10 @@ func (s *store) planTier(ctx context.Context, m migrationRecord, home string, pl
 	if !conv.Native {
 		plan.Tier, plan.TierCauses = string(htaccess.VerdictCompat), append([]string{}, site.Causes...)
 		plan.TierRefusals = tierRefusals(conv)
+		plan.TierAccess, plan.TierFix = tierFix(conv)
+		if slices.ContainsFunc(conv.Refused, func(r htaccess.FileRefusal) bool { return r.Cause == htaccess.CauseNotConverted }) {
+			plan.TierCauses = append(plan.TierCauses, htaccess.CauseNotConverted)
+		}
 	}
 	if homeFile {
 		plan.Tier = string(htaccess.VerdictCompat)
@@ -761,30 +789,102 @@ func (s *store) planTier(ctx context.Context, m migrationRecord, home string, pl
 	}
 	plan.Htaccess = len(site.Files)
 	if plan.Tier == string(htaccess.VerdictNative) {
-		plan.Converted = migrationFolders(conv.Rules)
+		plan.Converted = append(migrationFolders(conv.Rules), migrationMoved(conv)...)
 		plan.Probes = foldersProbes(conv.Rules)
+		plan.TierWarnings = tierWarnings(conv, plan.PHPSource)
 	}
 	return nil
 }
 
+// maxTierLines bounds each list of lines the plan carries.
+const maxTierLines = 20
+
+// tierWhere names a line: "<file> line N (<directive>)", the file relative
+// to public_html, or "the site" for a refusal of the whole site.
+func tierWhere(file string, line int, directive string) string {
+	where := "the site"
+	if file != "" {
+		where = file
+		if line > 0 {
+			where += fmt.Sprintf(" line %d", line)
+		}
+		if directive != "" {
+			where += " (" + directive + ")"
+		}
+	}
+	return where
+}
+
 // tierRefusals says in plain words, at most 20 of them, why a site is not
-// Native: each file the converter refused, with its line.
+// Native: each line the converter refused, with its file and directive.
 func tierRefusals(conv htaccess.SiteConversion) []string {
 	out := []string{}
 	for _, r := range conv.Refused {
-		if len(out) == 20 {
+		if len(out) == maxTierLines {
 			break
 		}
-		where := "the site"
-		if r.File != "" {
-			where = r.File
-			if r.Line > 0 {
-				where += fmt.Sprintf(" line %d", r.Line)
-			}
-		}
-		out = append(out, installDetail([]byte(where+": "+r.Reason)))
+		out = append(out, installDetail([]byte(tierWhere(r.File, r.Line, r.Directive)+": "+r.Reason)))
 	}
 	return out
+}
+
+// tierFix names the lines a person would change on the old server. When a
+// refusal concerns an access rule, OpenLiteSpeed would open what it
+// protects, so only those lines are named and access is true; otherwise
+// every refused line in a file.
+func tierFix(conv htaccess.SiteConversion) (access bool, lines []string) {
+	access = slices.ContainsFunc(conv.Refused, func(r htaccess.FileRefusal) bool { return r.Cause == htaccess.CauseAccessControl })
+	lines = []string{}
+	for _, r := range conv.Refused {
+		if r.File == "" || (access && r.Cause != htaccess.CauseAccessControl) || len(lines) == maxTierLines {
+			continue
+		}
+		lines = append(lines, installDetail([]byte(tierWhere(r.File, r.Line, r.Directive))))
+	}
+	return access, lines
+}
+
+// tierWarnings are the lines of a Native site a person checks before
+// cutover: what OpenLiteSpeed will not apply (htaccess.FileWarning), a
+// memory_limit above the memory a new account's PHP may use, which the
+// copy runs with instead (sitePHP), and a PHP handler naming another
+// version than the one the plan read for the site, because this server
+// runs every folder of a site with that one.
+func tierWarnings(conv htaccess.SiteConversion, phpSource string) []string {
+	out := []string{}
+	add := func(text string) {
+		if len(out) < maxTierLines {
+			out = append(out, installDetail([]byte(text)))
+		}
+	}
+	for _, w := range conv.Warnings {
+		add(tierWhere(w.File, w.Line, w.Directive) + ": " + w.Reason)
+	}
+	for _, s := range conv.PHPSettings {
+		if s.Name != "memory_limit" {
+			continue
+		}
+		memory := DefaultLimits.MemoryMiB
+		if mib, ok := olsweb.PHPSizeMiB(s.Value); !ok || mib > memory {
+			add(tierWhere(".htaccess", s.Line, s.Name) + fmt.Sprintf(": the old server let the site's PHP use %s of memory (-1 is no limit), but a website's PHP here may use at most its plan's %d MiB, so the copy runs with memory_limit %dM. Check the pages that need the most memory before cutover.", s.Value, memory, memory))
+		}
+	}
+	for _, p := range conv.PHP {
+		if p.Package == "" || phpDigits(p.Package) == phpDigits(phpSource) {
+			continue
+		}
+		add(tierWhere(p.File, p.Line, p.Directive) + ": the old server runs " + p.Path + " with PHP " + p.Package + ", but this server runs the whole site with one PHP version, the one the old server names for the site (" + phpSource + "). Check that part of the site before cutover.")
+	}
+	return out
+}
+
+// phpDigits is the version in a PHP package name: "81" in ea-php81.
+func phpDigits(pkg string) string {
+	i := len(pkg)
+	for i > 0 && pkg[i-1] >= '0' && pkg[i-1] <= '9' {
+		i--
+	}
+	return pkg[i:]
 }
 
 // beginMigrate checks the account under the broker lock and marks it busy,
@@ -847,9 +947,22 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 	defer s.endInstall(id)
 	work, cancel := backupContext(ctx, backupTimeout)
 	defer cancel()
-	account, site, err := s.lockedSourceSite(work, m, r.Account.Username, r.Account.Domain, in.CPanel)
-	if err != nil {
-		return MigrateFilesResult{}, err
+	var home string
+	var needMiB int64
+	if m.Via == ViaArchive {
+		if in.CPanel != nil {
+			return MigrateFilesResult{}, ErrInvalid
+		}
+		if err = archiveSite(m, r); err != nil {
+			return MigrateFilesResult{}, err
+		}
+		home, needMiB = m.Archive.Home, mibOf(m.Archive.HomeBytes)
+	} else {
+		account, site, err := s.lockedSourceSite(work, m, r.Account.Username, r.Account.Domain, in.CPanel)
+		if err != nil {
+			return MigrateFilesResult{}, err
+		}
+		home, needMiB = site.HomeDir, account.DiskUsedMiB
 	}
 	s.backupMu.Lock()
 	defer s.backupMu.Unlock()
@@ -880,7 +993,7 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 			return err
 		}
 	}
-	result, err := s.migrate.Files(work, m, site.HomeDir, r, account.DiskUsedMiB, l, protect)
+	result, err := s.migrate.Files(work, m, home, r, needMiB, l, protect)
 	if err != nil {
 		return MigrateFilesResult{}, err
 	}
@@ -952,21 +1065,8 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 	}
 	work, cancel := backupContext(ctx, backupTimeout)
 	defer cancel()
-	// The source must list the database under the account of this name.
-	command, err := cpsource.DatabasesCommand(r.Account.Username)
-	if err != nil {
-		return MigrateDatabaseResult{}, ErrInvalid
-	}
-	out, err := s.cpanelAnswer(work, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.Databases }, command)
-	if err != nil {
+	if err = s.sourceDatabase(work, m, r, in); err != nil {
 		return MigrateDatabaseResult{}, err
-	}
-	dbs, err := cpsource.ParseDatabases(out, r.Account.Username)
-	if err != nil {
-		return MigrateDatabaseResult{}, unreadable(err, "databases (uapi Mysql list_databases)")
-	}
-	if !slices.ContainsFunc(dbs, func(d cpsource.Database) bool { return d.Name == in.Database }) {
-		return MigrateDatabaseResult{}, &MigrationError{Step: "database", Detail: "The old server's account " + r.Account.Username + " has no database " + in.Database + "."}
 	}
 	s.backupMu.Lock()
 	defer s.backupMu.Unlock()
@@ -987,6 +1087,39 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 	}
 	defer s.finishLeftover(l)
 	return s.migrate.Database(work, m, in.Database, r, l)
+}
+
+// sourceDatabase checks that the source holds the database under the
+// account of this name: the old server's list, or the backup file's.
+func (s *store) sourceDatabase(ctx context.Context, m migrationRecord, r record, in MigrateDatabaseInput) error {
+	if m.Via == ViaArchive {
+		if in.CPanel != nil {
+			return ErrInvalid
+		}
+		if err := archiveSite(m, r); err != nil {
+			return err
+		}
+		if !slices.Contains(m.Archive.Databases, in.Database) {
+			return &MigrationError{Step: "database", Detail: "The backup file holds no database " + in.Database + "."}
+		}
+		return nil
+	}
+	command, err := cpsource.DatabasesCommand(r.Account.Username)
+	if err != nil {
+		return ErrInvalid
+	}
+	out, err := s.cpanelAnswer(ctx, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.Databases }, command)
+	if err != nil {
+		return err
+	}
+	dbs, err := cpsource.ParseDatabases(out, r.Account.Username)
+	if err != nil {
+		return unreadable(err, "databases (uapi Mysql list_databases)")
+	}
+	if !slices.ContainsFunc(dbs, func(d cpsource.Database) bool { return d.Name == in.Database }) {
+		return &MigrationError{Step: "database", Detail: "The old server's account " + r.Account.Username + " has no database " + in.Database + "."}
+	}
+	return nil
 }
 
 // finishMigration removes the key's line from the source's authorized_keys,
@@ -1020,6 +1153,12 @@ func (s *store) finishMigration(ctx context.Context, id string, in MigrationFini
 	}
 	if err != nil {
 		return MigrationFinishResult{}, err
+	}
+	if m.Via == ViaArchive {
+		if err = s.forgetMigration(id); err != nil {
+			return MigrationFinishResult{}, err
+		}
+		return MigrationFinishResult{RemovedFromSource: true, Detail: "The uploaded backup file was deleted from this server."}, nil
 	}
 	result := MigrationFinishResult{Detail: "The old server's host key was never confirmed, so Sifruno never signed in there. If the key line was added there, it is still there. " + manualRemoval(m)}
 	if m.Pinned != "" {

@@ -204,11 +204,11 @@ export function SiteBackups({ accountId }: { accountId: string }) {
     setActionProblem(undefined);
     try {
       await (kind === "backup" ? startBackup : startDrill)(accountId);
-      setSpoken(kind === "backup" ? "The backup has started." : "The restore drill has started.");
+      setSpoken(kind === "backup" ? "The backup has started." : "The restore test has started.");
       reload();
       window.requestAnimationFrame(() => statusRef.current?.focus());
     } catch (error) {
-      setActionProblem(problemFrom(error, kind === "backup" ? "The backup did not start." : "The restore drill did not start."));
+      setActionProblem(problemFrom(error, kind === "backup" ? "The backup did not start." : "The restore test did not start."));
     } finally {
       setStarting(undefined);
     }
@@ -236,15 +236,18 @@ export function SiteBackups({ accountId }: { accountId: string }) {
           {!data.ready && <Alert variant="destructive" className="text-start">
             <CircleAlert aria-hidden="true" />
             <AlertTitle>Backups cannot run on this server right now</AlertTitle>
-            <AlertDescription className="text-start text-foreground">restic is missing or is not the version the panel was built for. {canBackUp ? "Run the installer again, then reload this page." : "Ask whoever runs this server to fix it."}</AlertDescription>
+            <AlertDescription className="text-start text-foreground">The backup program (restic) is missing or is not the version the panel was built for. {canBackUp ? "Run the installer again, then reload this page." : "Ask whoever runs this server to fix it."}</AlertDescription>
           </Alert>}
           {(canBackUp || canDrill) && <div className="flex flex-wrap gap-2">
             {canBackUp && <Button className={`${control} aria-disabled:opacity-60`} disabled={busy} focusableWhenDisabled onClick={() => void start("backup")} data-testid="back-up-now">
               {starting === "backup" ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <DatabaseBackup aria-hidden="true" />}Back up now
             </Button>}
-            {canDrill && <Button variant="outline" className={`${control} aria-disabled:opacity-60`} disabled={busy || data.snapshots.length === 0} focusableWhenDisabled onClick={() => void start("drill")} data-testid="drill-now">
-              {starting === "drill" ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <ShieldCheck aria-hidden="true" />}Run restore drill now
+            {canDrill && <Button variant="outline" className={`${control} aria-disabled:opacity-60`} disabled={busy || data.snapshots.length === 0} focusableWhenDisabled aria-describedby={data.snapshots.length === 0 ? "drill-needs-backup" : undefined} onClick={() => void start("drill")} data-testid="drill-now">
+              {starting === "drill" ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <ShieldCheck aria-hidden="true" />}Test a restore now
             </Button>}
+          </div>}
+          {canDrill && data.snapshots.length === 0 && !running && <div id="drill-needs-backup" className="text-sm text-muted-foreground" data-testid="drill-needs-backup">
+            Make a backup first: a restore test puts the newest backup back into a private folder and checks every file, without touching the live site.
           </div>}
           {actionProblem && <ProblemAlert problem={actionProblem} testId="backup-action-problem" />}
           <div ref={statusRef} tabIndex={-1} className="outline-none" data-testid="backup-status">

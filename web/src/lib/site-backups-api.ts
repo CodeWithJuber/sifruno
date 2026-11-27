@@ -192,17 +192,25 @@ export function scheduleLine(nightlyAt: string, timezone: string): string {
   return `Every night at ${nightlyAt || "02:30"}, ${timezone || "server time"}. Kept: ${retention}.`;
 }
 
-export const kindLabel: Record<JobKind, string> = { backup: "Backup", restore: "Restore", drill: "Restore drill" };
+// The API calls a restore test a drill; people read "restore test".
+export const kindLabel: Record<JobKind, string> = { backup: "Backup", restore: "Restore", drill: "Restore test" };
 export const whatLabel: Record<RestoreWhat, string> = { files: "Files", database: "Database", both: "Files and database" };
 
+// Who started a job, in words: the panel's own sessions are recorded as
+// "local-operator", which names no person.
+export function actorLabel(actor: string): string {
+  if (actor === "scheduler") return "the nightly schedule";
+  if (!actor || actor === "local-operator") return "an admin";
+  return actor;
+}
+
 export function runningLine(job: RunningJob, timezone: string): string {
-  const who = job.actor === "scheduler" ? "the nightly schedule" : job.actor || "someone";
-  const verb = job.kind === "backup" ? "A backup" : job.kind === "restore" ? "A restore" : "A restore drill";
-  return `${verb} is running. Started by ${who} at ${formatWhen(job.started_at, timezone)}.`;
+  const verb = job.kind === "backup" ? "A backup" : job.kind === "restore" ? "A restore" : "A restore test";
+  return `${verb} is running. Started by ${actorLabel(job.actor)} at ${formatWhen(job.started_at, timezone)}.`;
 }
 
 export function drillLine(drill: DrillRecord | null, timezone: string): string {
-  if (!drill) return "No restore drill has run yet. The first runs after the first nightly backup.";
+  if (!drill) return "No restore test has run yet. The panel tests one website's newest backup each week, or test one now on a website's Backups tab.";
   return `${drill.passed ? "Passed" : "Failed"}, ${formatWhen(drill.checked_at, timezone)}, ${drill.domain || "a site"}.`;
 }
 
@@ -305,7 +313,7 @@ export const whatFailed: Record<Operation, string> = {
   confirmPassword: "The backup password was not marked as saved.",
   list: "The backups could not be loaded.",
   backup: "The backup did not start.",
-  drill: "The restore drill did not start.",
+  drill: "The restore test did not start.",
   restore: "The restore did not start.",
 };
 

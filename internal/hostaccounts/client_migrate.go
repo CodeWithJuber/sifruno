@@ -1,7 +1,10 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 
 	"sifruno/internal/cpsource"
 )
@@ -21,6 +24,24 @@ func (c *client) OpenMigration(ctx context.Context, in MigrationOpenInput, actor
 	}
 	var out Migration
 	err := c.send(ctx, c.http, "POST", "/v1/migrations", migrationBody[MigrationOpenInput]{in, actor}, &out, maxResponseBytes)
+	return out, err
+}
+
+// OpenArchiveMigration streams an uploaded cPanel backup file of exactly
+// in.Size bytes to the broker, which keeps and reads it: one framing line
+// with the size and reason, then the bytes.
+func (c *client) OpenArchiveMigration(ctx context.Context, in MigrationArchiveInput, body io.Reader, actor string) (Migration, error) {
+	if body == nil || !validArchiveOpen(in, actor) {
+		return Migration{}, ErrInvalid
+	}
+	head, err := json.Marshal(migrationBody[MigrationArchiveInput]{in, actor})
+	if err != nil || len(head)+1 > MaxRequestBytes {
+		return Migration{}, ErrInvalid
+	}
+	head = append(head, '\n')
+	stream := io.MultiReader(bytes.NewReader(head), &exactReader{r: body, left: in.Size})
+	var out Migration
+	err = c.exchangeStream(ctx, c.long, "/v1/migrations/archive", stream, int64(len(head))+in.Size, &out, maxMigrationAnswer)
 	return out, err
 }
 
@@ -88,6 +109,17 @@ func (c *client) MigrateDatabase(ctx context.Context, id string, in MigrateDatab
 	}
 	var out MigrateDatabaseResult
 	err := c.exchange(ctx, c.long, "POST", "/v1/accounts/"+id+"/migrate-database", migrationBody[MigrateDatabaseInput]{in, actor}, maxCPanelRequest, &out, maxMigrationAnswer)
+	return out, err
+}
+
+// MigrateCertificate copies the old site's certificate into the account's
+// live site, or answers why it was not copied.
+func (c *client) MigrateCertificate(ctx context.Context, id string, in MigrateCertificateInput, actor string) (MigrateCertificateResult, error) {
+	if !idPattern.MatchString(id) || !validMigrateCertificate(in, actor) {
+		return MigrateCertificateResult{}, ErrInvalid
+	}
+	var out MigrateCertificateResult
+	err := c.exchange(ctx, c.long, "POST", "/v1/accounts/"+id+"/migrate-certificate", migrationBody[MigrateCertificateInput]{in, actor}, maxCPanelRequest, &out, maxResponseBytes)
 	return out, err
 }
 

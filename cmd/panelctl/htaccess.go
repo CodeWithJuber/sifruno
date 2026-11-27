@@ -64,6 +64,8 @@ func htaccessSummary(r htaccess.Report, details bool) string {
 	for _, c := range htaccess.Categories {
 		fmt.Fprintf(&b, "  %s: %d\n", c, t.DirectivesByCategory[c])
 	}
+	fmt.Fprintf(&b, "directives OpenLiteSpeed ignores that Sifruno covers: harmless %d, handled %d, warnings %d\n",
+		t.DirectivesByHandling[htaccess.HandlingIgnored], t.DirectivesByHandling[htaccess.HandlingSifruno], t.DirectivesByHandling[htaccess.HandlingWarning])
 	b.WriteString("compat sites by cause:\n")
 	for _, c := range htaccess.Causes {
 		fmt.Fprintf(&b, "  %s: %d\n", c, t.CompatSitesByCause[c])
@@ -113,13 +115,71 @@ func htaccessSummary(r htaccess.Report, details bool) string {
 					if g.Honoured || g.Category == htaccess.CategoryStructure {
 						continue
 					}
-					fmt.Fprintf(&b, "    line %d %s [%s]: %s\n", g.Line, g.Directive, g.Category, g.Reason)
+					class := string(g.Category)
+					if g.Handling != "" {
+						class += ", " + string(g.Handling)
+					}
+					fmt.Fprintf(&b, "    line %d %s [%s]: %s\n", g.Line, g.Directive, class, g.Reason)
 				}
 				for _, a := range file.AccessRules {
 					fmt.Fprintf(&b, "    access %s %s files=%q methods=%q expect=%d\n", a.Kind, a.Path, a.Files, a.Methods, a.ExpectStatus)
 				}
 			}
+			writeMove(&b, htaccess.ConvertSite(site))
 		}
 	}
 	return b.String()
+}
+
+// writeMove says whether a migration would move the site to OpenLiteSpeed,
+// as the panel's migration decides it (htaccess.ConvertSite), naming the
+// file, line and directive of each refusal, warning and PHP handler.
+func writeMove(b *strings.Builder, conv htaccess.SiteConversion) {
+	answer := "no"
+	if conv.Native {
+		answer = "yes"
+	}
+	fmt.Fprintf(b, "  moves to OpenLiteSpeed: %s\n", answer)
+	where := func(file string, line int, directive string) string {
+		w := file
+		if w == "" {
+			w = "the site"
+		}
+		if line > 0 {
+			w += fmt.Sprintf(" line %d", line)
+		}
+		if directive != "" {
+			w += " (" + directive + ")"
+		}
+		return w
+	}
+	for _, r := range conv.Refused {
+		fmt.Fprintf(b, "    refused: %s: %s\n", where(r.File, r.Line, r.Directive), r.Reason)
+	}
+	for _, rule := range conv.Rules {
+		fmt.Fprintf(b, "    converted: %s for %s\n", rule.File, rule.Path)
+	}
+	for _, r := range conv.Redirects {
+		from := r.Prefix
+		if from == "" {
+			from = r.Pattern
+		}
+		fmt.Fprintf(b, "    converted: line %d, redirect (%d) of %s to %s\n", r.Line, r.Status, from, r.Target)
+	}
+	for _, p := range conv.ErrorPages {
+		fmt.Fprintf(b, "    converted: line %d, error page %s for %d\n", p.Line, p.URL, p.Status)
+	}
+	for _, p := range conv.PHPSettings {
+		fmt.Fprintf(b, "    converted: line %d, PHP setting %s %s\n", p.Line, p.Name, p.Value)
+	}
+	for _, w := range conv.Warnings {
+		fmt.Fprintf(b, "    warning: %s: %s\n", where(w.File, w.Line, w.Directive), w.Reason)
+	}
+	for _, p := range conv.PHP {
+		pkg := p.Package
+		if pkg == "" {
+			pkg = "no version named"
+		}
+		fmt.Fprintf(b, "    PHP handler: %s for %s: %s\n", where(p.File, p.Line, ""), p.Path, pkg)
+	}
 }

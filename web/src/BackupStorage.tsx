@@ -86,7 +86,7 @@ function TargetFormView({ storage, onSaved }: { storage: Storage; onSaved: (save
   return <form method="post" noValidate aria-labelledby="backup-target-heading" onSubmit={(event) => void submit(event)} className="flex flex-col gap-4" data-testid="backup-target-form">
     <div className="flex flex-col gap-1">
       <h3 id="backup-target-heading">{storage.configured ? "Change the storage server" : "Set the storage server"}</h3>
-      <p className="text-sm">An SFTP server outside this one. Make a user there for the backups and install this server's backup key for it first.</p>
+      <p className="text-sm">Another server you can sign in to over SSH, such as a storage box or a second Sifruno server: if this server fails, the backups must not fail with it. Make a user there for the backups and install this server's backup key for it first.</p>
     </div>
     <FieldGroup className="gap-4">
       <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
@@ -106,7 +106,7 @@ function TargetFormView({ storage, onSaved }: { storage: Storage; onSaved: (save
       <Field data-invalid={errors.user ? true : undefined}>
         <FieldLabel htmlFor="backup-target-user">{fieldLabels.user}</FieldLabel>
         <Input {...bind("user")} {...identifier} className={control} type="text" enterKeyHint="next" value={values.user} onChange={(e) => set("user", e.target.value)} />
-        <FieldDescription id="backup-target-user-hint" className="text-start">The SFTP user the backups sign in as.</FieldDescription>
+        <FieldDescription id="backup-target-user-hint" className="text-start">The user on the storage server that the backups sign in as.</FieldDescription>
         <FieldProblem id="backup-target-user-error" message={errors.user} />
       </Field>
       <Field data-invalid={errors.path ? true : undefined}>
@@ -241,10 +241,10 @@ export function BackupStorage() {
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="backup-storage-heading">
       <div className="flex flex-col gap-1">
         <h2 id="backup-storage-heading">Backup storage</h2>
-        <p className="text-sm">Every website on this server is backed up to a storage server outside it. restic encrypts the backups with a password only this server holds.</p>
+        <p className="text-sm">Every night the panel copies each website's files and databases to a storage server you choose, encrypted with a password only this server holds. Set the storage server once; then every website is backed up, and you can put a site back from any of its backups.</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {storage.ready ? <Badge variant="secondary" data-testid="restic-ready"><ShieldCheck aria-hidden="true" />restic is ready</Badge> : <Badge variant="destructive" data-testid="restic-ready">restic is not ready</Badge>}
+        {storage.ready ? <Badge variant="secondary" data-testid="restic-ready"><ShieldCheck aria-hidden="true" />Backup program ready</Badge> : <Badge variant="destructive" data-testid="restic-ready">Backup program missing</Badge>}
         {storage.configured ? <Badge variant="secondary"><HardDrive aria-hidden="true" />Storage set</Badge> : <Badge variant="outline">No storage set yet</Badge>}
       </div>
       {!storage.ready && <Alert variant="destructive" className="text-start" data-testid="restic-not-ready">
@@ -287,7 +287,7 @@ export function BackupStorage() {
       <Separator />
       <TargetFormView key={formRound} storage={storage} onSaved={(saved) => {
         setStorage(saved.storage);
-        setNotice(saved.initialized ? `Saved. A new backup repository was made in ${saved.path}.` : `Saved. The backup repository in ${saved.path} opens with this server's password.`);
+        setNotice(saved.initialized ? `Saved. The backups will be kept in ${saved.path} on the storage server.` : `Saved. The backups already in ${saved.path} open with this server's password.`);
         setFormRound((value) => value + 1);
         if (saved.password) setPassword(saved.password); else window.requestAnimationFrame(() => noticeRef.current?.focus());
       }} />
@@ -296,7 +296,7 @@ export function BackupStorage() {
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="backup-checks-heading">
       <div className="flex flex-col gap-1">
         <h3 id="backup-checks-heading">Checks</h3>
-        <p className="text-sm">Each week one website's latest backup is restored to a private folder and compared with its file list, and old backups beyond {"7 daily and 4 weekly"} are removed.</p>
+        <p className="text-sm">Each week the panel tests a restore: one website's newest backup is put back into a private folder and compared with its file list. Old backups beyond {"7 daily and 4 weekly"} are removed.</p>
       </div>
       <DrillSummary drill={storage.last_drill} timezone={storage.timezone} />
       <PruneSummary prune={storage.last_prune} timezone={storage.timezone} />

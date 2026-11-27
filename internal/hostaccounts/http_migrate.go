@@ -12,6 +12,7 @@ import (
 // The broker's migration routes (README, Migration):
 //
 //	POST /v1/migrations                         host, port, reason
+//	POST /v1/migrations/archive                 size, reason; then the backup file
 //	GET  /v1/migrations/{id}                    the migration
 //	POST /v1/migrations/{id}/host-key           fingerprint, reason
 //	GET  /v1/migrations/{id}/accounts           the source's accounts
@@ -21,13 +22,14 @@ import (
 //	POST /v1/migrations/{id}/stale-cleared      reason: the admin removed that line
 //	POST /v1/accounts/{id}/migrate-files        migration, expected_revision, reason
 //	POST /v1/accounts/{id}/migrate-database     migration, database, expected_revision, reason
+//	POST /v1/accounts/{id}/migrate-certificate  migration, expected_revision, reason
 var (
 	migrationPath   = regexp.MustCompile(`^/v1/migrations/([a-f0-9]{32})(/host-key|/accounts|/plan|/finish|/stale-cleared)?$`)
-	migrateCopyPath = regexp.MustCompile(`^/v1/accounts/([a-f0-9]{32})/(migrate-files|migrate-database)$`)
+	migrateCopyPath = regexp.MustCompile(`^/v1/accounts/([a-f0-9]{32})/(migrate-files|migrate-database|migrate-certificate)$`)
 )
 
 func migrateRoute(path string) bool {
-	return path == "/v1/migrations" || path == "/v1/migrations/stale" || migrationPath.MatchString(path) || migrateCopyPath.MatchString(path)
+	return path == "/v1/migrations" || path == "/v1/migrations/archive" || path == "/v1/migrations/stale" || migrationPath.MatchString(path) || migrateCopyPath.MatchString(path)
 }
 
 // answerMigration writes the result, or 422 migration_failed with the step,
@@ -66,6 +68,29 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 		answerMigration(w, result, err)
 		return
 	}
+	if r.URL.Path == "/v1/migrations/archive" {
+		// The upload runs past the listener's 45 seconds, on its own limit.
+		if r.Method != "POST" {
+			writeError(w, ErrInvalid)
+			return
+		}
+		if e := http.NewResponseController(w).SetReadDeadline(time.Now().Add(archiveUploadTimeout)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+			writeError(w, ErrUnavailable)
+			return
+		}
+		if !backupDeadline(w, archiveUploadTimeout) {
+			return
+		}
+		var in body[MigrationArchiveInput]
+		archive, err := decodeFramed(r, &in, []string{"size", "reason"})
+		if err != nil {
+			writeError(w, ErrInvalid)
+			return
+		}
+		result, err := s.openArchiveMigration(ctx, in.Input, archive, in.Actor)
+		answerMigration(w, result, err)
+		return
+	}
 	if r.URL.Path == "/v1/migrations/stale" {
 		if r.Method != "GET" || !noBody(r) {
 			writeError(w, ErrInvalid)
@@ -94,6 +119,16 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 				return
 			}
 			result, err := s.migrateFiles(ctx, m[1], in.Input, in.Actor)
+			answerMigration(w, result, err)
+			return
+		}
+		if m[2] == "migrate-certificate" {
+			var in body[MigrateCertificateInput]
+			if decodeBodyWithin(w, r, &in, []string{"migration", "expected_revision", "cpanel", "reason"}, maxCPanelRequest) != nil {
+				writeError(w, ErrInvalid)
+				return
+			}
+			result, err := s.migrateCertificate(ctx, m[1], in.Input, in.Actor)
 			answerMigration(w, result, err)
 			return
 		}

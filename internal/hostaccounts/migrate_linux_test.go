@@ -34,10 +34,13 @@ type fakeSource struct {
 	ran  []ranCommand
 	home map[string]string // relative path -> content rsync writes; "->x" makes a link
 	// remote answers a remote command by its prefix.
-	remote   map[string]string
-	dump     string
-	objects  string // what the source's object check finds
-	failCopy bool
+	remote  map[string]string
+	dump    string
+	objects string // what the source's object check finds
+	// localObjects is what the object check on this server finds after a
+	// backup file's dump is loaded.
+	localObjects string
+	failCopy     bool
 	// realCopy runs cp and the mode fix for real (realProgram); modes are
 	// the modes rsync writes entries with (default 0644 and 0755).
 	realCopy bool
@@ -94,7 +97,8 @@ func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error
 		dest := strings.TrimSuffix(c.args[len(c.args)-1], "/")
 		htaccessOnly := slices.Contains(c.args, "--include=.htaccess")
 		for name, content := range f.home {
-			if htaccessOnly && filepath.Base(name) != ".htaccess" {
+			userINI := name == "public_html/.user.ini" && slices.Contains(c.args, "--include=/public_html/.user.ini")
+			if htaccessOnly && filepath.Base(name) != ".htaccess" && !userINI {
 				continue
 			}
 			p := filepath.Join(dest, name)
@@ -154,6 +158,8 @@ func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error
 		switch {
 		case strings.HasPrefix(stdin, "SELECT COUNT(*) FROM information_schema.SCHEMATA"):
 			return answer("1\n")
+		case strings.HasPrefix(stdin, "SELECT 'missing'"):
+			return answer(f.localObjects)
 		case strings.HasPrefix(stdin, "SELECT TABLE_NAME"):
 			return answer("wp_options\nwp_posts\n")
 		case strings.HasPrefix(stdin, "SELECT 'wp_options'"):
@@ -710,6 +716,72 @@ func TestMigrateFilesProtectsBeforeCopy(t *testing.T) {
 	}
 }
 
+// TestMigrateFilesCarriesWordPressPluginRules: the root .htaccess of
+// WordPress with WP Rocket, Wordfence and Solid Security blocks, plus a
+// redirect and an error page, converts; protect gets the names closed at
+// the root, the redirect and the error page before cp, and verify gets the
+// real closed files to ask for, nearest the root first.
+func TestMigrateFilesCarriesWordPressPluginRules(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	rec := openedRecord(t, m)
+	r := engineRecord(filepath.Dir(m.e.dir))
+	plugins, err := os.ReadFile("../htaccess/testdata/wordpress-plugins.htaccess")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.home = map[string]string{
+		"public_html/.htaccess":                         string(plugins) + "Redirect 301 /old-page /new-page/\nErrorDocument 404 /404.html\nphp_value memory_limit 256M\nphp_flag display_errors Off\n",
+		"public_html/index.php":                         "x",
+		"public_html/wp-config.php":                     "<?php",
+		"public_html/xmlrpc.php":                        "<?php",
+		"public_html/readme.html":                       "x",
+		"public_html/wp-content/plugins/x/readme.txt":   "x",
+		"public_html/wp-content/uploads/.htaccess":      "<Files *.php>\ndeny from all\n</Files>\n",
+		"public_html/wp-content/uploads/2026/shell.php": "<?php",
+	}
+	var got SiteProtection
+	protect := func(p SiteProtection) error {
+		got = p
+		return nil
+	}
+	res, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 10, backupLeftover{Op: strings.Repeat("9", 32)}, protect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Folders) != 2 || got.Folders[0].Path != "/" || got.Folders[0].Deny == nil || got.Folders[1].Path != "/wp-content/uploads/" ||
+		!reflect.DeepEqual(got.Folders[1].Deny, &olsweb.DenyNames{Endings: []string{".php"}}) {
+		t.Fatalf("folders %+v", got.Folders)
+	}
+	if want := []olsweb.HtaccessRedirect{{Prefix: "/old-page", Target: "/new-page/", Status: 301}}; !reflect.DeepEqual(got.Redirects, want) {
+		t.Fatalf("redirects %+v", got.Redirects)
+	}
+	if want := []olsweb.ErrorPage{{Status: 404, URL: "/404.html"}}; !reflect.DeepEqual(got.ErrorPages, want) || len(got.Users) != 0 {
+		t.Fatalf("error pages %+v users %v", got.ErrorPages, got.Users)
+	}
+	site := siteName(r.Account.ID)
+	if err := olsweb.CheckFolders(site, got.Folders); err != nil {
+		t.Fatal(err)
+	}
+	if err := olsweb.CheckMoved(got.Redirects, got.ErrorPages); err != nil {
+		t.Fatal(err)
+	}
+	if want := []olsweb.PHPSetting{{Name: "display_errors", Value: "off", Flag: true}, {Name: "memory_limit", Value: "256M"}}; !reflect.DeepEqual(got.PHPSettings, want) || !validStoredPHP(got.PHPSettings) {
+		t.Fatalf("PHP settings %+v", got.PHPSettings)
+	}
+	wantProbes := []MigrationProbe{
+		{Path: "/.htaccess", Kind: "deny"}, {Path: "/readme.html", Kind: "deny"}, {Path: "/wp-config.php", Kind: "deny"},
+		{Path: "/xmlrpc.php", Kind: "deny"}, {Path: "/wp-content/uploads/.htaccess", Kind: "deny"},
+		{Path: "/wp-content/uploads/2026/shell.php", Kind: "deny"},
+	}
+	if !reflect.DeepEqual(res.Probes, wantProbes) {
+		t.Fatalf("probes %+v", res.Probes)
+	}
+	if len(res.Folders) != 6 || res.Folders[2].Rule != "redirect (301) to /new-page/" || res.Folders[3].Rule != "error page for 404" || !strings.Contains(res.Folders[0].Rule, "wp-config.php") ||
+		res.Folders[4] != (MigrationFolder{File: ".htaccess", Path: "memory_limit", Rule: "PHP setting 256M"}) || res.Folders[5] != (MigrationFolder{File: ".htaccess", Path: "display_errors", Rule: "PHP setting off"}) {
+		t.Fatalf("folders %+v", res.Folders)
+	}
+}
+
 // TestMigrateFilesProbesSubfoldersAndAddressLists: verify checks one real
 // subfolder below a closed and a password folder, with the parent's
 // status, and every folder open to some addresses only. Before, a
@@ -776,10 +848,16 @@ func TestMigrateFilesProbesSubfoldersAndAddressLists(t *testing.T) {
 func TestPreflightScansOnlyHtaccess(t *testing.T) {
 	m, f, _ := testMigrator(t)
 	rec := openedRecord(t, m)
-	f.home = map[string]string{"public_html/index.php": "x", "public_html/staff/.htaccess": "AuthType Basic\nAuthName \"Staff\"\nAuthUserFile /home/u/.htpasswds/public_html/staff/passwd\nRequire valid-user\n"}
+	f.home = map[string]string{"public_html/index.php": "x", "public_html/staff/.htaccess": "AuthType Basic\nAuthName \"Staff\"\nAuthUserFile /home/u/.htpasswds/public_html/staff/passwd\nRequire valid-user\n",
+		"public_html/.user.ini": "auto_prepend_file = '/home/fixtureacct/public_html/wordfence-waf.php'\n"}
 	site, home, err := m.Preflight(context.Background(), rec, "/home/fixtureacct", backupLeftover{Op: strings.Repeat("3", 32)})
 	if err != nil || home || site.Verdict != htaccess.VerdictCompat {
 		t.Fatalf("preflight: %+v %v %v", site, home, err)
+	}
+	// The document root's .user.ini comes too, for what PHP ran before
+	// every script there.
+	if len(site.UserINI) != 1 || site.UserINI[0].Directive != "auto_prepend_file" {
+		t.Fatalf(".user.ini warnings %+v", site.UserINI)
 	}
 	conv := htaccess.ConvertSite(site)
 	if probes := foldersProbes(conv.Rules); !conv.Native || !reflect.DeepEqual(probes, []MigrationProbe{{Path: "/staff/", Kind: "auth"}}) {

@@ -39,10 +39,14 @@ var Categories = []Category{
 type Verdict string
 
 const (
-	// VerdictNative: OLS acts on everything in the file.
+	// VerdictNative: OLS acts on every directive in the file, or Sifruno
+	// covers the ones it ignores (handling.go: harmless to ignore, handled
+	// by Sifruno, or a warning shown before cutover).
 	VerdictNative Verdict = "native"
-	// VerdictConvertible: OLS ignores some directives, none of them access
-	// control or unknown; a converter must move them into vhost config.
+	// VerdictConvertible: OLS ignores some directives that are not access
+	// control, not unknown and in no handling class. A converter would have
+	// to move them into vhost config; none exists, so the file is not
+	// Native.
 	VerdictConvertible Verdict = "convertible"
 	// VerdictCompat: keep the site on Apache with PHP-FPM.
 	VerdictCompat Verdict = "compat"
@@ -117,6 +121,21 @@ type Finding struct {
 	Honoured  bool     `json:"ols_honoured"`
 	Reason    string   `json:"reason"`
 	Access    *Access  `json:"access,omitempty"`
+	// Handling is what Sifruno does about a directive OLS does not act on
+	// (handling.go); empty when OLS acts on it or no class covers it.
+	Handling Handling `json:"handling,omitempty"`
+	// Label is the directive with the first arguments safe to show
+	// (handling.go label), for messages that name the line.
+	Label string `json:"label"`
+	// PHP is the PHP package a handler line names (PHPHandler).
+	PHP string `json:"php_handler,omitempty"`
+	// Redirect and ErrorPage are what a converted redirect or
+	// ErrorDocument line becomes in the vhost (redirect.go), and
+	// PHPSetting what a converted php_value or php_flag line becomes
+	// (phpsettings.go).
+	Redirect   *Redirect   `json:"redirect,omitempty"`
+	ErrorPage  *ErrorPage  `json:"error_page,omitempty"`
+	PHPSetting *PHPSetting `json:"php_setting,omitempty"`
 }
 
 // AccessRule groups access findings that a verify step would test together.
@@ -168,6 +187,8 @@ func unreadFile(name, urlPath, cause, reason string) FileResult {
 func Classify(f *File, name, urlPath string) FileResult {
 	c := &classifier{file: name, urlPath: urlPath, root: urlPath == "/", problems: append([]Problem(nil), f.Problems...)}
 	c.envFeedsAccess = feedsAccess(f.Nodes)
+	c.envRead = rewriteEnvReads(f.Lines)
+	c.headerEnv = headerEnvReads(f.Lines)
 	c.walk(f.Nodes, scope{})
 	if stop := olsStopLine(f.Lines); stop > 0 {
 		for i := range c.findings {
@@ -191,7 +212,7 @@ func Classify(f *File, name, urlPath string) FileResult {
 			causes[CauseAccessControl] = true
 		case g.Category == CategoryUnknown:
 			causes[CauseUnknown] = true
-		case g.Category != CategoryStructure && !g.Honoured:
+		case g.Category != CategoryStructure && !g.Honoured && g.Handling == "":
 			r.Verdict = VerdictConvertible
 		}
 	}
@@ -200,7 +221,16 @@ func Classify(f *File, name, urlPath string) FileResult {
 		r.Causes = sortedCauses(causes)
 	}
 	if convertible(r) {
-		r.Conversion = Convert(f, urlPath)
+		skip, kept := map[int]bool{}, map[int]bool{}
+		for _, g := range r.Findings {
+			switch {
+			case g.Handling != "":
+				skip[g.Line] = true
+			case g.Honoured && g.Category != CategoryStructure:
+				kept[g.Line] = true
+			}
+		}
+		r.Conversion = convert(f, urlPath, skip, kept)
 	}
 	r.RewriteToPath = rewriteToPath(f.Lines)
 	return r
@@ -249,8 +279,12 @@ type classifier struct {
 	problems       []Problem
 	marker         bool
 	envFeedsAccess bool
-	satisfyAny     bool
-	plain          facts
+	// envRead holds the environment variables rewrite lines read, and
+	// headerEnv those Header lines test with env=.
+	envRead    map[string]bool
+	headerEnv  map[string]bool
+	satisfyAny bool
+	plain      facts
 }
 
 func (c *classifier) walk(nodes []*Node, sc scope) {
@@ -299,7 +333,10 @@ func (c *classifier) section(n *Node, sc scope) {
 	if len(n.Args) > 0 {
 		arg = n.Args[0]
 	}
-	f := Finding{File: c.file, Line: n.Line, Directive: "<" + n.Name + ">", Category: CategoryStructure}
+	f := Finding{File: c.file, Line: n.Line, Directive: "<" + n.Name + ">", Label: unknownPlaceholder, Category: CategoryStructure}
+	if directiveName.MatchString(n.Name) {
+		f.Label = "<" + n.Name + ">"
+	}
 	inner := sc
 	switch name {
 	case "ifmodule":
@@ -405,7 +442,7 @@ func (c *classifier) access(sc scope, kind AccessKind) *Access {
 // can probe their contents with it.
 func (c *classifier) directive(n *Node, sc scope) Finding {
 	name := strings.ToLower(n.Name)
-	f := Finding{File: c.file, Line: n.Line, Directive: n.Name}
+	f := Finding{File: c.file, Line: n.Line, Directive: n.Name, Label: label(n)}
 	e, ok := lookup(name)
 	if !ok {
 		f.Category = CategoryUnknown
@@ -433,6 +470,12 @@ func (c *classifier) directive(n *Node, sc scope) Finding {
 	case "rewritefile":
 		f.Reason = "loads another rule file that this scan does not read"
 	case "options":
+		// The Options lines handle.go covers only turn listings and content
+		// negotiation off, or follow links the vhost follows anyway
+		// (optionsHandled): none of them opens anything when OLS ignores it.
+		if optionsHandled(n.Args) {
+			break
+		}
 		if kind = optionsAccess(n.Args); kind != "" {
 			f.Category = CategoryAccessControl
 		}
@@ -478,6 +521,32 @@ func (c *classifier) directive(n *Node, sc scope) Finding {
 	case sc.vendor || c.marker:
 		f.Category = CategoryVendor
 	}
+	if !f.Honoured {
+		var reason string
+		switch name {
+		case "redirect", "redirectmatch", "redirectpermanent", "redirecttemp":
+			f.Handling, reason, f.Redirect = c.convertRedirect(name, n.Args, sc)
+		case "errordocument":
+			f.Handling, reason, f.ErrorPage = c.convertErrorDocument(n.Args, sc)
+		case "php_value", "php_flag", "php_admin_value", "php_admin_flag":
+			f.Handling, reason, f.PHPSetting = c.convertPHP(name, n.Args, sc)
+		default:
+			f.Handling, reason, f.PHP = handle(name, n.Args, c.envRead, c.headerEnv)
+		}
+		// A refused redirect, ErrorDocument or PHP line says why.
+		if f.Handling != "" || reason != "" {
+			f.Reason = reason
+		}
+		if f.Redirect != nil {
+			f.Redirect.Line = n.Line
+		}
+		if f.ErrorPage != nil {
+			f.ErrorPage.Line = n.Line
+		}
+		if f.PHPSetting != nil {
+			f.PHPSetting.Line = n.Line
+		}
+	}
 	if f.Reason == "" {
 		f.Reason = defaultReason(e.category, f.Honoured)
 	}
@@ -512,7 +581,7 @@ func defaultReason(cat Category, honoured bool) string {
 	case cat == CategoryVendor:
 		return "LiteSpeed Enterprise directive that OLS ignores"
 	}
-	return "OLS ignores this in .htaccess; a converter must move it to vhost config"
+	return "OLS ignores this in .htaccess and this server does not convert it, so the site would change"
 }
 
 func accessReason(kind AccessKind) string {

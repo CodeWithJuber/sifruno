@@ -1,10 +1,12 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http/httptest"
 	"reflect"
 	"slices"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"sifruno/internal/cpmove"
 	"sifruno/internal/cpsource"
 	"sifruno/internal/htaccess"
 )
@@ -37,6 +40,8 @@ type fakeMigrate struct {
 	protection SiteProtection
 	// copied runs when Files has put the files in the home.
 	copied func()
+	// archives are the uploaded backup files, by migration.
+	archives map[string][]byte
 }
 
 func newFakeMigrate() *fakeMigrate {
@@ -117,10 +122,50 @@ func (f *fakeMigrate) Database(_ context.Context, _ migrationRecord, db string, 
 	f.databases = append(f.databases, db+" as "+l.Users[db])
 	return MigrateDatabaseResult{Database: db, Tables: []MigrationTable{{Table: "wp_posts", Source: 3, Copy: 3}}}, nil
 }
+func (f *fakeMigrate) SaveArchive(ctx context.Context, id string, size int64, body io.Reader) (*cpmove.Archive, error) {
+	data, err := io.ReadAll(io.LimitReader(body, size))
+	if err != nil || int64(len(data)) != size {
+		return nil, &MigrationError{Step: "archive", Detail: "short upload"}
+	}
+	f.mu.Lock()
+	if f.archives == nil {
+		f.archives = map[string][]byte{}
+	}
+	f.folders[id], f.archives[id] = true, data
+	f.mu.Unlock()
+	return f.ReadArchive(ctx, migrationRecord{ID: id, Via: ViaArchive})
+}
+func (f *fakeMigrate) ReadArchive(ctx context.Context, m migrationRecord) (*cpmove.Archive, error) {
+	f.mu.Lock()
+	data, ok := f.archives[m.ID]
+	ok = ok && f.folders[m.ID]
+	f.mu.Unlock()
+	if !ok {
+		return nil, ErrUnavailable
+	}
+	a, err := cpmove.Read(ctx, bytes.NewReader(data), cpmove.DefaultLimits(), discardArchive{})
+	if err != nil {
+		return nil, archiveFailure(err)
+	}
+	return a, nil
+}
+
+// discardArchive reads every member and keeps none, as the fake engine
+// extracts nothing.
+type discardArchive struct{}
+
+func (discardArchive) Dir(string, fs.FileMode) error { return nil }
+func (discardArchive) File(_ string, _ fs.FileMode, r io.Reader) error {
+	_, err := io.Copy(io.Discard, r)
+	return err
+}
+func (discardArchive) Symlink(string, string) error { return nil }
+
 func (f *fakeMigrate) Forget(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.folders, id)
+	delete(f.archives, id)
 	return nil
 }
 func (f *fakeMigrate) Folders() ([]string, error) {
@@ -236,8 +281,56 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	refused := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\nSatisfy Any\n"))
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{refused}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "compat" || len(plan.TierRefusals) != 1 || !strings.Contains(plan.TierRefusals[0], "private/.htaccess line 2") || len(plan.Converted) != 0 {
+	if err != nil || plan.Tier != "compat" || len(plan.TierRefusals) != 1 || !strings.Contains(plan.TierRefusals[0], "private/.htaccess line 2 (Satisfy Any)") || len(plan.Converted) != 0 {
 		t.Fatalf("compat: %+v %v", plan, err)
+	}
+	if !plan.TierAccess || !slices.Equal(plan.TierFix, []string{"private/.htaccess line 2 (Satisfy Any)"}) {
+		t.Fatalf("an access rule it cannot convert: access %t fix %q", plan.TierAccess, plan.TierFix)
+	}
+	// A typical cPanel WordPress root moves: the handler block names the
+	// plan's PHP (ea-php82), the Expires and Header lines are harmless, and
+	// php_value is converted.
+	root := htaccess.ClassifyFile(".htaccess", "/", []byte("<IfModule mime_module>\n  AddHandler application/x-httpd-ea-php82 .php .php8 .phtml\n</IfModule>\n"+
+		"ExpiresActive On\nHeader set Cache-Control \"max-age=600\"\nphp_value upload_max_filesize 64M\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{root}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 0 || !reflect.DeepEqual(plan.Converted, []MigrationFolder{{File: ".htaccess", Path: "upload_max_filesize", Rule: "PHP setting 64M"}}) {
+		t.Fatalf("typical root: %+v %v", plan, err)
+	}
+	// A handler for another PHP version than the plan's is a warning.
+	legacy := htaccess.ClassifyFile("legacy/.htaccess", "/legacy/", []byte("AddHandler application/x-httpd-ea-php74 .php\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{root, legacy}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 1 || !strings.Contains(plan.TierWarnings[0], "legacy/.htaccess line 1 (AddHandler): the old server runs /legacy/ with PHP ea-php74") || !strings.Contains(plan.TierWarnings[0], "ea-php82") {
+		t.Fatalf("another PHP version: %q %v", plan.TierWarnings, err)
+	}
+	// More memory than a new account's PHP may use is a warning naming the
+	// line, and so is a .user.ini that runs a file before every script.
+	big := htaccess.ClassifyFile(".htaccess", "/", []byte("php_value memory_limit 512M\nphp_value memory_limit -1\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{big},
+		UserINI: htaccess.UserINIWarnings(".user.ini", []byte("auto_prepend_file = '/home/fixtureacct/public_html/wordfence-waf.php'\n"))}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 2 ||
+		!strings.HasPrefix(plan.TierWarnings[0], ".user.ini line 1 (auto_prepend_file): the old server's PHP ran a file before every script") ||
+		!strings.HasPrefix(plan.TierWarnings[1], ".htaccess line 2 (memory_limit): the old server let the site's PHP use -1") || !strings.Contains(plan.TierWarnings[1], "memory_limit 1024M") {
+		t.Fatalf("memory and .user.ini: %q %v", plan.TierWarnings, err)
+	}
+	// A setting it does not carry is a refusal naming its line.
+	prepend := htaccess.ClassifyFile(".htaccess", "/", []byte("RewriteEngine On\nphp_value auto_prepend_file /home/fixtureacct/public_html/wordfence-waf.php\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictConvertible, Files: []htaccess.FileResult{prepend}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "compat" || len(plan.TierRefusals) != 1 || !strings.HasPrefix(plan.TierRefusals[0], ".htaccess line 2 (php_value auto_prepend_file): auto_prepend_file names a file PHP runs before every script") ||
+		!slices.Equal(plan.TierFix, []string{".htaccess line 2 (php_value auto_prepend_file)"}) || len(plan.Converted) != 0 {
+		t.Fatalf("auto_prepend_file: %+v %v", plan, err)
+	}
+	// A line OpenLiteSpeed ignores that nothing covers is not an access
+	// rule: the plan names it as a line to change.
+	other := htaccess.ClassifyFile(".htaccess", "/", []byte("RewriteEngine On\nHeader set Set-Cookie a=b\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictConvertible, Files: []htaccess.FileResult{other}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "compat" || plan.TierAccess || !slices.Equal(plan.TierFix, []string{".htaccess line 2 (Header set Set-Cookie)"}) ||
+		!slices.Equal(plan.TierCauses, []string{htaccess.CauseNotConverted}) || len(plan.TierWarnings) != 0 {
+		t.Fatalf("not converted: %+v %v", plan, err)
 	}
 	// A verdict no file accounts for fails closed.
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}}

@@ -260,3 +260,55 @@ func TestInstallKeyCommand(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// fetch_vhost_ssl_components, filtered to one virtual host: the shape of
+// the example on its page, with made-up PEM text.
+const vhostSSL = `{"data":{"components":[
+ {"servername":"shop.example.test","certificate":"-----BEGIN CERTIFICATE-----\nTEVBRg==\n-----END CERTIFICATE-----\n","certificate_id":"shop_example_test_1","key":"-----BEGIN RSA PRIVATE KEY-----\nS0VZ\n-----END RSA PRIVATE KEY-----\n","key_id":"k1","cabundle":"-----BEGIN CERTIFICATE-----\nQ0E=\n-----END CERTIFICATE-----\n","cabundle_id":"c1"}
+]},"metadata":{"command":"fetch_vhost_ssl_components","reason":"OK","result":1,"version":1}}`
+
+// TestVhostSSL: the certificate the old site's virtual host serves, read
+// with the filter that keeps every other site's key out of the answer.
+func TestVhostSSL(t *testing.T) {
+	got, err := VhostSSLCommand("shop.example.test")
+	want := "/usr/local/cpanel/bin/whmapi1 --output=json fetch_vhost_ssl_components api.filter.enable=1 api.filter.a.field=servername api.filter.a.arg0=shop.example.test api.filter.a.type=eq"
+	if err != nil || got != want {
+		t.Fatalf("command: %q %v", got, err)
+	}
+	for _, domain := range []string{"example", "x.test;id", "X.test", "-x.test", "a b.test"} {
+		if _, err := VhostSSLCommand(domain); err == nil {
+			t.Errorf("%q accepted", domain)
+		}
+	}
+	ssl, err := ParseVhostSSL([]byte(vhostSSL), "shop.example.test")
+	if err != nil || !strings.Contains(ssl.Certificate, "TEVBRg==") || !strings.Contains(ssl.Key, "S0VZ") || !strings.Contains(ssl.CABundle, "Q0E=") {
+		t.Fatalf("parse: %+v %v", ssl, err)
+	}
+	// A virtual host without a bundle (cabundle null) has none.
+	noBundle := strings.Replace(vhostSSL, `"cabundle":"-----BEGIN CERTIFICATE-----\nQ0E=\n-----END CERTIFICATE-----\n"`, `"cabundle":null`, 1)
+	if ssl, err = ParseVhostSSL([]byte(noBundle), "shop.example.test"); err != nil || ssl.CABundle != "" || ssl.Certificate == "" {
+		t.Fatalf("no bundle: %+v %v", ssl, err)
+	}
+	// Another site's components are never taken for this one, and a site
+	// the answer leaves out has no certificate.
+	for _, empty := range []string{
+		`{"data":{"components":[]},"metadata":{"result":1}}`,
+		strings.Replace(vhostSSL, `"servername":"shop.example.test"`, `"servername":"other.example.test"`, 1),
+		strings.Replace(vhostSSL, `"servername":"shop.example.test"`, `"servername":"www.shop.example.test"`, 1),
+		strings.Replace(vhostSSL, `"certificate":"-----BEGIN CERTIFICATE-----\nTEVBRg==\n-----END CERTIFICATE-----\n"`, `"certificate":""`, 1),
+		strings.Replace(vhostSSL, `"key":"-----BEGIN RSA PRIVATE KEY-----\nS0VZ\n-----END RSA PRIVATE KEY-----\n"`, `"key":null`, 1),
+	} {
+		if _, err := ParseVhostSSL([]byte(empty), "shop.example.test"); !errors.Is(err, ErrNoCertificate) {
+			t.Errorf("%.120s: %v", empty, err)
+		}
+	}
+	// Two answers for one virtual host, a part past 64 KiB, or no JSON:
+	// not read.
+	twice := strings.Replace(vhostSSL, "}\n]}", "},{\"servername\":\"shop.example.test\",\"certificate\":\"x\",\"key\":\"y\"}\n]}", 1)
+	big := strings.Replace(vhostSSL, "TEVBRg==", strings.Repeat("A", 64<<10), 1)
+	for _, bad := range []string{``, `{`, `whmapi1: refused to run`, twice, big} {
+		if _, err := ParseVhostSSL([]byte(bad), "shop.example.test"); !errors.Is(err, ErrOutput) {
+			t.Errorf("%.80q: %v", bad, err)
+		}
+	}
+}

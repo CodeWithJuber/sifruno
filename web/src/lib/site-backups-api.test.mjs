@@ -89,8 +89,12 @@ test("numbers, times and lines read plainly", () => {
   assert.equal(api.formatWhen("not a date", "UTC"), "Unknown time");
   assert.equal(api.scheduleLine("02:30", "Asia/Dubai"), "Every night at 02:30, Asia/Dubai. Kept: 7 daily and 4 weekly.");
   assert.equal(api.drillLine(storage().last_drill, "Asia/Dubai"), "Passed, 24 Nov 2026, 03:10 (Asia/Dubai), example.test.");
-  assert.match(api.drillLine(null, "UTC"), /No restore drill has run yet/);
+  assert.match(api.drillLine(null, "UTC"), /^No restore test has run yet\. .*test one now on a website's Backups tab\.$/);
   assert.match(api.runningLine({ kind: "backup", started_at: "2026-11-23T22:30:00Z", actor: "scheduler" }, "UTC"), /^A backup is running\. Started by the nightly schedule/);
+  // The panel's own sessions are recorded as local-operator, which names no person.
+  assert.match(api.runningLine({ kind: "drill", started_at: "2026-11-23T22:30:00Z", actor: "local-operator" }, "UTC"), /^A restore test is running\. Started by an admin at /);
+  assert.deepEqual(["scheduler", "local-operator", "", "owner"].map(api.actorLabel), ["the nightly schedule", "an admin", "an admin", "owner"]);
+  assert.equal(api.kindLabel.drill, "Restore test");
   assert.equal(api.resultTechnical({ step: "copy", detail: "cp: cannot create", snapshot: snapshotId }), `step: copy\ncp: cannot create\nbackup id: ${snapshotId}`);
 });
 

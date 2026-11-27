@@ -156,7 +156,8 @@ export function WebsiteLayout({ accountId }: { accountId: string }) {
         {/* A partly deleted site no longer serves, so it has nothing to open. */}
         {!partly && <>
           <div className="flex flex-wrap gap-2">
-            <SiteLink href={site.url} label="Open site" domain={site.domain} variant="default" testId="open-site" />
+            {/* Outline, so each tab's own action is the page's one primary button. */}
+            <SiteLink href={site.url} label="Open site" domain={site.domain} variant="outline" testId="open-site" />
             {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />}
             <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
           </div>
@@ -326,7 +327,7 @@ function ActivitySection({ backups, reading }: { backups?: SiteBackups; reading:
   return <section className={`${panel} flex flex-col gap-3 p-5 md:p-6`} aria-labelledby={`${ids}-heading`} data-testid="site-activity">
     <div className="flex flex-col gap-1">
       <h2 id={`${ids}-heading`}>Recent activity</h2>
-      <div className="text-sm text-muted-foreground">The site's last backup, restore and restore drill, and when it was made.</div>
+      <div className="text-sm text-muted-foreground">The site's last backup, restore and restore test, and when it was made.</div>
     </div>
     <ol className="m-0 flex list-none flex-col gap-3 p-0">
       {items.map((item) => <li key={item.id} className="flex items-start gap-3" data-testid="activity-item" data-kind={item.id} data-ok={String(item.ok)}>

@@ -29,6 +29,9 @@ type SiteCertificates interface {
 	// Waiting names the aliases the last request left out because they did
 	// not reach this server.
 	Waiting(accountID string) []string
+	// CopiedUntil answers the expiry of the certificate copied from the
+	// site's old server when it moved here, while it is the one installed.
+	CopiedUntil(accountID string) (time.Time, bool)
 }
 
 // WebsiteDomain is one of a website's other domains.

@@ -65,16 +65,11 @@ async function context(viewport, preview = false, options = {}) {
 try {
   // Desktop, light.
   const { ctx, page } = await context({ width: 1440, height: 900 });
+  // Until the first admin exists, Home is the first-run setup too.
   await page.goto(origin + "/");
-  await page.getByRole("heading", { name: "Server monitoring" }).waitFor();
-  const topLevel = await page.locator('[data-slot="sidebar-menu-button"]').count();
-  check("sidebar has 8 top-level items", topLevel === 8, `found ${topLevel}`);
-  check("no Compatibility or Platforms in menu", (await page.getByTestId("nav-evidence").count()) + (await page.getByTestId("nav-platform").count()) === 0);
-  check("home has no horizontal overflow at 1440", await noOverflow(page));
-  await page.screenshot({ path: join(outDir, "1440-light-home.png") });
-
-  await page.getByTestId("nav-websites").click();
-  check("Websites menu item opens /websites", path(page) === "/websites", path(page));
+  await page.getByTestId("setup-key").waitFor();
+  check("a fresh panel asks for first-run setup on Home", (await page.getByRole("heading", { name: "Server monitoring" }).count()) === 0);
+  await page.goto(origin + "/websites");
   // First-run setup: access key, then username and password, then 2FA.
   await page.getByTestId("setup-key").waitFor();
   check("a fresh panel asks for first-run setup on a private page", true);
@@ -127,6 +122,18 @@ try {
   answered = await signIn("admin", password, totp(secret, lastStep));
   await page.getByTestId("signed-in-as").waitFor();
   check("the admin signs in with password and a fresh code", answered === 200 && path(page) === "/websites", `HTTP ${answered}`);
+
+  // Home for the signed-in admin: Get started first, the menu in three groups.
+  await page.goto(origin + "/");
+  await page.getByRole("heading", { name: "Server monitoring" }).waitFor();
+  await page.getByTestId("get-started").waitFor();
+  const topLevel = await page.locator('[data-slot="sidebar-menu-button"]').count();
+  check("sidebar has 11 top-level items (3 main, 4 administration, 4 advanced)", topLevel === 11, `found ${topLevel}`);
+  check("no Compatibility or Platforms in menu", (await page.getByTestId("nav-evidence").count()) + (await page.getByTestId("nav-platform").count()) === 0);
+  check("home has no horizontal overflow at 1440", await noOverflow(page));
+  await page.screenshot({ path: join(outDir, "1440-light-home.png") });
+  await page.getByTestId("nav-websites").click();
+  check("Websites menu item opens /websites", path(page) === "/websites", path(page));
 
   // Create a static site so the Files handoff has something to carry. Static
   // sites live at /websites/static since Websites lists the WordPress sites.

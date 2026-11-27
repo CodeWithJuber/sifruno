@@ -1,9 +1,10 @@
 // Package whmtest is a fake WHM API 1 for tests: an HTTPS server with a
 // self-signed certificate that answers, in the shapes cPanel documents,
 // listaccts, domainuserdata, php_get_vhost_versions, uapi_cpanel (Mysql
-// list_databases and list_users), importsshkey, authorizesshkey,
-// deletesshkey and listsshkeys, and refuses a wrong login. Only tests
-// import it.
+// list_databases and list_users), fetch_vhost_ssl_components (for every
+// virtual host, whatever filter it is sent, as a WHM that ignored it
+// would), importsshkey, authorizesshkey, deletesshkey and listsshkeys, and
+// refuses a wrong login. Only tests import it.
 package whmtest
 
 import (
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +46,24 @@ type Server struct {
 	Failing map[string]string
 	// Seen are the Authorization headers received, to check what was sent.
 	Seen []string
+	// queries are the last query of each function.
+	queries map[string]url.Values
+}
+
+// The made-up components fetch_vhost_ssl_components answers for the fake's
+// virtual host, and another site's key it answers too.
+const (
+	SSLCertificate = "-----BEGIN CERTIFICATE-----\nU0hPUA==\n-----END CERTIFICATE-----\n"
+	SSLKey         = "-----BEGIN PRIVATE KEY-----\nU0hPUEtFWQ==\n-----END PRIVATE KEY-----\n"
+	SSLBundle      = "-----BEGIN CERTIFICATE-----\nQ0E=\n-----END CERTIFICATE-----\n"
+	OtherSSLKey    = "-----BEGIN PRIVATE KEY-----\nT1RIRVJLRVk=\n-----END PRIVATE KEY-----\n"
+)
+
+// Query is the last query the fake took for function.
+func (s *Server) Query(function string) url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.queries[function]
 }
 
 // The fake's one account.
@@ -122,6 +142,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Calls = append(s.Calls, function)
+	if s.queries == nil {
+		s.queries = map[string]url.Values{}
+	}
+	s.queries[function] = r.URL.Query()
 	if s.Broken != "" {
 		_, _ = w.Write([]byte(s.Broken))
 		return
@@ -165,6 +189,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		answer(w, function, 1, "OK", map[string]any{"uapi": map[string]any{"data": data, "status": 1, "errors": nil, "messages": nil, "warnings": nil, "metadata": map[string]any{}}})
+	case "fetch_vhost_ssl_components":
+		answer(w, function, 1, "OK", map[string]any{"components": []map[string]any{
+			{"servername": "other.example.test", "certificate": SSLCertificate, "key": OtherSSLKey, "cabundle": nil, "certificate_id": "other", "key_id": "other", "cabundle_id": nil},
+			{"servername": Domain, "certificate": SSLCertificate, "key": SSLKey, "cabundle": SSLBundle, "certificate_id": "shop", "key_id": "shop", "cabundle_id": "ca"},
+		}})
 	case "importsshkey":
 		name, key := q.Get("name"), q.Get("key")
 		if name == "" || key == "" || strings.Contains(name, "/") {

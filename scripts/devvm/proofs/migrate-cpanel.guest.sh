@@ -24,7 +24,13 @@
 #              wp-config.php, xmlrpc.php, .user.ini ...), cPanel's PHP
 #              handler block, an ErrorDocument and two redirects, which
 #              move Native, the CORS and X-Robots-Tag headers as notes to
-#              accept, a backup index.php.bak the copy refuses, and the
+#              accept, a backup index.php.bak the copy refuses, cPanel's
+#              MultiPHP INI block of php_value and php_flag lines, which
+#              the copy carries into its vhost's phpIniOverride (each
+#              setting reads back the same through PHP on both servers),
+#              a .user.ini with the same settings and Wordfence's
+#              auto_prepend_file, whose note keeps the gate closed until
+#              accepted, and the
 #              stock Akismet plugin, whose .htaccess
 #              (deny all, a <FilesMatch> allow-list, Apache 2.2 and 2.4
 #              branches) the converter turns into an OpenLiteSpeed rule: the
@@ -38,7 +44,9 @@
 #              password, 200 with it, 403 for the closed folder, the lists
 #              by client address, and every other spelling of the paths
 #   odd<id>    an .htaccess with a directive the converter does not know:
-#              refused before anything is created, naming its file and line
+#              refused before anything is created, naming its file and line;
+#              then Wordfence's mod_php block, whose php_value
+#              auto_prepend_file line is refused the same way
 #   trig<id>   a PHP site whose database has a trigger: the copy fails at
 #              the database and the job removes what it created
 #   race<id>   a tenant that swaps a folder for a link to /root while the
@@ -274,6 +282,46 @@ wp "rewrite structure '/%postname%/'" >/dev/null 2>&1
 # root; the redirects and error page move into the vhost; the CORS and
 # X-Robots-Tag headers cannot be carried and are notes to accept.
 podman cp "$BIN/wordpress-plugins.htaccess" "$CTR:/root/wordpress-plugins.htaccess"
+# The site's PHP settings, as cPanel's MultiPHP INI Editor writes them into
+# the root .htaccess for the DSO and LSAPI handlers. The stand-in runs
+# PHP-FPM, for which those <IfModule> blocks are inert: it reads the same
+# settings from the document root's .user.ini, where Wordfence's
+# extended protection adds its auto_prepend_file (its "cgi" case). So the
+# old site's PHP has these settings and runs wordfence-waf.php first; the
+# copy gets the settings from the converted .htaccess lines, and the note
+# says the firewall file does not run there.
+{
+  echo '# BEGIN cPanel-generated php ini directives, do not edit'
+  echo '# Manual editing of this file may result in unexpected behavior.'
+  for module in php8_module lsapi_module; do
+    printf '<IfModule %s>\n' "$module"
+    printf '   php_flag display_errors Off\n   php_value max_execution_time 300\n   php_value max_input_time 600\n   php_value max_input_vars 3000\n'
+    printf '   php_value memory_limit 512M\n   php_value post_max_size 128M\n   php_value session.gc_maxlifetime 7200\n'
+    printf '   php_value session.save_path "/var/cpanel/php/sessions/ea-php%s"\n' "$PHPXY"
+    printf '   php_value upload_max_filesize 128M\n   php_flag zlib.output_compression Off\n</IfModule>\n'
+  done
+  echo '# END cPanel-generated php ini directives, do not edit'
+} > "$WORK/php-ini.htaccess"
+{
+  echo '; cPanel-generated php ini directives, do not edit'
+  printf 'display_errors = Off\nmax_execution_time = 300\nmax_input_time = 600\nmax_input_vars = 3000\nmemory_limit = 512M\n'
+  printf 'post_max_size = 128M\nsession.gc_maxlifetime = 7200\nupload_max_filesize = 128M\nzlib.output_compression = Off\n\n'
+  printf '; Wordfence WAF\nauto_prepend_file = '"'"'/home/%s/public_html/wordfence-waf.php'"'"'\n; END Wordfence WAF\n' "$SHOP"
+} > "$WORK/user.ini"
+# Stand-ins for Wordfence's loader and a page that prints the settings.
+printf '<?php\ndefine("SIFRUNO_PROOF_WAF", true);\n' > "$WORK/wordfence-waf.php"
+cat > "$WORK/sifruno-ini.php" <<'PHP'
+<?php
+header('Content-Type: application/json');
+$out = ['sapi' => PHP_SAPI, 'waf' => defined('SIFRUNO_PROOF_WAF')];
+foreach (['display_errors', 'max_execution_time', 'max_input_time', 'max_input_vars', 'memory_limit', 'post_max_size', 'session.gc_maxlifetime', 'upload_max_filesize', 'zlib.output_compression'] as $k) {
+    $v = ini_get($k);
+    // A flag reads back as "", "0" or "Off" when off: compare its meaning.
+    $out[$k] = in_array($k, ['display_errors', 'zlib.output_compression'], true) ? (filter_var($v, FILTER_VALIDATE_BOOLEAN) ? 'on' : 'off') : $v;
+}
+echo json_encode($out);
+PHP
+for file in php-ini.htaccess user.ini wordfence-waf.php sifruno-ini.php; do podman cp "$WORK/$file" "$CTR:/root/$file"; done
 in_ctr "{ cat /root/wordpress-plugins.htaccess; cat <<'HT'
 # php -- BEGIN cPanel-generated handler, do not edit
 # Set the \"ea-php$PHPXY\" package as the default \"PHP\" programming language.
@@ -295,10 +343,11 @@ Redirect 301 /old-page /moved-with-sifruno
 RedirectMatch 302 ^/archive/([0-9]+)/?\$ /?m=\$1
 HT
 } > /home/$SHOP/public_html/.htaccess; rm -f /root/wordpress-plugins.htaccess
+cat /root/php-ini.htaccess >> /home/$SHOP/public_html/.htaccess; rm -f /root/php-ini.htaccess
+mv /root/user.ini /home/$SHOP/public_html/.user.ini; mv /root/wordfence-waf.php /root/sifruno-ini.php /home/$SHOP/public_html/
 echo '<?php echo 1; // sifruno-phtml-source' > /home/$SHOP/public_html/info.phtml
 cp /home/$SHOP/public_html/index.php /home/$SHOP/public_html/index.php.bak
 echo '<!doctype html><title>Forbidden</title><p>sifruno-error-page-403' > /home/$SHOP/public_html/403.html
-echo 'max_execution_time = 60' > /home/$SHOP/public_html/.user.ini
 install -d /home/$SHOP/public_html/wp-content/uploads/fonts
 echo 'font' > /home/$SHOP/public_html/wp-content/uploads/fonts/proof.woff2
 chown -R $SHOP:apache /home/$SHOP/public_html
@@ -444,6 +493,10 @@ old_cors="$(curl -s -o /dev/null -D - "http://$SHOP_DOMAIN/wp-content/uploads/fo
 echo "  old: fonts/proof.woff2 sends '$old_cors'"
 check "the old WordPress sends the CORS header on a font (WP Rocket)" test -n "$old_cors"
 check "the old WordPress serves the backup index.php.bak with its PHP source (200): the leak the copy closes" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://$SHOP_DOMAIN/index.php.bak)\" = 200 ] && curl -s http://$SHOP_DOMAIN/index.php.bak | grep -q wp-blog-header"
+old_ini="$(curl -s "http://$SHOP_DOMAIN/sifruno-ini.php")"
+echo "  old: sifruno-ini.php says $old_ini"
+check "the old WordPress's PHP (PHP-FPM) has the site's settings (memory_limit 512M, upload_max_filesize 128M ...) and ran Wordfence's file before the script" \
+  python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d['sapi']=='fpm-fcgi' and d['waf'] is True and d['memory_limit']=='512M' and d['upload_max_filesize']=='128M' and d['max_input_vars']=='3000' and d['session.gc_maxlifetime']=='7200'" "$old_ini"
 
 if [ "$MODE" = cert ]; then
   echo
@@ -1173,9 +1226,10 @@ check "the move succeeded" test "$state" = succeeded
 check "the tier is Native (rewrite rules kept; the <Files> rules, Akismet's access rules, redirects and error page converted)" test "$(m "['tier']")" = native
 echo "  notes:"
 json "$WORK/job.json" "'\n'.join('    ' + n for n in d['job']['migration']['notes'])"
-check "the notes are the lines that cannot be carried: WP Rocket's SetEnvIf and two CORS headers, and the X-Robots-Tag header" test "$(json "$WORK/job.json" "len(d['job']['migration']['notes']) == 4 and sum('CORS header' in n for n in d['job']['migration']['notes']) == 2 and sum('X-Robots-Tag' in n for n in d['job']['migration']['notes']) == 1")" = True
+check "the notes are what the copy does not do as the old site: WP Rocket's SetEnvIf and two CORS headers, the X-Robots-Tag header, and the .user.ini's auto_prepend_file" test "$(json "$WORK/job.json" "len(d['job']['migration']['notes']) == 5 and sum('CORS header' in n for n in d['job']['migration']['notes']) == 2 and sum('X-Robots-Tag' in n for n in d['job']['migration']['notes']) == 1")" = True
+check "a note names .user.ini line 13 (auto_prepend_file): Wordfence's firewall file does not run on the copy" test "$(json "$WORK/job.json" "sum(n.startswith('Check before cutover: .user.ini line 13 (auto_prepend_file):') and 'Wordfence' in n and 'firewall' in n for n in d['job']['migration']['notes'])")" = 1
 echo "  converted: $(m "['converted']")"
-check "the job names the root .htaccess's closed names, Akismet's folder, the two redirects and the error page as converted" test "$(json "$WORK/job.json" "[(x['file'], x['path']) for x in d['job']['migration']['converted']]")" = "[('.htaccess', '/'), ('wp-content/plugins/akismet/.htaccess', '/wp-content/plugins/akismet/'), ('.htaccess', '/old-page'), ('.htaccess', '^/archive/([0-9]+)/?\$'), ('.htaccess', '/403.html')]"
+check "the job names the root .htaccess's closed names, Akismet's folder, the two redirects, the error page and nine PHP settings as converted" test "$(json "$WORK/job.json" "[(x['file'], x['path']) for x in d['job']['migration']['converted']]")" = "[('.htaccess', '/'), ('wp-content/plugins/akismet/.htaccess', '/wp-content/plugins/akismet/'), ('.htaccess', '/old-page'), ('.htaccess', '^/archive/([0-9]+)/?\$'), ('.htaccess', '/403.html'), ('.htaccess', 'display_errors'), ('.htaccess', 'max_execution_time'), ('.htaccess', 'max_input_time'), ('.htaccess', 'max_input_vars'), ('.htaccess', 'memory_limit'), ('.htaccess', 'post_max_size'), ('.htaccess', 'session.gc_maxlifetime'), ('.htaccess', 'upload_max_filesize'), ('.htaccess', 'zlib.output_compression')]"
 check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
 src_ht="$(in_ctr "sha256sum /home/$SHOP/public_html/.htaccess" | cut -d' ' -f1)"
 check "the copy's .htaccess is the old site's, byte for byte" test -n "$src_ht" -a "$src_ht" = "$(sha256sum "/home/$SHOP/public_html/.htaccess" 2>/dev/null | cut -d' ' -f1)"
@@ -1198,6 +1252,19 @@ account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
 vhconf="$LSWS/conf/vhosts/sifruno-u${account:0:31}/vhconf.conf"
 check "the copy runs PHP ${PHPXY:0:1}.${PHPXY:1} (lsphp$PHPXY), the old site's version" grep -q "lsphp$PHPXY/bin/lsphp" "$vhconf"
 check "the vhost has Akismet's folder as a regex context closed to all" grep -q '^context exp:(?s)^/wp-content/plugins/akismet/(?!' "$vhconf"
+echo "  the vhost's phpIniOverride:"
+sed -n '/^phpIniOverride/,/^}/p' "$vhconf" | sed 's/^/    /'
+check "the vhost carries the nine settings as php_value and php_flag lines (session.save_path, cPanel's own folder, left to this server)" \
+  test "$(sed -n '/^phpIniOverride/,/^}/p' "$vhconf" | grep -c '^php_')" = 9 -a "$(sed -n '/^phpIniOverride/,/^}/p' "$vhconf" | grep -cE '^php_value memory_limit 512M$|^php_value upload_max_filesize 128M$|^php_flag display_errors off$')" = 3 -a "$(grep -c session.save_path "$vhconf")" = 0
+new_ini="$(curl -s -H "Host: $SHOP_DOMAIN" http://127.0.0.1/sifruno-ini.php)"
+echo "  copy: sifruno-ini.php says $new_ini"
+check "each PHP setting reads back the same through PHP on both servers" \
+  python3 -c "import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); keys=[k for k in a if k not in ('sapi','waf')]; assert len(keys)==9 and all(a[k]==b[k] for k in keys), [(k,a[k],b.get(k)) for k in keys if a[k]!=b.get(k)]" "$old_ini" "$new_ini"
+# shellcheck disable=SC2016 # PHP's own variables, for PHP
+defaults="$(runuser -u "$SHOP" -- "$LSWS/lsphp$PHPXY/bin/php" -r 'foreach (["memory_limit","upload_max_filesize","post_max_size","max_input_vars","max_input_time","session.gc_maxlifetime"] as $k) echo $k, "=", ini_get($k), " ";' 2>/dev/null)"
+echo "  this server's PHP defaults (lsphp$PHPXY php.ini): $defaults"
+check "the copy's values are the old site's, not this server's defaults" python3 -c "import json,sys; b=json.loads(sys.argv[1]); d=dict(x.split('=',1) for x in sys.argv[2].split()); assert d and all(b[k]!=d[k] for k in d), d" "$new_ini" "$defaults"
+check "the copy's PHP is LSPHP, and Wordfence's file ran on the old site but not on the copy, as the note says" python3 -c "import json,sys; a=json.loads(sys.argv[1]); b=json.loads(sys.argv[2]); assert b['sapi']=='litespeed' and a['waf'] is True and b['waf'] is False" "$old_ini" "$new_ini"
 new() { status -H "Host: $1" "http://127.0.0.1$2" "${@:3}"; }
 for path in /wp-content/plugins/akismet/ /wp-content/plugins/akismet/akismet.php /wp-content/plugins/akismet/readme.txt /wp-content/plugins/akismet/_inc/ /wp-content/plugins/akismet/akismet.php/akismet.css; do
   check "the copy answers 403 for $path, as the old site" test "$(new "$SHOP_DOMAIN" "$path")" = 403
@@ -1253,7 +1320,7 @@ echo "  verify: $(m "['verify']['verdict']")"
 echo "  pages $(m "['verify']['pages_compared']") compared, $(m "['verify']['pages_pass']") pass, $(m "['verify']['pages_fail']") fail; notes: $(m "['notes']")"
 check "verify ran and found no difference (cutover allowed by verify)" test "$(m "['verify']['cutover_allowed']")" = True
 gate="$(m "['gate']")"
-check "with verify green but notes to check, the cutover gate stays closed until a person accepts them (gate: $gate)" test "$gate" = closed
+check "with verify green but notes to check (the .user.ini's among them), the cutover gate stays closed until a person accepts them (gate: $gate)" test "$gate" = closed
 if [ "$gate" = closed ]; then
   # Only notes (such as a PHP version this server maps) close it; the
   # proof accepts them on purpose, as an admin would, with a reason.
@@ -1379,6 +1446,34 @@ check "the reason does not claim a protected folder would open: the unknown line
 check "no account $ODD was created" bash -c "! getent passwd $ODD"
 check "the key is removed after the refusal too" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 check "no staging folder or migration folder is left" bash -c "[ -z \"\$(ls -A /var/lib/sifruno-restore 2>/dev/null)\" ] && [ ! -e $STATE/migrate/$SRC ]"
+
+echo
+echo "## 5c. $ODD_DOMAIN again: Wordfence's mod_php block, whose php_value auto_prepend_file is refused"
+# Wordfence 9's .htaccess for mod_php: its loader through php_value, and
+# the <Files ".user.ini"> rule. The stand-in's Apache has no mod_php, so the
+# old site serves as before; the folder rule of 5b stays, without the
+# unknown line.
+{
+  echo '# Wordfence WAF'
+  for module in mod_php7.c mod_php.c; do
+    printf '<IfModule %s>\n\tphp_value auto_prepend_file '"'"'/home/%s/public_html/wordfence-waf.php'"'"'\n</IfModule>\n' "$module" "$ODD"
+  done
+  printf '<Files ".user.ini">\n<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n</Files>\n# END Wordfence WAF\n'
+} > "$WORK/odd.htaccess"
+podman cp "$WORK/odd.htaccess" "$CTR:/home/$ODD/public_html/.htaccess"
+in_ctr "printf 'Deny from all\n' > /home/$ODD/public_html/tools/.htaccess; chown $ODD:apache /home/$ODD/public_html/.htaccess /home/$ODD/public_html/tools/.htaccess; chmod 0644 /home/$ODD/public_html/.htaccess"
+check "the old odd site still serves its page with Wordfence's block (200)" test "$(status "http://$ODD_DOMAIN/")" = 200
+connect odd; pin odd >/dev/null 2>&1; install_key odd
+run_job "$ODD"
+echo "  why: $(json "$WORK/job.json" "d['job']['error']['why']")"
+echo "  next: $(json "$WORK/job.json" "d['job']['error']['next']")"
+echo "  technical: $(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
+check "the move stops at the old server's site, before anything is created" test "$state" = failed -a "$(json "$WORK/job.json" "d['job']['error']['step']")" = source
+check "Technical details names the line and why: .htaccess line 3 (php_value auto_prepend_file), a file PHP runs before every script, often a firewall" grep -qF '.htaccess line 3 (php_value auto_prepend_file): auto_prepend_file names a file PHP runs before every script, often a security plugin' <<<"$(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
+check "the next step names that line to remove or change on the old server" grep -qF 'remove or change .htaccess line 3 (php_value auto_prepend_file)' <<<"$(json "$WORK/job.json" "d['job']['error']['next']")"
+check "the reason does not claim a protected folder would open: the PHP line is the cause, and Wordfence's <Files> rule converts" bash -c "! grep -q 'open to everyone' <<<\"\$1\"" _ "$(json "$WORK/job.json" "d['job']['error']['why']")"
+check "no account $ODD was created" bash -c "! getent passwd $ODD"
+check "the key is removed after the refusal too" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 
 echo
 echo "## 6. $TRIG_DOMAIN: a database with a trigger fails the copy, which is undone"

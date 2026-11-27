@@ -58,6 +58,17 @@
 
 ### Added
 
+- Get started on Home: the panel's own address and certificate, the first
+  website, moving a website (optional), backups with one restore test, a
+  customer login and Always use HTTPS, each read from the server's state,
+  with why it matters and one button to the screen that does it. It can be
+  hidden once done. From a UX audit of every journey on a real server
+  (`docs/ux-audit.md`), whose top fixes also land: first-run setup on
+  every page until an admin exists, job names on Home's tiles, the old
+  static-site screens and Linux accounts in an Advanced menu group, the
+  certificate's state on Domains and SSL, "Manage" and "Move a website
+  here" on Websites, "Manage this website" after the wizard, "restore
+  test" for drill, and plain words on Backups and Security.
 - A website moved from cPanel keeps its https: the move copies the
   certificate the old site serves, with its key, so the copy answers https
   before the DNS changes. It is copied only when it is not self-signed, is

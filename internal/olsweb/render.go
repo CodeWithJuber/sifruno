@@ -283,12 +283,17 @@ func renderVhost(v site) []byte {
 		if v.AlwaysHTTPS {
 			rules = append(rules, httpsRules(securedDomains(v))...)
 		}
+		// The old .htaccess's redirects last: the panel's own settings win,
+		// and a plain http request reaches https before a path redirect
+		// whose target is a path, as the old site's https rewrite did.
+		rules = append(rules, movedRules(v.HtaccessRedirects)...)
 		autoLoad = "1"
 	}
 	renderCache(&b, v)
 	renderACMEChallenge(&b)
 	if !v.Suspended {
 		renderFolders(&b, v)
+		renderErrorPages(&b, v.ErrorPages)
 	}
 
 	b.WriteString("\nrewrite  {\n")

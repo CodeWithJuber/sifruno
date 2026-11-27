@@ -147,6 +147,13 @@ type Site struct {
 	// rendered for an active site only: a suspended site refuses every
 	// request anyway.
 	Folders []Folder `json:"folders,omitempty"`
+	// HtaccessRedirects and ErrorPages are the redirect and ErrorDocument
+	// lines a migration converted from the site's root .htaccess (moved.go),
+	// rendered for an active site only: the redirects in the file's order
+	// after the site's own redirects and the https rule, the error pages
+	// sorted by status.
+	HtaccessRedirects []HtaccessRedirect `json:"htaccess_redirects,omitempty"`
+	ErrorPages        []ErrorPage        `json:"error_pages,omitempty"`
 }
 
 // Redirect answers requests with a 301 or 302 to Target. Exactly one of

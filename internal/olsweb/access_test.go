@@ -102,6 +102,121 @@ func TestFolderPattern(t *testing.T) {
 	}
 }
 
+func TestDenyFolderValidation(t *testing.T) {
+	names := &DenyNames{Names: []string{".user.ini", "wp-config.php", "xmlrpc.php"}, Endings: []string{".sql", "~"}}
+	ok := [][]Folder{
+		{{Path: "/", Hosts: HostsAll, Deny: names}},
+		{{Path: "/", Hosts: HostsAll, Deny: names}, {Path: "/a/", Hosts: HostsNone}, {Path: "/a/b/", Hosts: HostsAll, Deny: names}},
+		{{Path: "/a/", Hosts: HostsOnly, Networks: []string{"192.0.2.0/24"}, Deny: names}},
+		{{Path: "/a/", Hosts: HostsAll, Realm: &FolderRealm{Name: "a", UserFile: RealmFile("blog", 1)}, Deny: &DenyNames{Names: []string{".htpasswd"}}}},
+	}
+	for i, folders := range ok {
+		if err := Validate(folderSite(folders...)); err != nil {
+			t.Errorf("ok[%d]: %v", i, err)
+		}
+	}
+	bad := map[string][]Folder{
+		"root folder rule":  {{Path: "/", Hosts: HostsOnly, Networks: []string{"192.0.2.0/24"}, Deny: names}},
+		"root without deny": {{Path: "/", Hosts: HostsAll}},
+		"empty":             {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{}}},
+		"closed folder":     {{Path: "/a/", Hosts: HostsNone, Deny: names}},
+		"unsorted":          {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{Names: []string{"b", "a"}}}},
+		"twice":             {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{Endings: []string{".sql", ".sql"}}}},
+		"slash":             {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{Names: []string{"a/b"}}}},
+		"regex char":        {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{Names: []string{"a|b"}}}},
+		"plus":              {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{Endings: []string{"+"}}}},
+		"dot dot":           {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{Names: []string{".."}}}},
+		"brace":             {{Path: "/a/", Hosts: HostsAll, Deny: &DenyNames{Names: []string{"a{"}}}},
+		"nested folders":    {{Path: "/", Hosts: HostsAll, Deny: names}, {Path: "/a/", Hosts: HostsNone}, {Path: "/a/b/", Hosts: HostsNone}},
+	}
+	for name, folders := range bad {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(folderSite(folders...))
+			var fe *FieldError
+			if !errors.As(err, &fe) || !strings.Contains(fe.Field, "folders") {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+// goDenyPattern is denyPattern's regex for Go's engine, which has no
+// lookahead: (?!.) at the end is \z, and the challenge path's lookahead is
+// left out and checked on its own.
+func goDenyPattern(p string) *regexp.Regexp {
+	p = strings.Replace(p, "(?!"+acmeToken+")", "", 1)
+	return regexp.MustCompile(strings.TrimSuffix(p, "(?!.)") + `\z`)
+}
+
+func TestDenyPattern(t *testing.T) {
+	root := Folder{Path: "/", Hosts: HostsAll, Deny: &DenyNames{Names: []string{".user.ini", "wp-config.php", "xmlrpc.php"}, Endings: []string{".sql"}}}
+	want := `(?s)^/(?![.]well-known/acme-challenge/[-_A-Za-z0-9]+(?!.))(?:(?:.*/)?(?:[.]user[.]ini|wp-config[.]php|xmlrpc[.]php|[^/]*[.]sql)(?:/.*)?)[[:cntrl:]]?(?!.)`
+	if got := denyPattern(root); got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+	re := goDenyPattern(denyPattern(root))
+	for path, closed := range map[string]bool{
+		"/wp-config.php": true, "/blog/wp-config.php": true, "/xmlrpc.php/x": true, "/xmlrpc.php/": true,
+		"/a/.user.ini": true, "/dump.sql": true, "/x/y/.sql": true, "/wp-config.php\n": true,
+		"/wp-config.php.bak": false, "/my-wp-config.php": false, "/index.php": false, "/": false,
+		"/dump.sql.gz": false, "/wp-config.phpx": false, "/wp-admin/": false, "/sql": false,
+	} {
+		if re.MatchString(path) != closed {
+			t.Errorf("%q: closed %v, want %v", path, !closed, closed)
+		}
+	}
+	// The challenge path is left out only for a bare token at the root.
+	token := regexp.MustCompile("^/" + strings.TrimSuffix(acmeToken, "(?!.)") + `\z`)
+	for path, left := range map[string]bool{
+		"/.well-known/acme-challenge/AbC-_09": true, "/.well-known/acme-challenge/a.sql": false,
+		"/.well-known/acme-challenge/../wp-config.php": false, "/.well-known/acme-challenge/a/b": false,
+	} {
+		if token.MatchString(path) != left {
+			t.Errorf("%q: left out %v", path, !left)
+		}
+	}
+	if strings.Contains(denyPattern(Folder{Path: "/a/", Hosts: HostsAll, Deny: root.Deny}), "acme") {
+		t.Error("a folder below the root leaves the challenge path out")
+	}
+	// Names that include an index file close each folder's own address.
+	uploads := Folder{Path: "/wp-content/uploads/", Hosts: HostsAll, Deny: &DenyNames{Endings: []string{".php"}}}
+	re = goDenyPattern(denyPattern(uploads))
+	for path, closed := range map[string]bool{
+		"/wp-content/uploads/": true, "/wp-content/uploads/2026/": true, "/wp-content/uploads/a.php": true,
+		"/wp-content/uploads/a.php/b.jpg": true, "/wp-content/uploads/a.jpg": false, "/wp-content/": false,
+	} {
+		if re.MatchString(path) != closed {
+			t.Errorf("%q: closed %v, want %v", path, !closed, closed)
+		}
+	}
+}
+
+// The names' contexts come before every folder's, so the first regex
+// context that matches is a names context whenever one matches.
+func TestNamesContextsComeFirst(t *testing.T) {
+	s := folderSite(
+		Folder{Path: "/", Hosts: HostsAll, Deny: &DenyNames{Names: []string{"wp-config.php"}}},
+		Folder{Path: "/a/", Hosts: HostsOnly, Networks: []string{"192.0.2.0/24"}, Deny: &DenyNames{Names: []string{"secret.json"}}},
+	)
+	files, err := Render(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vh := string(files[VhostConfigPath("blog")])
+	var contexts []string
+	for _, line := range strings.Split(vh, "\n") {
+		if strings.HasPrefix(line, "context exp:") {
+			contexts = append(contexts, line)
+		}
+	}
+	if len(contexts) != 3 || !strings.Contains(contexts[0], "wp-config") || !strings.Contains(contexts[1], "secret") || !strings.HasPrefix(contexts[2], "context exp:(?s)^/a/.*") {
+		t.Fatalf("contexts %q", contexts)
+	}
+	if _, err := confShape(files[VhostConfigPath("blog")]); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSuspendedSiteHasNoFolders(t *testing.T) {
 	s := folderSite(Folder{Path: "/a/", Hosts: HostsAll, Realm: &FolderRealm{Name: "a", UserFile: RealmFile("blog", 1)}})
 	s.Sites[0].Suspended = true

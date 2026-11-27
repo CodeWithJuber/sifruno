@@ -31,10 +31,26 @@ import (
 //	hosts only / except:       accessControl allow/deny lists
 //	realm:                     realm, authName, required, and a realm block
 //	                           whose userDB is RealmFile(site, n)
+//	names closed to all:       one more regex context, allowBrowse 0 (403),
+//	                           for a path part with one of the names or
+//	                           endings and everything below it, written
+//	                           ahead of every folder's context
 //
 // Every value is checked against an alphabet with no character the config
 // grammar or the regex treats specially, apart from '.', which is written
 // as [.].
+//
+// OpenLiteSpeed tries the regex contexts in the order of the config and
+// takes the first that matches (src/http/httpcontext.cpp
+// HttpContext::match), so the names' contexts answer 403 before a folder's
+// context could admit a client. The regex sees the decoded, cleaned path
+// (src/http/httpreq.cpp normalizeDecodedReqPath). A names context at the
+// site root leaves out the certificate challenge path
+// (/.well-known/acme-challenge/ and a token of base64url characters), which
+// the vhost serves from ACMEChallengeDir, never from the site. Names that
+// include an index file (indexFiles) also close every folder's own address
+// below Path: OpenLiteSpeed would answer it with that file, as Apache's
+// mod_dir would have refused it.
 
 // RealmRoot holds one root-owned directory per site with the user files of
 // its realms, outside every home: OpenLiteSpeed reads them as the web server
@@ -64,12 +80,44 @@ const (
 // Hosts is all, none, only or except; Networks are canonical prefixes for
 // only and except. Allow names files open to every client in a folder
 // whose Hosts is none. Realm asks for a password after the address check.
+// Deny closes names below Path to every client whatever the rest says; a
+// folder with Deny, hosts all and no realm closes only those names, and
+// may be the site root "/".
 type Folder struct {
 	Path     string       `json:"path"`
 	Hosts    string       `json:"hosts"`
 	Networks []string     `json:"networks,omitempty"`
 	Allow    []string     `json:"allow,omitempty"`
 	Realm    *FolderRealm `json:"realm,omitempty"`
+	Deny     *DenyNames   `json:"deny,omitempty"`
+}
+
+// DenyNames are the names a folder closes: a path part named one of Names
+// or ending with one of Endings, and everything below it. Each list is
+// sorted, each name once.
+type DenyNames struct {
+	Names   []string `json:"names,omitempty"`
+	Endings []string `json:"endings,omitempty"`
+}
+
+// whole reports a folder whose rule covers the folder itself, not only
+// names in it: its context takes the folder and everything below it.
+func (f Folder) whole() bool { return f.Hosts != HostsAll || f.Realm != nil }
+
+// indexFiles are the files every vhost serves for a folder's own address
+// (renderVhost's index block).
+var indexFiles = []string{"index.php", "index.html"}
+
+func (d DenyNames) match(name string) bool {
+	if slices.Contains(d.Names, name) {
+		return true
+	}
+	for _, e := range d.Endings {
+		if strings.HasSuffix(name, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // FolderRealm is a folder's Basic password check. UserFile must be
@@ -156,16 +204,23 @@ func checkFolders(field string, name string, folders []Folder) error {
 	}
 	for i, f := range folders {
 		ff := fmt.Sprintf("%s.folders[%d]", field, i)
-		if !ValidFolderPath(f.Path) {
+		// Only a folder that closes names alone may be the site root: its
+		// context takes those names, not every path.
+		if !ValidFolderPath(f.Path) && (f.Path != "/" || f.whole() || f.Deny == nil) {
 			return fieldErr(ff+".path", "must be / then folder names of letters, digits and . _ @ ~ -, none starting with a dot, each ending in /")
 		}
 		if i > 0 && folders[i-1].Path >= f.Path {
 			return fieldErr(ff+".path", "folders must be sorted by path, each once")
 		}
+		// Two folders' contexts must not overlap; a names context may, as
+		// it only answers 403 and comes first.
 		for j := range i {
-			if strings.HasPrefix(f.Path, folders[j].Path) {
+			if f.whole() && folders[j].whole() && strings.HasPrefix(f.Path, folders[j].Path) {
 				return fieldErr(ff+".path", "is inside folders[%d]", j)
 			}
+		}
+		if err := checkDenyNames(ff, f); err != nil {
+			return err
 		}
 		switch f.Hosts {
 		case HostsAll, HostsNone:
@@ -198,7 +253,7 @@ func checkFolders(field string, name string, folders []Folder) error {
 			}
 		}
 		if f.Realm == nil {
-			if f.Hosts == HostsAll {
+			if f.Hosts == HostsAll && f.Deny == nil {
 				return fieldErr(ff, "opens the folder to everyone: nothing to protect")
 			}
 			continue
@@ -224,9 +279,67 @@ func checkFolders(field string, name string, folders []Folder) error {
 	return nil
 }
 
+// denyName is a name or name ending a folder may close: letters, digits
+// and . _ @ ~ -, not "." or "..".
+var denyName = regexp.MustCompile(`^[A-Za-z0-9._@~-]{1,127}$`)
+
+// checkDenyNames validates a folder's closed names: at least one, at most
+// MaxFolderNames in all, each list sorted with each name once, and only
+// beside a rule that does not close the whole folder already.
+func checkDenyNames(ff string, f Folder) error {
+	if f.Deny == nil {
+		return nil
+	}
+	d := f.Deny
+	if f.Hosts == HostsNone || len(f.Allow) > 0 {
+		return fieldErr(ff+".deny", "only for a folder not closed to all")
+	}
+	n := len(d.Names) + len(d.Endings)
+	if n == 0 || n > MaxFolderNames || !sortedOnce(d.Names) || !sortedOnce(d.Endings) {
+		return fieldErr(ff+".deny", "must list 1 to %d names and endings, each list sorted, each once", MaxFolderNames)
+	}
+	for k, name := range append(slices.Clone(d.Names), d.Endings...) {
+		if !denyName.MatchString(name) || name == "." || name == ".." {
+			return fieldErr(fmt.Sprintf("%s.deny[%d]", ff, k), "must be 1 to 127 letters, digits and . _ @ ~ -")
+		}
+	}
+	return nil
+}
+
 // regexQuote writes a checked folder or file name for PCRE: '.' is the only
 // character of those alphabets with a meaning there.
 func regexQuote(s string) string { return strings.ReplaceAll(s, ".", "[.]") }
+
+// acmeToken is the certificate challenge path with a token (RFC 8555
+// section 8.3: base64url characters) and nothing after it, for a names
+// context at the site root to leave out.
+const acmeToken = `[.]well-known/acme-challenge/[-_A-Za-z0-9]+(?!.)`
+
+// denyPattern is the context regex of a folder's closed names: below the
+// folder, a path part with one of the names or endings and everything
+// below it, which covers a script's path info. Names that include an index
+// file also close every folder address (ending in '/') below the folder.
+// The end is (?!.) after an optional control character: Apache's
+// <FilesMatch> '$' also matches before a final newline, and a '$' or '\'
+// outside the rewrite rules is a character the config is never given.
+func denyPattern(f Folder) string {
+	var alts []string
+	for _, n := range f.Deny.Names {
+		alts = append(alts, regexQuote(n))
+	}
+	for _, e := range f.Deny.Endings {
+		alts = append(alts, "[^/]*"+regexQuote(e))
+	}
+	p := "(?s)^" + regexQuote(f.Path)
+	if f.Path == "/" {
+		p += "(?!" + acmeToken + ")"
+	}
+	p += "(?:(?:.*/)?(?:" + strings.Join(alts, "|") + ")(?:/.*)?"
+	if slices.ContainsFunc(indexFiles, f.Deny.match) {
+		p += "|(?:.*/)?"
+	}
+	return p + ")[[:cntrl:]]?(?!.)"
+}
 
 // folderPattern is the folder's context regex. (?s) lets '.' match a newline
 // too, so a file name with one cannot slip past the folder; (?!.) is the end
@@ -274,7 +387,26 @@ func renderFolders(b *bytes.Buffer, v site) {
 		b.WriteString("  }\n")
 		b.WriteString("}\n")
 	}
+	// The names' contexts come first: the first regex context that matches
+	// answers.
+	for _, f := range v.Folders {
+		if f.Deny == nil {
+			continue
+		}
+		b.WriteString("\ncontext exp:" + denyPattern(f) + " {\n")
+		// As a closed folder's: the empty root-owned folder, never a name
+		// in the tenant's document root.
+		kv(b, "location", SuspendedDocRoot+"/")
+		kv(b, "allowBrowse", "0")
+		b.WriteString("  rewrite  {\n")
+		fmt.Fprintf(b, "    %-21s %s\n", "enable", "0")
+		b.WriteString("  }\n")
+		b.WriteString("}\n")
+	}
 	for i, f := range v.Folders {
+		if !f.whole() {
+			continue
+		}
 		b.WriteString("\ncontext exp:" + folderPattern(f) + " {\n")
 		if f.Hosts == HostsNone {
 			// A closed folder serves nothing, so its location is the empty

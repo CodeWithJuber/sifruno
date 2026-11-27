@@ -142,7 +142,7 @@ try {
   await admin.getByTestId("nav-customers").click();
   await admin.getByTestId("create-login").waitFor();
   check("Customers opens the customer logins page at /customers", path(admin) === "/customers");
-  check("the old hosting-accounts screen is a child of Customers", (await admin.getByTestId("nav-accounts").count()) === 1);
+  check("the old hosting-accounts screen is in the menu, under Advanced", (await admin.getByTestId("nav-accounts").count()) === 1);
   await admin.getByTestId("login-username").fill(customer);
   // The picker lists the websites once they load; if they cannot be loaded
   // the page shows why instead, which the transcript must carry.

@@ -19,10 +19,13 @@
 # documentation gives for listaccts, domainuserdata,
 # php_get_vhost_versions, Mysql list_databases and list_users, for exactly
 # the accounts this script makes. Six accounts:
-#   shop<id>   WordPress with a typical cPanel .htaccess (its rewrite
-#              rules, cPanel's PHP handler block, Expires, deflate, caching
-#              and security headers, Options -Indexes), which moves Native
-#              with no note, and the stock Akismet plugin, whose .htaccess
+#   shop<id>   WordPress with the .htaccess blocks of WP Rocket, Wordfence,
+#              Solid Security and the hardening guide (<Files> rules for
+#              wp-config.php, xmlrpc.php, .user.ini ...), cPanel's PHP
+#              handler block, an ErrorDocument and two redirects, which
+#              move Native, the CORS and X-Robots-Tag headers as notes to
+#              accept, a backup index.php.bak the copy refuses, and the
+#              stock Akismet plugin, whose .htaccess
 #              (deny all, a <FilesMatch> allow-list, Apache 2.2 and 2.4
 #              branches) the converter turns into an OpenLiteSpeed rule: the
 #              full path, from discovery to the DNS records, with the closed
@@ -259,24 +262,19 @@ secret > "$WORK/admin.pw"
 podman cp "$WORK/admin.pw" "$CTR:/root/admin.pw"
 in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN core install --url=http://$SHOP_DOMAIN --title='$TITLE' --admin_user=standin --admin_email=standin@proof.test --skip-email --prompt=admin_password < /root/admin.pw && rm -f /root/admin.pw" >/dev/null 2>&1
 wp "post create --post_title='Moved with Sifruno' --post_status=publish" >/dev/null 2>&1
-# A typical cPanel WordPress .htaccess: WordPress's own rewrite block,
-# cPanel's PHP handler block for the site's PHP package, and the caching,
-# compression and header lines hosting guides and cache plugins add.
-# OpenLiteSpeed acts on the rewrite lines; every other line is harmless to
-# ignore or handled by Sifruno (internal/htaccess handling.go), so the site
-# moves Native with no note.
-in_ctr "cat > /home/$SHOP/public_html/.htaccess <<'HT'
-# BEGIN WordPress
-<IfModule mod_rewrite.c>
-RewriteEngine On
-RewriteBase /
-RewriteRule ^index\.php\$ - [L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /index.php [L]
-</IfModule>
-# END WordPress
-
+# Pretty permalinks, so WordPress's rewrite block serves the post's address.
+wp "rewrite structure '/%postname%/'" >/dev/null 2>&1
+# A WordPress .htaccess with the blocks plugins write on cPanel:
+# internal/htaccess/testdata/wordpress-plugins.htaccess (WP Rocket with
+# its CDN fonts block, Solid Security's protected files and disabled
+# XML-RPC, WordPress's rewrite block, Wordfence's .user.ini rule and the
+# hardening guide's wp-config.php rule), then cPanel's PHP handler block,
+# the common xmlrpc.php rule, an X-Robots-Tag header for PDFs, an
+# ErrorDocument and two redirects. The access rules close names at the
+# root; the redirects and error page move into the vhost; the CORS and
+# X-Robots-Tag headers cannot be carried and are notes to accept.
+podman cp "$BIN/wordpress-plugins.htaccess" "$CTR:/root/wordpress-plugins.htaccess"
+in_ctr "{ cat /root/wordpress-plugins.htaccess; cat <<'HT'
 # php -- BEGIN cPanel-generated handler, do not edit
 # Set the \"ea-php$PHPXY\" package as the default \"PHP\" programming language.
 <IfModule mime_module>
@@ -284,33 +282,25 @@ RewriteRule . /index.php [L]
 </IfModule>
 # php -- END cPanel-generated handler, do not edit
 
-<IfModule mod_expires.c>
-ExpiresActive On
-ExpiresByType image/png \"access plus 1 year\"
-ExpiresByType text/css \"access plus 1 month\"
-ExpiresByType application/javascript \"access plus 1 month\"
-ExpiresDefault \"access plus 2 days\"
-</IfModule>
-<IfModule mod_deflate.c>
-AddOutputFilterByType DEFLATE text/plain text/html text/xml text/css \\
-  application/javascript application/json image/svg+xml
-BrowserMatch ^Mozilla/4 gzip-only-text/html
-BrowserMatch \\bMSIE !no-gzip !gzip-only-text/html
-</IfModule>
-<IfModule mod_headers.c>
-Header set X-Content-Type-Options nosniff
-Header always set X-Frame-Options SAMEORIGIN
-<FilesMatch \"\\.(js|css|png|jpg|svg|woff2)\$\">
-Header set Cache-Control \"max-age=2592000, public\"
+# Block WordPress xmlrpc.php requests
+<Files xmlrpc.php>
+order deny,allow
+deny from all
+</Files>
+<FilesMatch \"\\.pdf\$\">
+Header set X-Robots-Tag \"noindex, nofollow\"
 </FilesMatch>
-Header unset ETag
-</IfModule>
-FileETag None
-Options -Indexes
-AddType image/webp .webp
-AddDefaultCharset UTF-8
+ErrorDocument 403 /403.html
+Redirect 301 /old-page /moved-with-sifruno
+RedirectMatch 302 ^/archive/([0-9]+)/?\$ /?m=\$1
 HT
+} > /home/$SHOP/public_html/.htaccess; rm -f /root/wordpress-plugins.htaccess
 echo '<?php echo 1; // sifruno-phtml-source' > /home/$SHOP/public_html/info.phtml
+cp /home/$SHOP/public_html/index.php /home/$SHOP/public_html/index.php.bak
+echo '<!doctype html><title>Forbidden</title><p>sifruno-error-page-403' > /home/$SHOP/public_html/403.html
+echo 'max_execution_time = 60' > /home/$SHOP/public_html/.user.ini
+install -d /home/$SHOP/public_html/wp-content/uploads/fonts
+echo 'font' > /home/$SHOP/public_html/wp-content/uploads/fonts/proof.woff2
 chown -R $SHOP:apache /home/$SHOP/public_html
 find /home/$SHOP/public_html -type d -exec chmod 0750 {} +; find /home/$SHOP/public_html -type f -exec chmod 0640 {} +"
 in_ctr "echo '*/15 * * * * php /home/$SHOP/public_html/wp-cron.php >/dev/null 2>&1' | crontab -u $SHOP -"
@@ -330,6 +320,7 @@ printf '# Directory Privacy\nstaff:%s\n' \"\$(openssl passwd -apr1 '$HT_PW')\" >
 printf 'AuthType Basic\nAuthName \"Staff area\"\nAuthUserFile /home/$STAFF/.htpasswds/public_html/private/passwd\nRequire valid-user\n' > /home/$STAFF/public_html/private/.htaccess
 printf 'Order Deny,Allow\nDeny from all\n' > /home/$STAFF/public_html/backups/.htaccess
 echo 'dump' > /home/$STAFF/public_html/backups/backup.sql
+echo 'notes' > /home/$STAFF/public_html/backups/notes.txt
 printf 'Order Deny,Allow\nDeny from all\nAllow from 127.0.0.2\n' > /home/$STAFF/public_html/office/.htaccess
 echo 'Office' > /home/$STAFF/public_html/office/index.html
 printf 'Order Allow,Deny\nAllow from all\nDeny from 127.0.0.2\n' > /home/$STAFF/public_html/lobby/.htaccess
@@ -433,12 +424,26 @@ check "the old WordPress site answers with its title" bash -c "curl -s http://$S
 status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 check "the old staff site closes /private/ with 401" test "$(status "http://$STAFF_DOMAIN/private/")" = 401
 check "the old staff site opens /private/ with the password (200)" test "$(status -u "staff:$HT_PW" "http://$STAFF_DOMAIN/private/")" = 200
-check "the old staff site denies /backups/backup.sql with 403" test "$(status "http://$STAFF_DOMAIN/backups/backup.sql")" = 403
+check "the old staff site denies /backups/backup.sql and /backups/notes.txt with 403" test "$(status "http://$STAFF_DOMAIN/backups/backup.sql")" = 403 -a "$(status "http://$STAFF_DOMAIN/backups/notes.txt")" = 403
 check "the old staff site answers 401 for /pub/index.html, rewritten into /private/" test "$(status "http://$STAFF_DOMAIN/pub/index.html")" = 401
 check "the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/" test "$(status "http://$STAFF_DOMAIN/old-backups/backup.sql")" = 403
 check "the old staff site closes /office/ to this server (403) and opens /lobby/ (200)" test "$(status "http://$STAFF_DOMAIN/office/")" = 403 -a "$(status "http://$STAFF_DOMAIN/lobby/")" = 200
 check "the old WordPress denies Akismet's folder with 403" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/akismet.php")" = 403
 check "the old WordPress serves Akismet's allow-listed akismet.css with 200" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/_inc/akismet.css")" = 200
+# The plugin blocks on Apache: what the copy must answer the same.
+for path in /wp-config.php /xmlrpc.php /xmlrpc.php/x /readme.html /.user.ini /.htaccess; do
+  check "the old WordPress answers 403 for $path (<Files> rules)" test "$(status "http://$SHOP_DOMAIN$path")" = 403
+done
+check "the old WordPress serves the post at its pretty address (200)" bash -c "curl -s http://$SHOP_DOMAIN/moved-with-sifruno/ | grep -q 'Moved with Sifruno'"
+check "the old WordPress answers its 403 with the ErrorDocument page" bash -c "curl -s http://$SHOP_DOMAIN/wp-config.php | grep -q sifruno-error-page-403"
+old_redirect="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$SHOP_DOMAIN/old-page/sub?x=1")"
+old_match="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://$SHOP_DOMAIN/archive/2026/")"
+echo "  old: /old-page/sub?x=1 -> $old_redirect; /archive/2026/ -> $old_match"
+check "the old WordPress redirects /old-page (Redirect 301) and /archive/2026/ (RedirectMatch 302)" bash -c "[ '${old_redirect%% *}' = 301 ] && [ '${old_match%% *}' = 302 ]"
+old_cors="$(curl -s -o /dev/null -D - "http://$SHOP_DOMAIN/wp-content/uploads/fonts/proof.woff2" | tr -d '\r' | grep -i '^access-control-allow-origin:')"
+echo "  old: fonts/proof.woff2 sends '$old_cors'"
+check "the old WordPress sends the CORS header on a font (WP Rocket)" test -n "$old_cors"
+check "the old WordPress serves the backup index.php.bak with its PHP source (200): the leak the copy closes" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://$SHOP_DOMAIN/index.php.bak)\" = 200 ] && curl -s http://$SHOP_DOMAIN/index.php.bak | grep -q wp-blog-header"
 
 if [ "$MODE" = cert ]; then
   echo
@@ -1165,10 +1170,12 @@ done
 sample_stop
 m() { json "$WORK/job.json" "d['job']['migration']$1"; }
 check "the move succeeded" test "$state" = succeeded
-check "the tier is Native (rewrite rules, and Akismet's access rules converted)" test "$(m "['tier']")" = native
-check "the typical cPanel .htaccess (PHP handler block, Expires, deflate, headers, Options -Indexes) left no note (notes: $(m "['notes']"))" test "$(m "['notes']")" = "[]"
+check "the tier is Native (rewrite rules kept; the <Files> rules, Akismet's access rules, redirects and error page converted)" test "$(m "['tier']")" = native
+echo "  notes:"
+json "$WORK/job.json" "'\n'.join('    ' + n for n in d['job']['migration']['notes'])"
+check "the notes are the lines that cannot be carried: WP Rocket's SetEnvIf and two CORS headers, and the X-Robots-Tag header" test "$(json "$WORK/job.json" "len(d['job']['migration']['notes']) == 4 and sum('CORS header' in n for n in d['job']['migration']['notes']) == 2 and sum('X-Robots-Tag' in n for n in d['job']['migration']['notes']) == 1")" = True
 echo "  converted: $(m "['converted']")"
-check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.json" "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
+check "the job names the root .htaccess's closed names, Akismet's folder, the two redirects and the error page as converted" test "$(json "$WORK/job.json" "[(x['file'], x['path']) for x in d['job']['migration']['converted']]")" = "[('.htaccess', '/'), ('wp-content/plugins/akismet/.htaccess', '/wp-content/plugins/akismet/'), ('.htaccess', '/old-page'), ('.htaccess', '^/archive/([0-9]+)/?\$'), ('.htaccess', '/403.html')]"
 check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
 src_ht="$(in_ctr "sha256sum /home/$SHOP/public_html/.htaccess" | cut -d' ' -f1)"
 check "the copy's .htaccess is the old site's, byte for byte" test -n "$src_ht" -a "$src_ht" = "$(sha256sum "/home/$SHOP/public_html/.htaccess" 2>/dev/null | cut -d' ' -f1)"
@@ -1200,6 +1207,30 @@ for path in /wp-content/plugins/akismet/_inc/akismet.css /wp-content/plugins/aki
 done
 echo "  probes: $(m "['probes']")"
 check "verify checked Akismet's closed folder and its open files, all passing" test "$(m "['verify']['probes_fail']")" = 0 -a "$(m "['verify']['probes_pass']")" -ge 2
+# The plugin blocks on this server: the <Files> rules close the same names,
+# a script's path info and the spellings OpenLiteSpeed cleans included.
+check "the vhost closes the root .htaccess's names in a regex context ahead of Akismet's" bash -c "grep -n '^context exp:' $vhconf | head -1 | grep -q 'wp-config\[.\]php|xmlrpc\[.\]php'"
+check "verify asked for the closed files on both servers and both answered 403" test "$(json "$WORK/job.json" "sorted(p['path'] for p in d['job']['migration']['probes'] if p['kind'] == 'deny' and p['path'] in ('/wp-config.php', '/xmlrpc.php', '/readme.html', '/.user.ini', '/.htaccess'))")" = "['/.htaccess', '/.user.ini', '/readme.html', '/wp-config.php', '/xmlrpc.php']"
+for path in /wp-config.php /xmlrpc.php /xmlrpc.php/x /readme.html /readme.txt /.user.ini /.htaccess /wp-admin/wp-config.php //wp-config.php /./xmlrpc.php /%77p-config.php /x/../wp-config.php; do
+  check "the copy answers 403 for $path (the old site: $(status --path-as-is "http://$SHOP_DOMAIN$path"))" test "$(new "$SHOP_DOMAIN" "$path" --path-as-is)" = 403
+done
+echo "  the copy answers $(new "$SHOP_DOMAIN" /WP-CONFIG.PHP) for /WP-CONFIG.PHP (the old site $(status "http://$SHOP_DOMAIN/WP-CONFIG.PHP"))"
+check "the copy answers its 403 with the ErrorDocument page, as the old site" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/wp-config.php | grep -q sifruno-error-page-403"
+check "the copy serves the post at its pretty address: WordPress's rewrite block still runs after WP Rocket's" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/moved-with-sifruno/ | grep -q 'Moved with Sifruno'"
+new_redirect="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --resolve "$SHOP_DOMAIN:80:127.0.0.1" "http://$SHOP_DOMAIN/old-page/sub?x=1")"
+new_match="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --resolve "$SHOP_DOMAIN:80:127.0.0.1" "http://$SHOP_DOMAIN/archive/2026/")"
+echo "  copy: /old-page/sub?x=1 -> $new_redirect; /archive/2026/ -> $new_match"
+echo "  copy's Location header for /old-page/sub?x=1: $(curl -s -o /dev/null -D - --resolve "$SHOP_DOMAIN:80:127.0.0.1" "http://$SHOP_DOMAIN/old-page/sub?x=1" | tr -d '\r' | grep -i '^location:')"
+check "the copy's Redirect answers 301 to the same address as the old site" test "$new_redirect" = "$old_redirect"
+check "the copy's RedirectMatch answers 302 to the same address as the old site" test "$new_match" = "$old_match"
+new_cors="$(curl -s -o /dev/null -D - -H "Host: $SHOP_DOMAIN" "http://127.0.0.1/wp-content/uploads/fonts/proof.woff2" | tr -d '\r' | grep -i '^access-control-allow-origin:')"
+echo "  copy: fonts/proof.woff2 sends '${new_cors:-no CORS header}'"
+check "the copy does not send the CORS header, and the job's notes say so for a person to accept" bash -c "[ -z '$new_cors' ] && python3 -c \"import json,sys; n=json.load(open('$WORK/job.json'))['job']['migration']['notes']; sys.exit(0 if any('Access-Control-Allow-Origin' in x and 'CORS header' in x for x in n) else 1)\""
+check "the copy answers 403 for the backup index.php.bak, and its source is not sent" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/index.php.bak)\" = 403 ] && ! curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/index.php.bak | grep -q wp-blog-header"
+token="proofToken$RUNID"
+install -d -m 0755 /var/lib/sifruno-acme && echo "$token.challenge" > "/var/lib/sifruno-acme/$token" && chmod 0644 "/var/lib/sifruno-acme/$token"
+check "the certificate challenge path is still served (200) beside the root's closed names" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/.well-known/acme-challenge/$token | grep -qx '$token.challenge'"
+rm -f "/var/lib/sifruno-acme/$token"
 # D-0001: the stand-in's Apache read this site through the group alone
 # (0640 files, 0750 folders, group apache). The copy keeps those modes with
 # the site's own group, and this server's web server reads them through one
@@ -1222,7 +1253,7 @@ echo "  verify: $(m "['verify']['verdict']")"
 echo "  pages $(m "['verify']['pages_compared']") compared, $(m "['verify']['pages_pass']") pass, $(m "['verify']['pages_fail']") fail; notes: $(m "['notes']")"
 check "verify ran and found no difference (cutover allowed by verify)" test "$(m "['verify']['cutover_allowed']")" = True
 gate="$(m "['gate']")"
-check "with verify green and no note, the cutover gate opened without an acceptance (gate: $gate)" test "$gate" = open
+check "with verify green but notes to check, the cutover gate stays closed until a person accepts them (gate: $gate)" test "$gate" = closed
 if [ "$gate" = closed ]; then
   # Only notes (such as a PHP version this server maps) close it; the
   # proof accepts them on purpose, as an admin would, with a reason.
@@ -1270,7 +1301,7 @@ check "the copy answers 401 for /private/ with a wrong password" test "$(new "$S
 check "the copy answers 200 for /private/ with the password, and serves the page" bash -c "curl -s -u 'staff:$HT_PW' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private/ | grep -qx Payroll"
 check "the copy answers 200 for /private/sub/ with the password" test "$(new "$STAFF_DOMAIN" /private/sub/ -u "staff:$HT_PW")" = 200
 check "the copy runs PHP in the password folder with the password" bash -c "curl -s -u 'staff:$HT_PW' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private/report.php | grep -qx 'Payroll from PHP'"
-check "the copy answers 403 for /backups/ and /backups/backup.sql" test "$(new "$STAFF_DOMAIN" /backups/)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403
+check "the copy answers 403 for /backups/, /backups/backup.sql and /backups/notes.txt" test "$(new "$STAFF_DOMAIN" /backups/)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403 -a "$(new "$STAFF_DOMAIN" /backups/notes.txt)" = 403
 # Other spellings of the same paths answer exactly as the folder does. A
 # folder named without its slash gets OpenLiteSpeed's redirect to the
 # slash form first (which then answers 401 or 403); a name in another case
@@ -1284,14 +1315,16 @@ for path in //private/index.html /./private/index.html /x/../private/index.html 
   /%2e/private/index.html /private/%2e%2e/private/index.html /private/index.html/ /private/sub/ /private//index.html; do
   spelled "$path" 401
 done
-for path in //backups/backup.sql /%62ackups/backup.sql /backups/./backup.sql /backups/%2e/backup.sql /backups/backup.sql/ /backups//backup.sql; do
+# notes.txt, not backup.sql: every site refuses a .sql name anyway, and
+# these spellings are for the folder's own context.
+for path in //backups/notes.txt /%62ackups/notes.txt /backups/./notes.txt /backups/%2e/notes.txt /backups/notes.txt/ /backups//notes.txt; do
   spelled "$path" 403
 done
 spelled /private 301
 check "and that redirect names /private/" bash -c "curl -s -o /dev/null -w '%{redirect_url}' -H 'Host: $STAFF_DOMAIN' http://127.0.0.1/private | grep -q '/private/\$'"
 spelled /backups 301
 spelled /PRIVATE/index.html 404
-spelled /Backups/backup.sql 404
+spelled /Backups/notes.txt 404
 # A rewrite from the root .htaccess into a closed folder is checked again
 # in that folder's context.
 check "the copy answers 401 for /pub/index.html, rewritten into /private/" test "$(new "$STAFF_DOMAIN" /pub/index.html)" = 401

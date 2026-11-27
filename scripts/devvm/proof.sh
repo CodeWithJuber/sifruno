@@ -282,6 +282,9 @@ case "${1:-}" in
       "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
     done
     "$HERE/vm.sh" put "$HERE/proofs/migrate-cpanel.guest.sh" /opt/sifruno-proof/migrate-cpanel.guest.sh
+    # The shop site's .htaccess starts with the converter's test file of
+    # WordPress plugin blocks.
+    "$HERE/vm.sh" put "$REPO/internal/htaccess/testdata/wordpress-plugins.htaccess" /opt/sifruno-proof/wordpress-plugins.htaccess
     "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/panelctl /opt/sifruno-proof/migrate-cpanel.guest.sh; restorecon -R /opt/sifruno-proof'
     mkdir -p "$OUT"
     transcript="$OUT/migrate-cpanel-$stamp.txt"

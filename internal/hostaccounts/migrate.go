@@ -206,12 +206,23 @@ type MigrationPlan struct {
 	Tier          string                  `json:"tier"`
 	TierCauses    []string                `json:"tier_causes"`
 	// Converted lists the .htaccess files whose access rules were converted
-	// for OpenLiteSpeed (Native includes them); TierRefusals says, file by
-	// file, why a site is not Native.
+	// for OpenLiteSpeed (Native includes them); TierRefusals says, line by
+	// line, why a site is not Native: "<file> line N (<directive>):
+	// <reason>", with paths relative to public_html.
 	Converted    []MigrationFolder `json:"converted"`
 	TierRefusals []string          `json:"tier_refusals"`
-	Probes       []MigrationProbe  `json:"probes"`
-	Htaccess     int               `json:"htaccess_files"`
+	// TierAccess says a refusal concerns an access rule, which OpenLiteSpeed
+	// would leave open; TierFix names the lines to change ("<file> line N
+	// (<directive>)"): the access rules when TierAccess, else every refused
+	// line.
+	TierAccess bool     `json:"tier_access"`
+	TierFix    []string `json:"tier_fix"`
+	// TierWarnings are the lines of a Native site a person checks before
+	// cutover: PHP settings OpenLiteSpeed does not apply, and handlers for
+	// another PHP version than the site's.
+	TierWarnings []string         `json:"tier_warnings"`
+	Probes       []MigrationProbe `json:"probes"`
+	Htaccess     int              `json:"htaccess_files"`
 	// ClientAddress is the address the source sees this server's
 	// connections come from (its SSH_CONNECTION), or empty when it did not
 	// say: verify needs it for folders open to some addresses only.

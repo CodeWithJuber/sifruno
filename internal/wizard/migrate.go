@@ -503,9 +503,11 @@ func ExplainMigration(failed *hostaccounts.MigrationError, again string) Migrati
 	return MigrationExplanation{Why: why, Next: next, Technical: technical}
 }
 
-// tierCauses says in plain words why a site is not Native.
+// tierCauses says in plain words why a site is not Native. access_control
+// is left out: tierRefusal names access rules itself, and only when one is
+// the reason (plan.TierAccess).
 var tierCauses = map[string]string{
-	"access_control":       "password-protected folders or deny rules this server cannot convert yet",
+	"not_converted":        "lines OpenLiteSpeed does not act on that this server does not convert",
 	"unknown":              "directives this panel does not know",
 	"malformed":            "lines it cannot read",
 	"unreadable_file":      "files it could not read",
@@ -515,6 +517,49 @@ var tierCauses = map[string]string{
 	"scan_truncated":       "more files than the check reads",
 	"unreadable_dir":       "folders it could not read",
 	"home_htaccess":        "an .htaccess in the home folder above public_html",
+}
+
+// tierLinesShown is how many lines a refusal names before "and N more".
+const tierLinesShown = 5
+
+// tierRefusal explains a site that is not Native. Only an access rule this
+// server cannot convert would leave a folder open on OpenLiteSpeed, so only
+// then does the message say so, and the next step is the Apache tier. Any
+// other cause names the lines to change on the old server; Technical
+// details holds each refused line with its reason.
+func tierRefusal(plan hostaccounts.MigrationPlan) *stepError {
+	technical := clip("tier " + plan.Tier + "; causes " + strings.Join(plan.TierCauses, ",") + "; " + strings.Join(plan.TierRefusals, " | "))
+	lines := strings.Join(plan.TierFix[:min(len(plan.TierFix), tierLinesShown)], ", ")
+	if more := len(plan.TierFix) - tierLinesShown; more > 0 {
+		lines += fmt.Sprintf(" and %d more", more)
+	}
+	if plan.TierAccess {
+		why := "The site's .htaccess files have access rules this server cannot convert yet"
+		if lines != "" {
+			why += ": " + lines
+		}
+		return &stepError{
+			why:       why + ". This server's web server, OpenLiteSpeed, ignores access rules in .htaccess, so the folder such a rule protects would open to everyone. Nothing was created here.",
+			next:      "Leave this website on the old server for now: it needs the Apache tier, which this server does not offer yet. Technical details says why each rule cannot be converted.",
+			technical: technical}
+	}
+	causes := []string{}
+	for _, c := range plan.TierCauses {
+		if text, ok := tierCauses[c]; ok {
+			causes = append(causes, text)
+		}
+	}
+	if len(causes) == 0 {
+		causes = append(causes, "rules OpenLiteSpeed does not act on")
+	}
+	next := "Fix what the message names on the old server, then move the website again"
+	if lines != "" {
+		next = "On the old server, remove or change " + lines + " (Technical details says why for each), then move the website again"
+	}
+	return &stepError{
+		why:       "The site's .htaccess files have " + strings.Join(causes, ", ") + ". Moving the website as it is would change what it does. Nothing was created here.",
+		next:      next + ". If the website needs those lines, leave it on the old server for now: it needs the Apache tier, which this server does not offer yet.",
+		technical: technical}
 }
 
 func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
@@ -546,19 +591,10 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		return "", &stepError{why: plan.Domain + " already belongs to the hosting account " + owner + " on this server.", next: "Remove that website first, or move another one."}
 	}
 	if plan.Tier != "native" {
-		causes := make([]string, 0, len(plan.TierCauses))
-		for _, c := range plan.TierCauses {
-			if text, ok := tierCauses[c]; ok {
-				causes = append(causes, text)
-			}
-		}
-		if len(causes) == 0 {
-			causes = append(causes, "rules OpenLiteSpeed does not act on")
-		}
-		return "", &stepError{
-			why:       "The site's .htaccess files have " + strings.Join(causes, ", ") + ". This server's web server, OpenLiteSpeed, ignores those rules, so a protected folder would open to everyone. Nothing was created here.",
-			next:      "Leave this website on the old server for now: it needs the Apache tier, which this server does not offer yet. Websites whose .htaccess has only rewrite rules can move now.",
-			technical: clip("tier " + plan.Tier + "; causes " + strings.Join(plan.TierCauses, ",") + "; " + strings.Join(plan.TierRefusals, " | "))}
+		return "", tierRefusal(plan)
+	}
+	for _, w := range plan.TierWarnings {
+		j.note("A .htaccess line is not carried over: " + w)
 	}
 	for _, u := range plan.Users {
 		if u.Hash == "" {

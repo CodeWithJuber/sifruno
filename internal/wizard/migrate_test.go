@@ -367,9 +367,11 @@ func TestAddressListFoldersGoToVerifyWithBothAddresses(t *testing.T) {
 func TestCompatSiteIsRefusedBeforeAnythingIsMade(t *testing.T) {
 	f := newMigrationFixture(t)
 	f.broker.plan.Tier, f.broker.plan.TierCauses = "compat", []string{"access_control"}
-	f.broker.plan.TierRefusals = []string{"staff/.htaccess line 2: Satisfy Any"}
+	f.broker.plan.TierRefusals = []string{"staff/.htaccess line 2 (Satisfy Any): Satisfy is not one of the converted directives"}
+	f.broker.plan.TierAccess, f.broker.plan.TierFix = true, []string{"staff/.htaccess line 2 (Satisfy Any)"}
 	job := f.migrate(t)
-	if job.State != StateFailed || job.Error.Step != StepSource || !strings.Contains(job.Error.Why, "password-protected folders") || !strings.Contains(job.Error.Next, "Apache tier") || !strings.Contains(job.Error.Technical, "staff/.htaccess line 2") {
+	if job.State != StateFailed || job.Error.Step != StepSource || !strings.Contains(job.Error.Why, "access rules this server cannot convert yet: staff/.htaccess line 2 (Satisfy Any)") ||
+		!strings.Contains(job.Error.Why, "would open to everyone") || !strings.Contains(job.Error.Next, "Apache tier") || !strings.Contains(job.Error.Technical, "staff/.htaccess line 2 (Satisfy Any): Satisfy") {
 		t.Fatalf("job: %+v %+v", job.State, job.Error)
 	}
 	for _, call := range f.order.all {
@@ -382,6 +384,40 @@ func TestCompatSiteIsRefusedBeforeAnythingIsMade(t *testing.T) {
 	}
 	if job.Steps[len(job.Steps)-1].State != StepDone {
 		t.Fatalf("key step: %+v", job.Steps[len(job.Steps)-1])
+	}
+}
+
+// TestNotConvertedLinesNameWhatToChange: a site refused for lines that are
+// not access rules says so without claiming a folder would open, and the
+// next step names the lines to change on the old server.
+func TestNotConvertedLinesNameWhatToChange(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.plan.Tier, f.broker.plan.TierCauses = "compat", []string{"unknown", "not_converted"}
+	f.broker.plan.TierRefusals = []string{".htaccess line 40 (Header set X-Robots-Tag noindex): OLS ignores this", "tools/.htaccess line 2 (SifrunoUnknown On): a directive this panel does not know"}
+	f.broker.plan.TierFix = []string{".htaccess line 40 (Header set X-Robots-Tag noindex)", "tools/.htaccess line 2 (SifrunoUnknown On)"}
+	job := f.migrate(t)
+	e := job.Error
+	if job.State != StateFailed || e.Step != StepSource || strings.Contains(e.Why, "protect") || strings.Contains(e.Why, "open to everyone") ||
+		!strings.Contains(e.Why, "directives this panel does not know") || !strings.Contains(e.Why, "lines OpenLiteSpeed does not act on that this server does not convert") ||
+		!strings.Contains(e.Next, "On the old server, remove or change .htaccess line 40 (Header set X-Robots-Tag noindex), tools/.htaccess line 2 (SifrunoUnknown On)") ||
+		!strings.Contains(e.Next, "Apache tier") || !strings.Contains(e.Technical, "tools/.htaccess line 2 (SifrunoUnknown On): a directive this panel does not know") {
+		t.Fatalf("job: %+v %+v", job.State, e)
+	}
+	if slices.ContainsFunc(f.order.all, func(call string) bool { return strings.HasPrefix(call, "create") }) {
+		t.Fatalf("an account was created: %q", f.order.all)
+	}
+}
+
+// TestTierWarningsKeepTheGateClosed: a PHP setting OpenLiteSpeed does not
+// apply is shown as a note, which keeps the cutover gate closed until a
+// person accepts it.
+func TestTierWarningsKeepTheGateClosed(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.broker.plan.TierWarnings = []string{".htaccess line 12 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings from .htaccess"}
+	job := f.migrate(t)
+	m := job.Migration
+	if job.State != StateSucceeded || m.Gate != GateClosed || !slices.Contains(m.Notes, "A .htaccess line is not carried over: .htaccess line 12 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings from .htaccess") {
+		t.Fatalf("job: %+v %+v", job.State, m)
 	}
 }
 

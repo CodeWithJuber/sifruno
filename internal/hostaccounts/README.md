@@ -1551,19 +1551,30 @@ root step. The design, with the owner's choices recorded from Jev on
   database service on standard input and records none.
 - Tier (Jev: refuse what is not Native, 0.96; then D-0003, 0.93: build a
   fail-closed converter first). Only OpenLiteSpeed serves hosted accounts
-  today. Native means rewrite rules only, or access rules the converter
+  today. Native means rewrite rules, access rules the converter
   turns into OpenLiteSpeed config (`internal/htaccess` convert.go: deny
   all, deny all with a `<Files>`/`<FilesMatch>` allow-list such as
   Akismet's, IP lists, `<IfModule [!]mod_authz_core.c>` pairs that agree,
-  Basic password folders). The plan lists each converted file and what it
-  became (`converted`), or why a file was refused (`tier_refusals`). A site
-  with anything else OpenLiteSpeed would ignore (an unconverted access
-  rule, an unknown directive, a `.htaccess` below a converted folder or in
-  the home above public_html, or a rewrite rule whose result could be a
-  file path, which OpenLiteSpeed would serve without the folder's check) is not put live, not even on the preview:
-  OpenLiteSpeed would open the protected folder. The panel stops before it
-  creates anything, and `migrate-files` scans and converts the copied files
-  again and refuses before they reach the home.
+  Basic password folders), and lines OpenLiteSpeed ignores that a handling
+  class covers (`internal/htaccess` handling.go): harmless to ignore
+  (Expires, FileETag, compression, caching and security headers, plain
+  `AddType`, `AddDefaultCharset`), handled by Sifruno (cPanel's PHP handler
+  block, `Options -Indexes`), or a warning (`php_value`, `php_flag`). The
+  plan lists each converted file and what it became (`converted`), the
+  warnings (`tier_warnings`: those PHP settings, and a PHP handler naming
+  another version than the plan's, which the panel shows as notes that keep
+  the cutover gate closed until accepted), or why a site was refused, line by
+  line (`tier_refusals`, "file line N (directive): reason", paths relative
+  to public_html), with `tier_access` when an access rule is the reason and
+  `tier_fix` naming the lines to change. A site with anything else
+  OpenLiteSpeed would ignore (an unconverted access rule, an unknown
+  directive, a line no class covers, a `.htaccess` below a converted folder
+  or in the home above public_html, or a rewrite rule whose result could be
+  a file path, which OpenLiteSpeed would serve without the folder's check)
+  is not put live, not even on the preview. The panel stops before it
+  creates anything; only an access rule would open a folder, and only then
+  does its message say so. `migrate-files` scans and converts the copied
+  files again and refuses before they reach the home.
 - Protected folders (`folders.go`, needs human review). When the copy
   converts, `migrate-files` puts the folders live before `cp` runs: each
   realm's user file is read from the root-only staging copy by handle,

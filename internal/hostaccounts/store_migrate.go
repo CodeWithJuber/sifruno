@@ -614,7 +614,7 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	}
 	plan := MigrationPlan{Username: account.User, Domain: account.Domain, Aliases: site.Aliases, WWW: site.WWW, DiskUsedMiB: account.DiskUsedMiB, DiskLimitMiB: account.DiskLimitMiB,
 		Databases: []cpsource.Database{}, Users: []cpsource.DatabaseUser{}, GrantsSkipped: []string{}, Cron: []cpsource.CronLine{}, CronSkipped: []string{}, Probes: []MigrationProbe{}, TierCauses: []string{},
-		Converted: []MigrationFolder{}, TierRefusals: []string{}}
+		Converted: []MigrationFolder{}, TierRefusals: []string{}, TierFix: []string{}, TierWarnings: []string{}}
 	out, err := s.cpanelAnswer(work, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.PHP }, cpsource.VhostPHPCommand())
 	if err != nil {
 		return MigrationPlan{}, err
@@ -754,6 +754,10 @@ func (s *store) planTier(ctx context.Context, m migrationRecord, home string, pl
 	if !conv.Native {
 		plan.Tier, plan.TierCauses = string(htaccess.VerdictCompat), append([]string{}, site.Causes...)
 		plan.TierRefusals = tierRefusals(conv)
+		plan.TierAccess, plan.TierFix = tierFix(conv)
+		if slices.ContainsFunc(conv.Refused, func(r htaccess.FileRefusal) bool { return r.Cause == htaccess.CauseNotConverted }) {
+			plan.TierCauses = append(plan.TierCauses, htaccess.CauseNotConverted)
+		}
 	}
 	if homeFile {
 		plan.Tier = string(htaccess.VerdictCompat)
@@ -763,28 +767,89 @@ func (s *store) planTier(ctx context.Context, m migrationRecord, home string, pl
 	if plan.Tier == string(htaccess.VerdictNative) {
 		plan.Converted = migrationFolders(conv.Rules)
 		plan.Probes = foldersProbes(conv.Rules)
+		plan.TierWarnings = tierWarnings(conv, plan.PHPSource)
 	}
 	return nil
 }
 
+// maxTierLines bounds each list of lines the plan carries.
+const maxTierLines = 20
+
+// tierWhere names a line: "<file> line N (<directive>)", the file relative
+// to public_html, or "the site" for a refusal of the whole site.
+func tierWhere(file string, line int, directive string) string {
+	where := "the site"
+	if file != "" {
+		where = file
+		if line > 0 {
+			where += fmt.Sprintf(" line %d", line)
+		}
+		if directive != "" {
+			where += " (" + directive + ")"
+		}
+	}
+	return where
+}
+
 // tierRefusals says in plain words, at most 20 of them, why a site is not
-// Native: each file the converter refused, with its line.
+// Native: each line the converter refused, with its file and directive.
 func tierRefusals(conv htaccess.SiteConversion) []string {
 	out := []string{}
 	for _, r := range conv.Refused {
-		if len(out) == 20 {
+		if len(out) == maxTierLines {
 			break
 		}
-		where := "the site"
-		if r.File != "" {
-			where = r.File
-			if r.Line > 0 {
-				where += fmt.Sprintf(" line %d", r.Line)
-			}
-		}
-		out = append(out, installDetail([]byte(where+": "+r.Reason)))
+		out = append(out, installDetail([]byte(tierWhere(r.File, r.Line, r.Directive)+": "+r.Reason)))
 	}
 	return out
+}
+
+// tierFix names the lines a person would change on the old server. When a
+// refusal concerns an access rule, OpenLiteSpeed would open what it
+// protects, so only those lines are named and access is true; otherwise
+// every refused line in a file.
+func tierFix(conv htaccess.SiteConversion) (access bool, lines []string) {
+	access = slices.ContainsFunc(conv.Refused, func(r htaccess.FileRefusal) bool { return r.Cause == htaccess.CauseAccessControl })
+	lines = []string{}
+	for _, r := range conv.Refused {
+		if r.File == "" || (access && r.Cause != htaccess.CauseAccessControl) || len(lines) == maxTierLines {
+			continue
+		}
+		lines = append(lines, installDetail([]byte(tierWhere(r.File, r.Line, r.Directive))))
+	}
+	return access, lines
+}
+
+// tierWarnings are the lines of a Native site a person checks before
+// cutover: what OpenLiteSpeed will not apply (htaccess.FileWarning), and a
+// PHP handler naming another version than the one the plan read for the
+// site, because this server runs every folder of a site with that one.
+func tierWarnings(conv htaccess.SiteConversion, phpSource string) []string {
+	out := []string{}
+	add := func(text string) {
+		if len(out) < maxTierLines {
+			out = append(out, installDetail([]byte(text)))
+		}
+	}
+	for _, w := range conv.Warnings {
+		add(tierWhere(w.File, w.Line, w.Directive) + ": " + w.Reason)
+	}
+	for _, p := range conv.PHP {
+		if p.Package == "" || phpDigits(p.Package) == phpDigits(phpSource) {
+			continue
+		}
+		add(tierWhere(p.File, p.Line, p.Directive) + ": the old server runs " + p.Path + " with PHP " + p.Package + ", but this server runs the whole site with one PHP version, the one the old server names for the site (" + phpSource + "). Check that part of the site before cutover.")
+	}
+	return out
+}
+
+// phpDigits is the version in a PHP package name: "81" in ea-php81.
+func phpDigits(pkg string) string {
+	i := len(pkg)
+	for i > 0 && pkg[i-1] >= '0' && pkg[i-1] <= '9' {
+		i--
+	}
+	return pkg[i:]
 }
 
 // beginMigrate checks the account under the broker lock and marks it busy,

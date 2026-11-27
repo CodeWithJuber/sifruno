@@ -236,8 +236,37 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	refused := htaccess.ClassifyFile("private/.htaccess", "/private/", []byte("Deny from all\nSatisfy Any\n"))
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}, Files: []htaccess.FileResult{refused}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "compat" || len(plan.TierRefusals) != 1 || !strings.Contains(plan.TierRefusals[0], "private/.htaccess line 2") || len(plan.Converted) != 0 {
+	if err != nil || plan.Tier != "compat" || len(plan.TierRefusals) != 1 || !strings.Contains(plan.TierRefusals[0], "private/.htaccess line 2 (Satisfy Any)") || len(plan.Converted) != 0 {
 		t.Fatalf("compat: %+v %v", plan, err)
+	}
+	if !plan.TierAccess || !slices.Equal(plan.TierFix, []string{"private/.htaccess line 2 (Satisfy Any)"}) {
+		t.Fatalf("an access rule it cannot convert: access %t fix %q", plan.TierAccess, plan.TierFix)
+	}
+	// A typical cPanel WordPress root moves: the handler block names the
+	// plan's PHP (ea-php82), the Expires and Header lines are harmless, and
+	// php_value is a warning naming its line.
+	root := htaccess.ClassifyFile(".htaccess", "/", []byte("<IfModule mime_module>\n  AddHandler application/x-httpd-ea-php82 .php .php8 .phtml\n</IfModule>\n"+
+		"ExpiresActive On\nHeader set Cache-Control \"max-age=600\"\nphp_value upload_max_filesize 64M\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{root}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 1 || !strings.HasPrefix(plan.TierWarnings[0], ".htaccess line 6 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings") {
+		t.Fatalf("typical root: %+v %v", plan, err)
+	}
+	// A handler for another PHP version than the plan's is a warning too.
+	legacy := htaccess.ClassifyFile("legacy/.htaccess", "/legacy/", []byte("AddHandler application/x-httpd-ea-php74 .php\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{root, legacy}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 2 || !strings.Contains(plan.TierWarnings[1], "legacy/.htaccess line 1 (AddHandler): the old server runs /legacy/ with PHP ea-php74") || !strings.Contains(plan.TierWarnings[1], "ea-php82") {
+		t.Fatalf("another PHP version: %q %v", plan.TierWarnings, err)
+	}
+	// A line OpenLiteSpeed ignores that nothing covers is not an access
+	// rule: the plan names it as a line to change.
+	other := htaccess.ClassifyFile(".htaccess", "/", []byte("RewriteEngine On\nHeader set X-Robots-Tag noindex\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictConvertible, Files: []htaccess.FileResult{other}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "compat" || plan.TierAccess || !slices.Equal(plan.TierFix, []string{".htaccess line 2 (Header set X-Robots-Tag noindex)"}) ||
+		!slices.Equal(plan.TierCauses, []string{htaccess.CauseNotConverted}) || len(plan.TierWarnings) != 0 {
+		t.Fatalf("not converted: %+v %v", plan, err)
 	}
 	// A verdict no file accounts for fails closed.
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictCompat, Causes: []string{htaccess.CauseAccessControl}}

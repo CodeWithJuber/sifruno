@@ -58,6 +58,14 @@
 
 ### Added
 
+- Move a website here from a cPanel backup file: "Move a website here" now
+  asks where the website is, and for a backup file (cpmove-USER.tar.gz,
+  USER.tar.gz or backup-…_USER.tar.gz, up to 32 GiB) shows what it holds
+  and what will not move before anything is made, then moves its files,
+  databases with the same users and passwords, PHP version, cron and
+  certificate as a move from a cPanel server does. The file is read with
+  bounded sizes and refused when a name climbs out of its folder; it is
+  kept only for the move and deleted at its end or after 24 hours.
 - Get started on Home: the panel's own address and certificate, the first
   website, moving a website (optional), backups with one restore test, a
   customer login and Always use HTTPS, each read from the server's state,

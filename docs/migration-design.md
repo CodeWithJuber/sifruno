@@ -166,6 +166,25 @@ output stays under Technical details.
 - Commits that touch the broker, migration or credentials say
   "needs human review".
 
+## Built so far (2026-11-27)
+
+- The model (`internal/sitemodel`) and the cPanel adapter onto it.
+- The backup file adapter end to end: `cpmove.Read`, the broker's
+  `POST /v1/migrations/archive` and its copy steps, the panel's upload
+  route, the move job, and the first question in "Move a website here".
+- The nginx converter (`sitesource.ConvertNginx`), and the reading half of
+  the SSH adapter: Apache virtual hosts (`ParseApache`) and wp-config.php
+  (`ParseWPConfig`).
+- The export writer (`cpmove.Write`), with a round trip through
+  `cpmove.Read`.
+
+Not built yet: the broker's steps for a server that is not cPanel (and so
+the third answer to "where is the website now?"), the panel API clients
+for DirectAdmin and CyberPanel (CyberPanel publishes no API for listing
+websites; its source would have to be read), writing the carried PHP
+settings as `.user.ini` during a copy (a site with `php_value` lines is
+refused by the `.htaccess` tier check today), and an export button.
+
 ## Not in this design yet
 
 - Running the archive's extraction in a separate process as an unprivileged

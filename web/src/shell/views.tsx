@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Info, RefreshCw } from "lucide-react";
+import { Info, LogIn, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { HostingWorkspace, Overview, ServiceInventory } from "@/Dashboard";
+import { HostingWorkspace, Overview, panel, ServiceInventory } from "@/Dashboard";
 import { useResource, validBudget, validTrail } from "@/lib/api";
 import type { Resource } from "@/lib/api";
 import { useShell } from "@/shell/context";
@@ -63,9 +63,19 @@ export function HomeView() {
   // A customer's Home is its websites; the server's readings are the admin's.
   if (shell.viewer.restricted) return <WebsitesList />;
   // The checklist reads admin-only routes, so it waits for an admin's sign-in.
+  // On the server itself Home opens without one, so it says so and offers it.
   const admin = !shell.publicPreview && Boolean(shell.viewer.session);
+  const signedOut = !shell.publicPreview && !shell.viewer.session;
   return <div className="flex min-w-0 flex-col gap-6">
     {admin && <Suspense fallback={<LoadingState label="Loading Get started" />}><GetStarted revision={shell.revision} origin={window.location.origin} /></Suspense>}
+    {signedOut && <section className={`${panel} flex flex-wrap items-center gap-x-3.5 gap-y-3 px-4 py-4 md:px-5`} aria-labelledby="home-sign-in-heading" data-testid="home-sign-in">
+      <LogIn className="size-5 shrink-0 text-primary" aria-hidden="true" />
+      <div className="min-w-0 flex-1 basis-56">
+        <h2 id="home-sign-in-heading">Sign in to see what is next</h2>
+        <div className="mt-1 text-sm text-muted-foreground">You are not signed in. Once you are, Get started lists what this server still needs, and your websites and customers open.</div>
+      </div>
+      <Button className="h-9 shrink-0 pointer-coarse:h-11" onClick={shell.askSignIn} data-testid="home-sign-in-action"><LogIn aria-hidden="true" />Sign in</Button>
+    </section>}
     <HostingWorkspace publicPreview={shell.publicPreview} platform={shell.platform.data} onNavigate={(to) => navigate({ to })} onPreview={() => navigate({ to: "/tour" })} />
     <section className="flex min-w-0 flex-col gap-3.5" aria-labelledby="monitoring-heading">
       <div className="flex items-center justify-between gap-4">

@@ -33,6 +33,9 @@ export interface Shell {
   signOut: () => void;
   // A sign-in made on a page (a customer's setup) hands its session here.
   setSession: (session: AuthSession) => void;
+  // Shows the sign-in form in place of the page, for a page that opens
+  // without a session (Home on the server itself).
+  askSignIn: () => void;
 }
 
 export const ShellContext = createContext<Shell | null>(null);

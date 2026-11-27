@@ -94,6 +94,9 @@ export function AppShell() {
   const [auth, setAuth] = useState<{ checked: boolean; session: AuthSession | null; adminRequired: boolean; error: string }>({ checked: false, session: null, adminRequired: false, error: "" });
   // Bumped on sign-out so the kept-alive screens drop what they had loaded.
   const [authEpoch, setAuthEpoch] = useState(0);
+  // Home's "Sign in" on the server itself: the sign-in form until the
+  // person signs in or goes back.
+  const [signInAsked, setSignInAsked] = useState(false);
   const handoffSequence = useRef(0);
   // Over the network every reading needs a session, so nothing is fetched
   // until an admin is signed in there. A customer's session never reads the
@@ -145,6 +148,7 @@ export function AppShell() {
   }, [publicPreview, auth.session, refreshAuth]);
   const onSession = useCallback((session: AuthSession, adminCreated: boolean) => {
     setAuth((current) => ({ checked: true, session, adminRequired: adminCreated ? false : current.adminRequired, error: "" }));
+    setSignInAsked(false);
     // Screens that were open before the session ended pick up the new one.
     refresh();
   }, [refresh]);
@@ -178,7 +182,7 @@ export function AppShell() {
   // first admin exists, every page is the first-run setup, so a new owner
   // meets it on Home instead of only after opening a private page; until
   // the check answers, a page waits for it rather than flash the panel.
-  const gated = !publicPreview && pageId !== "setup" && (page?.audience === "private" || remote || auth.adminRequired || !auth.checked) && !signedIn;
+  const gated = !publicPreview && pageId !== "setup" && (page?.audience === "private" || remote || auth.adminRequired || !auth.checked || signInAsked) && !signedIn;
   // A page a customer has no use for; the server refuses its data anyway.
   const adminPage = Boolean(signedIn && limited && page && !customerPage(page));
   useEffect(() => {
@@ -213,7 +217,8 @@ export function AppShell() {
   const toggleTheme = useCallback(() => setTheme((value) => value === "light" ? "dark" : "light"), []);
   const signOutNow = useCallback(() => { void endSession(); }, [endSession]);
   const shell: Shell = { publicPreview, revision, refresh, server, services, platform, range, setRange, serviceQuery, setServiceQuery, setPageResource, open,
-    viewer: { session: signedIn ? auth.session : null, restricted: limited, can: (route: string) => allows(auth.session, route) }, viewAs, endViewAs, signOut: signOutNow, setSession: (session: AuthSession) => onSession(session, false) };
+    viewer: { session: signedIn ? auth.session : null, restricted: limited, can: (route: string) => allows(auth.session, route) }, viewAs, endViewAs, signOut: signOutNow, setSession: (session: AuthSession) => onSession(session, false),
+    askSignIn: () => setSignInAsked(true) };
 
   const commandGroups = useMemo<CommandGroup[]>(() => {
     const pageCommands = visiblePages(publicPreview, menuRole).map((p) => {
@@ -251,6 +256,9 @@ export function AppShell() {
               ? <>{auth.error && <p className="mb-4 text-sm text-destructive" role="alert">{auth.error}</p>}<AuthGate adminRequired={auth.adminRequired} keySession={auth.session} onSession={onSession} /></>
               : <LoadingState label="Checking your sign-in" />}
           </Suspense>
+          {signInAsked && !auth.adminRequired && <Button variant="link" className="mt-3 px-0" onClick={() => setSignInAsked(false)} data-testid="sign-in-back">
+            <ArrowLeft className="rtl:rotate-180" aria-hidden="true" />Back to Home without signing in
+          </Button>}
         </div>
         <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={toggleTheme}>
           {theme === "light" ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}{theme === "light" ? "Dark theme" : "Light theme"}

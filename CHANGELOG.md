@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Home opened on the server itself without a sign-in says "Sign in to see
+  what is next", with a Sign in button, instead of showing the readings
+  with no next step.
 - Moving a website from cPanel no longer refuses `.htaccess` lines
   OpenLiteSpeed can safely ignore or that Sifruno handles: cPanel's PHP
   handler block, Expires, compression, caching and security headers,

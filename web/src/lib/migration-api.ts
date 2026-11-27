@@ -1,5 +1,7 @@
 import { checkArchiveFile, parseArchiveSource } from "./migration-archive";
 import type { ArchiveSource } from "./migration-archive";
+import { parseSites } from "./migration-server";
+import type { ServerSite } from "./migration-server";
 import { csrfToken, getWebsiteJob, parseJobResponse, problemError, readTimeoutMs, request, WordPressApiError } from "./wordpress-api";
 import type { WebsiteJob } from "./wordpress-api";
 
@@ -20,8 +22,9 @@ export interface MigrationSource {
   install_command: string;
   host_keys: HostKey[];
   pinned_fingerprint: string;
-  // "whm" when connected with the WHM login, "" for the SSH path.
-  via: "whm" | "";
+  // "whm" when connected with the WHM login, "server" for another Linux
+  // server, "" for the cPanel SSH path.
+  via: "whm" | "server" | "";
   expires_at: string;
 }
 // WHM's certificate as the server read it, for the admin to confirm when
@@ -63,7 +66,7 @@ export function parseSource(v: unknown): MigrationSource | undefined {
   if (!Array.isArray(s.host_keys) || s.host_keys.length > 8 || !s.host_keys.every((k) => object(k) && text(k.type, 40) && text(k.fingerprint, 80) && k.fingerprint.startsWith("SHA256:"))) return undefined;
   if (!s.key_line.includes(`sifruno-migration-${s.id}`)) return undefined;
   const via = s.via === undefined ? "" : s.via;
-  if (via !== "" && via !== "whm") return undefined;
+  if (via !== "" && via !== "whm" && via !== "server") return undefined;
   return { id: s.id, host: s.host, port: s.port, key_line: s.key_line, install_command: s.install_command, host_keys: s.host_keys as HostKey[], pinned_fingerprint: s.pinned_fingerprint, via, expires_at: s.expires_at };
 }
 
@@ -191,13 +194,39 @@ export async function uploadArchive(file: File, onProgress: (sent: number, total
   });
 }
 
-export async function openSource(host: string, port: number, options: { signal?: AbortSignal } = {}): Promise<MigrationSource> {
+export async function openSource(host: string, port: number, options: { signal?: AbortSignal; via?: "server" } = {}): Promise<MigrationSource> {
   const what = "Sifruno could not connect to the old server.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/sources`;
-  const source = parseSource(await request("move", url, { method: "POST", body: { host, port }, csrf, timeoutMs: slowMs, signal: options.signal, what }));
-  if (!source) throw unexpected(what, `POST ${url}`);
+  const body: Record<string, unknown> = { host, port };
+  if (options.via) body.via = options.via;
+  const source = parseSource(await request("move", url, { method: "POST", body, csrf, timeoutMs: slowMs, signal: options.signal, what }));
+  if (!source || source.via !== (options.via ?? "")) throw unexpected(what, `POST ${url}`);
   return source;
+}
+
+// The way root's login on the old server reaches the panel, once, to add
+// the move's key there: root's password, or a private key root accepts
+// with its passphrase. The page keeps it in the form's state until it is
+// sent, then clears it; the server keeps neither.
+export type RootLogin = { password: string } | { private_key: string; passphrase: string };
+
+export async function installKey(id: string, login: RootLogin, options: { signal?: AbortSignal } = {}): Promise<MigrationSource> {
+  const what = "Sifruno could not add its key on the old server.";
+  const csrf = await csrfToken(options.signal);
+  const url = `${base}/sources/${id}/install-key`;
+  const body: Record<string, unknown> = "password" in login ? { password: login.password } : { private_key: login.private_key, ...(login.passphrase ? { passphrase: login.passphrase } : {}) };
+  const source = parseSource(await request("move", url, { method: "POST", body, csrf, timeoutMs: slowMs, signal: options.signal, what }));
+  if (!source || source.id !== id) throw unexpected(what, `POST ${url}`);
+  return source;
+}
+
+export async function listSites(id: string, options: { signal?: AbortSignal } = {}): Promise<ServerSite[]> {
+  const what = "The old server's websites could not be listed.";
+  const url = `${base}/sources/${id}/sites`;
+  const sites = parseSites(await request("move", url, { timeoutMs: slowMs, signal: options.signal, what }));
+  if (!sites) throw unexpected(what, `GET ${url}`);
+  return sites;
 }
 
 export interface WHMConnection { source: MigrationSource; accounts: SourceAccount[]; certificate: WHMCertificate }
@@ -280,8 +309,10 @@ async function jobChange(what: string, url: string, body: unknown, signal?: Abor
   return job;
 }
 
-export function startMigration(source: string, username: string, options: { signal?: AbortSignal } = {}): Promise<WebsiteJob> {
-  return jobChange("The move was not started.", base, { source, username }, options.signal);
+export function startMigration(source: string, username: string, options: { signal?: AbortSignal; site?: string } = {}): Promise<WebsiteJob> {
+  const body: Record<string, unknown> = { source, username };
+  if (options.site) body.site = options.site;
+  return jobChange("The move was not started.", base, body, options.signal);
 }
 export function verifyMigration(id: string, options: { signal?: AbortSignal } = {}): Promise<WebsiteJob> {
   return jobChange("The comparison was not started.", `${base}/${id}/verify`, {}, options.signal);

@@ -10,7 +10,8 @@ const recordURL = moduleURL(readFileSync(new URL("./migration-record.ts", import
 const wordpressURL = moduleURL(readFileSync(new URL("./wordpress-api.ts", import.meta.url), "utf8").replace('"./sites-api"', JSON.stringify(sitesURL)).replace('"./migration-record"', JSON.stringify(recordURL)));
 const api = await import(wordpressURL);
 const archiveURL = moduleURL(readFileSync(new URL("./migration-archive.ts", import.meta.url), "utf8"));
-const migrations = await import(moduleURL(readFileSync(new URL("./migration-api.ts", import.meta.url), "utf8").replace('"./wordpress-api"', JSON.stringify(wordpressURL)).replaceAll('"./migration-archive"', JSON.stringify(archiveURL))));
+const serverURL = moduleURL(readFileSync(new URL("./migration-server.ts", import.meta.url), "utf8"));
+const migrations = await import(moduleURL(readFileSync(new URL("./migration-api.ts", import.meta.url), "utf8").replace('"./wordpress-api"', JSON.stringify(wordpressURL)).replaceAll('"./migration-archive"', JSON.stringify(archiveURL)).replaceAll('"./migration-server"', JSON.stringify(serverURL))));
 
 const jobId = "0123456789abcdef0123456789abcdef";
 const password = "correct horse battery";
@@ -506,6 +507,36 @@ test("the WHM login is sent once, only the chosen secret, and a certificate to c
   assert.equal(migrations.checkWHMSecret("password", "a: b"), undefined);
   assert.equal(migrations.checkOptionalSSHPort(""), undefined);
   assert.ok(migrations.checkOptionalSSHPort("70000"));
+});
+
+test("another Linux server is opened, keyed with one secret, listed and moved by its site", async () => {
+  const source = { id: sourceId, host: "old.example.test", port: 22, key_line: `restrict ssh-ed25519 AAAA sifruno-migration-${sourceId}`, install_command: "x", host_keys: [{ type: "ssh-ed25519", fingerprint: "SHA256:ed" }], pinned_fingerprint: "SHA256:ed", via: "server", expires_at: "2026-11-25T10:00:00Z" };
+  const site = { domain: "blog.example.test", aliases: [], www: false, server: "nginx", where: "/etc/nginx/conf.d/blog.conf line 1", doc_root: "/var/www/blog", owner: "nginx", account: "blog", php_source: "php8.2-fpm", php: "8.2", wordpress: true, database: "wordpress", certificate: false, movable: true, refused: [], not_carried: [] };
+  const posts = [];
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    posts.push({ url, body: options.body ? JSON.parse(options.body) : undefined });
+    if (url.endsWith("/sites")) return json({ sites: [site] });
+    if (url === "/api/v1/websites/migrations") return json({ job: migrationJob() });
+    return json({ source });
+  }, async () => {
+    assert.equal((await migrations.openSource("old.example.test", 22, { via: "server" })).via, "server");
+    await migrations.installKey(sourceId, { password: "root secret" });
+    await migrations.installKey(sourceId, { private_key: "-----BEGIN OPENSSH PRIVATE KEY-----", passphrase: "" });
+    assert.equal((await migrations.listSites(sourceId))[0].domain, "blog.example.test");
+    await migrations.startMigration(sourceId, "blog", { site: "blog.example.test" });
+  });
+  assert.deepEqual(posts.map((p) => [p.url, p.body]), [
+    ["/api/v1/websites/migrations/sources", { host: "old.example.test", port: 22, via: "server" }],
+    [`/api/v1/websites/migrations/sources/${sourceId}/install-key`, { password: "root secret" }],
+    [`/api/v1/websites/migrations/sources/${sourceId}/install-key`, { private_key: "-----BEGIN OPENSSH PRIVATE KEY-----" }],
+    [`/api/v1/websites/migrations/sources/${sourceId}/sites`, undefined],
+    ["/api/v1/websites/migrations", { source: sourceId, username: "blog", site: "blog.example.test" }],
+  ]);
+  // A cPanel source is not taken for another Linux server.
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ source: { ...source, via: "" } }), async () => {
+    await assert.rejects(migrations.openSource("old.example.test", 22, { via: "server" }), { status: 0 });
+  });
 });
 
 test("stale key lines are read only with the line they name, and cleared with the session", async () => {

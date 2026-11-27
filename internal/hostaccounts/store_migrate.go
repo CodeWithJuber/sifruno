@@ -788,7 +788,7 @@ func (s *store) planTier(ctx context.Context, m migrationRecord, home string, pl
 	}
 	plan.Htaccess = len(site.Files)
 	if plan.Tier == string(htaccess.VerdictNative) {
-		plan.Converted = migrationFolders(conv.Rules)
+		plan.Converted = append(migrationFolders(conv.Rules), migrationMoved(conv)...)
 		plan.Probes = foldersProbes(conv.Rules)
 		plan.TierWarnings = tierWarnings(conv, plan.PHPSource)
 	}

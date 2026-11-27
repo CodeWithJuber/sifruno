@@ -425,15 +425,17 @@ func (m *migrator) placeFiles(ctx context.Context, stage *os.File, stagePath, ho
 		}
 		return MigrateFilesResult{}, &MigrationError{Step: "tier", Detail: installDetail([]byte(detail))}
 	}
-	result := MigrateFilesResult{Folders: migrationFolders(conv.Rules), Probes: foldersProbes(conv.Rules)}
-	if len(conv.Rules) > 0 {
-		p, err := readProtection(files, home, siteName(r.Account.ID), conv.Rules)
+	result := MigrateFilesResult{Folders: append(migrationFolders(conv.Rules), migrationMoved(conv)...), Probes: foldersProbes(conv.Rules)}
+	if converts(conv) {
+		p, err := readProtection(files, home, siteName(r.Account.ID), conv)
 		if err != nil {
 			return MigrateFilesResult{}, err
 		}
 		result.Probes = append(result.Probes, subfolderProbes(stagePath+"/files/public_html", conv.Rules)...)
 		result.Probes = append(result.Probes, openFileProbes(stagePath+"/files/public_html", conv.Rules)...)
-		// The folders are live before cp makes the files reachable.
+		result.Probes = append(result.Probes, deniedFileProbes(stagePath+"/files/public_html", conv.Rules)...)
+		// The folders, names and redirects are live before cp makes the
+		// files reachable.
 		if err := protect(p); err != nil {
 			return MigrateFilesResult{}, err
 		}
@@ -461,9 +463,10 @@ func (m *migrator) placeFiles(ctx context.Context, stage *os.File, stagePath, ho
 // what root reads here; the path is walked one folder at a time from
 // the staged home's handle, never following a link, and must lie in the
 // source home the copy came from.
-func readProtection(files *os.File, sourceHome, site string, rules []htaccess.FolderRule) (SiteProtection, error) {
-	folders, userFiles := protectionFolders(site, rules)
+func readProtection(files *os.File, sourceHome, site string, conv htaccess.SiteConversion) (SiteProtection, error) {
+	folders, userFiles := protectionFolders(site, conv.Rules)
 	p := SiteProtection{Folders: folders, Users: map[string][]byte{}}
+	p.Redirects, p.ErrorPages = protectionMoved(conv)
 	for _, f := range folders {
 		if f.Realm == nil {
 			continue
@@ -578,6 +581,57 @@ func openFileProbes(public string, rules []htaccess.FolderRule) []MigrationProbe
 		}
 		if len(open) > 0 {
 			walk(strings.Trim(rule.Path, "/"), 0)
+		}
+	}
+	return out
+}
+
+// probeFileName is a file name verify can put in a URL as it is.
+var probeFileName = regexp.MustCompile(`^[A-Za-z0-9._@~-]+$`)
+
+// deniedFileProbes finds, below each rule that closes file names, up to
+// five real files with a closed name in the staged public_html, nearest
+// the rule's folder first (wp-config.php before a plugin's readme.txt), in
+// folders whose names have no dot, so verify asks for them on both sites
+// and expects 403 from each.
+func deniedFileProbes(public string, rules []htaccess.FolderRule) []MigrationProbe {
+	out := []MigrationProbe{}
+	root, err := os.OpenRoot(public)
+	if err != nil {
+		return out
+	}
+	defer root.Close()
+	for _, rule := range rules {
+		if rule.Deny == nil {
+			continue
+		}
+		found, seen := 0, 0
+		queue := []string{strings.Trim(rule.Path, "/")}
+		for len(queue) > 0 && found < 5 && seen <= 5000 {
+			rel := queue[0]
+			queue = queue[1:]
+			dir := rel
+			if dir == "" {
+				dir = "."
+			}
+			d, err := root.Open(dir)
+			if err != nil {
+				continue
+			}
+			entries, _ := d.ReadDir(1000)
+			d.Close()
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+			for _, e := range entries {
+				seen++
+				child := strings.TrimPrefix(rel+"/"+e.Name(), "/")
+				switch t := e.Type(); {
+				case t.IsRegular() && rule.Deny.Match(e.Name()) && probeFileName.MatchString(e.Name()) && found < 5:
+					out = append(out, MigrationProbe{Path: "/" + child, Kind: "deny"})
+					found++
+				case t.IsDir() && probeFolderName.MatchString(e.Name()) && strings.Count(child, "/") < 8:
+					queue = append(queue, child)
+				}
+			}
 		}
 	}
 	return out

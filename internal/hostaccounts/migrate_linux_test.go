@@ -715,6 +715,68 @@ func TestMigrateFilesProtectsBeforeCopy(t *testing.T) {
 	}
 }
 
+// TestMigrateFilesCarriesWordPressPluginRules: the root .htaccess of
+// WordPress with WP Rocket, Wordfence and Solid Security blocks, plus a
+// redirect and an error page, converts; protect gets the names closed at
+// the root, the redirect and the error page before cp, and verify gets the
+// real closed files to ask for, nearest the root first.
+func TestMigrateFilesCarriesWordPressPluginRules(t *testing.T) {
+	m, f, _ := testMigrator(t)
+	rec := openedRecord(t, m)
+	r := engineRecord(filepath.Dir(m.e.dir))
+	plugins, err := os.ReadFile("../htaccess/testdata/wordpress-plugins.htaccess")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.home = map[string]string{
+		"public_html/.htaccess":                         string(plugins) + "Redirect 301 /old-page /new-page/\nErrorDocument 404 /404.html\n",
+		"public_html/index.php":                         "x",
+		"public_html/wp-config.php":                     "<?php",
+		"public_html/xmlrpc.php":                        "<?php",
+		"public_html/readme.html":                       "x",
+		"public_html/wp-content/plugins/x/readme.txt":   "x",
+		"public_html/wp-content/uploads/.htaccess":      "<Files *.php>\ndeny from all\n</Files>\n",
+		"public_html/wp-content/uploads/2026/shell.php": "<?php",
+	}
+	var got SiteProtection
+	protect := func(p SiteProtection) error {
+		got = p
+		return nil
+	}
+	res, err := m.Files(context.Background(), rec, "/home/fixtureacct", r, 10, backupLeftover{Op: strings.Repeat("9", 32)}, protect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Folders) != 2 || got.Folders[0].Path != "/" || got.Folders[0].Deny == nil || got.Folders[1].Path != "/wp-content/uploads/" ||
+		!reflect.DeepEqual(got.Folders[1].Deny, &olsweb.DenyNames{Endings: []string{".php"}}) {
+		t.Fatalf("folders %+v", got.Folders)
+	}
+	if want := []olsweb.HtaccessRedirect{{Prefix: "/old-page", Target: "/new-page/", Status: 301}}; !reflect.DeepEqual(got.Redirects, want) {
+		t.Fatalf("redirects %+v", got.Redirects)
+	}
+	if want := []olsweb.ErrorPage{{Status: 404, URL: "/404.html"}}; !reflect.DeepEqual(got.ErrorPages, want) || len(got.Users) != 0 {
+		t.Fatalf("error pages %+v users %v", got.ErrorPages, got.Users)
+	}
+	site := siteName(r.Account.ID)
+	if err := olsweb.CheckFolders(site, got.Folders); err != nil {
+		t.Fatal(err)
+	}
+	if err := olsweb.CheckMoved(got.Redirects, got.ErrorPages); err != nil {
+		t.Fatal(err)
+	}
+	wantProbes := []MigrationProbe{
+		{Path: "/.htaccess", Kind: "deny"}, {Path: "/readme.html", Kind: "deny"}, {Path: "/wp-config.php", Kind: "deny"},
+		{Path: "/xmlrpc.php", Kind: "deny"}, {Path: "/wp-content/uploads/.htaccess", Kind: "deny"},
+		{Path: "/wp-content/uploads/2026/shell.php", Kind: "deny"},
+	}
+	if !reflect.DeepEqual(res.Probes, wantProbes) {
+		t.Fatalf("probes %+v", res.Probes)
+	}
+	if len(res.Folders) != 4 || res.Folders[2].Rule != "redirect (301) to /new-page/" || res.Folders[3].Rule != "error page for 404" || !strings.Contains(res.Folders[0].Rule, "wp-config.php") {
+		t.Fatalf("folders %+v", res.Folders)
+	}
+}
+
 // TestMigrateFilesProbesSubfoldersAndAddressLists: verify checks one real
 // subfolder below a closed and a password folder, with the parent's
 // status, and every folder open to some addresses only. Before, a

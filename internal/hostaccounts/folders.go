@@ -30,10 +30,20 @@ import (
 
 // siteFolders is a record's protected folders and the SHA-256 of each realm
 // user file, keyed by its path, so a stored record names the exact files it
-// was applied with. The canonical JSON is a string in the record.
+// was applied with, and the redirects and error pages the migration
+// converted from the root .htaccess (olsweb moved.go). The canonical JSON
+// is a string in the record; a set from before the redirects has the same
+// JSON as before.
 type siteFolders struct {
-	Folders []olsweb.Folder   `json:"folders"`
-	Users   map[string]string `json:"users"`
+	Folders    []olsweb.Folder           `json:"folders"`
+	Users      map[string]string         `json:"users"`
+	Redirects  []olsweb.HtaccessRedirect `json:"redirects,omitempty"`
+	ErrorPages []olsweb.ErrorPage        `json:"error_pages,omitempty"`
+}
+
+// empty reports a set with nothing to render.
+func (f siteFolders) empty() bool {
+	return len(f.Folders) == 0 && len(f.Redirects) == 0 && len(f.ErrorPages) == 0
 }
 
 // maxFoldersBytes bounds a set as the record holds it (canonical JSON,
@@ -44,7 +54,7 @@ const maxFoldersBytes = 48 << 10
 var foldersDigestPattern = regexp.MustCompile(`^folders=[0-9a-f]{64}$`)
 
 func encodeFolders(f siteFolders) string {
-	if len(f.Folders) == 0 {
+	if f.empty() {
 		return ""
 	}
 	b, err := json.Marshal(f)
@@ -64,7 +74,7 @@ func decodeFolders(encoded string) (siteFolders, bool) {
 	var f siteFolders
 	d := json.NewDecoder(strings.NewReader(encoded))
 	d.DisallowUnknownFields()
-	if d.Decode(&f) != nil || len(f.Folders) == 0 || encodeFolders(f) != encoded {
+	if d.Decode(&f) != nil || f.empty() || encodeFolders(f) != encoded {
 		return siteFolders{}, false
 	}
 	return f, true
@@ -86,7 +96,7 @@ func validStoredFolders(id, encoded string) bool {
 	if encoded == "" {
 		return true
 	}
-	if olsweb.CheckFolders(siteName(id), f.Folders) != nil {
+	if olsweb.CheckFolders(siteName(id), f.Folders) != nil || olsweb.CheckMoved(f.Redirects, f.ErrorPages) != nil {
 		return false
 	}
 	files := olsweb.FolderRealmFiles(f.Folders)
@@ -114,22 +124,25 @@ func foldersSized(encoded string) bool {
 	return err == nil && len(quoted) <= maxFoldersBytes
 }
 
-// recordFolders is the folders a record's site is rendered with: the set an
+// recordProtection is the set a record's site is rendered with: the set an
 // unfinished folders operation installs, else the recorded one.
-func recordFolders(r record) []olsweb.Folder {
+func recordProtection(r record) siteFolders {
 	encoded := r.Folders
 	if r.Pending != nil && r.Pending.Action == "folders" {
 		encoded = r.FoldersNext
 	}
 	f, _ := decodeFolders(encoded)
-	return f.Folders
+	return f
 }
 
 // SiteProtection is what a migration's copy converted to: the folders and
-// each realm's user file, normalized, keyed by its path in olsweb.RealmRoot.
+// each realm's user file, normalized, keyed by its path in olsweb.RealmRoot,
+// and the root .htaccess's redirects and error pages.
 type SiteProtection struct {
-	Folders []olsweb.Folder
-	Users   map[string][]byte
+	Folders    []olsweb.Folder
+	Users      map[string][]byte
+	Redirects  []olsweb.HtaccessRedirect
+	ErrorPages []olsweb.ErrorPage
 }
 
 // protectionFolders maps converted rules (sorted by path, as ConvertSite
@@ -144,9 +157,30 @@ func protectionFolders(site string, rules []htaccess.FolderRule) (folders []olsw
 			f.Realm = &olsweb.FolderRealm{Name: rule.Realm.Name, UserFile: olsweb.RealmFile(site, i+1), Users: rule.Realm.Users}
 			userFiles[f.Realm.UserFile] = rule.Realm.UserFile
 		}
+		if rule.Deny != nil {
+			f.Deny = &olsweb.DenyNames{Names: rule.Deny.Exact, Endings: rule.Deny.Endings}
+		}
 		folders = append(folders, f)
 	}
 	return folders, userFiles
+}
+
+// protectionMoved maps the converted redirects and error pages.
+func protectionMoved(conv htaccess.SiteConversion) ([]olsweb.HtaccessRedirect, []olsweb.ErrorPage) {
+	var redirects []olsweb.HtaccessRedirect
+	for _, r := range conv.Redirects {
+		redirects = append(redirects, olsweb.HtaccessRedirect{Prefix: r.Prefix, Pattern: r.Pattern, Target: r.Target, Status: r.Status})
+	}
+	var pages []olsweb.ErrorPage
+	for _, p := range conv.ErrorPages {
+		pages = append(pages, olsweb.ErrorPage{Status: p.Status, URL: p.URL})
+	}
+	return redirects, pages
+}
+
+// converts reports a conversion with anything for the vhost to carry.
+func converts(conv htaccess.SiteConversion) bool {
+	return len(conv.Rules) > 0 || len(conv.Redirects) > 0 || len(conv.ErrorPages) > 0
 }
 
 // MigrationFolder is one converted .htaccess in a migration's tier report:
@@ -161,6 +195,23 @@ func migrationFolders(rules []htaccess.FolderRule) []MigrationFolder {
 	out := []MigrationFolder{}
 	for _, rule := range rules {
 		out = append(out, MigrationFolder{File: rule.File, Path: rule.Path, Rule: ruleText(rule)})
+	}
+	return out
+}
+
+// migrationMoved lists the converted redirects and error pages of the root
+// .htaccess in the same form: the path or expression, and what it became.
+func migrationMoved(conv htaccess.SiteConversion) []MigrationFolder {
+	out := []MigrationFolder{}
+	for _, r := range conv.Redirects {
+		from := r.Prefix
+		if from == "" {
+			from = r.Pattern
+		}
+		out = append(out, MigrationFolder{File: ".htaccess", Path: from, Rule: fmt.Sprintf("redirect (%d) to %s", r.Status, r.Target)})
+	}
+	for _, p := range conv.ErrorPages {
+		out = append(out, MigrationFolder{File: ".htaccess", Path: p.URL, Rule: fmt.Sprintf("error page for %d", p.Status)})
 	}
 	return out
 }
@@ -184,6 +235,13 @@ func ruleText(rule htaccess.FolderRule) string {
 			who = "the users " + strings.Join(rule.Realm.Users, ", ")
 		}
 		parts = append(parts, fmt.Sprintf("password \"%s\" for %s (401)", rule.Realm.Name, who))
+	}
+	if rule.Deny != nil {
+		names := slices.Clone(rule.Deny.Exact)
+		for _, e := range rule.Deny.Endings {
+			names = append(names, "*"+e)
+		}
+		parts = append(parts, "files named "+strings.Join(names, ", ")+" closed to everyone (403)")
 	}
 	return strings.Join(parts, "; ")
 }
@@ -231,13 +289,13 @@ func (s *store) setSiteFolders(ctx context.Context, id string, p SiteProtection,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !idPattern.MatchString(id) || len(p.Folders) == 0 || !validUserFiles(p) || !validText(reason, 500) || !validText(actor, 120) {
+	want := siteFolders{Folders: p.Folders, Users: map[string]string{}, Redirects: p.Redirects, ErrorPages: p.ErrorPages}
+	if !idPattern.MatchString(id) || want.empty() || !validUserFiles(p) || !validText(reason, 500) || !validText(actor, 120) {
 		return ErrInvalid
 	}
 	if s.web == nil {
 		return ErrUnavailable
 	}
-	want := siteFolders{Folders: p.Folders, Users: map[string]string{}}
 	for _, path := range olsweb.FolderRealmFiles(p.Folders) {
 		data, ok := p.Users[path]
 		if !ok {

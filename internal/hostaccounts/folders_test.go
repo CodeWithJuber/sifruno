@@ -115,6 +115,47 @@ func TestSiteFoldersWithoutRealm(t *testing.T) {
 	}
 }
 
+// TestSiteNamesRedirectsAndErrorPages: a migrated WordPress site's root
+// .htaccess converts to names closed at the root, redirects and error
+// pages, with no folder and no user file; they go live and stay in the
+// rendered site.
+func TestSiteNamesRedirectsAndErrorPages(t *testing.T) {
+	s, f := webStore(t)
+	live := liveFixture(t, s)
+	ctx := context.Background()
+	defer busy(s, live.Account.ID)()
+	p := SiteProtection{
+		Folders:    []olsweb.Folder{{Path: "/", Hosts: olsweb.HostsAll, Deny: &olsweb.DenyNames{Names: []string{"wp-config.php", "xmlrpc.php"}}}},
+		Users:      map[string][]byte{},
+		Redirects:  []olsweb.HtaccessRedirect{{Prefix: "/old-page", Target: "https://example.com/new-page", Status: 301}, {Pattern: "^/blog/(.*)$", Target: "/news/$1", Status: 302}},
+		ErrorPages: []olsweb.ErrorPage{{Status: 404, URL: "/404.html"}},
+	}
+	if err := s.setSiteFolders(ctx, live.Account.ID, p, "test operator", "Move a website here"); err != nil {
+		t.Fatal(err)
+	}
+	site := siteOf(t, f.sites, live.Account.ID)
+	if len(site.Folders) != 1 || site.Folders[0].Deny == nil || len(site.HtaccessRedirects) != 2 || site.HtaccessRedirects[1].Pattern == "" || len(site.ErrorPages) != 1 {
+		t.Fatalf("site %+v", site)
+	}
+	if _, ok := f.realms[siteName(live.Account.ID)]; ok {
+		t.Fatal("user files written without a realm")
+	}
+}
+
+// Redirects alone, without a folder, are a set of their own.
+func TestSiteRedirectsWithoutFolders(t *testing.T) {
+	s, f := webStore(t)
+	live := liveFixture(t, s)
+	defer busy(s, live.Account.ID)()
+	p := SiteProtection{Users: map[string][]byte{}, Redirects: []olsweb.HtaccessRedirect{{Prefix: "/", Target: "https://new.example.com/", Status: 301}}}
+	if err := s.setSiteFolders(context.Background(), live.Account.ID, p, "test operator", "Move a website here"); err != nil {
+		t.Fatal(err)
+	}
+	if site := siteOf(t, f.sites, live.Account.ID); len(site.Folders) != 0 || len(site.HtaccessRedirects) != 1 {
+		t.Fatalf("site %+v", site)
+	}
+}
+
 func TestSiteFoldersRefusals(t *testing.T) {
 	s, f := webStore(t)
 	live := liveFixture(t, s)
@@ -129,6 +170,11 @@ func TestSiteFoldersRefusals(t *testing.T) {
 		"not normalized":    {Folders: fixtureProtection(live.Account.ID).Folders, Users: map[string][]byte{olsweb.RealmFile(site, 1): []byte("# c\n" + fixtureUserFile)}},
 		"other site file":   {Folders: []olsweb.Folder{{Path: "/m/", Hosts: olsweb.HostsAll, Realm: &olsweb.FolderRealm{Name: "m", UserFile: olsweb.RealmFile("uother", 1)}}}, Users: map[string][]byte{olsweb.RealmFile("uother", 1): []byte(fixtureUserFile)}},
 		"open folder":       {Folders: []olsweb.Folder{{Path: "/m/", Hosts: olsweb.HostsAll}}},
+		"root folder rule":  {Folders: []olsweb.Folder{{Path: "/", Hosts: olsweb.HostsNone}}},
+		"bad deny name":     {Folders: []olsweb.Folder{{Path: "/", Hosts: olsweb.HostsAll, Deny: &olsweb.DenyNames{Names: []string{"a|b"}}}}},
+		"bad redirect":      {Redirects: []olsweb.HtaccessRedirect{{Prefix: "/a", Target: "/b%{HTTP_HOST}", Status: 301}}},
+		"redirect status":   {Redirects: []olsweb.HtaccessRedirect{{Prefix: "/a", Target: "/b", Status: 307}}},
+		"bad error page":    {ErrorPages: []olsweb.ErrorPage{{Status: 404, URL: "https://example.com/404"}}},
 	}
 	for name, p := range bad {
 		if err := s.setSiteFolders(ctx, live.Account.ID, p, "test operator", "x"); !errors.Is(err, ErrInvalid) {
@@ -252,14 +298,25 @@ func TestSiteFoldersStoredFormIsChecked(t *testing.T) {
 		}
 	}
 	noDigest := siteFolders{Folders: p.Folders, Users: map[string]string{}}
+	badRedirect := siteFolders{Users: map[string]string{}, Redirects: []olsweb.HtaccessRedirect{{Prefix: "/a", Target: "/b$1", Status: 301}}}
 	for name, bad := range map[string]string{
-		"spaces":    strings.Replace(encoded, `{"folders"`, `{ "folders"`, 1),
-		"unknown":   strings.Replace(encoded, `{"folders"`, `{"x":1,"folders"`, 1),
-		"no digest": encodeFolders(noDigest),
-		"too big":   encoded + strings.Repeat(" ", maxFoldersBytes),
+		"spaces":       strings.Replace(encoded, `{"folders"`, `{ "folders"`, 1),
+		"unknown":      strings.Replace(encoded, `{"folders"`, `{"x":1,"folders"`, 1),
+		"no digest":    encodeFolders(noDigest),
+		"too big":      encoded + strings.Repeat(" ", maxFoldersBytes),
+		"bad redirect": encodeFolders(badRedirect),
+		"empty":        `{"folders":null,"users":{}}`,
 	} {
 		if validStoredFolders(id, bad) {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// A set from before the redirects keeps its stored form.
+	if strings.Contains(encoded, "redirects") || strings.Contains(encoded, "error_pages") || strings.Contains(encoded, "deny") {
+		t.Fatalf("an older set's form changed: %s", encoded)
+	}
+	moved := siteFolders{Users: map[string]string{}, Redirects: []olsweb.HtaccessRedirect{{Prefix: "/a", Target: "/b", Status: 301}}, ErrorPages: []olsweb.ErrorPage{{Status: 404, URL: "/404.html"}}}
+	if !validStoredFolders(id, encodeFolders(moved)) {
+		t.Fatal("redirects without folders were refused")
 	}
 }

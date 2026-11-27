@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Migration v1 proof, guest side (proof.sh migrate-cpanel copies it in).
-# Runs as root in the dev VM:  migrate-cpanel.guest.sh DIR PORT [whm]
+# Runs as root in the dev VM:  migrate-cpanel.guest.sh DIR PORT [whm|cert]
 # DIR holds the panel (sifruno, dist.tgz, state.tgz); the panel listens on
 # 127.0.0.1:PORT as sifpanel with the broker and the MariaDB option file.
 # With whm, the SSH path's sections are left out and the WHM login path
-# runs instead (whm_proof below). KEEP_STANDIN=1 keeps the stand-in
+# runs instead (whm_proof below). With cert, the old sites serve https with
+# certificates from a throwaway CA and the moves copy them (cert_proof
+# below). KEEP_STANDIN=1 keeps the stand-in
 # container running afterwards, for screenshots; remove it with
 # podman rm -f NAME.
 #
@@ -41,8 +43,8 @@
 # Every check prints PASS or FAIL; the exit status is the number of FAILs.
 set -uo pipefail
 
-DIR="${1:?usage: migrate-cpanel.guest.sh DIR PORT [whm]}"
-PORT="${2:?usage: migrate-cpanel.guest.sh DIR PORT [whm]}"
+DIR="${1:?usage: migrate-cpanel.guest.sh DIR PORT [whm|cert]}"
+PORT="${2:?usage: migrate-cpanel.guest.sh DIR PORT [whm|cert]}"
 MODE="${3:-ssh}"
 BIN=/opt/sifruno-proof
 SOCKET=/run/sifruno-broker/control.sock
@@ -89,6 +91,9 @@ sample_stop() { kill "$sampler" 2>/dev/null; wait "$sampler" 2>/dev/null; }
 # shellcheck disable=SC2317 # called by the EXIT trap below
 cleanup() {
   sample_stop 2>/dev/null
+  if [ -n "${ANCHOR:-}" ] && [ -e "$ANCHOR" ]; then
+    rm -f "$ANCHOR" && update-ca-trust extract
+  fi
   if [ "${KEEP_STANDIN:-0}" = 1 ]; then
     echo "# kept: the stand-in $CTR and its /etc/hosts lines"
     return
@@ -101,6 +106,55 @@ trap cleanup EXIT
 echo "# Migration v1: one website account from a cPanel stand-in over root SSH"
 echo "# $(date -u +%FT%TZ)  $(rpm -q openlitespeed mariadb-server podman rsync openssh-clients | paste -sd ' ')"
 echo "# accounts $SHOP, $STAFF, $ODD, $TRIG, $RACE, $HARD; container $CTR from $IMAGE"
+
+# cert mode: a throwaway CA, root and intermediate, and certificates for
+# the old sites: shop and staff valid for 90 days, race expired on
+# 2026-10-01. The root stands for a public CA: it joins this server's trust
+# store for the run (cleanup removes it), so the broker's check and the
+# comparison trust it as they would a public one. The panel gets website
+# certificates on (--acme-email) with an ACME directory nothing answers at,
+# so it records the copied certificates and orders none.
+CA="$WORK/ca"
+ACME_ARGS=""
+ca_leaf() { # ca_leaf NAME DOMAIN [START END]: an RSA 2048 key and a leaf from the intermediate
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$CA/$1.key" 2>/dev/null
+  openssl req -new -key "$CA/$1.key" -subj "/CN=$2" -out "$CA/$1.csr" 2>/dev/null
+  printf 'basicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:%s,DNS:www.%s,DNS:mail.%s\n' "$2" "$2" "$2" > "$CA/$1.ext"
+  if [ -n "${3:-}" ]; then
+    openssl ca -batch -config "$CA/ca.cnf" -cert "$CA/inter.pem" -keyfile "$CA/inter.key" -in "$CA/$1.csr" -out "$CA/$1.pem" \
+      -startdate "$3" -enddate "$4" -extfile "$CA/$1.ext" -notext -md sha256 >/dev/null 2>&1
+  else
+    openssl x509 -req -in "$CA/$1.csr" -CA "$CA/inter.pem" -CAkey "$CA/inter.key" -set_serial "0x$(openssl rand -hex 8)" -days 90 -sha256 -extfile "$CA/$1.ext" -out "$CA/$1.pem" 2>/dev/null
+  fi
+}
+fingerprint_of() { openssl x509 -noout -fingerprint -sha256 -in "$1" 2>/dev/null | sed 's/.*=//'; }
+if [ "$MODE" = cert ]; then
+  echo
+  echo "## 0. A throwaway certificate authority (the proof's, not public)"
+  install -d -m 0700 "$CA" "$CA/new"
+  : > "$CA/index.txt"
+  echo 1000 > "$CA/serial"
+  printf '[ ca ]\ndefault_ca = proof\n[ proof ]\ndatabase = %s/index.txt\nnew_certs_dir = %s/new\nserial = %s/serial\ndefault_md = sha256\npolicy = any\nunique_subject = no\n[ any ]\ncommonName = supplied\n' "$CA" "$CA" "$CA" > "$CA/ca.cnf"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$CA/root.key" 2>/dev/null
+  openssl req -x509 -new -key "$CA/root.key" -subj "/CN=Sifruno proof root $RUNID" -days 30 -sha256 \
+    -addext basicConstraints=critical,CA:true -addext keyUsage=critical,keyCertSign,cRLSign -out "$CA/root.pem" 2>/dev/null
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$CA/inter.key" 2>/dev/null
+  openssl req -new -key "$CA/inter.key" -subj "/CN=Sifruno proof intermediate $RUNID" -out "$CA/inter.csr" 2>/dev/null
+  printf 'basicConstraints=critical,CA:true,pathlen:0\nkeyUsage=critical,keyCertSign,cRLSign\n' > "$CA/inter.ext"
+  openssl x509 -req -in "$CA/inter.csr" -CA "$CA/root.pem" -CAkey "$CA/root.key" -set_serial 2 -days 30 -sha256 -extfile "$CA/inter.ext" -out "$CA/inter.pem" 2>/dev/null
+  ca_leaf shop "$SHOP_DOMAIN"
+  ca_leaf staff "$STAFF_DOMAIN"
+  ca_leaf race "$RACE_DOMAIN" 20260801000000Z 20261001000000Z
+  for leaf in shop staff race; do
+    echo "  $leaf: $(openssl x509 -noout -subject -enddate -ext subjectAltName -in "$CA/$leaf.pem" 2>/dev/null | tr '\n' ' ' | tr -s ' ' | sed 's/ *$//')"
+  done
+  check "the shop and staff certificates chain to the proof's root through the intermediate" bash -c "openssl verify -CAfile $CA/root.pem -untrusted $CA/inter.pem $CA/shop.pem $CA/staff.pem"
+  check "the race certificate expired on 2026-10-01" bash -c "! openssl x509 -checkend 0 -noout -in $CA/race.pem && openssl x509 -noout -enddate -in $CA/race.pem | grep -q 'Oct  1 00:00:00 2026 GMT'"
+  ANCHOR="/etc/pki/ca-trust/source/anchors/sifruno-proof-$RUNID.pem"
+  cp "$CA/root.pem" "$ANCHOR" && update-ca-trust extract
+  check "this server's trust store holds the proof's root for the run" grep -q "$(sed -n 2p "$CA/root.pem")" /etc/pki/tls/certs/ca-bundle.crt
+  ACME_ARGS="--acme-email proof@example.com --acme-directory https://127.0.0.1:9/directory"
+fi
 
 echo
 echo "## 1. The broker and the panel"
@@ -117,7 +171,7 @@ tar -xzf dist.tgz && tar -xzf state.tgz && chown -R sifpanel:sifpanel "$DIR" && 
 restorecon -R "$DIR" 2>/dev/null
 pkill -x sifruno 2>/dev/null
 runuser -u sifpanel -- sh -c "nohup ./sifruno --listen 127.0.0.1:$PORT --sites-listen '' --state ./state --ui ./dist \
-  --accounts-socket $SOCKET --db-defaults-file /var/lib/sifpanel/db-admin.cnf --dns-ip $VMIP > panel.log 2>&1 &"
+  --accounts-socket $SOCKET --db-defaults-file /var/lib/sifpanel/db-admin.cnf --dns-ip $VMIP $ACME_ARGS > panel.log 2>&1 &"
 for _ in $(seq 1 90); do curl -fs -o /dev/null "$API/" && break; sleep 2; done
 check "the panel answers on 127.0.0.1:$PORT as sifpanel, its DNS address $VMIP" curl -fs -o /dev/null "$API/"
 for tool in /usr/bin/rsync /usr/bin/ssh /usr/bin/ssh-keyscan /usr/bin/cp /usr/bin/mariadb; do
@@ -281,6 +335,21 @@ php_get_vhost_versions)
     printf '%s{"account":"%s","vhost":"%s","version":"ea-php%s","documentroot":"/home/%s/public_html","homedir":"/home/%s","main_domain":1,"php_fpm":1}' "$sep" "$u" "$d" "$php" "$u" "$u"; sep=,
   done < /etc/standin-accounts
   printf ']},"metadata":{"command":"php_get_vhost_versions","reason":"OK","result":1,"version":1}}\n' ;;
+fetch_vhost_ssl_components)
+  want=""
+  for a in "$@"; do case "$a" in api.filter.a.arg0=*) want="${a#api.filter.a.arg0=}" ;; esac; done
+  python3 - "$want" <<'PY'
+import json, os, sys
+want, root, comps = sys.argv[1], '/etc/standin-ssl', []
+for d in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+    if want and d != want:
+        continue
+    part = lambda n: open(os.path.join(root, d, n)).read()
+    comps.append({'servername': d, 'certificate': part('cert.pem'), 'key': part('key.pem'), 'cabundle': part('cabundle.pem'),
+                  'certificate_id': d.replace('.', '_'), 'key_id': d.replace('.', '_'), 'cabundle_id': 'proof'})
+print(json.dumps({'data': {'components': comps}, 'metadata': {'command': 'fetch_vhost_ssl_components', 'reason': 'OK', 'result': 1, 'version': 1}}))
+PY
+  ;;
 *) echo "stand-in whmapi1: $fn is not part of the proof" >&2; exit 1 ;;
 esac
 STUB
@@ -329,6 +398,35 @@ check "the old staff site closes /office/ to this server (403) and opens /lobby/
 check "the old WordPress denies Akismet's folder with 403" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/akismet.php")" = 403
 check "the old WordPress serves Akismet's allow-listed akismet.css with 200" test "$(status "http://$SHOP_DOMAIN/wp-content/plugins/akismet/_inc/akismet.css")" = 200
 
+if [ "$MODE" = cert ]; then
+  echo
+  echo "## 2b. The old sites serve https: shop, staff and race with the proof CA's certificates"
+  # As cPanel keeps a virtual host's certificate: the certificate, its key and
+  # the CA bundle, which the stand-in whmapi1 prints as
+  # fetch_vhost_ssl_components does. mod_ssl's own ssl.conf (a localhost
+  # certificate made at boot) is replaced by these virtual hosts.
+  in_ctr "dnf -y -q install mod_ssl >/dev/null 2>&1; rm -f /etc/httpd/conf.d/ssl.conf; install -d -m 0700 /etc/standin-ssl"
+  {
+    echo "Listen 443 https"
+    for pair in "shop:$SHOP:$SHOP_DOMAIN" "staff:$STAFF:$STAFF_DOMAIN" "race:$RACE:$RACE_DOMAIN"; do
+      IFS=: read -r leaf u d <<<"$pair"
+      in_ctr "install -d -m 0700 /etc/standin-ssl/$d"
+      podman cp "$CA/$leaf.pem" "$CTR:/etc/standin-ssl/$d/cert.pem"
+      podman cp "$CA/$leaf.key" "$CTR:/etc/standin-ssl/$d/key.pem"
+      podman cp "$CA/inter.pem" "$CTR:/etc/standin-ssl/$d/cabundle.pem"
+      printf '<VirtualHost *:443>\n  ServerName %s\n  ServerAlias www.%s\n  DocumentRoot /home/%s/public_html\n  SSLEngine on\n  SSLCertificateFile /etc/standin-ssl/%s/cert.pem\n  SSLCertificateKeyFile /etc/standin-ssl/%s/key.pem\n  SSLCertificateChainFile /etc/standin-ssl/%s/cabundle.pem\n  CustomLog /var/log/httpd/ssl_access_log "%%h %%{SSL_PROTOCOL}x %%r %%>s %%{User-Agent}i"\n  <Directory /home/%s/public_html>\n    AllowOverride All\n    Require all granted\n  </Directory>\n</VirtualHost>\n' "$d" "$d" "$u" "$d" "$d" "$d" "$u"
+    done
+  } > "$WORK/standin-ssl.conf"
+  podman cp "$WORK/standin-ssl.conf" "$CTR:/etc/httpd/conf.d/standin-ssl.conf"
+  in_ctr "chmod 0600 /etc/standin-ssl/*/key.pem; httpd -t && httpd -k graceful" >/dev/null 2>&1
+  for _ in $(seq 1 20); do curl -s -o /dev/null --cacert "$CA/root.pem" "https://$SHOP_DOMAIN/" && break; sleep 1; done
+  check "the old shop site answers https with its certificate, which this server trusts" bash -c "curl -s --cacert $CA/root.pem https://$SHOP_DOMAIN/ | grep -q '$TITLE' && curl -s -o /dev/null https://$SHOP_DOMAIN/"
+  check "the old staff site answers https with its certificate" bash -c "curl -s https://$STAFF_DOMAIN/ | grep -q 'Staff site'"
+  check "the old race site serves its expired certificate (curl refuses it)" bash -c "! curl -s -o /dev/null https://$RACE_DOMAIN/ && curl -sk https://$RACE_DOMAIN/ | grep -q Race"
+  echo "  the old servers' certificates (SHA-256): shop $(fingerprint_of "$CA/shop.pem"), staff $(fingerprint_of "$CA/staff.pem"), race $(fingerprint_of "$CA/race.pem")"
+  check "the stand-in whmapi1 prints shop's certificate, key and bundle for fetch_vhost_ssl_components, filtered to its virtual host" bash -c "podman exec $CTR /usr/local/cpanel/bin/whmapi1 --output=json fetch_vhost_ssl_components api.filter.enable=1 api.filter.a.field=servername api.filter.a.arg0=$SHOP_DOMAIN api.filter.a.type=eq | python3 -c 'import json,sys; c=json.load(sys.stdin)[\"data\"][\"components\"]; assert [x[\"servername\"] for x in c] == [\"$SHOP_DOMAIN\"] and \"PRIVATE KEY\" in c[0][\"key\"]'"
+fi
+
 
 # ---- The WHM login path (D-0005) ------------------------------------------------
 # With "whm" as the third argument, sections 3 to 9 (the SSH path) are left
@@ -339,9 +437,9 @@ check "the old WordPress serves Akismet's allow-listed akismet.css with 200" tes
 # php_get_vhost_versions, uapi_cpanel and the key calls (importsshkey,
 # authorizesshkey, deletesshkey, listsshkeys) as cPanel's public API
 # documentation gives them, for root's API token only.
-whm_proof() {
+whm_standin() { # whm_standin SECTION: writes and starts the WHM API stub; STUB_FP
   echo
-  echo "## 3. The WHM API stand-in on port 2087 (Python; not cPanel)"
+  echo "## $1. The WHM API stand-in on port 2087 (Python; not cPanel)"
   cat > "$WORK/whm-standin.py" <<'STUB'
 #!/usr/bin/python3
 # STAND-IN for WHM API 1 over HTTPS in the migration proof: not cPanel. It
@@ -410,10 +508,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         LOG.write('%s\n' % function)
         if os.path.exists('/etc/standin-whm/broken'):
             return self.text(200, '2026/01/02 03:04:05 LD_Preload detected, refusing to run\n2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369.\n')
-        if function in ('listaccts', 'domainuserdata', 'php_get_vhost_versions'):
+        if function in ('listaccts', 'domainuserdata', 'php_get_vhost_versions', 'fetch_vhost_ssl_components'):
             args = ['/usr/local/cpanel/bin/whmapi1', '--output=json', function]
             if function == 'domainuserdata':
                 args.append('domain=' + q.get('domain', ''))
+            for k in ('api.filter.enable', 'api.filter.a.field', 'api.filter.a.arg0', 'api.filter.a.type'):
+                if function == 'fetch_vhost_ssl_components' and k in q:
+                    args.append('%s=%s' % (k, q[k]))
             out = tool(args)
             if out.returncode != 0:
                 return self.answer(function, 0, 'The function failed.')
@@ -484,6 +585,10 @@ STUB
   STUB_FP="$(in_ctr "openssl x509 -noout -fingerprint -sha256 -in /etc/standin-whm/cert.pem" | sed 's/.*=//')"
   echo "  WHM stand-in: https://$CIP:2087, certificate SHA-256 $STUB_FP (self-signed)"
   check "the WHM stand-in answers on port 2087 over HTTPS" bash -c "curl -sk -o /dev/null -w '%{http_code}' https://$CIP:2087/json-api/listaccts?api.version=1 | grep -qx 403"
+}
+
+whm_proof() {
+  whm_standin 3
   # As on the owner's server: cPanel's own tools refuse when started over
   # SSH. The stand-in scripts print what the owner's screen showed.
   cat > "$WORK/preload-guard" <<'GUARD'
@@ -665,6 +770,151 @@ check "the admin's command adds one restricted key line to root's authorized_key
 call GET "/api/v1/websites/migrations/sources/$SRC/accounts"
 echo "  accounts listed: $(json "$WORK/answer.json" "' '.join(a['user'] for a in d['accounts'])")"
 check "discovery lists the six accounts with whmapi1 listaccts" test "$(json "$WORK/answer.json" "len(d['accounts'])")" = 6
+
+# ---- Certificates (cert mode) -------------------------------------------------
+# With "cert" as the third argument, after section 3 this runs instead of
+# the SSH path's own moves: shop moves over SSH and its certificate is
+# copied, so the copy answers https at once with the old site's certificate
+# and is compared with the old site over https; race's certificate expired,
+# so it is not copied and the move still finishes; staff moves with the
+# WHM login (the WHM stand-in, started here) and its certificate comes
+# through WHM's API.
+cert_move() { # cert_move USER: the move and its comparison; JOB and $WORK/job.json
+  call POST /api/v1/websites/migrations "$(body start "{\"source\":\"$SRC\",\"username\":\"$1\"}")"
+  JOB="$(json "$WORK/answer.json" "d['job']['id']")"
+  [ "$code" = 202 ] || echo "  start answered $code: $(head -c 400 "$WORK/answer.json")"
+  for _ in $(seq 1 450); do
+    call GET "/api/v1/websites/jobs/$JOB"
+    cp "$WORK/answer.json" "$WORK/job.json"
+    state="$(json "$WORK/job.json" "d['job']['state']")"
+    [ "$state" != running ] && break
+    sleep 2
+  done
+  for _ in $(seq 1 150); do
+    [ "$(json "$WORK/job.json" "(d['job']['migration'].get('verify') or {}).get('running')")" = False ] && break
+    sleep 2; call GET "/api/v1/websites/jobs/$JOB"; cp "$WORK/answer.json" "$WORK/job.json"
+  done
+  echo "  job $JOB: $state"
+  python3 -c "import json,sys; [print('    %-8s %-8s %s' % (s['name'], s['state'], s['message'][:400].rstrip())) for s in json.load(open(sys.argv[1]))['job']['steps']]" "$WORK/job.json"
+}
+jm() { json "$WORK/job.json" "d['job']['migration']$1"; }
+ssl_step() { json "$WORK/job.json" "[s for s in d['job']['steps'] if s['name']=='ssl'][0]['$1']"; }
+served() { # served DOMAIN HOST:PORT: the SHA-256 fingerprint of the certificate served there for DOMAIN
+  openssl s_client -connect "$2" -servername "$1" </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/.*=//'
+}
+cert_ready() { # accepts the notes when they keep the gate closed, then marks the website ready
+  if [ "$(jm "['gate']")" = closed ]; then
+    call POST "/api/v1/websites/migrations/$JOB/accept" "$(body accept '{"reason":"Proof run: the notes were read and accepted"}')"
+    cp "$WORK/answer.json" "$WORK/job.json"
+  fi
+  call POST "/api/v1/websites/migrations/$JOB/ready" "$(body ready '{}')"
+  cp "$WORK/answer.json" "$WORK/job.json"
+  echo "  marked ready: gate $(jm "['gate']"), DNS records $(jm "['dns']")"
+}
+site_https() { # site_https ACCOUNT: the website's https as the panel's API answers it
+  call GET "/api/v1/websites/sites/$1"
+  json "$WORK/answer.json" "d['https']"
+}
+key_line() { sed -n 2p "$1"; } # a line of a key's base64, to look for it elsewhere
+
+cert_proof() {
+  echo
+  echo "## 4. $SHOP_DOMAIN over SSH: its certificate is copied"
+  sample_start
+  cert_move "$SHOP"
+  sample_stop
+  check "the move succeeded" test "$state" = succeeded
+  echo "  certificate step: $(ssl_step state): $(ssl_step message)"
+  check "the certificate step copied the old server's certificate, issued by the proof's intermediate" bash -c "[ '$(ssl_step state)' = done ] && grep -q 'Copied the old server.s certificate for $SHOP_DOMAIN, issued by Sifruno proof intermediate $RUNID, valid until' <<< \"\$1\"" _ "$(ssl_step message)"
+  account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  site="u${account:0:31}"
+  echo "  job record: certificate $(jm "['certificate']"); links $(json "$WORK/job.json" "d['job']['result']['url']") $(json "$WORK/job.json" "d['job']['result']['admin_url']")"
+  check "the job's links use https" test "$(json "$WORK/job.json" "d['job']['result']['url']")" = "https://$SHOP_DOMAIN/"
+  old_fp="$(fingerprint_of "$CA/shop.pem")"
+  new_fp="$(served "$SHOP_DOMAIN" 127.0.0.1:443)"
+  echo "  this server serves $SHOP_DOMAIN on 443 with SHA-256 $new_fp (the old server's: $old_fp)"
+  check "this server serves the old site's own certificate for $SHOP_DOMAIN" test -n "$new_fp" -a "$new_fp" = "$old_fp"
+  check "curl --resolve $SHOP_DOMAIN:443:127.0.0.1 with the proof's CA gets the moved site over https" bash -c "curl -s --cacert $CA/root.pem --resolve $SHOP_DOMAIN:443:127.0.0.1 https://$SHOP_DOMAIN/ | grep -q '$TITLE'"
+  check "and www.$SHOP_DOMAIN, which the certificate also names, the same way" bash -c "curl -s -o /dev/null --cacert $CA/root.pem --resolve www.$SHOP_DOMAIN:443:127.0.0.1 https://www.$SHOP_DOMAIN/"
+  check "plain http on the copy goes to https (Always use HTTPS, on by default)" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/)\" = '301 https://$SHOP_DOMAIN/' ]"
+  tls="/etc/sifruno/tls/$site"
+  echo "  the broker's certificate path: $(stat -c '%U:%G %a %n' "$tls" "$tls"/* 2>/dev/null | paste -sd ';' -)"
+  check "the key is in the broker's certificate path only: root's, 0600, and it matches the certificate" bash -c "[ \"\$(stat -c '%U %a' $tls/key.pem)\" = 'root 600' ] && [ \"\$(openssl pkey -in $tls/key.pem -pubout | sha256sum)\" = \"\$(openssl x509 -in $tls/cert.pem -noout -pubkey | sha256sum)\" ]"
+  needle="$(key_line "$CA/shop.key")"
+  check "the key is in no panel state, panel log, broker state, job record or process argument" bash -c "! grep -rqaF -- '$needle' $DIR/state $DIR/panel.log $STATE $WORK/job.json $WORK/ps-samples.txt"
+  check "nor in the broker's journal or any answer the panel saw" bash -c "! journalctl -u sifruno-broker-proof --no-pager 2>/dev/null | grep -qF -- '$needle' && ! grep -qF -- '$needle' $WORK/answer.json"
+  echo "  verify: $(jm "['verify']['verdict']")"
+  echo "  pages $(jm "['verify']['pages_compared']") compared, $(jm "['verify']['pages_pass']") pass, $(jm "['verify']['pages_fail']") fail"
+  check "the comparison ran over https on both sides (the old server's https log has its requests)" bash -c "[ '$(jm "['verify']['ran']")' = True ] && podman exec $CTR grep -q 'Sifruno-MigrationVerify' /var/log/httpd/ssl_access_log"
+  https="$(site_https "$account")"
+  echo "  the Domains tab's record: https $https"
+  check "the website's https says the certificate was copied from the old server, with its expiry" test "$(json "$WORK/answer.json" "d['https'].get('source')")" = copied -a "$(json "$WORK/answer.json" "d['https']['not_after']")" = "$(date -u -d "$(openssl x509 -noout -enddate -in "$CA/shop.pem" | cut -d= -f2)" +%FT%TZ)"
+  echo "  the certificate manager's record: $(python3 -c "import json,sys; print([s for s in json.load(open(sys.argv[1]))['sites'] if s['account_id']==sys.argv[2]])" "$DIR/state/acme/certificates.json" "$account")"
+  check "the certificate manager records it as copied, so the renewal loop replaces it before it runs out" test "$(python3 -c "import json,sys; print([s.get('copied') for s in json.load(open(sys.argv[1]))['sites'] if s['account_id']==sys.argv[2]])" "$DIR/state/acme/certificates.json" "$account")" = "[True]"
+  check "the panel logged the copy, with no key" bash -c "grep -q 'certificate copied from the old server, valid until' $DIR/panel.log"
+  cert_ready
+  check "the move is ready for cutover" test "$(jm "['gate']")" = ready
+
+  echo
+  echo "## 5. $RACE_DOMAIN over SSH: its certificate expired, so it is not copied and the move finishes"
+  connect race; pin race >/dev/null 2>&1; install_key race
+  cert_move "$RACE"
+  check "the move succeeded" test "$state" = succeeded
+  echo "  certificate step: $(ssl_step state): $(ssl_step message)"
+  check "the step says plainly that the expired certificate was not copied and https follows the DNS" bash -c "[ '$(ssl_step state)' = skipped ] && grep -q \"The old server's certificate was not copied. It expired on 2026-10-01. The site uses http on this server until $RACE_DOMAIN points here; then the panel gets it a certificate by itself.\" <<< \"\$1\"" _ "$(ssl_step message)"
+  echo "  job record: certificate $(jm "['certificate']")"
+  race_account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  check "the copy answers over http" bash -c "curl -s -H 'Host: $RACE_DOMAIN' http://127.0.0.1/ | grep -q Race"
+  race_fp="$(served "$RACE_DOMAIN" 127.0.0.1:443)"
+  check "this server does not serve the expired certificate ($race_fp)" test "$race_fp" != "$(fingerprint_of "$CA/race.pem")"
+  check "the broker staged and installed nothing for it" test ! -e "/etc/sifruno/tls/u${race_account:0:31}/cert.pem" -a ! -e "/etc/sifruno/tls/u${race_account:0:31}/key.pem"
+  echo "  the Domains tab's record: https $(site_https "$race_account")"
+  check "the website has no certificate yet" test "$(json "$WORK/answer.json" "d['https']['on']")" = False
+  check "the comparison ran over http, as before" test "$(jm "['verify']['ran']")" = True
+  cert_ready
+  check "the move is ready for cutover all the same" test "$(jm "['gate']")" = ready
+
+  whm_standin 6
+  echo
+  echo "## 7. $STAFF_DOMAIN with the WHM login: its certificate comes through WHM's API"
+  python3 -c "import json,sys; print(json.dumps({'address': 'https://' + sys.argv[1] + ':2087', 'token': open(sys.argv[2]).read().strip(), 'tls_fingerprint': sys.argv[3]}))" "$CIP" "$WORK/whm.token" "$STUB_FP" > "$WORK/whm.json"
+  call POST /api/v1/websites/migrations/whm "$WORK/whm.json"
+  SRC="$(json "$WORK/answer.json" "d['source']['id']")"
+  check "WHM's login connects (200)" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['via']")" = whm
+  shown="$(json "$WORK/answer.json" "[k['fingerprint'] for k in d['source']['host_keys'] if k['type']=='ssh-ed25519'][0]")"
+  call POST "/api/v1/websites/migrations/sources/$SRC/host-key" "$(body fp "{\"fingerprint\":\"$shown\"}")"
+  check "the old server's SSH key is confirmed (200)" test "$code" = 200
+  sample_start
+  cert_move "$STAFF"
+  sample_stop
+  check "the move succeeded" test "$state" = succeeded
+  echo "  certificate step: $(ssl_step state): $(ssl_step message)"
+  check "the certificate step copied the old server's certificate" bash -c "[ '$(ssl_step state)' = done ] && grep -q 'Copied the old server.s certificate for $STAFF_DOMAIN' <<< \"\$1\"" _ "$(ssl_step message)"
+  check "WHM was asked for it: fetch_vhost_ssl_components" in_ctr "grep -qx fetch_vhost_ssl_components /var/log/whm-standin.log"
+  echo "  WHM calls: $(in_ctr "sort /var/log/whm-standin.log | uniq -c | tr -s ' ' | paste -sd ',' -")"
+  check "this server serves the old site's own certificate for $STAFF_DOMAIN" test "$(served "$STAFF_DOMAIN" 127.0.0.1:443)" = "$(fingerprint_of "$CA/staff.pem")"
+  check "curl --resolve $STAFF_DOMAIN:443:127.0.0.1 with the proof's CA gets the moved site over https" bash -c "curl -s --cacert $CA/root.pem --resolve $STAFF_DOMAIN:443:127.0.0.1 https://$STAFF_DOMAIN/ | grep -q 'Staff site'"
+  check "its password folder answers 401 over https without the password, 200 with it" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' --cacert $CA/root.pem --resolve $STAFF_DOMAIN:443:127.0.0.1 https://$STAFF_DOMAIN/private/)\" = 401 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -u 'staff:$HT_PW' --cacert $CA/root.pem --resolve $STAFF_DOMAIN:443:127.0.0.1 https://$STAFF_DOMAIN/private/)\" = 200 ]"
+  staff_account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  echo "  verify: $(jm "['verify']['verdict']")"
+  echo "  the Domains tab's record: https $(site_https "$staff_account")"
+  check "the website's https says the certificate was copied" test "$(json "$WORK/answer.json" "d['https'].get('source')")" = copied
+  needle="$(key_line "$CA/staff.key")"
+  check "the key is in no panel state, panel log, broker state, job record or process argument" bash -c "! grep -rqaF -- '$needle' $DIR/state $DIR/panel.log $STATE $WORK/job.json $WORK/ps-samples.txt"
+  check "the key went to the broker's certificate path" bash -c "[ \"\$(openssl pkey -in /etc/sifruno/tls/u${staff_account:0:31}/key.pem -pubout | sha256sum)\" = \"\$(openssl pkey -in $CA/staff.key -pubout | sha256sum)\" ]"
+  check "the WHM login is in no panel state or log" bash -c "! grep -rqF \"\$(cat $WORK/whm.token)\" $DIR/state $DIR/panel.log"
+  echo
+  echo "## 8. The proof's root leaves this server's trust store"
+  rm -f "$ANCHOR" && update-ca-trust extract
+  check "the trust store no longer holds the proof's root" bash -c "! grep -q '$(sed -n 2p "$CA/root.pem")' /etc/pki/tls/certs/ca-bundle.crt"
+}
+
+if [ "$MODE" = cert ]; then
+  cert_proof
+  echo
+  if [ "$fails" -eq 0 ]; then echo "RESULT: every check passed"; else echo "RESULT: $fails check(s) failed"; fi
+  exit "$fails"
+fi
 
 echo
 echo "## 4. Move $SHOP_DOMAIN"

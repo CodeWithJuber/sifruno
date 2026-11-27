@@ -197,9 +197,45 @@ parse_args() {
   fi
   if [ -n "$ACME_EMAIL" ] && ! [[ "$ACME_EMAIL" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]]; then
     die "--acme-email is not an email address: $ACME_EMAIL" \
-      "Let's Encrypt sends expiry and account notices to this address." \
-      "Give an address such as admin@example.com."
+      "It becomes the contact address of the panel's Let's Encrypt account, so it must be one plain address." \
+      "Type an address you read, at a domain you own, such as the one you use for your business. Put nothing else in it."
   fi
+  local refused
+  refused="$(acme_email_refused)"
+  if [ -n "$refused" ]; then
+    die "--acme-email is at a domain Let's Encrypt refuses: $ACME_EMAIL" \
+      "$refused. Let's Encrypt refuses such a contact address when the panel registers its account, so neither the panel nor any website would get a certificate." \
+      "Type an address you read, at a domain you own, such as the one you use for your business, and run the installer again."
+  fi
+}
+
+# acme_email_refused prints why Let's Encrypt refuses ACME_EMAIL's domain as
+# a contact, or nothing: the domains RFC 2606 keeps for documentation
+# (example.com, .net and .org), the top-level names kept for tests,
+# examples and local networks (RFC 2606, 6761, 6762, 7686, ICANN's
+# .internal), and an IP address. On 2026-11-27 Let's Encrypt answered
+# admin@example.com with invalidContact, "contact email has forbidden
+# domain", and the panel then got no certificate at all.
+acme_email_refused() {
+  local domain="${ACME_EMAIL##*@}" top
+  domain="${domain,,}"
+  top="${domain##*.}"
+  case "$domain" in
+    example.com | *.example.com | example.net | *.example.net | example.org | *.example.org)
+      printf '%s is kept for examples in documentation and receives no mail' "$domain"
+      return 0
+      ;;
+  esac
+  case "$top" in
+    test | example | invalid | localhost | local | onion | arpa | internal)
+      printf '.%s names are kept for tests, examples or local networks and receive no mail from the internet' "$top"
+      return 0
+      ;;
+  esac
+  if [[ "$top" =~ ^[0-9]+$ ]]; then
+    printf '%s is an IP address, not a domain' "$domain"
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------- preflight

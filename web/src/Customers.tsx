@@ -10,6 +10,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PanelTrustNote } from "@/components/panel-trust-note";
 import { ProblemAlert } from "@/components/problem-alert";
 import type { Problem } from "@/components/problem-alert";
 import { dateLabel } from "@/lib/api";
@@ -86,6 +87,7 @@ function SetupLinkPanel({ link, onDone }: { link: CustomerSetupLink; onDone: () 
       </div>
       <span role="status" className={`min-h-5 text-sm ${failed ? "text-destructive" : "text-muted-foreground"}`}>{message}</span>
     </Field>
+    <PanelTrustNote place="setup-link" admin testId="setup-link-trust" />
     <Button type="button" className={`${rowControl} w-fit`} onClick={onDone} data-testid="hide-setup-link"><Check aria-hidden="true" />I have sent it</Button>
   </section>;
 }

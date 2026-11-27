@@ -14,7 +14,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { dateLabel } from "@/lib/api";
-import { checkDatabasePassword, createPhpSite, createWordPressSite, defaultPhpVersion, fieldChecks, getWebsiteJob, httpReason, jobProgress, phpVersions, usesHttps, validJobId, websiteKinds, WordPressApiError } from "@/lib/wordpress-api";
+import { checkDatabasePassword, createPhpSite, createWordPressSite, defaultPhpVersion, fieldChecks, getWebsiteJob, httpReason, httpReasonDetail, jobProgress, phpVersions, usesHttps, validJobId, websiteKinds, WordPressApiError } from "@/lib/wordpress-api";
 import type { JobResult, JobStep, StepState, WebsiteJob, WebsiteKind, WordPressField, WordPressInput } from "@/lib/wordpress-api";
 import { useShell } from "@/shell/context";
 import "./new-website.css";
@@ -430,6 +430,7 @@ export function StepList({ steps, ended }: { steps: JobStep[]; ended: boolean })
             <Badge variant={stepBadge[state]}>{stepLabels[state]}</Badge>
           </div>
           {step.message && <div className="mt-1 text-xs break-words text-muted-foreground">{step.message}</div>}
+          {step.technical && <TechnicalDetails className="mt-1.5 text-xs">{step.technical}</TechnicalDetails>}
         </div>
       </li>;
       })}
@@ -589,6 +590,7 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
     const secure = usesHttps(result);
     // Why the site has no certificate yet, as the "ssl" step said it.
     const reason = secure ? "" : httpReason(job);
+    const reasonDetail = secure ? "" : httpReasonDetail(job);
     const php = job.kind === "php";
     const what = php ? "The PHP site is live." : "WordPress is installed.";
     return <section className={`${panel} flex w-full max-w-2xl flex-col gap-5`} data-testid="job-succeeded" data-kind={job.kind}>
@@ -598,6 +600,7 @@ export function WebsiteJob({ jobId }: { jobId: string }) {
           {heading(<>{job.domain} is ready</>)}
           <p className="text-sm" data-testid="site-protocol">{secure ? `${what} The site uses https with its own certificate.` : `${what} The site uses http for now.`}</p>
           {reason && <p className="text-sm text-muted-foreground" data-testid="http-reason">{reason}</p>}
+          {reasonDetail && <TechnicalDetails className="mt-1">{reasonDetail}</TechnicalDetails>}
         </div>
       </div>
       <JobFacts job={job} result={result} />

@@ -40,7 +40,9 @@ export type PhpSiteField = keyof PhpSiteInput;
 
 export type JobState = "running" | "succeeded" | "failed";
 export type StepState = "pending" | "running" | "done" | "failed" | "undone" | "skipped";
-export interface JobStep { name: string; title: string; state: StepState; message: string; started_at: string; finished_at: string }
+// technical: a skipped step's detail in the words of whoever stopped it,
+// such as the certificate authority's answer; empty for most steps.
+export interface JobStep { name: string; title: string; state: StepState; message: string; technical: string; started_at: string; finished_at: string }
 export interface JobError { step: string; what: string; why: string; next: string; technical: string }
 // A PHP site has no admin_url or wordpress_version (both empty); database
 // names its database and user when it asked for one, and is empty otherwise.
@@ -210,8 +212,9 @@ function webURL(v: unknown): v is string {
 
 function parseStep(v: unknown): JobStep | undefined {
   if (!object(v) || !text(v.name) || !v.name || !text(v.title) || !v.title || !stepStates.includes(String(v.state))) return undefined;
-  if (!optionalText(v.message) || !optionalDate(v.started_at) || !optionalDate(v.finished_at)) return undefined;
-  return { name: v.name, title: v.title, state: v.state as StepState, message: (v.message as string | undefined) ?? "", started_at: (v.started_at as string | undefined) ?? "", finished_at: (v.finished_at as string | undefined) ?? "" };
+  if (!optionalText(v.message) || !optionalText(v.technical) || !optionalDate(v.started_at) || !optionalDate(v.finished_at)) return undefined;
+  return { name: v.name, title: v.title, state: v.state as StepState, message: (v.message as string | undefined) ?? "", technical: (v.technical as string | undefined) ?? "",
+    started_at: (v.started_at as string | undefined) ?? "", finished_at: (v.finished_at as string | undefined) ?? "" };
 }
 
 function parseError(v: unknown): JobError | null | undefined {
@@ -474,4 +477,11 @@ export function usesHttps(result: JobResult): boolean {
 export function httpReason(job: WebsiteJob): string {
   const step = job.steps.find((s) => s.name === "ssl");
   return step?.state === "skipped" ? step.message : "";
+}
+
+// The certificate authority's own answer behind httpReason, for Technical
+// details. Empty when the step has none.
+export function httpReasonDetail(job: WebsiteJob): string {
+  const step = job.steps.find((s) => s.name === "ssl");
+  return step?.state === "skipped" ? step.technical : "";
 }

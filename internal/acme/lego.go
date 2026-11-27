@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -329,4 +330,93 @@ func classify(err error) error {
 		}
 	}
 	return fmt.Errorf("%w: %w", ErrAuthority, err)
+}
+
+// Reason is what stopped a certificate, finer than the error kinds above,
+// so a person can be told the real cause and what to do about it.
+type Reason string
+
+const (
+	// ReasonContact: the certificate authority refused the account's
+	// contact address (invalidContact, unsupportedContact), such as one at
+	// example.com. Nothing is issued until the panel has another address.
+	ReasonContact Reason = "contact"
+	// ReasonRateLimit: one of the authority's rate limits (rateLimited).
+	ReasonRateLimit Reason = "rate_limited"
+	// ReasonName: the authority does not issue for the name at all
+	// (rejectedIdentifier, unsupportedIdentifier).
+	ReasonName Reason = "rejected_name"
+	// ReasonCAA: the domain's CAA records do not allow the authority (caa).
+	ReasonCAA Reason = "caa"
+	// ReasonDNS: the authority could not look the domain up (dns).
+	ReasonDNS Reason = "dns"
+	// ReasonConnection: the authority could not connect to the domain on
+	// port 80, or the TLS of a redirect failed (connection, tls).
+	ReasonConnection Reason = "connection"
+	// ReasonElsewhere: the domain answered, but not with this server's
+	// challenge file, so it points at another server (unauthorized,
+	// incorrectResponse).
+	ReasonElsewhere Reason = "elsewhere"
+	// ReasonNoAnswer: the panel could not reach the authority, or it did
+	// not answer in time.
+	ReasonNoAnswer Reason = "no_answer"
+	// ReasonRefused: the authority answered with another problem.
+	ReasonRefused Reason = "refused"
+	// ReasonInstall: issued, but not installed (ErrInstall).
+	ReasonInstall Reason = "install"
+	// ReasonTooSoon: not asked, the last attempt was too recent (ErrTooSoon).
+	ReasonTooSoon Reason = "too_soon"
+	// ReasonOther: anything else, such as a challenge file the panel could
+	// not write.
+	ReasonOther Reason = "other"
+)
+
+// ReasonOf answers what stopped a certificate, from an error Secure,
+// Refresh or an Issuer returned. The authority's problem type decides it
+// when there is one: a compound problem by its first subproblem.
+func ReasonOf(err error) Reason {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrTooSoon):
+		return ReasonTooSoon
+	case errors.Is(err, ErrInstall):
+		return ReasonInstall
+	}
+	var problem *legoacme.ProblemDetails
+	if errors.As(err, &problem) {
+		kind := problem.Type
+		if len(problem.SubProblems) > 0 && (kind == legoacme.CompoundErrorType || kind == legoacme.MalformedErrorType) {
+			kind = problem.SubProblems[0].Type
+		}
+		switch kind {
+		case legoacme.InvalidContactErrorType, legoacme.UnsupportedContactErrorType:
+			return ReasonContact
+		case legoacme.RateLimitedErrorType:
+			return ReasonRateLimit
+		case legoacme.RejectedIdentifierErrorType, legoacme.UnsupportedIdentifierErrorType:
+			return ReasonName
+		case legoacme.CaaErrorType:
+			return ReasonCAA
+		case legoacme.DNSErrorType:
+			return ReasonDNS
+		case legoacme.ConnectionErrorType, legoacme.TLSErrorType:
+			return ReasonConnection
+		case legoacme.UnauthorizedErrorType, legoacme.IncorrectResponseErrorType:
+			return ReasonElsewhere
+		}
+		return ReasonRefused
+	}
+	var network net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &network):
+		return ReasonNoAnswer
+	// Only an Issuer other than lego's answers these kinds without the
+	// problem behind them.
+	case errors.Is(err, ErrRateLimited):
+		return ReasonRateLimit
+	case errors.Is(err, ErrValidation):
+		return ReasonConnection
+	}
+	return ReasonOther
 }

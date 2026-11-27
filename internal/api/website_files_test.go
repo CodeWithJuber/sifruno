@@ -322,6 +322,90 @@ func TestWebsiteFilesWorkOnTheHome(t *testing.T) {
 	}
 }
 
+// OpenLiteSpeed makes .lsns/tmp in every site's home for the PHP's /tmp.
+// The file manager lists it as locked, and refuses to change it or anything
+// in it, or to move anything into it, before the broker is asked.
+func TestWebsiteFilesLockOpenLiteSpeedsFolder(t *testing.T) {
+	f, broker, site := filesFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	get := func(rest string) *httptest.ResponseRecorder {
+		return websiteRequest(f.handler, "GET", filesURL(site, rest), nil, cookie, "")
+	}
+	post := func(action string, body any) *httptest.ResponseRecorder {
+		return websiteRequest(f.handler, "POST", filesURL(site, "/"+action), body, cookie, csrf)
+	}
+	home := broker.home(site.AccountID)
+	for _, dir := range []string{".lsns/tmp", "public_html", ".lsnsish"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, "public_html", "index.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var folder WebsiteFolder
+	if w := get(""); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &folder) != nil || folder.Locked != "" || len(folder.Entries) != 3 {
+		t.Fatalf("home: %d %s", w.Code, w.Body.String())
+	}
+	locked := map[string]string{}
+	for _, e := range folder.Entries {
+		locked[e.Name] = e.Locked
+	}
+	if !strings.HasPrefix(locked[".lsns"], "OpenLiteSpeed's working folder") || !strings.HasPrefix(locked["public_html"], "The folder the website serves") || locked[".lsnsish"] != "" {
+		t.Fatalf("locked notes %q", locked)
+	}
+	folder = WebsiteFolder{}
+	if w := get("?path=.lsns"); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &folder) != nil || folder.Locked == "" || len(folder.Entries) != 1 || folder.Entries[0].Locked == "" {
+		t.Fatalf(".lsns: %d %s", w.Code, w.Body.String())
+	}
+	folder = WebsiteFolder{}
+	if w := get("?path=public_html"); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &folder) != nil || folder.Locked != "" || folder.Entries[0].Locked != "" {
+		t.Fatalf("public_html: %d %s", w.Code, w.Body.String())
+	}
+
+	before := len(broker.calls)
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"delete .lsns":            post("delete", map[string]string{"path": ".lsns"}),
+		"delete .lsns/tmp":        post("delete", map[string]string{"path": ".lsns/tmp"}),
+		"rename .lsns":            post("rename", map[string]string{"path": ".lsns", "to": "old-lsns"}),
+		"move .lsns/tmp out":      post("rename", map[string]string{"path": ".lsns/tmp", "to": "tmp"}),
+		"move a file into .lsns":  post("rename", map[string]string{"path": "public_html/index.php", "to": ".lsns/index.php"}),
+		"rename a folder to it":   post("rename", map[string]string{"path": ".lsnsish", "to": ".lsns"}),
+		"permissions of .lsns":    post("mode", map[string]string{"path": ".lsns", "mode": "0700"}),
+		"new folder in .lsns":     post("folder", map[string]string{"path": ".lsns/new"}),
+		"new file in .lsns":       post("save", map[string]string{"path": ".lsns/tmp/x.php", "content": "<?php", "expected_version": ""}),
+		"upload into .lsns":       rawRequest(f.handler, "POST", filesURL(site, "/upload?path=.lsns%2Ftmp%2Fx.zip&overwrite=false"), "application/octet-stream", bytes.NewReader([]byte("x")), 1, cookie, csrf, ""),
+		"delete the site folder":  post("delete", map[string]string{"path": "public_html"}),
+		"rename the site folder":  post("rename", map[string]string{"path": "public_html", "to": "old_html"}),
+		"permissions of the site": post("mode", map[string]string{"path": "public_html", "mode": "0700"}),
+	} {
+		want := filesLsns
+		if strings.Contains(name, "site") {
+			want = filesSiteFolder
+		}
+		if w.Code != 409 || problemDetail(t, w) != want {
+			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	broker.fmu.Lock()
+	calls := len(broker.calls)
+	broker.fmu.Unlock()
+	if calls != before {
+		t.Fatalf("a refused change reached the broker: %d calls", calls-before)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".lsns", "tmp")); err != nil {
+		t.Fatal(err)
+	}
+	// What is inside the site folder, and a name that only starts the same,
+	// still change.
+	if e := decodeFile(t, post("rename", map[string]string{"path": ".lsnsish", "to": "lsns-notes"})); e.Name != "lsns-notes" {
+		t.Fatalf("rename %+v", e)
+	}
+	if e := decodeFile(t, post("mode", map[string]string{"path": "public_html/index.php", "mode": "0600"})); e.Mode != "0600" {
+		t.Fatalf("mode %+v", e)
+	}
+}
+
 func TestWebsiteFilesRefuseBadRequests(t *testing.T) {
 	f, broker, site := filesFixture(t)
 	cookie, csrf := websiteSignIn(t, f)

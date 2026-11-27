@@ -12,7 +12,7 @@ Steps: open `http://127.0.0.1:8080/` through the tunnel, find the setup, type th
 | --- | --- | --- | --- |
 | The first page is Home with the full menu, live readings and five tiles, although the panel has no admin yet. Setup appears only after opening Websites. | The owner sees a working panel, clicks around, and every page asks for a key it never mentioned. The installer says "Open Websites", which is easy to miss. | Before the first admin exists, every page shows the setup form. | S |
 | "It is in `operator/access.key` inside the panel's state folder on this server." | A non-specialist does not know where the state folder is or how to open a root-only file. | Give the full path and the command: `sudo cat /var/lib/sifpanel/state/operator/access.key`. | S |
-| The authenticator step shows a 32-letter key and an "Open in authenticator app" link, with no QR code. | Most people add an account by scanning a code. Typing 32 letters on a phone is slow and error-prone, and the link works only on the same device. | Show a QR code of the `otpauth://` address. Needs a QR encoder: a new dependency or about 300 lines of our own. | L |
+| The authenticator step shows a 32-letter key and an "Open in authenticator app" link, with no QR code. | Most people add an account by scanning a code. Typing 32 letters on a phone is slow and error-prone, and the link works only on the same device. | Show a QR code of the `otpauth://` address. Fixed in the follow-ups with our own encoder. | L |
 | After setup, nothing says that the panel should now be used at its name, `https://panel…:8443/`. | The owner keeps using the SSH tunnel, or never learns that customers use the name. | A "Get started" step for the panel's own address. | S |
 
 ## 2. Home
@@ -24,7 +24,7 @@ Steps: open `http://127.0.0.1:8080/` through the tunnel, find the setup, type th
 | The "Customers" tile opens Hosting accounts (Linux accounts), not customer logins. | The tile says one thing and opens another. | Open Customers. | S |
 | A tile for "Static site backups (old)". | The old model takes a fifth of Home. | Replace it with Backups (backup storage). | S |
 | 122 system services (`apt-daily.service`, cloud-init stages) on Home. | Noise for a hosting owner. | Keep monitoring under Get started; the list stays on Server. Not changed in this slice. | S |
-| On the server itself, an admin who is not signed in sees Home's tiles and readings but no Get started and no sign-in prompt (found after the fix). | The next step appears only after a tile asks for sign-in. | A "Sign in to see what is next" line. Not in this slice. | S |
+| On the server itself, an admin who is not signed in sees Home's tiles and readings but no Get started and no sign-in prompt (found after the fix). | The next step appears only after a tile asks for sign-in. | A "Sign in to see what is next" line. Fixed in the follow-ups ([proofs/ux-followups/](proofs/ux-followups/)). | S |
 
 ## 3. Create a WordPress site with the wizard
 
@@ -32,7 +32,7 @@ Steps: open `http://127.0.0.1:8080/` through the tunnel, find the setup, type th
 | --- | --- | --- | --- |
 | Field hints in bytes: "Up to 200 bytes: a plain letter is 1, letters with accents… are 2 to 4", "12 to 128 bytes". | Bytes are a programmer's unit. | Say characters, and that accented letters count more. | S |
 | The finished screen's last action is "Go to Websites"; nothing leads to the new site's own page, where domains, SSL and backups are. | The owner's next jobs (certificate, backups, a customer login) start on the site's page. | "Manage this website" as the one primary action. | S |
-| "Turn on https: Skipped. The certificate authority could not be reached or did not issue a certificate… The panel tries again every few hours." On this run the real cause was that Let's Encrypt refused the contact address `admin@example.com`. | The message blames the network; the owner checks DNS and firewalls that are fine, then waits hours. | The ACME client should name the refusal (contact address, rate limit, DNS) and the installer should check the address. Server work, not in this slice. | L |
+| "Turn on https: Skipped. The certificate authority could not be reached or did not issue a certificate… The panel tries again every few hours." On this run the real cause was that Let's Encrypt refused the contact address `admin@example.com`. | The message blames the network; the owner checks DNS and firewalls that are fine, then waits hours. | The ACME client should name the refusal (contact address, rate limit, DNS) and the installer should check the address. Fixed in the follow-ups. | L |
 
 | A PHP site's finished screen tells the admin "Ask whoever runs this server to add your public key". | The admin is whoever runs the server, and the panel has no screen for SFTP keys. | A key form, or the command for the server. Not in this slice. | M |
 
@@ -48,8 +48,8 @@ The wizard's progress screen is good: five named steps, a progress bar, "You can
 | Overview | Good: a health list with a button per problem. "restore drill" in Recent activity. | One internal word. | "restore test". | S |
 | Domains and SSL | The tab is named SSL but shows no certificate state, only an `http` badge. The HTTPS switch shows on but cannot be pressed. The next step for the owner says "ask whoever runs this server". | The owner is whoever runs the server: a dead end. The switch looks broken. | A Certificate line (valid until, none yet, expired); for an admin, a next step with what to check on the server; "On: starts once the site has a certificate". | S |
 | Always use HTTPS | Cannot be tried until a certificate exists (see above). | — | Covered by the Domains fix and Get started. | — |
-| Files | Opens the home folder, which lists `.lsns` (OpenLiteSpeed's namespace folder) with Rename and Delete; permissions as `rwxr-xr-x`. | A system folder looks like the owner's, and deleting it breaks the site. | Hide or lock system folders; show permissions in words. Not in this slice. | M |
-| Databases, phpMyAdmin | "Open phpMyAdmin" opens the panel's name on port 8444; while the panel's certificate is self-signed the browser shows "Your connection is not private". | The panel sends the owner into a security warning without saying why. | Get started shows the panel's certificate state; a note on this button is the next step. Not in this slice. | M |
+| Files | Opens the home folder, which lists `.lsns` (OpenLiteSpeed's namespace folder) with Rename and Delete; permissions as `rwxr-xr-x`. | A system folder looks like the owner's. (On the follow-ups' server, OpenLiteSpeed made `.lsns` again after it was deleted and PHP kept working, so "breaks the site" was not reproduced.) | Lock system folders; show permissions in words. Fixed in the follow-ups: `.lsns` is locked in the page and refused by the server. | M |
+| Databases, phpMyAdmin | "Open phpMyAdmin" opens the panel's name on port 8444; while the panel's certificate is self-signed the browser shows "Your connection is not private". | The panel sends the owner into a security warning without saying why. | Get started shows the panel's certificate state; a note on this button is the next step. Fixed in the follow-ups. | M |
 | Backups | "Run restore drill now" is disabled with no reason before the first backup. "Started by local-operator." | "Drill" and "local-operator" are internal; a greyed button with no reason is a dead end. | "Test a restore now", with "Make a backup first"; "Started by an admin". | S |
 | Cron jobs | Crontab fields ("Five fields: minute, hour…", `>> ~/cron.log 2>&1`). The "When" presets help. | Shell terms. | Acceptable in Advanced view; not changed. | S |
 | Logs | Raw log lines, newest last. | Expected for logs. | None. | — |
@@ -114,9 +114,9 @@ Ranked by how many owners meet it, how early, and whether it stops them.
 | --- | --- | --- | --- |
 | 1 | Home gives no next step: an owner cannot tell what a ready server needs. | Get started checklist from the server's real state. | Fixed |
 | 2 | The first open shows the panel, not the setup; the access key's place is vague. | Setup on every page until an admin exists; full path and command. | Fixed |
-| 3 | The panel's own certificate state is invisible in the panel; customers' setup links and phpMyAdmin open on browser warnings. | Get started step for the panel's address and certificate, with what to do. | Fixed (warnings beside the link and the phpMyAdmin button not yet) |
+| 3 | The panel's own certificate state is invisible in the panel; customers' setup links and phpMyAdmin open on browser warnings. | Get started step for the panel's address and certificate, with what to do. | Fixed (the warnings beside the link and the phpMyAdmin button in the follow-ups) |
 | 4 | Domains and SSL shows no certificate state, a switch that is on but disabled, and "ask whoever runs this server" to the owner. | Certificate line, admin next step, switch explained. | Fixed |
-| 5 | Certificate failures name the wrong cause (this run: a refused contact address reported as "could not be reached"). | Name the real refusal; check `--acme-email` in the installer. | Not fixed: server work |
+| 5 | Certificate failures name the wrong cause (this run: a refused contact address reported as "could not be reached"). | Name the real refusal; check `--acme-email` in the installer. | Fixed in the follow-ups |
 | 6 | Old static-site screens in the main menu and on Home. | Advanced group, one quiet link. | Fixed |
 | 7 | Hosting accounts (Linux, broker, UID) under Customers, and Home's Customers tile opens it. | Advanced group; the tile opens Customers. | Fixed |
 | 8 | The site's own page is hard to find from Websites; Move is missing there; "New website" twice when empty. | Name links, "Manage", Move beside New website. | Fixed |
@@ -125,5 +125,5 @@ Ranked by how many owners meet it, how early, and whether it stops them.
 | 11 | "Restore drill", "local-operator", and a disabled drill button with no reason. | "Restore test", "an admin", the reason. | Fixed |
 | 12 | Backup storage is written for a sysadmin (restic, SFTP, host key). | Plain first sentence; commands stay as help. | Fixed |
 | 13 | Security page: "operator", "locally", "revoke". | Plain words. | Fixed |
-| 14 | No QR code for the authenticator app. | QR code. | Not fixed: needs a QR encoder (a new dependency or our own) |
+| 14 | No QR code for the authenticator app. | QR code. | Fixed in the follow-ups: our own encoder, no new dependency |
 | 15 | Wizard limits in bytes. | Characters. | Fixed |

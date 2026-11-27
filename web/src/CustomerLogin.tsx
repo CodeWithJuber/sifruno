@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AuthenticatorQr } from "@/components/qr-code";
 import { ProblemAlert } from "@/components/problem-alert";
 import type { Problem } from "@/components/problem-alert";
 import { AuthError, beginAuthenticatorChange, beginCustomerSetup, beginPasskey, changeOwnPassword, finishAuthenticatorChange, finishCustomerSetup, finishPasskey, groupedSecret, listPasskeys, removePasskey } from "@/lib/auth-api";
@@ -125,15 +126,21 @@ export function CustomerSetup() {
     {!secret && !problem && <div className="flex flex-col gap-3" aria-busy="true"><span className="sr-only">Checking the setup link</span><Skeleton className="h-24 w-full" /><Skeleton className="h-10 w-full" /></div>}
     {secret && <>
       <div className="flex flex-col gap-2 rounded-md border border-border bg-muted p-3">
-        <div className="text-sm font-medium text-foreground">1. Add this key to your authenticator app</div>
-        <div className="text-xs text-muted-foreground">Google Authenticator, Microsoft Authenticator and 1Password all work. Key for {secret.username}:</div>
-        <code className="block font-mono text-base tracking-wider break-all text-foreground" data-testid="customer-setup-secret">{groupedSecret(secret.secret)}</code>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => void copyKey()}>{copied === "Copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}Copy key</Button>
-          <a className={buttonVariants({ variant: "outline", size: "sm" })} href={secret.otpauth_uri}><ExternalLink aria-hidden="true" />Open in authenticator app</a>
-          <span role="status" className="text-xs text-muted-foreground">{copied}</span>
+        <div className="text-sm font-medium text-foreground">1. Add this login to your authenticator app</div>
+        <div className="text-xs text-muted-foreground">Google Authenticator, Microsoft Authenticator and 1Password all work. Scan the code with the app, or type the key.</div>
+        <div className="flex flex-wrap items-start gap-4">
+          <AuthenticatorQr uri={secret.otpauth_uri} username={secret.username} testId="customer-setup-qr" />
+          <div className="flex min-w-0 flex-1 basis-48 flex-col gap-2">
+            <div className="text-xs text-muted-foreground">Key for {secret.username}:</div>
+            <code className="block font-mono text-base tracking-wider break-all text-foreground" data-testid="customer-setup-secret">{groupedSecret(secret.secret)}</code>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void copyKey()}>{copied === "Copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}Copy key</Button>
+              <a className={buttonVariants({ variant: "outline", size: "sm" })} href={secret.otpauth_uri}><ExternalLink aria-hidden="true" />Open in authenticator app</a>
+              <span role="status" className="text-xs text-muted-foreground">{copied}</span>
+            </div>
+          </div>
         </div>
-        <div className="text-xs text-foreground">The key is shown only during setup. Anyone with it can make codes, so do not share it or save it in a note.</div>
+        <div className="text-xs text-foreground">The code and the key are shown only during setup. Anyone with them can make codes, so do not share them, photograph them or save them in a note.</div>
       </div>
       <form method="post" noValidate onSubmit={(event) => void submit(event)} aria-label="Choose your password">
         <FieldGroup className="gap-4">
@@ -555,15 +562,21 @@ function AuthenticatorChange({ username, csrf }: { username: string; csrf: strin
     </form>}
     {secret && <>
       <div className="flex flex-col gap-2 rounded-md border border-border bg-muted p-3">
-        <h3 ref={keyHeading} tabIndex={-1} className="m-0 text-sm font-medium text-foreground outline-none">1. Add this key to the new app</h3>
-        <div className="text-xs text-muted-foreground">Google Authenticator, Microsoft Authenticator and 1Password all work. Key for {username}:</div>
-        <code className="block font-mono text-base tracking-wider break-all text-foreground" data-testid="authenticator-secret">{groupedSecret(secret.secret)}</code>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => void copyKey()}>{copied === "Copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}Copy key</Button>
-          <a className={buttonVariants({ variant: "outline", size: "sm" })} href={secret.otpauth_uri}><ExternalLink aria-hidden="true" />Open in authenticator app</a>
-          <span role="status" className="text-xs text-muted-foreground">{copied}</span>
+        <h3 ref={keyHeading} tabIndex={-1} className="m-0 text-sm font-medium text-foreground outline-none">1. Add this login to the new app</h3>
+        <div className="text-xs text-muted-foreground">Google Authenticator, Microsoft Authenticator and 1Password all work. Scan the code with the new app, or type the key.</div>
+        <div className="flex flex-wrap items-start gap-4">
+          <AuthenticatorQr uri={secret.otpauth_uri} username={username} testId="authenticator-qr" />
+          <div className="flex min-w-0 flex-1 basis-48 flex-col gap-2">
+            <div className="text-xs text-muted-foreground">Key for {username}:</div>
+            <code className="block font-mono text-base tracking-wider break-all text-foreground" data-testid="authenticator-secret">{groupedSecret(secret.secret)}</code>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void copyKey()}>{copied === "Copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}Copy key</Button>
+              <a className={buttonVariants({ variant: "outline", size: "sm" })} href={secret.otpauth_uri}><ExternalLink aria-hidden="true" />Open in authenticator app</a>
+              <span role="status" className="text-xs text-muted-foreground">{copied}</span>
+            </div>
+          </div>
         </div>
-        <div className="text-xs text-foreground">The key is shown only now and works for 10 minutes until it is confirmed. Anyone with it can make codes, so do not share it or save it in a note.</div>
+        <div className="text-xs text-foreground">The code and the key are shown only now and work for 10 minutes until they are confirmed. Anyone with them can make codes, so do not share them, photograph them or save them in a note.</div>
       </div>
       <form method="post" noValidate onSubmit={(event) => void finish(event)} aria-label="Confirm the new app" data-testid="authenticator-finish-form">
         <FieldGroup className="gap-4">

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PanelTrustNote } from "@/components/panel-trust-note";
 import { checkConfirmName, checkDatabaseChoice, checkPassword, checkSuffix, createDatabaseUser, createSiteDatabase, databaseHost, DatabasesApiError, databasesFor, deleteDatabaseUser, deleteSiteDatabase, fullName, listSiteDatabases, openPhpMyAdmin, setDatabaseUserPassword, suffixLimit, usedByWordPress } from "@/lib/databases-api";
 import type { NameKind, PhpMyAdminLink, SiteDatabase, SiteDatabases as DatabaseList } from "@/lib/databases-api";
 import { getWebsite, WebsitesApiError } from "@/lib/websites-api";
@@ -438,6 +439,7 @@ function DeleteForm({ accountId, target, onBusy, onDeleted, onCancel }: { accoun
 // opened no tab, the one-time link is offered instead: it signs in once,
 // within a minute.
 function OpenPhpMyAdmin({ accountId, hasDatabases, announcer }: { accountId: string; hasDatabases: boolean; announcer: Announcer }) {
+  const { viewer } = useShell();
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<Problem>();
   const [blocked, setBlocked] = useState<PhpMyAdminLink>();
@@ -488,6 +490,7 @@ function OpenPhpMyAdmin({ accountId, hasDatabases, announcer }: { accountId: str
     {hasDatabases && <div className="text-sm text-muted-foreground" data-testid="phpmyadmin-definers">
       Triggers, views and stored routines need this website's own database user: phpMyAdmin's sign-in cannot make them.
     </div>}
+    {hasDatabases && <PanelTrustNote place="phpmyadmin" admin={!viewer.restricted} testId="phpmyadmin-trust" />}
     {blocked && <Alert role={undefined} className="text-start" data-testid="phpmyadmin-blocked">
       <TriangleAlert aria-hidden="true" />
       <AlertTitle>Your browser did not open a new tab.</AlertTitle>

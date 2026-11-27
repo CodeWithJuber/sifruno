@@ -95,6 +95,55 @@ export function panelAddressStep(reading: Reading<PasskeyStatus>, origin: string
   return { ...base, state: "todo", status: `The panel has a name, ${host}. Open it there: that is where you check its certificate and where your customers sign in.`, action: { kind: "address", label: `Open ${host}`, href: `${status.address}/` } };
 }
 
+// What the panel's own certificate means beside a customer's setup link and
+// the "Open phpMyAdmin" button, from the reading the first step uses: both
+// open at the panel's name with its certificate. None while browsers trust
+// it. "untrusted": open at the name, which has no trusted certificate yet.
+// "no-name": the panel has no name. "unknown": open at another address, so
+// this page cannot tell. admin: the viewer can act on Get started; a
+// customer is told who can.
+export type TrustPlace = "setup-link" | "phpmyadmin";
+export interface TrustNote {
+  state: "untrusted" | "no-name" | "unknown";
+  title: string;
+  what: string;
+  next: string;
+  // The panel at its name, to check by opening it ("unknown" only).
+  href?: string;
+}
+
+const getStartedStep = "Get started's step \"Give the panel its own address\" shows what to check";
+
+export function panelTrustNote(status: PasskeyStatus, origin: string, place: TrustPlace, admin = true): TrustNote | undefined {
+  if (status.available) return undefined;
+  const warning = "\"Your connection is not private\"";
+  const customerNext = "Ask your hosting provider to give the panel a certificate browsers trust.";
+  if (!status.address) {
+    // Without a name the panel serves no phpMyAdmin: the button says why.
+    if (place === "phpmyadmin") return undefined;
+    return { state: "no-name", title: "Your customer cannot open this link safely yet",
+      what: "The panel has no name of its own, so the link points at the address you opened it at: one your customer's browser warns about, or cannot reach at all.",
+      next: "Give the panel its own address first (Get started's first step), then make a new setup link and send that one." };
+  }
+  const host = hostOf(status.address);
+  if (status.address.toLowerCase() === origin.toLowerCase()) {
+    return place === "setup-link"
+      ? { state: "untrusted", title: "Your customer will see a security warning first",
+        what: `Browsers do not trust the panel's certificate at ${host} yet, so the link opens on ${warning} before the setup page. Until Let's Encrypt issues one for the panel's name, the panel uses a certificate it made itself.`,
+        next: `Get the certificate in place first: ${getStartedStep}. Send the link once the panel opens without a warning.` }
+      : { state: "untrusted", title: "Your browser will show a security warning first",
+        what: `phpMyAdmin opens at the panel's name with the panel's certificate, which browsers do not trust yet, so they show ${warning} before phpMyAdmin.`,
+        next: admin ? `Get the certificate in place first: ${getStartedStep}.` : customerNext };
+  }
+  return place === "setup-link"
+    ? { state: "unknown", title: "Check the panel's address before you send this",
+      what: `The link opens the panel at ${host}. You opened the panel at another address, so this page cannot tell whether browsers trust ${host}.`,
+      next: `Open ${host} yourself: if your browser shows no warning there, send the link. If it warns, ${getStartedStep}.`, href: `${status.address}/` }
+    : { state: "unknown", title: "Your browser may show a security warning first",
+      what: "phpMyAdmin opens at the panel's name with the panel's certificate. You opened the panel at another address, so this page cannot tell whether browsers trust it.",
+      next: admin ? `If your browser warns there, ${getStartedStep}.` : customerNext };
+}
+
 export function firstWebsiteStep(reading: Reading<Website[]>): Step {
   const base = { id: "first-website" as const, title: "Create your first website", why: "A website is what your customers pay for. The wizard sets up the hosting account, the database and WordPress." };
   const pending = unread(reading);

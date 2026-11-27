@@ -19,8 +19,12 @@ export interface FileEntry {
   modified: string;
   // Files only: changes whenever the file changes. A save sends it back.
   version?: string;
+  // Why the file manager does not rename, move, delete or change it: a
+  // folder the platform made (public_html, OpenLiteSpeed's .lsns).
+  locked?: string;
 }
-export interface Folder { path: string; entries: FileEntry[]; skipped: number; truncated: boolean }
+// locked: why nothing in this folder can be added, changed or removed here.
+export interface Folder { path: string; entries: FileEntry[]; skipped: number; truncated: boolean; locked?: string }
 export interface FileText { path: string; file: FileEntry; content: string }
 
 // The server's bounds.
@@ -147,10 +151,29 @@ export function sortEntries(entries: readonly FileEntry[], locale?: string): Fil
   return [...entries].sort((a, b) => (a.type === "folder" ? 0 : 1) - (b.type === "folder" ? 0 : 1) || collator.compare(a.name, b.name));
 }
 
+// Permissions in words, beside the mode: who may read, write and run a file
+// or open a folder. The owner is the website's own user; others are
+// everyone else, the web server included. A link's own mode means nothing:
+// what it points to decides.
+export function modeWords(mode: string, type: EntryType): string {
+  if (type === "link") return "Set by what the link points to";
+  const p = permissionsOf(mode);
+  const verbs = (t: Triple) => {
+    const v = [t.read ? "read" : "", t.write ? "write" : "", t.execute ? (type === "folder" ? "open" : "run") : ""].filter(Boolean);
+    return v.length < 2 ? v.join("") : `${v.slice(0, -1).join(", ")} and ${v[v.length - 1]}`;
+  };
+  const can = (who: string, t: Triple, none: string) => (verbs(t) ? `${who} can ${verbs(t)}` : `${who} ${none} no access`);
+  if (!verbs(p.owner) && !verbs(p.group) && !verbs(p.others)) return "No one has access";
+  const same = (a: Triple, b: Triple) => a.read === b.read && a.write === b.write && a.execute === b.execute;
+  const rest = same(p.group, p.others) ? [can("others", p.others, "have")] : [can("group", p.group, "has"), can("others", p.others, "have")];
+  return [can("Owner", p.owner, "has"), ...rest].join("; ");
+}
+
 // What can be done with an entry. A link or special file can only be
-// renamed or deleted; a file small enough opens in the editor.
+// renamed or deleted; a file small enough opens in the editor. A locked
+// entry (the site folder, OpenLiteSpeed's folder) is only opened and read.
 export function actionsFor(entry: FileEntry, path: string, writable: boolean) {
-  const own = path === siteFolder;
+  const own = path === siteFolder || Boolean(entry.locked);
   return {
     open: entry.type === "folder",
     edit: entry.type === "file" && entry.size <= maxTextBytes,
@@ -172,11 +195,16 @@ export function parseEntry(v: unknown): FileEntry | undefined {
   if (!Number.isSafeInteger(v.size) || (v.size as number) < 0 || !text(v.mode) || !modeForm.test(v.mode) || !text(v.modified) || Number.isNaN(Date.parse(v.modified))) return undefined;
   const type = v.type as EntryType;
   if (type === "file" ? !(text(v.version) && versionForm.test(v.version)) : v.version !== undefined || v.size !== 0) return undefined;
-  return { name: v.name, type, size: v.size as number, mode: v.mode, modified: v.modified, ...(type === "file" ? { version: v.version as string } : {}) };
+  if (!lockNote(v.locked)) return undefined;
+  return { name: v.name, type, size: v.size as number, mode: v.mode, modified: v.modified, ...(type === "file" ? { version: v.version as string } : {}), ...(v.locked ? { locked: v.locked as string } : {}) };
 }
+
+// A lock's reason as the server words it: absent, or one short line.
+const lockNote = (v: unknown) => v === undefined || (text(v) && v.length > 0 && v.length <= 300 && !control.test(v));
 
 export function parseFolder(v: unknown, path: string): Folder | undefined {
   if (!object(v) || v.path !== path || !Array.isArray(v.entries) || v.entries.length > maxEntries || !Number.isSafeInteger(v.skipped) || (v.skipped as number) < 0 || typeof v.truncated !== "boolean") return undefined;
+  if (!lockNote(v.locked)) return undefined;
   const entries: FileEntry[] = [];
   const seen = new Set<string>();
   for (const item of v.entries as unknown[]) {
@@ -185,7 +213,7 @@ export function parseFolder(v: unknown, path: string): Folder | undefined {
     seen.add(entry.name);
     entries.push(entry);
   }
-  return { path, entries, skipped: v.skipped as number, truncated: v.truncated };
+  return { path, entries, skipped: v.skipped as number, truncated: v.truncated, ...(v.locked ? { locked: v.locked as string } : {}) };
 }
 
 export function parseFileText(v: unknown, path: string): FileText | undefined {

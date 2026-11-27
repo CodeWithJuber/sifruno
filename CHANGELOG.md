@@ -4,6 +4,29 @@
 
 ### Changed
 
+- A certificate that Let's Encrypt did not issue is explained by its real
+  cause: a refused contact address, a rate limit, a name it does not issue
+  for, a CAA record, no DNS record, port 80 closed, another server
+  answering, or Let's Encrypt not answering, each with what to do. The
+  new website's last screen and its "Turn on https" step show it, with
+  Let's Encrypt's own words under Technical details, and so does the
+  panel's "Panel certificate:" log line. A refused contact address used to
+  read as "could not be reached".
+- The installer stops, before it changes anything, when `--acme-email` is
+  at a domain Let's Encrypt refuses (example.com, .net and .org, .test,
+  .invalid, .localhost and other names kept for examples and tests, or an
+  IP address), and says to type an address at a domain you own.
+- While browsers do not trust the panel's own certificate, a customer's
+  setup link and "Open phpMyAdmin" carry a short warning: that the browser
+  will show "Your connection is not private" first, why, and that Get
+  started's step for the panel's address shows what to check.
+- A website's Files show OpenLiteSpeed's `.lsns` folder as locked, with
+  why, and the server refuses to rename, move, delete or change it or
+  anything in it, or to move anything into it. Permissions read in words
+  beside the mode, such as "Owner can read and write; others can read".
+- Home opened on the server itself without a sign-in says "Sign in to see
+  what is next", with a Sign in button, instead of showing the readings
+  with no next step.
 - Moving a website from cPanel no longer refuses `.htaccess` lines
   OpenLiteSpeed can safely ignore or that Sifruno handles: cPanel's PHP
   handler block, Expires, compression, caching and security headers,
@@ -83,6 +106,11 @@
 
 ### Added
 
+- A QR code to scan with the authenticator app, on the first-run setup, on
+  a customer's setup page and where Account changes the app. The panel
+  draws it in the browser from the app's link (our own encoder, no new
+  dependency), so the key goes nowhere; the key and the link stay beside
+  it.
 - Move a website here from a cPanel backup file: "Move a website here" now
   asks where the website is, and for a backup file (cpmove-USER.tar.gz,
   USER.tar.gz or backup-…_USER.tar.gz, up to 32 GiB) shows what it holds

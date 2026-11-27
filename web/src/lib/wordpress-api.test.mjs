@@ -99,7 +99,7 @@ test("job parsing accepts the contract's running, succeeded and failed shapes", 
   assert.deepEqual(api.jobProgress(api.parseJob(succeeded())), { done: 5, total: 5 });
   // The short step form in the contract (name and title only besides state) is filled in.
   const short = api.parseJob(job({ steps: [{ name: "account", title: "Create the hosting account", state: "pending" }] }));
-  assert.deepEqual(short.steps[0], { name: "account", title: "Create the hosting account", state: "pending", message: "", started_at: "", finished_at: "" });
+  assert.deepEqual(short.steps[0], { name: "account", title: "Create the hosting account", state: "pending", message: "", technical: "", started_at: "", finished_at: "" });
   // The username is empty until the account step picks one.
   assert.equal(api.parseJob(job({ username: "" })).username, "");
   assert.equal(api.parseJobResponse({ job: job() }).id, jobId);
@@ -127,6 +127,12 @@ test("the ssl step: skipped keeps its reason, and the last screen tells https fr
   assert.deepEqual(parsed.steps.map((s) => `${s.name}=${s.state}`), ["account=done", "web=done", "ssl=skipped", "database=done", "wordpress=done"]);
   assert.equal(api.usesHttps(parsed.result), false);
   assert.equal(api.httpReason(parsed), notPointing);
+  assert.equal(api.httpReasonDetail(parsed), "");
+  // The certificate authority's own answer is kept for Technical details.
+  const refused = succeeded();
+  refused.steps[2] = { ...refused.steps[2], state: "skipped", message: "Let's Encrypt refused the contact email address this server was installed with.", technical: "urn:ietf:params:acme:error:invalidContact :: contact email has forbidden domain" };
+  assert.match(api.httpReasonDetail(api.parseJob(refused)), /invalidContact/);
+  assert.equal(api.parseJob({ ...refused, steps: refused.steps.map((s, i) => i === 2 ? { ...s, technical: 7 } : s) }), undefined);
   // Not set up on this server: the same, with that reason.
   const plain = succeeded(); plain.steps[2].message = "Certificates are not set up on this server.";
   assert.equal(api.httpReason(api.parseJob(plain)), "Certificates are not set up on this server.");

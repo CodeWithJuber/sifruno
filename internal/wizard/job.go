@@ -60,10 +60,14 @@ func (j Job) namesSite() bool { return j.State == StateSucceeded && j.RemovedAt 
 // step failed. "skipped" means the step did not run because an earlier one
 // failed, or, for "ssl", that the site has no certificate yet and uses http.
 type Step struct {
-	Name       string `json:"name"`
-	Title      string `json:"title"`
-	State      string `json:"state"`
-	Message    string `json:"message"`
+	Name    string `json:"name"`
+	Title   string `json:"title"`
+	State   string `json:"state"`
+	Message string `json:"message"`
+	// Technical is a skipped step's detail in the words of whoever stopped
+	// it, such as the certificate authority's answer; the Message says it
+	// in plain words. Printable ASCII without secrets.
+	Technical  string `json:"technical,omitempty"`
 	StartedAt  string `json:"started_at"`
 	FinishedAt string `json:"finished_at"`
 }

@@ -98,10 +98,10 @@ This writes `artifacts/release/sifruno-linux-amd64.tar.gz` and `sifruno-linux-am
    To also reach the panel from other machines over HTTPS on port 8443, and to turn on Let's Encrypt certificates for websites and for the panel itself, name the panel's host and a contact address:
 
    ```bash
-   ./install.sh --panel-host panel.example.com --acme-email admin@example.com
+   ./install.sh --panel-host panel.example.com --acme-email YOUR-ADDRESS
    ```
 
-   `--acme-email` accepts the certificate authority's terms of service. With both, the broker answers the panel's name on port 80 for its certificate challenge and nothing else, and the installer warns when the name is already a website's domain. `--no-start` installs everything but leaves the two Sifruno units off.
+   Put your panel's real name in place of `panel.example.com`, and in place of `YOUR-ADDRESS` an email address you read at a domain you own: Let's Encrypt refuses addresses at example.com, .test and other names kept for examples and tests, and the installer stops on one before it changes anything. `--acme-email` accepts the certificate authority's terms of service. With both, the broker answers the panel's name on port 80 for its certificate challenge and nothing else, and the installer warns when the name is already a website's domain. `--no-start` installs everything but leaves the two Sifruno units off.
 
 5. Keep your SSH session open. Open a second one and check that you can still sign in before you close the first.
 

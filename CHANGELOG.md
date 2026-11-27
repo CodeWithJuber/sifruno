@@ -12,6 +12,10 @@
   Let's Encrypt's own words under Technical details, and so does the
   panel's "Panel certificate:" log line. A refused contact address used to
   read as "could not be reached".
+- The installer stops, before it changes anything, when `--acme-email` is
+  at a domain Let's Encrypt refuses (example.com, .net and .org, .test,
+  .invalid, .localhost and other names kept for examples and tests, or an
+  IP address), and says to type an address at a domain you own.
 - Home opened on the server itself without a sign-in says "Sign in to see
   what is next", with a Sign in button, instead of showing the readings
   with no next step.

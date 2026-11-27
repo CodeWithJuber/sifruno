@@ -1,0 +1,169 @@
+# UX follow-ups (audit problems 3, 5, 14 and the Home and Files rows left open), proved on a real server, 2026-11-27
+#
+# Server: a new g6-standard-2 Linode made by scripts/ci/nightly-fresh-install.sh with SIFRUNO_NIGHTLY_KEEP=1
+# and the owner's admin key added; AlmaLinux 9, SELinux enforcing, /home on its own XFS disk with quota. The
+# Cloud Firewall admitted 22, 8443 and 8444 from the runner only, 80 and 443 from anywhere; firewalld opened
+# the same ports for this boot. Deleted at the end (last part).
+# Browser: Chrome through agent-browser 0.45.0 on the runner, at 1440x900 and 390x844. The admin used an SSH
+# tunnel to the panel's loopback address ([::1]:8080), as docs/installation.md says; a second browser session
+# opened the panel at its name, https://panel.SERVER_IP.sslip.io:8443/, which still had its self-signed
+# certificate, with --ignore-https-errors; a third was the customer.
+#
+# Edits to the captured output: the server's address is SERVER_IP (also in NAME.sslip.io names). Before each
+# screenshot a script replaced it in the page's text, blanked the authenticator key and the setup link's
+# one-time token, and the QR codes of real keys were painted over after zbarimg had read them (part 6).
+# Passwords, codes, the access key and setup links reached the browser through stdin, never an argument or
+# a file in the repository. Screenshots: before-*.png (release e823f84) and after-*.png (branch head).
+
+# Part 1. Before: the release of e823f84, installed with a contact address Let's Encrypt refuses
+$ SIFRUNO_NIGHTLY_KEEP=1 ... scripts/ci/nightly-fresh-install.sh
+# release sha256 13f8763a377c2b2331c06bde6a225a6f7406ffef3c4705fb08ea500820434670, source e823f84
+PASS: the fresh-install test passed 17 checks on a new g6-standard-2 Linode (linode/almalinux9).
+$ ./install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@example.com
+exit status 0
+acme: panel.SERVER_IP.sslip.io (account panel): no certificate: acme: the certificate authority did not issue a certificate: acme: error: 400 :: POST :: https://acme-v02.api.letsencrypt.org/acme/new-acct :: urn:ietf:params:acme:error:invalidContact :: Error validating contact(s) :: contact email has forbidden domain "example.com"
+Panel certificate: Let's Encrypt did not answer or did not issue a certificate for panel.SERVER_IP.sslip.io, so the panel keeps its self-signed certificate. Check that this server reaches acme-v02.api.letsencrypt.org on port 443; the panel asks again within 6 hours.
+# The wizard's site wp.SERVER_IP.sslip.io: "The certificate authority could not be reached or did not issue a
+#   certificate, so the site uses http. The panel tries again every few hours." (before-a-wizard-done-*.png)
+# First run, step 3: a 32-letter key and a link, no QR code (before-e-first-run-authenticator-*.png).
+# Signed out on the server itself: Home with tiles and readings, no Get started, no sign-in (before-d-*.png).
+# Customers: the setup link at https://panel.SERVER_IP.sslip.io:8443/setup#... with no word about the
+#   self-signed certificate (before-b-setup-link-*.png); Databases: "Open phpMyAdmin" likewise
+#   (before-b-phpmyadmin-*.png).
+# Files: the home lists .lsns with Rename, Permissions and Delete, and permissions as rwxr-xr-x
+#   (before-c-files-*.png, before-c-delete-lsns-dialog-1440.png).
+
+# Part 2. What the platform makes in a site's home, on this server (item c)
+$ for h in /home/*/; do echo "== $h"; ls -A "$h"; done        # after two WordPress sites
+== /home/shop/
+.lsns
+public_html
+== /home/wpsite/
+.lsns
+public_html
+$ ls -la /home/wpsite/.lsns                                   # OpenLiteSpeed's namespace /tmp
+drwxr-xr-x. 2 wpsite wpsite  6 Nov 27 06:22 tmp
+# public_html is the broker's (already locked). .lsns is OpenLiteSpeed's: on the e823f84 release it was
+# deleted through the Files page, then OpenLiteSpeed was reloaded, then its namespace was torn down
+# (/usr/local/lsws/lsns/bin/unmount_ns -u wpsite, pkill lsphp):
+site right after delete: 200
+site after an OpenLiteSpeed graceful restart: 200
+wp-login.php after the namespace is torn down: 200
+# and OpenLiteSpeed made /home/wpsite/.lsns/tmp again by itself. With .lsns at mode 000 and the namespace torn
+# down again: wp-login.php 200. So the audit's "deleting it breaks the site" did not reproduce; .lsns is
+# still the web server's, not the owner's, and the file manager now leaves it alone.
+
+# Part 3. After: the branch head, built and installed as an upgrade
+$ scripts/install/build-release.sh
+Built from 5f221d0
+SHA-256: 618427952ae7a31956b74c5b12f46b0826885f0d27aca90ba4199367b73c7315
+$ ./install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@example.com
+install.sh: --acme-email is at a domain Let's Encrypt refuses: admin@example.com
+  Why: example.com is kept for examples in documentation and receives no mail. Let's Encrypt refuses such a contact address when the panel registers its account, so neither the panel nor any website would get a certificate.
+  What to do: Type an address you read, at a domain you own, such as the one you use for your business, and run the installer again.
+exit status 1
+$ systemctl show -p ExecStart sifruno | grep -o -- '--acme-email [^ ]*'     # unchanged: nothing was installed
+--acme-email admin@example.com
+# An address the installer cannot judge without the public suffix list, which Let's Encrypt refuses too:
+$ ./install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email owner@bakery.localdomain
+exit status 0
+# The wizard's new site shop.SERVER_IP.sslip.io (after-a-wizard-done-*.png):
+#   "Let's Encrypt refused the contact email address this server was installed with, so it issued no
+#   certificate and the site uses http. It refuses addresses at domains that receive no mail, such as
+#   example.com. Run the installer again on the server with --acme-email set to an address at a domain you
+#   own; the panel then asks again by itself within 6 hours."
+#   Technical details: acme: the certificate authority did not issue a certificate: acme: error: 400 :: POST
+#   :: https://acme-v02.api.letsencrypt.org/acme/new-acct :: urn:ietf:params:acme:error:invalidContact ::
+#   Error validating contact(s) :: contact email has invalid domain: Domain name does not end with a valid
+#   public suffix (TLD)
+# The panel's own line, at its next start more than an hour after its last try:
+Panel certificate: Let's Encrypt refused the contact email address the panel was installed with (--acme-email), so it issued no certificate for panel.SERVER_IP.sslip.io and the panel keeps its self-signed certificate. It refuses addresses at domains that receive no mail, such as example.com. Run the installer again with --acme-email set to an address at a domain you own; the panel asks again within 6 hours.
+$ ./install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@panel.SERVER_IP.sslip.io
+exit status 0
+# A new PHP site cafe.SERVER_IP.sslip.io then got its certificate in the wizard
+#   (after-a-good-address-site-https-1440.png):
+acme: cafe.SERVER_IP.sslip.io (account ...): certificate installed, valid until 2027-02-25
+$ curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}' https://cafe.SERVER_IP.sslip.io/
+200 0
+
+# Part 4. The warning beside the setup link and Open phpMyAdmin (item b)
+# Through the tunnel, a new setup link for bakery: "Check the panel's address before you send this. The link
+#   opens the panel at panel.SERVER_IP.sslip.io:8443. You opened the panel at another address, so this page
+#   cannot tell whether browsers trust it." with Open panel.SERVER_IP.sslip.io:8443 and Open Get started
+#   (after-b-setup-link-tunnel-*.png; data-state="unknown").
+# At the name, still self-signed (data-state="untrusted"): "Your customer will see a security warning first.
+#   Browsers do not trust the panel's certificate at panel.SERVER_IP.sslip.io:8443 yet, so the link opens on
+#   "Your connection is not private" before the setup page. ... Next step: Get the certificate in place first:
+#   Get started's step "Give the panel its own address" shows what to check." (after-b-setup-link-at-name-*.png)
+# Databases at the name: "Your browser will show a security warning first. phpMyAdmin opens at the panel's
+#   name with the panel's certificate, which browsers do not trust yet ..." (after-b-phpmyadmin-at-name-*.png);
+#   the customer bakery sees "Next step: Ask your hosting provider to give the panel a certificate browsers
+#   trust." (after-b-phpmyadmin-customer-390.png)
+
+# Part 5. Files (item c)
+# The home: .lsns "Locked" with "OpenLiteSpeed's working folder for this website's PHP. The web server makes
+#   it, so it is not changed here." and no Rename, Permissions or Delete; public_html "Website folder"; every
+#   entry's permissions in words beside the mode, such as "Owner can read, write and open; others can read and
+#   open" (after-c-files-*.png, after-c-lsns-folder-1440.png, after-c-public-html-1440.png).
+# The server refuses whatever the page no longer offers. From the signed-in browser, with the session's CSRF:
+POST files/delete {"path":".lsns"} -> HTTP 409: .lsns is OpenLiteSpeed's working folder for this website: the site's PHP keeps its temporary files in .lsns/tmp, and the web server makes the folder again whenever it is gone. So the file manager does not rename, move, delete or change it, or anything in it. Nothing was changed. Your website's files are in public_html.
+POST files/rename {"path":".lsns","to":"old-lsns"} -> HTTP 409: (the same)
+POST files/mode {"path":".lsns","mode":"0700"} -> HTTP 409: (the same)
+POST files/rename {"path":"public_html/readme.html","to":".lsns/readme.html"} -> HTTP 409: (the same)
+POST files/folder {"path":".lsns/x"} -> HTTP 409: (the same)
+POST files/delete {"path":"public_html"} -> HTTP 409: public_html is the folder the website serves, so the file manager does not delete, rename or change the permissions of it. Change what is inside it instead.
+$ ls -la /home/wpsite/.lsns
+drwxr-xr-x. 2 wpsite wpsite  6 Nov 27 06:22 tmp
+
+# Part 6. QR code for the authenticator app (item e)
+# Each QR below was captured from Chrome's own rendering of the page and read with zbarimg 0.23.93 on the
+# runner; the decoded text was compared byte for byte with the page's otpauth link (secret shown here as
+# [REDACTED]):
+after-e-account-qr-1440: zbarimg read the QR on screen as exactly the page's otpauth link (117 bytes): otpauth://totp/Sifruno:owner?algorithm=SHA1&digits=6&issuer=Sifruno&period=30&secret=[REDACTED]
+after-e-account-qr-390: zbarimg read the QR on screen as exactly the page's otpauth link (117 bytes): (the same)
+after-e-first-run-qr-1440: zbarimg read the QR on screen as exactly the page's otpauth link (118 bytes): otpauth://totp/Sifruno:owner2?algorithm=SHA1&digits=6&issuer=Sifruno&period=30&secret=[REDACTED]
+after-e-first-run-qr-390: zbarimg read the QR on screen as exactly the page's otpauth link (118 bytes): (the same)
+after-e-customer-setup-qr-390: zbarimg read the QR on screen as exactly the page's otpauth link (118 bytes): otpauth://totp/Sifruno:bakery?algorithm=SHA1&digits=6&issuer=Sifruno&period=30&secret=[REDACTED]
+# The customer then finished its setup with a code computed from the key zbarimg had read out of the QR, as a
+# phone's app would, and landed on its Websites page. (First run was shown by moving operator/admins.json
+# aside, the installation guide's recovery step, and back; that setup was not finished.)
+# The committed screenshots have the real QR codes painted over: they hold the key. after-e-qr-stand-in.png
+# is the same drawing for a stand-in link (a key of A's): version 7, mask 2; zbarimg reads it back exactly.
+# The encoder also matched Nayuki's qrcodegen 1.8.0 (byte mode, level M, no boost) module for module on 125
+# inputs covering versions 1 to 40, empty and UTF-8 text, and zbarimg read all 125 back exactly.
+
+# Part 7. Sign in from Home (item d)
+# Signed out on the server itself: "Sign in to see what is next. You are not signed in. Once you are, Get
+#   started lists what this server still needs, and your websites and customers open." with Sign in
+#   (after-d-home-signed-out-*.png). Sign in shows the form, with "Back to Home without signing in"
+#   (after-d-sign-in-form-390.png). After sign-in: Home with Get started, and no sign-in line
+#   (after-d-home-signed-in-1440.png).
+
+# Part 8. The panel's certificate trusted: the notes go away
+# The panel waits an hour after a try; its next start (09:51) asked Let's Encrypt with the good address:
+Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-25. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+$ curl -sS -o /dev/null -w '%{ssl_verify_result}' https://panel.SERVER_IP.sslip.io:8443/
+0
+# A new Chrome session at the name, without --ignore-https-errors, signed in; the Databases tab:
+phpmyadmin-trust notes: 0                                      (after-b-phpmyadmin-trusted-1440.png)
+
+# Part 9. Checks on the branch (runner, from the worktree)
+$ npm --prefix web run typecheck                        # no output, exit 0
+$ node --test web/src/lib/*.test.mjs                    # tests 285, pass 285, fail 0 (qr.test.mjs: 8 new)
+$ go vet ./...                                          # exit 0
+$ go test ./... -count=1                                # 54 packages ok; cmd/sifruno's process test missed its
+                                                        # build deadline on a cold cache, then passed after
+                                                        # `go build -trimpath ./cmd/sifruno`, as CI primes it
+$ go test ./internal/acme/ ./internal/wizard/ ./internal/panelcert/ ./internal/api/ -count=1   # all ok
+$ bash scripts/ci/public-repo-guard.sh                  # exit 0
+$ reuse lint                                            # compliant with REUSE 3.3
+$ tesseract on all 38 committed screenshots             # no server address, no 32-letter key
+# Not run: the dev-VM browser proofs (panel-shell.qa.mjs, customer-login.qa.mjs), the Python fixture tests.
+
+# Part 10. The server is deleted
+$ SIFRUNO_NIGHTLY_KEEP=1 SIFRUNO_NIGHTLY_ID=uxf1127 scripts/ci/nightly-fresh-install.sh cleanup
+== 2026-11-27T09:53:01Z deleted: Linode (sifruno-owner-test-uxf1127)
+== 2026-11-27T09:53:18Z deleted: firewall (sifruno-owner-test-uxf1127)
+== 2026-11-27T09:53:19Z checked through the API: no Linode and no firewall named sifruno-owner-test-uxf1127 is left
+$ GET /v4/linode/instances/<id> and GET /v4/networking/firewalls/<id>
+HTTP 404, HTTP 404

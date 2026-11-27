@@ -4,6 +4,14 @@
 
 ### Changed
 
+- A certificate that Let's Encrypt did not issue is explained by its real
+  cause: a refused contact address, a rate limit, a name it does not issue
+  for, a CAA record, no DNS record, port 80 closed, another server
+  answering, or Let's Encrypt not answering, each with what to do. The
+  new website's last screen and its "Turn on https" step show it, with
+  Let's Encrypt's own words under Technical details, and so does the
+  panel's "Panel certificate:" log line. A refused contact address used to
+  read as "could not be reached".
 - Home opened on the server itself without a sign-in says "Sign in to see
   what is next", with a Sign in button, instead of showing the readings
   with no next step.

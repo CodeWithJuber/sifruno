@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	legoacme "github.com/go-acme/lego/v5/acme"
 
 	"sifruno/internal/acme"
 	"sifruno/internal/hostaccounts"
@@ -109,39 +113,90 @@ func TestSSLStepInstallsTheCertificateAndWordPressUsesHTTPS(t *testing.T) {
 }
 
 func TestSSLFailureIsSkippedAndTheSiteUsesHTTP(t *testing.T) {
+	problem := func(kind, detail string) error {
+		return &legoacme.ProblemDetails{Type: kind, Detail: detail, HTTPStatus: 400}
+	}
+	installed := "the certificate could not be installed"
 	for _, tc := range []struct {
 		name      string
 		issuer    acme.Issuer
 		installer func(*fakeAccounts) acme.Installer
 		message   string
+		technical string   // what the step's technical detail holds
 		calls     []string // after SetWeb
 	}{
 		{
-			name:      "domain not pointing here",
-			issuer:    fakeIssuer{err: fmt.Errorf("%w: acme: error: 403 :: urn:ietf:params:acme:error:connection :: refused", acme.ErrValidation)},
+			// The audit's case: the installer took an address Let's
+			// Encrypt refuses, which the step used to blame on the network.
+			name:      "contact address refused",
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: %w", acme.ErrAuthority, problem(legoacme.InvalidContactErrorType, `Error validating contact(s) :: contact email has forbidden domain "example.com"`))},
 			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
-			message:   "The domain does not point at this server yet, so the site uses http. The panel tries again every few hours.",
+			message:   "Let's Encrypt refused the contact email address this server was installed with, so it issued no certificate and the site uses http. It refuses addresses at domains that receive no mail, such as example.com. Run the installer again on the server with --acme-email set to an address at a domain you own; the panel then asks again by itself within 6 hours.",
+			technical: `urn:ietf:params:acme:error:invalidContact :: Error validating contact(s) :: contact email has forbidden domain "example.com"`,
+			calls:     []string{"list", "install 0001 rev=2"},
+		},
+		{
+			name:      "domain not pointing here",
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: %w", acme.ErrValidation, problem(legoacme.ConnectionErrorType, "203.0.113.7: Fetching http://example.com/.well-known/acme-challenge/x: Connection refused"))},
+			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
+			message:   "Let's Encrypt could not connect to example.com on port 80, so the site uses http. The domain points at an address that does not answer there: another server, or this one with port 80 closed. Point the domain's A record at this server and open TCP port 80 to the internet; the panel tries again within 6 hours.",
+			technical: "Connection refused",
+			calls:     []string{"list", "install 0001 rev=2"},
+		},
+		{
+			name:      "another server answers",
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: %w", acme.ErrValidation, problem(legoacme.UnauthorizedErrorType, "203.0.113.7: Invalid response from http://example.com/.well-known/acme-challenge/x: 404"))},
+			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
+			message:   "Let's Encrypt reached example.com, but another server answered there, so the site uses http. The domain, or its IPv6 (AAAA) record, still points at another server. Point every A and AAAA record of example.com at this server, or remove an old AAAA record; the panel tries again within 6 hours.",
+			technical: "Invalid response",
+			calls:     []string{"list", "install 0001 rev=2"},
+		},
+		{
+			name:      "no DNS record",
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: %w", acme.ErrValidation, problem(legoacme.DNSErrorType, "DNS problem: NXDOMAIN looking up A for example.com"))},
+			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
+			message:   "Let's Encrypt could not find example.com in DNS, so the site uses http. The domain has no A record yet, or its DNS servers did not answer. Add an A record for example.com with this server's IP address at your DNS provider (Set up DNS shows it); the panel tries again within 6 hours.",
+			technical: "NXDOMAIN",
+			calls:     []string{"list", "install 0001 rev=2"},
+		},
+		{
+			name:      "CAA forbids",
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: %w", acme.ErrAuthority, problem(legoacme.CaaErrorType, "CAA record for example.com prevents issuance"))},
+			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
+			message:   "The DNS of example.com has a CAA record that does not allow Let's Encrypt, so it issued no certificate and the site uses http. At your DNS provider, add a CAA record for letsencrypt.org or remove the CAA records; the panel tries again within 6 hours.",
+			technical: "CAA record",
+			calls:     []string{"list", "install 0001 rev=2"},
+		},
+		{
+			name:      "name refused",
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: %w", acme.ErrAuthority, problem(legoacme.RejectedIdentifierErrorType, `Cannot issue for "example.com": The ACME server refuses to issue a certificate for this domain name, because it is forbidden by policy`))},
+			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
+			message:   "Let's Encrypt does not issue certificates for example.com: the name is reserved or on its list of names it refuses, so the site uses http. Check the spelling; a domain you have registered gets a certificate, this one cannot.",
+			technical: "forbidden by policy",
 			calls:     []string{"list", "install 0001 rev=2"},
 		},
 		{
 			name:      "rate limited",
-			issuer:    fakeIssuer{err: fmt.Errorf("%w: too many certificates", acme.ErrRateLimited)},
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: %w", acme.ErrRateLimited, problem(legoacme.RateLimitedErrorType, "too many certificates (5) already issued for this exact set of identifiers"))},
 			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
-			message:   "The certificate authority is not issuing more certificates for this domain right now, so the site uses http. The panel tries again every few hours.",
+			message:   "Let's Encrypt is not issuing more certificates for example.com right now: one of its rate limits was reached, so the site uses http. The panel tries again within 6 hours; if this lasts more than a day, read https://letsencrypt.org/docs/rate-limits/.",
+			technical: "too many certificates",
 			calls:     []string{"list", "install 0001 rev=2"},
 		},
 		{
 			name:      "certificate authority unreachable",
-			issuer:    fakeIssuer{err: errors.New("dial tcp: connection refused")},
+			issuer:    fakeIssuer{err: fmt.Errorf("%w: get directory: %w", acme.ErrAuthority, &url.Error{Op: "Get", URL: acme.LetsEncrypt, Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}})},
 			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a} },
-			message:   "The certificate authority could not be reached or did not issue a certificate, so the site uses http. The panel tries again every few hours.",
+			message:   "The panel could not reach Let's Encrypt, or it did not answer in time, so the site uses http. This server's outgoing connections on port 443 may be blocked, or Let's Encrypt may be busy. Check that the server can open https://acme-v02.api.letsencrypt.org/directory; the panel tries again within 6 hours.",
+			technical: "connection refused",
 			calls:     []string{"list", "install 0001 rev=2"},
 		},
 		{
 			name:      "web server refused the certificate",
 			issuer:    fakeIssuer{},
 			installer: func(a *fakeAccounts) acme.Installer { return fakeInstaller{acc: a, err: hostaccounts.ErrWebRejected} },
-			message:   "A certificate was issued, but the web server did not take it, so the site uses http. The panel tries again every few hours.",
+			message:   "A certificate was issued, but the web server did not take it, so the site uses http. The account service's reason is under Technical details. Fix what it names on the server; the panel tries again in a week.",
+			technical: installed,
 			calls:     []string{"certificate 0001 rev=2", "list", "install 0001 rev=2"},
 		},
 		{
@@ -153,8 +208,9 @@ func TestSSLFailureIsSkippedAndTheSiteUsesHTTP(t *testing.T) {
 			installer: func(a *fakeAccounts) acme.Installer {
 				return fakeInstaller{acc: a, err: hostaccounts.ErrUnavailable, bumps: true}
 			},
-			message: "A certificate was issued, but the web server did not take it, so the site uses http. The panel tries again every few hours.",
-			calls:   []string{"certificate 0001 rev=2", "list", "install 0001 rev=3"},
+			message:   "A certificate was issued, but the web server did not take it, so the site uses http. The account service's reason is under Technical details. Fix what it names on the server; the panel tries again in a week.",
+			technical: installed,
+			calls:     []string{"certificate 0001 rev=2", "list", "install 0001 rev=3"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,7 +223,7 @@ func TestSSLFailureIsSkippedAndTheSiteUsesHTTP(t *testing.T) {
 			if got := stepStates(done); got != "account=done web=done ssl=skipped database=done wordpress=done" {
 				t.Fatal(got)
 			}
-			if step := sslStep(t, done); step.Message != tc.message || step.FinishedAt == "" {
+			if step := sslStep(t, done); step.Message != tc.message || !strings.Contains(step.Technical, tc.technical) || step.FinishedAt == "" {
 				t.Fatalf("ssl step %+v", step)
 			}
 			if got := f.acc.calls[3:]; !slices.Equal(got, tc.calls) {

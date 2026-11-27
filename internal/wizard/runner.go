@@ -262,6 +262,9 @@ type run struct {
 
 	// migration is a migration job's own state (migrate.go), nil otherwise.
 	migration *migrationRun
+	// skipDetail is the technical detail of the step about to be skipped:
+	// the certificate authority's answer when the ssl step got none.
+	skipDetail string
 }
 
 // stepError is a failed step in plain words.
@@ -355,7 +358,10 @@ func (j *run) begin(i int) {
 func (j *run) finish(i int, message string) { j.end(i, StepDone, message) }
 
 // skip ends a step that did not do its work but does not stop the job.
-func (j *run) skip(i int, message string) { j.end(i, StepSkipped, message) }
+func (j *run) skip(i int, message string) {
+	j.job.Steps[i].Technical, j.skipDetail = j.skipDetail, ""
+	j.end(i, StepSkipped, message)
+}
 
 func (j *run) end(i int, state, message string) {
 	j.job.Steps[i].State = state
@@ -464,15 +470,37 @@ func (j *run) web(ctx context.Context) (string, *stepError) {
 	return "The site is live with PHP " + j.in.PHPVersion + ".", nil
 }
 
-// Plain reasons for a site that stays on http. The panel's renewal loop tries
-// again every few hours.
-const (
-	sslNotSetUp    = "Certificates are not set up on this server."
-	sslNotPointing = "The domain does not point at this server yet, so the site uses http. The panel tries again every few hours."
-	sslLimited     = "The certificate authority is not issuing more certificates for this domain right now, so the site uses http. The panel tries again every few hours."
-	sslNotTaken    = "A certificate was issued, but the web server did not take it, so the site uses http. The panel tries again every few hours."
-	sslNoAnswer    = "The certificate authority could not be reached or did not issue a certificate, so the site uses http. The panel tries again every few hours."
-)
+const sslNotSetUp = "Certificates are not set up on this server."
+
+// sslWhy says why a site stays on http, from what stopped its certificate:
+// what happened, why, and what to do. The certificate authority's own words
+// go to the step's technical detail. The renewal loop tries a failed site
+// again 6 hours after the try, and a week after a refused install.
+func sslWhy(reason acme.Reason, domain string) string {
+	switch reason {
+	case acme.ReasonContact:
+		return "Let's Encrypt refused the contact email address this server was installed with, so it issued no certificate and the site uses http. It refuses addresses at domains that receive no mail, such as example.com. Run the installer again on the server with --acme-email set to an address at a domain you own; the panel then asks again by itself within 6 hours."
+	case acme.ReasonRateLimit:
+		return "Let's Encrypt is not issuing more certificates for " + domain + " right now: one of its rate limits was reached, so the site uses http. The panel tries again within 6 hours; if this lasts more than a day, read https://letsencrypt.org/docs/rate-limits/."
+	case acme.ReasonName:
+		return "Let's Encrypt does not issue certificates for " + domain + ": the name is reserved or on its list of names it refuses, so the site uses http. Check the spelling; a domain you have registered gets a certificate, this one cannot."
+	case acme.ReasonCAA:
+		return "The DNS of " + domain + " has a CAA record that does not allow Let's Encrypt, so it issued no certificate and the site uses http. At your DNS provider, add a CAA record for letsencrypt.org or remove the CAA records; the panel tries again within 6 hours."
+	case acme.ReasonDNS:
+		return "Let's Encrypt could not find " + domain + " in DNS, so the site uses http. The domain has no A record yet, or its DNS servers did not answer. Add an A record for " + domain + " with this server's IP address at your DNS provider (Set up DNS shows it); the panel tries again within 6 hours."
+	case acme.ReasonConnection:
+		return "Let's Encrypt could not connect to " + domain + " on port 80, so the site uses http. The domain points at an address that does not answer there: another server, or this one with port 80 closed. Point the domain's A record at this server and open TCP port 80 to the internet; the panel tries again within 6 hours."
+	case acme.ReasonElsewhere:
+		return "Let's Encrypt reached " + domain + ", but another server answered there, so the site uses http. The domain, or its IPv6 (AAAA) record, still points at another server. Point every A and AAAA record of " + domain + " at this server, or remove an old AAAA record; the panel tries again within 6 hours."
+	case acme.ReasonNoAnswer:
+		return "The panel could not reach Let's Encrypt, or it did not answer in time, so the site uses http. This server's outgoing connections on port 443 may be blocked, or Let's Encrypt may be busy. Check that the server can open https://acme-v02.api.letsencrypt.org/directory; the panel tries again within 6 hours."
+	case acme.ReasonRefused:
+		return "Let's Encrypt refused to issue a certificate for " + domain + ", so the site uses http. Its reason is under Technical details. The panel tries again within 6 hours; if the same reason comes back, check https://letsencrypt.status.io/."
+	case acme.ReasonInstall:
+		return "A certificate was issued, but the web server did not take it, so the site uses http. The account service's reason is under Technical details. Fix what it names on the server; the panel tries again in a week."
+	}
+	return "The panel could not get a certificate for " + domain + ", so the site uses http. The reason is under Technical details. The panel tries again within 6 hours."
+}
 
 // ssl gets the site a certificate and installs it. It never fails the job:
 // without a certificate the step is skipped with the reason, the site stays
@@ -491,16 +519,8 @@ func (j *run) ssl(ctx context.Context) (string, *stepError) {
 	// waiting, which moves the account's revision; the install step needs
 	// the current one.
 	j.refreshRevision(ctx)
-	switch {
-	case errors.Is(err, acme.ErrValidation):
-		return sslNotPointing, nil
-	case errors.Is(err, acme.ErrRateLimited):
-		return sslLimited, nil
-	case errors.Is(err, acme.ErrInstall):
-		return sslNotTaken, nil
-	default:
-		return sslNoAnswer, nil
-	}
+	j.skipDetail = j.technical(err)
+	return sslWhy(acme.ReasonOf(err), j.in.Domain), nil
 }
 
 // refreshRevision reads the account's current revision from the broker,

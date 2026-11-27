@@ -275,15 +275,30 @@ func (i *Issued) valid(c *issuedCert) string {
 // certificate for name after err, what it keeps serving (keeps), and what
 // to do. The manager's own line before it has the technical details.
 func explain(err error, name, keeps string) string {
-	switch {
-	case errors.Is(err, acme.ErrValidation):
-		return "Panel certificate: Let's Encrypt could not check " + name + " over http on port 80 of this server, so the panel keeps " + keeps + ". Point the name's DNS at this server and open TCP port 80 to the internet; the panel asks again within 6 hours."
-	case errors.Is(err, acme.ErrRateLimited):
+	const again = "; the panel asks again within 6 hours."
+	switch acme.ReasonOf(err) {
+	case acme.ReasonContact:
+		return "Panel certificate: Let's Encrypt refused the contact email address the panel was installed with (--acme-email), so it issued no certificate for " + name + " and the panel keeps " + keeps + ". It refuses addresses at domains that receive no mail, such as example.com. Run the installer again with --acme-email set to an address at a domain you own" + again
+	case acme.ReasonRateLimit:
 		return "Panel certificate: Let's Encrypt has had too many requests for " + name + " or from this server, so the panel keeps " + keeps + ". The panel asks again within 6 hours; if this lasts more than a day, read https://letsencrypt.org/docs/rate-limits/."
-	case errors.Is(err, acme.ErrInstall):
+	case acme.ReasonName:
+		return "Panel certificate: Let's Encrypt does not issue certificates for " + name + ": the name is reserved or on its list of names it refuses, so the panel keeps " + keeps + ". Give the panel a name in a domain you have registered: run the installer again with --panel-host set to it."
+	case acme.ReasonCAA:
+		return "Panel certificate: the DNS of " + name + " has a CAA record that does not allow Let's Encrypt, so it issued no certificate and the panel keeps " + keeps + ". At your DNS provider, add a CAA record for letsencrypt.org or remove the CAA records" + again
+	case acme.ReasonDNS:
+		return "Panel certificate: Let's Encrypt could not find " + name + " in DNS, so the panel keeps " + keeps + ". Add an A record for " + name + " with this server's IP address at your DNS provider" + again
+	case acme.ReasonConnection:
+		return "Panel certificate: Let's Encrypt could not check " + name + " over http on port 80 of this server, so the panel keeps " + keeps + ". Point the name's DNS at this server and open TCP port 80 to the internet" + again
+	case acme.ReasonElsewhere:
+		return "Panel certificate: Let's Encrypt reached " + name + ", but another server answered there, so the panel keeps " + keeps + ". Point every A and AAAA record of " + name + " at this server" + again
+	case acme.ReasonInstall:
 		return "Panel certificate: Let's Encrypt issued a certificate for " + name + ", but the panel could not save it in its state folder, so it keeps " + keeps + ". Check that the folder belongs to the panel's user and the disk has room; the panel asks again in a week."
-	case errors.Is(err, acme.ErrTooSoon):
+	case acme.ReasonTooSoon:
 		return "Panel certificate: the panel asked Let's Encrypt for " + name + " less than an hour ago, so it does not ask again now and keeps " + keeps + ". The renewal check asks again within 6 hours of that try."
+	case acme.ReasonNoAnswer:
+		return "Panel certificate: Let's Encrypt did not answer, so the panel got no certificate for " + name + " and keeps " + keeps + ". Check that this server reaches acme-v02.api.letsencrypt.org on port 443" + again
+	case acme.ReasonRefused:
+		return "Panel certificate: Let's Encrypt refused to issue a certificate for " + name + ", so the panel keeps " + keeps + ". Its reason is on the line before this one. The panel asks again within 6 hours; if the same reason comes back, check https://letsencrypt.status.io/."
 	}
-	return "Panel certificate: Let's Encrypt did not answer or did not issue a certificate for " + name + ", so the panel keeps " + keeps + ". Check that this server reaches acme-v02.api.letsencrypt.org on port 443; the panel asks again within 6 hours."
+	return "Panel certificate: the panel could not get a certificate for " + name + ", so it keeps " + keeps + ". The reason is on the line before this one" + again
 }

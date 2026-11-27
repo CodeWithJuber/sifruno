@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +22,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	legoacme "github.com/go-acme/lego/v5/acme"
 
 	"sifruno/internal/acme"
 )
@@ -262,7 +266,12 @@ func TestObtainAsksOnceAndSaysWhatHappened(t *testing.T) {
 		"rate limit":   {fmt.Errorf("%w: too many", acme.ErrRateLimited), "Panel certificate: Let's Encrypt has had too many requests for " + panelName + " or from this server, so the panel keeps its self-signed certificate. The panel asks again within 6 hours; if this lasts more than a day, read https://letsencrypt.org/docs/rate-limits/."},
 		"not saved":    {fmt.Errorf("%w: disk full", acme.ErrInstall), "Panel certificate: Let's Encrypt issued a certificate for " + panelName + ", but the panel could not save it in its state folder, so it keeps its self-signed certificate. Check that the folder belongs to the panel's user and the disk has room; the panel asks again in a week."},
 		"too soon":     {acme.ErrTooSoon, "Panel certificate: the panel asked Let's Encrypt for " + panelName + " less than an hour ago, so it does not ask again now and keeps its self-signed certificate. The renewal check asks again within 6 hours of that try."},
-		"no answer":    {fmt.Errorf("%w: dial tcp: i/o timeout", acme.ErrAuthority), "Panel certificate: Let's Encrypt did not answer or did not issue a certificate for " + panelName + ", so the panel keeps its self-signed certificate. Check that this server reaches acme-v02.api.letsencrypt.org on port 443; the panel asks again within 6 hours."},
+		"no answer":    {fmt.Errorf("%w: %w", acme.ErrAuthority, &url.Error{Op: "Get", URL: acme.LetsEncrypt, Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("i/o timeout")}}), "Panel certificate: Let's Encrypt did not answer, so the panel got no certificate for " + panelName + " and keeps its self-signed certificate. Check that this server reaches acme-v02.api.letsencrypt.org on port 443; the panel asks again within 6 hours."},
+		// The audit's case, which the line used to blame on the network.
+		"contact refused": {fmt.Errorf("%w: %w", acme.ErrAuthority, &legoacme.ProblemDetails{Type: legoacme.InvalidContactErrorType, Detail: `contact email has forbidden domain "example.com"`, HTTPStatus: 400}), "Panel certificate: Let's Encrypt refused the contact email address the panel was installed with (--acme-email), so it issued no certificate for " + panelName + " and the panel keeps its self-signed certificate. It refuses addresses at domains that receive no mail, such as example.com. Run the installer again with --acme-email set to an address at a domain you own; the panel asks again within 6 hours."},
+		"name refused":    {fmt.Errorf("%w: %w", acme.ErrAuthority, &legoacme.ProblemDetails{Type: legoacme.RejectedIdentifierErrorType, HTTPStatus: 400}), "Panel certificate: Let's Encrypt does not issue certificates for " + panelName + ": the name is reserved or on its list of names it refuses, so the panel keeps its self-signed certificate. Give the panel a name in a domain you have registered: run the installer again with --panel-host set to it."},
+		"other server":    {fmt.Errorf("%w: %w", acme.ErrValidation, &legoacme.ProblemDetails{Type: legoacme.UnauthorizedErrorType, HTTPStatus: 403}), "Panel certificate: Let's Encrypt reached " + panelName + ", but another server answered there, so the panel keeps its self-signed certificate. Point every A and AAAA record of " + panelName + " at this server; the panel asks again within 6 hours."},
+		"refused":         {fmt.Errorf("%w: %w", acme.ErrAuthority, &legoacme.ProblemDetails{Type: legoacme.ServerInternalErrorType, HTTPStatus: 500}), "Panel certificate: Let's Encrypt refused to issue a certificate for " + panelName + ", so the panel keeps its self-signed certificate. Its reason is on the line before this one. The panel asks again within 6 hours; if the same reason comes back, check https://letsencrypt.status.io/."},
 	} {
 		i, err := OpenIssued(t.TempDir(), []string{panelName}, func() time.Time { return now })
 		if err != nil {

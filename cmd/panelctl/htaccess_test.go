@@ -67,6 +67,7 @@ func TestHtaccessScanSummaryHidesNamesAndPaths(t *testing.T) {
 		// bob's Expires lines are harmless to ignore.
 		"sites: 3 (native 1, convertible 0, compat 2)",
 		".htaccess files: 5 (native 3, convertible 0, compat 2, not readable 0)",
+		"directives OpenLiteSpeed ignores that Sifruno covers: harmless 2, handled 0, warnings 0\n",
 		"  access_control: 4\n",
 		"  unknown: 1\n",
 		"  access_control: 1\n",
@@ -131,6 +132,50 @@ func TestHtaccessScanDetailsText(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("details lack %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestHtaccessScanDetailsNameEachLine: with --details, each site says
+// whether it moves to OpenLiteSpeed and names the file, line and directive
+// of each refusal, warning and PHP handler.
+func TestHtaccessScanDetailsNameEachLine(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		".htaccess": "# php -- BEGIN cPanel-generated handler, do not edit\n<IfModule mime_module>\n  AddHandler application/x-httpd-ea-php81 .php .php8 .phtml\n</IfModule>\n" +
+			"# php -- END cPanel-generated handler, do not edit\nphp_value upload_max_filesize 64M\nHeader set Cache-Control \"max-age=600\"\n" + testWordPressHtaccess,
+		"tools/.htaccess": "ExpiresActive On\nSifrunoUnknown On\n",
+	}
+	for rel, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := runCLI(t, "htaccess", "scan", "--root", root, "--details")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"    line 3 AddHandler [vendor, handled]: PHP handler",
+		"    line 6 php_value [php_settings, warning]: OpenLiteSpeed does not apply PHP settings from .htaccess",
+		"    line 7 Header [headers, ignored]: caching or security response header",
+		"  moves to OpenLiteSpeed: no\n",
+		"    refused: tools/.htaccess line 2 (SifrunoUnknown On): a directive this panel does not know\n",
+		"    warning: .htaccess line 6 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings",
+		"    PHP handler: .htaccess line 3 for /: ea-php81\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("details lack %q:\n%s", want, out)
+		}
+	}
+	if err := os.Remove(filepath.Join(root, "tools", ".htaccess")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err = runCLI(t, "htaccess", "scan", "--root", root, "--details"); err != nil || !strings.Contains(out, "  moves to OpenLiteSpeed: yes\n") {
+		t.Fatalf("err=%v\n%s", err, out)
 	}
 }
 

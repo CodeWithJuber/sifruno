@@ -35,6 +35,9 @@ export interface Website {
   // word is shown as unknown.
   state: string;
   https: WebsiteHttps;
+  // Always use HTTPS: on unless the site's owner turned it off. Left out by
+  // a server from before the switch.
+  always_https?: boolean;
   // Empty when the account service reports none.
   php_version: string;
   wordpress_version: string;
@@ -135,9 +138,11 @@ export function parseWebsite(v: unknown): Website | undefined {
   const aliases = parseAliasSummaries(v.aliases);
   const redirectCount = v.redirect_count === undefined ? 0 : v.redirect_count;
   if (!aliases || !Number.isSafeInteger(redirectCount) || (redirectCount as number) < 0) return undefined;
+  if (v.always_https !== undefined && typeof v.always_https !== "boolean") return undefined;
   return {
     account_id: v.account_id, username: v.username, domain: v.domain, kind: v.kind, state: v.state,
     https: { on: https.on, not_after: https.not_after as string, ...(https.source === "copied" ? { source: "copied" as const } : {}) },
+    ...(typeof v.always_https === "boolean" ? { always_https: v.always_https } : {}),
     php_version: v.php_version, wordpress_version: v.wordpress_version, url: v.url, admin_url: v.admin_url as string, created_at: v.created_at,
     revision: v.revision as number, site_folder_changed: v.site_folder_changed,
     ...(limits ? { limits } : {}),

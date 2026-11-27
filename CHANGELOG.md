@@ -20,6 +20,10 @@
   setup link and "Open phpMyAdmin" carry a short warning: that the browser
   will show "Your connection is not private" first, why, and that Get
   started's step for the panel's address shows what to check.
+- A website's Files show OpenLiteSpeed's `.lsns` folder as locked, with
+  why, and the server refuses to rename, move, delete or change it or
+  anything in it, or to move anything into it. Permissions read in words
+  beside the mode, such as "Owner can read and write; others can read".
 - Home opened on the server itself without a sign-in says "Sign in to see
   what is next", with a Sign in button, instead of showing the readings
   with no next step.

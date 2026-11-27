@@ -67,6 +67,22 @@ test("actions follow the entry and the site's state", () => {
   assert.deepEqual(readOnly, { open: true, edit: false, download: false, rename: false, permissions: false, remove: false });
   const own = api.actionsFor(folder({ name: "public_html" }), "public_html", true);
   assert.equal(own.remove || own.rename || own.permissions, false);
+  // A folder the server reports locked (OpenLiteSpeed's .lsns) opens, and
+  // nothing else.
+  const lsns = api.actionsFor(folder({ name: ".lsns", locked: "OpenLiteSpeed's working folder." }), ".lsns", true);
+  assert.deepEqual(lsns, { open: true, edit: false, download: false, rename: false, permissions: false, remove: false });
+});
+
+test("permissions read in words beside the mode", () => {
+  assert.equal(api.modeWords("0644", "file"), "Owner can read and write; others can read");
+  assert.equal(api.modeWords("0755", "folder"), "Owner can read, write and open; others can read and open");
+  assert.equal(api.modeWords("0750", "folder"), "Owner can read, write and open; group can read and open; others have no access");
+  assert.equal(api.modeWords("0600", "file"), "Owner can read and write; others have no access");
+  assert.equal(api.modeWords("0700", "file"), "Owner can read, write and run; others have no access");
+  assert.equal(api.modeWords("0444", "file"), "Owner can read; others can read");
+  assert.equal(api.modeWords("0000", "file"), "No one has access");
+  assert.equal(api.modeWords("0070", "folder"), "Owner has no access; group can read, write and open; others have no access");
+  assert.equal(api.modeWords("0777", "link"), "Set by what the link points to");
 });
 
 test("answers outside the contract are refused", () => {
@@ -75,8 +91,13 @@ test("answers outside the contract are refused", () => {
   for (const bad of [file({ name: "../x" }), file({ name: "a/b" }), file({ type: "device" }), file({ size: -1 }), file({ size: 1.5 }), file({ mode: "644" }), file({ modified: "soon" }), file({ version: undefined }), file({ version: "XYZ" }), folder({ size: 4096 }), folder({ version: "0123456789abcdef" })]) {
     assert.equal(api.parseEntry(bad), undefined, JSON.stringify(bad));
   }
+  // A lock's reason is one short line, kept as the server words it.
+  assert.equal(api.parseEntry(folder({ name: ".lsns", locked: "OpenLiteSpeed's working folder." })).locked, "OpenLiteSpeed's working folder.");
+  for (const locked of ["", 7, "x".repeat(301), "two\nlines"]) assert.equal(api.parseEntry(folder({ locked })), undefined, JSON.stringify(locked));
+  assert.equal(api.parseFolder({ path: ".lsns", entries: [], skipped: 0, truncated: false, locked: "OpenLiteSpeed's working folder." }, ".lsns").locked, "OpenLiteSpeed's working folder.");
   const list = { $schema: "x", path: "public_html", entries: [file(), folder()], skipped: 1, truncated: false };
   assert.equal(api.parseFolder(list, "public_html").entries.length, 2);
+  assert.equal("locked" in api.parseFolder(list, "public_html"), false);
   assert.equal(api.parseFolder(list, ""), undefined, "an answer about another folder");
   assert.equal(api.parseFolder({ ...list, entries: [file(), file()] }, "public_html"), undefined, "a name twice");
   assert.equal(api.parseFolder({ ...list, skipped: -1 }, "public_html"), undefined);

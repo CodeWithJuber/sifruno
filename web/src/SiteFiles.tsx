@@ -13,7 +13,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { actionsFor, checkName, checkText, deleteEntry, downloadURL, FilesApiError, joinPath, listFolder, makeFolder, maxTextBytes, modeLabel, modeOf, modifiedLabel, parentPath, pathTrail, permissionsOf, readText, renameEntry, saveText, setPermissions, siteFolder, sizeLabel, sortEntries, specialBits, typeLabel, uploadFile } from "@/lib/files-api";
+import { actionsFor, checkName, checkText, deleteEntry, downloadURL, FilesApiError, joinPath, listFolder, makeFolder, maxTextBytes, modeLabel, modeOf, modeWords, modifiedLabel, parentPath, pathTrail, permissionsOf, readText, renameEntry, saveText, setPermissions, siteFolder, sizeLabel, sortEntries, specialBits, typeLabel, uploadFile } from "@/lib/files-api";
 import type { FileEntry, Folder as FolderList, Permissions, Triple } from "@/lib/files-api";
 import { getWebsite, listWebsites, WebsitesApiError } from "@/lib/websites-api";
 import type { Website } from "@/lib/websites-api";
@@ -137,7 +137,9 @@ export function SiteFiles({ accountId, path }: { accountId: string; path: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, path, round]);
 
-  const writable = site?.state === "active";
+  // A folder the platform keeps (OpenLiteSpeed's .lsns) is read-only here.
+  const locked = folder && folder.path === path ? folder.locked : undefined;
+  const writable = site?.state === "active" && !locked;
   const entries = folder && folder.path === path ? sortEntries(folder.entries) : [];
   const names = new Set(entries.map((entry) => entry.name));
 
@@ -194,7 +196,7 @@ export function SiteFiles({ accountId, path }: { accountId: string; path: string
         <h2 ref={headingRef} tabIndex={-1} className="wrap-anywhere outline-none" data-testid="files-heading">Files for {site.domain}</h2>
         <p className="text-sm">The hosting account's home folder. The website serves what is in <code>public_html</code>. Every change is made as the website's own user, so its permissions and disk quota apply.</p>
       </div>
-      {!writable && <Alert className="text-start" data-testid="files-read-only">
+      {site.state !== "active" && <Alert className="text-start" data-testid="files-read-only">
         <LockKeyhole aria-hidden="true" />
         <AlertTitle>{site.state === "suspended" ? "This website is suspended, so its files are read-only." : "This website's files are read-only for now."}</AlertTitle>
         <AlertDescription className="text-start">
@@ -240,6 +242,10 @@ export function SiteFiles({ accountId, path }: { accountId: string; path: string
           </div>
         </div>
         {writable && <div className="text-sm text-muted-foreground">Uploads are up to 64 MB each. A file with the same name is not replaced unless you choose Replace.</div>}
+        {locked && <div className="flex items-start gap-2 text-sm text-foreground" data-testid="files-folder-locked">
+          <LockKeyhole className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span>Locked: {locked} You can look inside, but not add, change or remove anything here.</span>
+        </div>}
       </div>
 
       {uploads.length > 0 && <UploadList uploads={uploads} onReplace={(item) => void sendUpload(item, true).then(reload)} onClear={() => setUploads((current) => current.filter((u) => u.state === "sending" || u.state === "waiting"))} />}
@@ -307,7 +313,7 @@ function FileTable({ entries, path, writable, accountId, busy, onOpen, onEdit, o
         <TableRow>
           <TableHead scope="col" className="ps-3 text-start">Name</TableHead>
           <TableHead scope="col" className="hidden w-24 text-end @xl:table-cell">Size</TableHead>
-          <TableHead scope="col" className="hidden w-32 text-start @3xl:table-cell">Permissions</TableHead>
+          <TableHead scope="col" className="hidden w-52 text-start @4xl:table-cell">Permissions</TableHead>
           <TableHead scope="col" className="hidden w-44 text-start @2xl:table-cell">Modified</TableHead>
           <TableHead scope="col" className="w-60 pe-3 text-end"><span className="sr-only">Actions</span></TableHead>
         </TableRow>
@@ -324,15 +330,24 @@ function FileTable({ entries, path, writable, accountId, busy, onOpen, onEdit, o
                   : <span className="flex min-w-0 text-foreground"><FileName name={entry.name} /></span>}
                 {entry.type === "link" && <Badge variant="secondary" className="shrink-0">Link</Badge>}
                 {entry.type === "other" && <Badge variant="secondary" className="shrink-0">Special</Badge>}
-                {joinPath(path, entry.name) === siteFolder && <Badge variant="outline" className="shrink-0">Website folder</Badge>}
+                {joinPath(path, entry.name) === siteFolder
+                  ? <Badge variant="outline" className="shrink-0">Website folder</Badge>
+                  : entry.locked && <Badge variant="outline" className="shrink-0" data-testid="file-locked"><LockKeyhole aria-hidden="true" />Locked</Badge>}
               </div>
+              {entry.locked && <div className="mt-0.5 ps-6 text-xs whitespace-normal text-muted-foreground" data-testid="file-locked-note">{entry.locked}</div>}
               {/* On a narrow table the hidden columns' values move under the name. */}
               <div className="mt-0.5 ps-6 text-xs whitespace-normal text-muted-foreground @2xl:hidden">
                 {typeLabel(entry)}{entry.type === "file" ? `, ${sizeLabel(entry.size)}` : ""} · {modifiedLabel(entry.modified)}
               </div>
+              <div className="mt-0.5 ps-6 text-xs whitespace-normal text-muted-foreground @4xl:hidden" data-testid="file-mode-words-narrow">
+                {modeWords(entry.mode, entry.type)} (<code>{modeLabel(entry.mode)}</code>)
+              </div>
             </TableCell>
             <TableCell className="hidden text-end text-muted-foreground tabular-nums @xl:table-cell">{entry.type === "file" ? sizeLabel(entry.size) : "—"}</TableCell>
-            <TableCell className="hidden @3xl:table-cell"><code className="text-xs text-muted-foreground" title={`${entry.mode}`}>{modeLabel(entry.mode)}</code></TableCell>
+            <TableCell className="hidden whitespace-normal @4xl:table-cell">
+              <span className="block text-xs text-foreground" data-testid="file-mode-words">{modeWords(entry.mode, entry.type)}</span>
+              <code className="text-xs text-muted-foreground" title={`${entry.mode}`}>{modeLabel(entry.mode)}</code>
+            </TableCell>
             <TableCell className="hidden text-muted-foreground @2xl:table-cell">{modifiedLabel(entry.modified)}</TableCell>
             <TableCell className="pe-3 @max-xl:block @max-xl:ps-7 @max-xl:pt-0">
               <div className="flex flex-wrap justify-end gap-1 @max-xl:justify-start">

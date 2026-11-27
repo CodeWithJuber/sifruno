@@ -34,11 +34,13 @@ type WebsiteFile struct {
 	Mode     string `json:"mode" doc:"The permission bits as four octal digits, such as 0644."`
 	Modified string `json:"modified" doc:"When it last changed, RFC 3339 in UTC."`
 	Version  string `json:"version,omitempty" doc:"For a file: changes whenever the file is replaced or changed. A save sends it back as expected_version."`
+	Locked   string `json:"locked,omitempty" doc:"Why the file manager does not rename, move, delete or change it: a folder the platform made, such as public_html or OpenLiteSpeed's .lsns. Empty for the rest."`
 }
 
 // WebsiteFolder is one folder of the home.
 type WebsiteFolder struct {
 	Path      string        `json:"path" doc:"The folder, relative to the home; empty for the home itself."`
+	Locked    string        `json:"locked,omitempty" doc:"Why nothing in this folder can be added, changed or removed here; empty for a folder the owner may change."`
 	Entries   []WebsiteFile `json:"entries"`
 	Skipped   int           `json:"skipped" doc:"Names the file manager cannot show: not UTF-8 text, a control character, or longer than 255 bytes. Use SFTP for them."`
 	Truncated bool          `json:"truncated" doc:"The folder holds more than 5000 names; only the first 5000 by name are listed."`
@@ -100,6 +102,12 @@ const (
 	// The site's own folder: deleting, renaming or changing its mode here
 	// would take the site offline, so the file manager refuses it.
 	siteFolder = "public_html"
+	// OpenLiteSpeed's working folder in each website's home: the PHP of a
+	// site in its own namespace has .lsns/tmp as its /tmp, and the web
+	// server makes the folder again whenever it is gone (seen on a real
+	// server on 2026-11-27, where nothing else was in a new site's home).
+	// None of it is the owner's, so the file manager does not change it.
+	lsnsFolder = ".lsns"
 	// A save carries up to 1 MiB of text, which JSON can grow to six times
 	// that (a control character becomes \u0001).
 	maxSaveBody = 6*sitefiles.MaxTextBytes + 16<<10
@@ -113,6 +121,7 @@ const (
 	filesSuspended     = "This website is suspended, so its files can be looked at and downloaded but not changed. Resume the website on its page to change its files."
 	filesBadPath       = "That path cannot be used. A path is relative to the website's home folder; it cannot start with / or hold .., an empty name, or a control character, and each name is at most 255 bytes. Choose another name."
 	filesSiteFolder    = "public_html is the folder the website serves, so the file manager does not delete, rename or change the permissions of it. Change what is inside it instead."
+	filesLsns          = ".lsns is OpenLiteSpeed's working folder for this website: the site's PHP keeps its temporary files in .lsns/tmp, and the web server makes the folder again whenever it is gone. So the file manager does not rename, move, delete or change it, or anything in it. Nothing was changed. Your website's files are in public_html."
 	filesTooLargeText  = "The file is larger than 1 MiB, the most the editor opens or saves. Download it to change it on your computer, then upload it."
 	filesTooLargeUp    = "The file is larger than 64 MiB, the most one upload can be. Use SFTP for large files."
 	filesUploadNeeds   = "The upload must be sent as the file's own bytes with its size (Content-Length), not as a form. Upload it from the Files page."
@@ -202,6 +211,32 @@ func checkFilePath(p string, target bool) error {
 		return huma.Error422UnprocessableEntity(filesBadPath)
 	}
 	return nil
+}
+
+// lockedFile answers why the file manager does not change path, or "" when
+// it may. whole: the change renames, moves, deletes or re-permissions path
+// itself, not only what is inside it. The site folder is locked as a whole;
+// OpenLiteSpeed's folder with everything in it, from and to.
+func lockedFile(path string, whole bool) string {
+	switch {
+	case path == lsnsFolder || strings.HasPrefix(path, lsnsFolder+"/"):
+		return filesLsns
+	case whole && path == siteFolder:
+		return filesSiteFolder
+	}
+	return ""
+}
+
+// lockedNote is the short reason the Files page shows beside a locked
+// entry; the refusal says the rest.
+func lockedNote(path string) string {
+	switch lockedFile(path, true) {
+	case filesLsns:
+		return "OpenLiteSpeed's working folder for this website's PHP. The web server makes it, so it is not changed here."
+	case filesSiteFolder:
+		return "The folder the website serves. Change what is inside it."
+	}
+	return ""
 }
 
 func webFile(e hostaccounts.FileEntry) WebsiteFile {
@@ -303,8 +338,17 @@ func registerWebsiteFiles(mux *routeMux, a huma.API, o Options) {
 			return nil, websiteFileError(err, false)
 		}
 		out := WebsiteFolder{Path: list.Path, Entries: make([]WebsiteFile, 0, len(list.Entries)), Skipped: list.Skipped, Truncated: list.Truncated}
+		if lockedFile(list.Path, false) != "" {
+			out.Locked = lockedNote(list.Path)
+		}
 		for _, e := range list.Entries {
-			out.Entries = append(out.Entries, webFile(e))
+			f := webFile(e)
+			if list.Path == "" {
+				f.Locked = lockedNote(e.Name)
+			} else {
+				f.Locked = lockedNote(list.Path + "/" + e.Name)
+			}
+			out.Entries = append(out.Entries, f)
 		}
 		return &websiteFolderOutput{Body: out}, nil
 	})
@@ -336,6 +380,9 @@ func registerWebsiteFiles(mux *routeMux, a huma.API, o Options) {
 		if b.ExpectedVersion != "" && !versionForm(b.ExpectedVersion) {
 			return nil, huma.Error422UnprocessableEntity("expected_version must be the version the editor opened (16 hexadecimal digits), or empty for a new file. Open the file again, then save.")
 		}
+		if why := lockedFile(b.Path, false); why != "" {
+			return nil, huma.Error409Conflict(why)
+		}
 		files, account, err := filesFor(ctx, o, in.AccountID, true)
 		if err != nil {
 			return nil, err
@@ -358,8 +405,14 @@ func registerWebsiteFiles(mux *routeMux, a huma.API, o Options) {
 					return nil, err
 				}
 			}
-			if action != "folder" && path == siteFolder {
-				return nil, huma.Error409Conflict(filesSiteFolder)
+			if why := lockedFile(path, action != "folder"); why != "" {
+				return nil, huma.Error409Conflict(why)
+			}
+			// A rename's new place: nothing moves into a locked folder.
+			for _, p := range more {
+				if why := lockedFile(p, false); why != "" {
+					return nil, huma.Error409Conflict(why)
+				}
 			}
 			files, account, err := filesFor(ctx, o, accountID, true)
 			if err != nil {
@@ -444,6 +497,10 @@ func registerWebsiteFiles(mux *routeMux, a huma.API, o Options) {
 		}
 		if err := checkFilePath(q["path"], true); err != nil {
 			writeFileProblem(w, err)
+			return
+		}
+		if why := lockedFile(q["path"], false); why != "" {
+			writeFileProblem(w, huma.Error409Conflict(why))
 			return
 		}
 		media, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

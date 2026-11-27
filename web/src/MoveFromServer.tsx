@@ -324,7 +324,7 @@ export function MoveFromServer({ onBack }: { onBack: () => void }) {
             {site.doc_root && <><dt className="text-muted-foreground">Files</dt><dd className="break-all"><code>{site.doc_root}</code>{site.owner && <> owned by <code>{site.owner}</code>; they go into the account's <code>public_html</code></>}</dd></>}
             {site.www && <><dt className="text-muted-foreground">Also answers</dt><dd className="break-all">www.{site.domain}</dd></>}
             <dt className="text-muted-foreground">PHP</dt><dd>{site.php}{site.php_source ? ` (the old server runs ${site.php_source})` : " (the old server does not name its version)"}</dd>
-            <dt className="text-muted-foreground">Database</dt><dd className="break-all">{site.database ? <><code>{site.database}</code>, named in wp-config.php: it moves with its user and password, under the account's name</> : "None found"}</dd>
+            <dt className="text-muted-foreground">Database</dt><dd className="break-words">{site.database ? <><code>{site.database}</code>, named in wp-config.php: it moves with its user and password, under the account's name</> : "None found"}</dd>
             <dt className="text-muted-foreground">Certificate</dt><dd>{site.certificate ? "Copied when a trusted authority issued it and it is valid for 7 days more" : "None named; the site uses http here until its domain points here"}</dd>
           </dl>
           {site.refused.length > 0 && <Alert className="text-start" data-testid="move-site-refused">

@@ -24,6 +24,8 @@
 # fresh install (installer)      17 passed, 0 failed   da7176e  pr20-rerun-fresh-install.txt
 # migrate-cpanel (live SSH)     194 passed, 0 failed   da7176e  pr20-rerun-migrate-cpanel.txt
 # migrate-cpanel whm             72 passed, 0 failed   da7176e  pr20-rerun-migrate-cpanel-whm.txt
+#   (that transcript is held back for the owner: Forge's commit gate flagged two lines in it,
+#    a throwaway stand-in's certificate and SSH key fingerprints, as credentials)
 # migrate-cpanel cert            89 passed, 0 failed   da7176e  pr20-rerun-migrate-cpanel-cert.txt
 # migrate-cpanel archive         80 passed, 0 failed   6f2b725  pr20-rerun-migrate-cpanel-archive.txt
 # migrate-verify                 19 passed, 0 failed   da7176e  pr20-rerun-migrate-verify.txt

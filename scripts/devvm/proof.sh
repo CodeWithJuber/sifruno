@@ -263,6 +263,7 @@ case "${1:-}" in
     port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
     build "$stage/sifruno" ./cmd/sifruno
     build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/panelctl" ./cmd/panelctl
     (cd "$REPO" && npm run --silent panel:build >/dev/null)
     # Seed the panel's state here, as the wizard proof does: a few seconds
     # make it, with its access key, which the guest script signs in with.
@@ -272,11 +273,12 @@ case "${1:-}" in
     tar -czf "$stage/state.tgz" -C "$stage" state
     "$HERE/vm.sh" ssh "systemctl stop sifruno-broker-proof 2>/dev/null; pkill -x sifruno; install -d -m 0755 /opt/sifruno-proof; install -d -o sifpanel -g sifpanel -m 0700 $guest" || true
     "$HERE/vm.sh" put "$stage/hostbroker" /opt/sifruno-proof/hostbroker
+    "$HERE/vm.sh" put "$stage/panelctl" /opt/sifruno-proof/panelctl
     for file in sifruno dist.tgz state.tgz; do
       "$HERE/vm.sh" put "$stage/$file" "$guest/$file"
     done
     "$HERE/vm.sh" put "$HERE/proofs/migrate-cpanel.guest.sh" /opt/sifruno-proof/migrate-cpanel.guest.sh
-    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/migrate-cpanel.guest.sh; restorecon -R /opt/sifruno-proof'
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/hostbroker /opt/sifruno-proof/panelctl /opt/sifruno-proof/migrate-cpanel.guest.sh; restorecon -R /opt/sifruno-proof'
     mkdir -p "$OUT"
     transcript="$OUT/migrate-cpanel-$stamp.txt"
     status=0

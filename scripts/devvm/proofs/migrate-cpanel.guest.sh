@@ -310,6 +310,7 @@ Options -Indexes
 AddType image/webp .webp
 AddDefaultCharset UTF-8
 HT
+echo '<?php echo 1; // sifruno-phtml-source' > /home/$SHOP/public_html/info.phtml
 chown -R $SHOP:apache /home/$SHOP/public_html
 find /home/$SHOP/public_html -type d -exec chmod 0750 {} +; find /home/$SHOP/public_html -type f -exec chmod 0640 {} +"
 in_ctr "echo '*/15 * * * * php /home/$SHOP/public_html/wp-cron.php >/dev/null 2>&1' | crontab -u $SHOP -"
@@ -990,9 +991,9 @@ check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.j
 check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
 src_ht="$(in_ctr "sha256sum /home/$SHOP/public_html/.htaccess" | cut -d' ' -f1)"
 check "the copy's .htaccess is the old site's, byte for byte" test -n "$src_ht" -a "$src_ht" = "$(sha256sum "/home/$SHOP/public_html/.htaccess" 2>/dev/null | cut -d' ' -f1)"
-if command -v panelctl >/dev/null 2>&1; then
+if [ -x "$BIN/panelctl" ]; then
   echo "  panelctl htaccess scan --details of the copy's public_html (as the panel decides the move):"
-  panelctl htaccess scan --root "/home/$SHOP/public_html" --layout single --details 2>&1 | sed -n '/^site /,$p' | sed 's/^/    /'
+  "$BIN/panelctl" htaccess scan --root "/home/$SHOP/public_html" --layout single --details 2>&1 | sed -n '/^site /,$p' | sed 's/^/    /'
 fi
 src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
 dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"
@@ -1033,6 +1034,9 @@ check "the scheduled job arrived in the site user's crontab" grep -q "wp-cron.ph
 page="$(curl -s -H "Host: $SHOP_DOMAIN" http://127.0.0.1/)"
 check "the preview (this server, the site's Host header) serves the site's title" grep -q "$TITLE" <<<"$page"
 check "the preview serves the moved post" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' 'http://127.0.0.1/?s=Moved' | grep -q 'Moved with Sifruno'"
+# cPanel's handler block maps .phtml to PHP; only .php runs here, so the
+# copy refuses a .phtml file rather than send its source.
+check "the copy answers 403 for info.phtml, and its source is not sent" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/info.phtml)\" = 403 ] && ! curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/info.phtml | grep -q sifruno-phtml-source"
 echo "  verify: $(m "['verify']['verdict']")"
 echo "  pages $(m "['verify']['pages_compared']") compared, $(m "['verify']['pages_pass']") pass, $(m "['verify']['pages_fail']") fail; notes: $(m "['notes']")"
 check "verify ran and found no difference (cutover allowed by verify)" test "$(m "['verify']['cutover_allowed']")" = True

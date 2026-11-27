@@ -60,7 +60,12 @@
 //     outside every home, and one "context exp:" regex context per folder,
 //     with allowBrowse 0 for a folder closed to all (its <Files> names left
 //     out of the regex), or accessControl lists and the realm, and always a
-//     rewrite block with enable 0. A suspended site renders none of them.
+//     rewrite block with enable 0; before them, one more regex context with
+//     allowBrowse 0 per folder that closes file names (Folder.Deny), which
+//     may be the site root. The redirect and ErrorDocument lines of the
+//     migrated site's root .htaccess (moved.go) follow the https rules in
+//     the rewrite block and are errorPage blocks. A suspended site renders
+//     none of them.
 //
 // # Certificates
 //

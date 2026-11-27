@@ -165,3 +165,35 @@ test("progress counts the required steps, and the next step is the first one the
   assert.deepEqual(gs.getStartedProgress(ready), { done: 5, total: 5, complete: true });
   assert.equal(gs.nextStep(ready), "move-website");
 });
+
+test("the note beside a setup link and Open phpMyAdmin follows the panel's certificate", () => {
+  const trusted = { available: true, address: origin };
+  assert.equal(gs.panelTrustNote(trusted, origin, "setup-link"), undefined);
+  assert.equal(gs.panelTrustNote(trusted, origin, "phpmyadmin"), undefined);
+
+  // At the name without a trusted certificate: both warn, and say what the
+  // browser shows and where the next step is.
+  const untrusted = { available: false, address: origin, detail: "Passkeys need a certificate browsers trust." };
+  const link = gs.panelTrustNote(untrusted, origin, "setup-link");
+  assert.equal(link.state, "untrusted");
+  assert.match(link.what, /panel\.example\.com:8443/);
+  assert.match(link.what, /Your connection is not private/);
+  assert.match(link.next, /Give the panel its own address/);
+  const pma = gs.panelTrustNote(untrusted, origin, "phpmyadmin");
+  assert.equal(pma.state, "untrusted");
+  assert.match(pma.what, /phpMyAdmin/);
+  assert.match(pma.next, /Get started/);
+  // A customer cannot act on Get started: it is told who can.
+  assert.match(gs.panelTrustNote(untrusted, origin, "phpmyadmin", false).next, /hosting provider/);
+
+  // No name: the link cannot be opened safely; phpMyAdmin is not served.
+  const none = { available: false, detail: "no name" };
+  assert.equal(gs.panelTrustNote(none, "http://127.0.0.1:8080", "setup-link").state, "no-name");
+  assert.equal(gs.panelTrustNote(none, "http://127.0.0.1:8080", "phpmyadmin"), undefined);
+
+  // Opened elsewhere (through an SSH tunnel): it cannot tell, and says so.
+  const elsewhere = gs.panelTrustNote(untrusted, "http://127.0.0.1:8080", "setup-link");
+  assert.equal(elsewhere.state, "unknown");
+  assert.equal(elsewhere.href, `${origin}/`);
+  assert.equal(gs.panelTrustNote(untrusted, "http://127.0.0.1:8080", "phpmyadmin").state, "unknown");
+});

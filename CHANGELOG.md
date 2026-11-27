@@ -16,6 +16,10 @@
   at a domain Let's Encrypt refuses (example.com, .net and .org, .test,
   .invalid, .localhost and other names kept for examples and tests, or an
   IP address), and says to type an address at a domain you own.
+- While browsers do not trust the panel's own certificate, a customer's
+  setup link and "Open phpMyAdmin" carry a short warning: that the browser
+  will show "Your connection is not private" first, why, and that Get
+  started's step for the panel's address shows what to check.
 - Home opened on the server itself without a sign-in says "Sign in to see
   what is next", with a Sign in button, instead of showing the readings
   with no next step.

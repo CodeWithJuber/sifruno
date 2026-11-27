@@ -33,7 +33,8 @@ export const siteTabs: readonly SiteTab[] = [
   { id: "overview", label: "Overview", segment: "", needs: [siteRead, `${siteRead}/usage`, `${siteRead}/backups`] },
   { id: "domains", label: "Domains and SSL", segment: "domains", needs: [siteRead] },
   { id: "files", label: "Files", segment: "files", needs: [siteRead, `${siteRead}/files`] },
-  { id: "databases", label: "Databases", segment: "databases", needs: [siteRead, `${siteRead}/databases`] },
+  // The panel's certificate state, for the note beside Open phpMyAdmin.
+  { id: "databases", label: "Databases", segment: "databases", needs: [siteRead, `${siteRead}/databases`, "GET /api/v1/session/passkey-login"] },
   { id: "backups", label: "Backups", segment: "backups", needs: [`${siteRead}/backups`] },
   { id: "cron", label: "Cron jobs", segment: "cron", advancedOnly: true, needs: [siteRead, `${siteRead}/cron`] },
   { id: "logs", label: "Logs", segment: "logs", advancedOnly: true, needs: [siteRead, `${siteRead}/logs/{kind}`] },

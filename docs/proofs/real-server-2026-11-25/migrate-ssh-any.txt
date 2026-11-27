@@ -57,12 +57,12 @@ PASS  the form no longer holds the password or key
     | Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   account name here: wpsite
 PASS  the move starts and the page follows its job
-  job state: succeeded 
+  job state: succeeded
     source   done     Found wp.SOURCE-IP.sslip.io on apache (/etc/httpd/conf.d/wp.conf line 1): files in /var/www/wp owned by apache, its database wordpress, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 3 rule(s) become the web server's config: /private/ (closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akismet-frontend.js, ak
     account  done     Created the hosting account wpsite for wp.SOURCE-IP.sslip.io.
     web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
@@ -70,8 +70,8 @@ PASS  the move starts and the page follows its job
     database done     Copied the database wordpress as wpsite_wordpress, with its user as wpsite_wpuser and the same password: 12 tables, 161 rows, every table's rows match.
     cron     done     Copied 1 scheduled job(s) of apache's crontab; they run as the site's user on this server's clock, and where they named /var/www/wp they now name /home/wpsite/public_html.
     ssl      skipped  The old server has no certificate for wp.SOURCE-IP.sslip.io. The site uses http on this server: certificates are not set up here.
-    verify   running  
-    key      pending  
+    verify   running
+    key      pending
   the job, once its comparison and key steps ended:
     source   done     Found wp.SOURCE-IP.sslip.io on apache (/etc/httpd/conf.d/wp.conf line 1): files in /var/www/wp owned by apache, its database wordpress, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 3 rule(s) become the web server's config: /private/ (closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akismet-frontend.js, ak
     account  done     Created the hosting account wpsite for wp.SOURCE-IP.sslip.io.
@@ -90,22 +90,22 @@ PASS  the move starts and the page follows its job
 ## 3. Checks of the moved WordPress on both servers
 PASS  every file arrived with the same content (3787 files, sha256 each)
 PASS  the copy's files are the account's own
-  wp-config.php on the old server: define('DB_NAME','wordpress'); define('DB_USER','wpuser'); define('DB_HOST','localhost'); 
-  wp-config.php here:              define('DB_NAME','wpsite_wordpress'); define('DB_USER','wpsite_wpuser'); define('DB_HOST','localhost'); 
+  wp-config.php on the old server: define('DB_NAME','wordpress'); define('DB_USER','wpuser'); define('DB_HOST','localhost');
+  wp-config.php here:              define('DB_NAME','wpsite_wordpress'); define('DB_USER','wpsite_wpuser'); define('DB_HOST','localhost');
 PASS  wp-config.php names the database wpsite_wordpress, the user wpsite_wpuser and localhost
 PASS  its DB_PASSWORD line and every other line are unchanged
-  rows: wp_commentmeta 0 wp_comments 1 wp_links 0 wp_options 125 wp_postmeta 2 wp_posts 4 wp_term_relationships 1 wp_term_taxonomy 1 wp_termmeta 0 wp_terms 1 wp_usermeta 16 wp_users 1 
+  rows: wp_commentmeta 0 wp_comments 1 wp_links 0 wp_options 125 wp_postmeta 2 wp_posts 4 wp_term_relationships 1 wp_term_taxonomy 1 wp_termmeta 0 wp_terms 1 wp_usermeta 16 wp_users 1
 PASS  every table has the same rows on both servers (12 tables)
 PASS  wpsite_wpuser signs in to wpsite_wordpress here with the old password
   PHP: the old server runs PHP 8.2.36 (PHP-FPM); the copy's vhost runs /usr/local/lsws/lsphp82/bin/lsphp
 PASS  the copy runs the old site's PHP version
-  deny rule: old: 403  | copy: 403 
+  deny rule: old: 403  | copy: 403
 PASS  the deny rule answers 403 on the copy, as on the old site
   redirect: old: 301 http://wp.SOURCE-IP.sslip.io/new-page | copy: 301 http://wp.SOURCE-IP.sslip.io/new-page
 PASS  the redirect answers 301 to the same place on the copy
   home page: old 'Apache stand-in blog', copy 'Apache stand-in blog'
 PASS  the copy's home page is the old one's
-  cron here: MAILTO="" */15 * * * * /usr/bin/php /home/wpsite/public_html/wp-cron.php >/dev/null 2>&1 
+  cron here: MAILTO="" */15 * * * * /usr/bin/php /home/wpsite/public_html/wp-cron.php >/dev/null 2>&1
 PASS  the scheduled job runs the copy's own folder
   process arguments, read five times a second during the move: panel samples=6939 hits=0; old server samples=6849 hits=0
 PASS  no password, key passphrase or password hash was in any process's arguments, on either server
@@ -141,12 +141,12 @@ PASS  the move's key got in (command) and the old server's websites are listed
     | Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   account name here: plainsite
 PASS  the move starts and the page follows its job
-  job state: succeeded 
+  job state: succeeded
     source   done     Found plain.SOURCE-IP.sslip.io on apache (/etc/httpd/conf.d/plain.conf line 1): files in /var/www/plain owned by plainsite, no database, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 2 rule(s) become the web server's config: /private/ (closed to everyone (403)); /old-page (redirect (301) to /about.html).
     account  done     Created the hosting account plainsite for plain.SOURCE-IP.sslip.io.
     web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
@@ -176,13 +176,13 @@ PASS  every file arrived with the same content (6 files, sha256 each)
 PASS  the copy's files are the account's own
   PHP: the old server runs PHP 8.2.36 (PHP-FPM); the copy's vhost runs /usr/local/lsws/lsphp82/bin/lsphp
 PASS  the copy runs the old site's PHP version
-  deny rule: old: 403  | copy: 403 
+  deny rule: old: 403  | copy: 403
 PASS  the deny rule answers 403 on the copy, as on the old site
   redirect: old: 301 http://plain.SOURCE-IP.sslip.io/about.html | copy: 301 http://plain.SOURCE-IP.sslip.io/about.html
 PASS  the redirect answers 301 to the same place on the copy
   home page: old 'Plain site on PHP 8.2.36', copy 'Plain site on PHP 8.2.36'
 PASS  the copy's home page is the old one's
-  cron here: MAILTO="" */30 * * * * /usr/bin/php /home/plainsite/public_html/task.php 
+  cron here: MAILTO="" */30 * * * * /usr/bin/php /home/plainsite/public_html/task.php
 PASS  the scheduled job runs the copy's own folder
   process arguments, read five times a second during the move: panel samples=251 hits=0; old server samples=245 hits=0
 PASS  no password, key passphrase or password hash was in any process's arguments, on either server
@@ -226,12 +226,12 @@ PASS  its file and line are under Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   account name here: blog
 PASS  the move starts and the page follows its job
-  job state: succeeded 
+  job state: succeeded
     source   done     Found blog.SOURCE-IP.sslip.io on nginx (/etc/nginx/sites-enabled/blog line 1): files in /var/www/blog owned by www-data, its database wordpress, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 1 rule(s) become the web server's config: /private/ (closed to everyone (403)).
     account  done     Created the hosting account blog for blog.SOURCE-IP.sslip.io.
     web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
@@ -258,25 +258,25 @@ PASS  the move starts and the page follows its job
 
 ## 7. Checks of the moved nginx WordPress on both servers
 PASS  nginx's own .htaccess files were left out of the copy (wp-content/.htaccess is not there)
-  .htaccess files in the copy, written from nginx's rules: ./.htaccess ./private/.htaccess 
+  .htaccess files in the copy, written from nginx's rules: ./.htaccess ./private/.htaccess
 PASS  every file arrived with the same content (3783 files, sha256 each)
 PASS  the copy's files are the account's own
-  wp-config.php on the old server: define('DB_NAME','wordpress'); define('DB_USER','wpuser'); define('DB_HOST','localhost'); 
-  wp-config.php here:              define('DB_NAME','blog_wordpress'); define('DB_USER','blog_wpuser'); define('DB_HOST','localhost'); 
+  wp-config.php on the old server: define('DB_NAME','wordpress'); define('DB_USER','wpuser'); define('DB_HOST','localhost');
+  wp-config.php here:              define('DB_NAME','blog_wordpress'); define('DB_USER','blog_wpuser'); define('DB_HOST','localhost');
 PASS  wp-config.php names the database blog_wordpress, the user blog_wpuser and localhost
 PASS  its DB_PASSWORD line and every other line are unchanged
-  rows: wp_commentmeta 0 wp_comments 1 wp_links 0 wp_options 125 wp_postmeta 2 wp_posts 4 wp_term_relationships 1 wp_term_taxonomy 1 wp_termmeta 0 wp_terms 1 wp_usermeta 16 wp_users 1 
+  rows: wp_commentmeta 0 wp_comments 1 wp_links 0 wp_options 125 wp_postmeta 2 wp_posts 4 wp_term_relationships 1 wp_term_taxonomy 1 wp_termmeta 0 wp_terms 1 wp_usermeta 16 wp_users 1
 PASS  every table has the same rows on both servers (12 tables)
 PASS  blog_wpuser signs in to blog_wordpress here with the old password
   PHP: the old server runs PHP 8.2.36 (PHP-FPM); the copy's vhost runs /usr/local/lsws/lsphp82/bin/lsphp
 PASS  the copy runs the old site's PHP version
-  deny rule: old: 403  | copy: 403 
+  deny rule: old: 403  | copy: 403
 PASS  the deny rule answers 403 on the copy, as on the old site
   redirect: old: 301 http://blog.SOURCE-IP.sslip.io/new-page | copy: 301 http://blog.SOURCE-IP.sslip.io/new-page
 PASS  the redirect answers 301 to the same place on the copy
   home page: old 'nginx stand-in blog', copy 'nginx stand-in blog'
 PASS  the copy's home page is the old one's
-  cron here: MAILTO="" */10 * * * * /usr/bin/php /home/blog/public_html/wp-cron.php >/dev/null 2>&1 
+  cron here: MAILTO="" */10 * * * * /usr/bin/php /home/blog/public_html/wp-cron.php >/dev/null 2>&1
 PASS  the scheduled job runs the copy's own folder
   process arguments, read five times a second during the move: panel samples=314 hits=0; old server samples=310 hits=0
 PASS  no password, key passphrase or password hash was in any process's arguments, on either server
@@ -296,13 +296,13 @@ PASS  and offers no Move button for it
 PASS  its file and line are under Technical details
   the API asked to move app.SOURCE-IP.sslip.io anyway: 202 43c6f49456b8489e50710bff8eeee6b3
     source   failed   The old server's configuration for app.SOURCE-IP.sslip.io has lines this server does not convert (/etc/nginx/sites-enabled/app line 5), so moving it as it is would change what it does. Nothing was created here.
-    account  skipped  
-    web      skipped  
-    files    skipped  
-    database skipped  
-    cron     skipped  
-    ssl      skipped  
-    verify   skipped  
+    account  skipped
+    web      skipped
+    files    skipped
+    database skipped
+    cron     skipped
+    ssl      skipped
+    verify   skipped
     key      done     The old server no longer accepts the migration key, and this server deleted it.
   what: The website on the old server cannot be moved as it is.
   why: The old server's configuration for app.SOURCE-IP.sslip.io has lines this server does not convert (/etc/nginx/sites-enabled/app line 5), so moving it as it is would change what it does. Nothing was created here.
@@ -343,7 +343,7 @@ PASS  the form no longer holds the password or key
     | Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   screenshot: move-summary-apache-wp-1440.png (addresses masked)
@@ -380,7 +380,7 @@ PASS  the move's key got in (command) and the old server's websites are listed
     | Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   screenshot: move-summary-apache-plain-390.png (addresses masked)
@@ -421,7 +421,7 @@ PASS  its file and line are under Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   screenshot: move-summary-nginx-blog-390.png (addresses masked)
@@ -462,7 +462,7 @@ PASS  its file and line are under Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   screenshot: move-summary-nginx-blog-1440.png (addresses masked)
@@ -517,7 +517,7 @@ PASS  its file and line are under Technical details
     | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
     | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
     | Account name here
-    | 
+    |
     | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
 PASS  the summary lists what will not move before anything is made
   screenshot: move-summary-nginx-blog-390.png (addresses masked)

@@ -91,7 +91,9 @@ export function GetStarted({ revision, origin }: { revision: number; origin: str
   const { done, total, complete } = getStartedProgress(steps);
   const next = nextStep(steps);
   const checking = steps.some((s) => s.status === "Checking…");
-  if (complete && hidden) return null;
+  // Hidden: stay away while the readings load too, so the list does not
+  // flash on each visit; it comes back only if a step is no longer done.
+  if (hidden && (complete || checking)) return null;
   return <section className={`${panel} min-w-0 overflow-hidden`} aria-labelledby={`${baseId}-heading`} data-testid="get-started" data-complete={String(complete)} aria-busy={checking}>
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-4 md:px-5">
       <div className="min-w-0 flex-1 basis-64">

@@ -155,8 +155,9 @@ func shopArchive(t testing.TB, extra ...syntheticEntry) []byte {
 		file(p+"cron/shop", "MAILTO=\"\"\n*/5 * * * * /usr/local/bin/php -q /home/shop/public_html/wp-cron.php\n"),
 		file(p+"mysql.sql", "GRANT USAGE ON *.* TO 'shop'@'localhost' IDENTIFIED BY PASSWORD '"+testHash+"';\n"+
 			"GRANT ALL PRIVILEGES ON `shop\\_%`.* TO 'shop'@'localhost';\n"+
-			"GRANT USAGE ON *.* TO 'shop_wp'@'localhost' IDENTIFIED BY PASSWORD '"+testHash2+"';\n"+
-			"GRANT ALL PRIVILEGES ON `shop\\_wp`.* TO 'shop_wp'@'localhost';\n"+
+			// MariaDB 10.4 and later quote the user and host with backticks.
+			"GRANT USAGE ON *.* TO `shop_wp`@`localhost` IDENTIFIED BY PASSWORD '"+testHash2+"';\n"+
+			"GRANT ALL PRIVILEGES ON `shop\\_wp`.* TO `shop_wp`@`localhost`;\n"+
 			"GRANT SELECT, INSERT ON `shop\\_wp`.* TO 'shop_wp'@'%';\n"),
 		dir(p + "mysql/"),
 		file(p+"mysql/shop_wp.create", "CREATE DATABASE `shop_wp`;\n"),

@@ -519,10 +519,11 @@ func (y yaml) value(k string) string  { return y.values[k] }
 func (y yaml) list(k string) []string { return y.lists[k] }
 func (y yaml) keys(k string) []string { return y.maps[k] }
 
-// grantLine is one line of mysql.sql as MariaDB's SHOW GRANTS prints it,
-// which pkgacct writes there: privileges, the database (or *.*), the user
-// and host, and for the USAGE line the mysql_native_password hash.
-var grantLine = regexp.MustCompile("^GRANT (.+) ON (\\*\\.\\*|`([^`]+)`\\.\\*) TO '([^']+)'@'([^']+)'(?: IDENTIFIED BY PASSWORD '(\\*[0-9A-F]{40})')?.*$")
+// grantLine is one line of mysql.sql as SHOW GRANTS prints it, which
+// pkgacct writes there: privileges, the database (or *.*), the user and
+// host (quoted 'so' by MySQL, `so` by MariaDB 10.4 and later), and for the
+// USAGE line the mysql_native_password hash.
+var grantLine = regexp.MustCompile("^GRANT (.+) ON (\\*\\.\\*|`([^`]+)`\\.\\*) TO ['`]([^'`]+)['`]@['`]([^'`]+)['`](?: IDENTIFIED BY PASSWORD '(\\*[0-9A-F]{40})')?.*$")
 
 var (
 	knownPrivileges = map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": true, "CREATE": true, "DROP": true, "REFERENCES": true, "INDEX": true,

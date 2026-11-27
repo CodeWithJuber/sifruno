@@ -77,10 +77,22 @@ type migrateEngine interface {
 	// copy's .htaccess files convert to protected folders, protect puts
 	// them live before cp runs; its error stops the copy.
 	Files(ctx context.Context, m migrationRecord, sourceHome string, r record, needMiB int64, l backupLeftover, protect func(SiteProtection) error) (MigrateFilesResult, error)
-	// Database dumps one database on the source into staging and loads it
-	// as the site's user through l's temporary MariaDB user, then compares
-	// every table's rows.
-	Database(ctx context.Context, m migrationRecord, db string, r record, l backupLeftover) (MigrateDatabaseResult, error)
+	// ServerPreflight is Preflight for a site on another Linux server: the
+	// document root's .htaccess files, fetched as its owner, or for nginx
+	// the files its converted rules become, staged and scanned. leftOut
+	// names the .htaccess files an nginx site holds, which nginx never
+	// read and the copy leaves out.
+	ServerPreflight(ctx context.Context, m migrationRecord, src serverSource, l backupLeftover) (site htaccess.SiteResult, leftOut []string, err error)
+	// ServerFiles is Files for a site on another Linux server: rsync of
+	// the document root, as its owner, into the staged public_html, nginx's
+	// rules written as .htaccess files and wp-config.php pointed at the
+	// database here on that root-only copy, then the same placement.
+	ServerFiles(ctx context.Context, m migrationRecord, src serverSource, r record, needMiB int64, l backupLeftover, protect func(SiteProtection) error) (MigrateFilesResult, error)
+	// Database dumps the source's database source into staging and loads
+	// it into db, here, as the site's user through l's temporary MariaDB
+	// user, then compares every table's rows. A cPanel source's database
+	// has the same name on both servers.
+	Database(ctx context.Context, m migrationRecord, source, db string, r record, l backupLeftover) (MigrateDatabaseResult, error)
 	// SaveArchive makes the migration's folder for an uploaded backup file
 	// and writes exactly size bytes of body into it, root's and 0600, within
 	// the disk margin; then it reads the file once (cpmove.Read) without
@@ -569,6 +581,10 @@ func (s *store) migrationAccounts(ctx context.Context, id string) ([]cpsource.Ac
 	if m.Via == ViaArchive {
 		return archiveAccounts(m), nil
 	}
+	if m.Via == ViaServer {
+		// Another Linux server lists websites, not accounts.
+		return nil, ErrInvalid
+	}
 	work, cancel := backupContext(ctx, migrateRemoteTimeout)
 	defer cancel()
 	// A WHM migration's accounts are listed by the panel through WHM.
@@ -632,6 +648,12 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	if m.Via == ViaArchive {
 		return s.planArchive(work, m, in)
 	}
+	if m.Via == ViaServer {
+		return s.planServer(work, m, in)
+	}
+	if in.Site != "" {
+		return MigrationPlan{}, ErrInvalid
+	}
 	account, site, err := s.sourceSite(work, m, in.Username, "", in.CPanel)
 	if err != nil {
 		return MigrationPlan{}, err
@@ -653,7 +675,7 @@ func (s *store) planMigration(ctx context.Context, id string, in MigrationPlanIn
 	if err = s.planCron(work, m, &plan); err != nil {
 		return MigrationPlan{}, err
 	}
-	if err = s.planTier(work, m, site.HomeDir, &plan); err != nil {
+	if err = s.planTier(work, m, site.HomeDir, nil, &plan); err != nil {
 		return MigrationPlan{}, err
 	}
 	return plan, nil
@@ -753,8 +775,9 @@ func (s *store) planCron(ctx context.Context, m migrationRecord, plan *Migration
 // planTier fetches the site's .htaccess files into a root-only staging
 // folder, scans them and converts their access rules. Only a Native site,
 // converted rules included, may go live on OpenLiteSpeed; the panel refuses
-// the others (README, Migration).
-func (s *store) planTier(ctx context.Context, m migrationRecord, home string, plan *MigrationPlan) error {
+// the others (README, Migration). src is set for a site on another Linux
+// server, whose files are its document root.
+func (s *store) planTier(ctx context.Context, m migrationRecord, home string, src *serverSource, plan *MigrationPlan) error {
 	s.backupMu.Lock()
 	defer s.backupMu.Unlock()
 	if err := s.cleanBackupLeftovers(ctx); err != nil {
@@ -769,7 +792,15 @@ func (s *store) planTier(ctx context.Context, m migrationRecord, home string, pl
 		return err
 	}
 	defer s.finishLeftover(l)
-	site, homeFile, err := s.migrate.Preflight(ctx, m, home, l)
+	var site htaccess.SiteResult
+	var homeFile bool
+	if src != nil {
+		var leftOut []string
+		site, leftOut, err = s.migrate.ServerPreflight(ctx, m, *src, l)
+		plan.NotCarried = append(plan.NotCarried, leftOutItems(leftOut)...)
+	} else {
+		site, homeFile, err = s.migrate.Preflight(ctx, m, home, l)
+	}
 	if err != nil {
 		return err
 	}
@@ -949,7 +980,9 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 	defer cancel()
 	var home string
 	var needMiB int64
-	if m.Via == ViaArchive {
+	var src *serverSource
+	switch {
+	case m.Via == ViaArchive:
 		if in.CPanel != nil {
 			return MigrateFilesResult{}, ErrInvalid
 		}
@@ -957,7 +990,16 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 			return MigrateFilesResult{}, err
 		}
 		home, needMiB = m.Archive.Home, mibOf(m.Archive.HomeBytes)
-	} else {
+	case m.Via == ViaServer:
+		if in.CPanel != nil {
+			return MigrateFilesResult{}, ErrInvalid
+		}
+		server, need, err := s.serverFiles(work, m, r)
+		if err != nil {
+			return MigrateFilesResult{}, err
+		}
+		src, needMiB = &server, need
+	default:
 		account, site, err := s.lockedSourceSite(work, m, r.Account.Username, r.Account.Domain, in.CPanel)
 		if err != nil {
 			return MigrateFilesResult{}, err
@@ -993,7 +1035,12 @@ func (s *store) migrateFiles(ctx context.Context, id string, in MigrateFilesInpu
 			return err
 		}
 	}
-	result, err := s.migrate.Files(work, m, home, r, needMiB, l, protect)
+	var result MigrateFilesResult
+	if src != nil {
+		result, err = s.migrate.ServerFiles(work, m, *src, r, needMiB, l, protect)
+	} else {
+		result, err = s.migrate.Files(work, m, home, r, needMiB, l, protect)
+	}
 	if err != nil {
 		return MigrateFilesResult{}, err
 	}
@@ -1065,7 +1112,8 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 	}
 	work, cancel := backupContext(ctx, backupTimeout)
 	defer cancel()
-	if err = s.sourceDatabase(work, m, r, in); err != nil {
+	source, err := s.sourceDatabase(work, m, r, in)
+	if err != nil {
 		return MigrateDatabaseResult{}, err
 	}
 	s.backupMu.Lock()
@@ -1086,40 +1134,48 @@ func (s *store) migrateDatabase(ctx context.Context, id string, in MigrateDataba
 		return MigrateDatabaseResult{}, err
 	}
 	defer s.finishLeftover(l)
-	return s.migrate.Database(work, m, in.Database, r, l)
+	return s.migrate.Database(work, m, source, in.Database, r, l)
 }
 
 // sourceDatabase checks that the source holds the database under the
-// account of this name: the old server's list, or the backup file's.
-func (s *store) sourceDatabase(ctx context.Context, m migrationRecord, r record, in MigrateDatabaseInput) error {
-	if m.Via == ViaArchive {
+// account of this name, the old server's list or the backup file's, and
+// names it there: the same name, but for another Linux server, whose
+// site's wp-config.php names it.
+func (s *store) sourceDatabase(ctx context.Context, m migrationRecord, r record, in MigrateDatabaseInput) (string, error) {
+	switch m.Via {
+	case ViaArchive:
 		if in.CPanel != nil {
-			return ErrInvalid
+			return "", ErrInvalid
 		}
 		if err := archiveSite(m, r); err != nil {
-			return err
+			return "", err
 		}
 		if !slices.Contains(m.Archive.Databases, in.Database) {
-			return &MigrationError{Step: "database", Detail: "The backup file holds no database " + in.Database + "."}
+			return "", &MigrationError{Step: "database", Detail: "The backup file holds no database " + in.Database + "."}
 		}
-		return nil
+		return in.Database, nil
+	case ViaServer:
+		if in.CPanel != nil {
+			return "", ErrInvalid
+		}
+		return s.serverSourceDatabase(ctx, m, r, in.Database)
 	}
 	command, err := cpsource.DatabasesCommand(r.Account.Username)
 	if err != nil {
-		return ErrInvalid
+		return "", ErrInvalid
 	}
 	out, err := s.cpanelAnswer(ctx, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.Databases }, command)
 	if err != nil {
-		return err
+		return "", err
 	}
 	dbs, err := cpsource.ParseDatabases(out, r.Account.Username)
 	if err != nil {
-		return unreadable(err, "databases (uapi Mysql list_databases)")
+		return "", unreadable(err, "databases (uapi Mysql list_databases)")
 	}
 	if !slices.ContainsFunc(dbs, func(d cpsource.Database) bool { return d.Name == in.Database }) {
-		return &MigrationError{Step: "database", Detail: "The old server's account " + r.Account.Username + " has no database " + in.Database + "."}
+		return "", &MigrationError{Step: "database", Detail: "The old server's account " + r.Account.Username + " has no database " + in.Database + "."}
 	}
-	return nil
+	return in.Database, nil
 }
 
 // finishMigration removes the key's line from the source's authorized_keys,

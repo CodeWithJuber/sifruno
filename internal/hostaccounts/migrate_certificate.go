@@ -287,6 +287,12 @@ func (s *store) sourceCertificate(ctx context.Context, m migrationRecord, r reco
 		}
 		return s.archiveCertificate(ctx, m)
 	}
+	if m.Via == ViaServer {
+		if in.CPanel != nil {
+			return cpsource.VhostSSL{}, ErrInvalid
+		}
+		return s.serverCertificate(ctx, m, r)
+	}
 	if _, _, err := s.lockedSourceSite(ctx, m, r.Account.Username, r.Account.Domain, in.CPanel); err != nil {
 		return cpsource.VhostSSL{}, err
 	}

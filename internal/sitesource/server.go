@@ -153,7 +153,7 @@ func asOwner(owner Owner, command string) (string, bool) {
 	if owner.UID == 0 {
 		return command, owner.Name == "root"
 	}
-	if owner.UID < 0 || !ValidSystemUser(owner.Name) {
+	if owner.UID < 0 || owner.Name == "root" || !ValidSystemUser(owner.Name) {
 		return "", false
 	}
 	return runuserPath + " -u " + owner.Name + " -- " + command, true

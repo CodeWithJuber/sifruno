@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http/httptest"
@@ -116,11 +117,46 @@ func (f *fakeMigrate) Files(_ context.Context, _ migrationRecord, home string, r
 	}
 	return MigrateFilesResult{WordPress: true}, f.failFiles
 }
-func (f *fakeMigrate) Database(_ context.Context, _ migrationRecord, db string, _ record, l backupLeftover) (MigrateDatabaseResult, error) {
+func (f *fakeMigrate) Database(_ context.Context, _ migrationRecord, source, db string, _ record, l backupLeftover) (MigrateDatabaseResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.databases = append(f.databases, db+" as "+l.Users[db])
+	name := db
+	if source != db {
+		name = source + " into " + db
+	}
+	f.databases = append(f.databases, name+" as "+l.Users[db])
 	return MigrateDatabaseResult{Database: db, Tables: []MigrationTable{{Table: "wp_posts", Source: 3, Copy: 3}}}, nil
+}
+
+// ServerPreflight and ServerFiles record what a copy from another Linux
+// server would copy: the folder, its owner, how its rules come, and the
+// names wp-config.php gets.
+func (f *fakeMigrate) ServerPreflight(_ context.Context, _ migrationRecord, src serverSource, _ backupLeftover) (htaccess.SiteResult, []string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.files = append(f.files, "preflight "+src.site.DocRoot+" as "+src.owner.Name)
+	var leftOut []string
+	if src.site.Server == "nginx" {
+		leftOut = []string{"old/.htaccess"}
+	}
+	return f.site, leftOut, nil
+}
+func (f *fakeMigrate) ServerFiles(_ context.Context, _ migrationRecord, src serverSource, r record, needMiB int64, _ backupLeftover, protect func(SiteProtection) error) (MigrateFilesResult, error) {
+	f.mu.Lock()
+	protection := f.protection
+	folders := make([]string, 0, len(src.site.Htaccess))
+	for k := range src.site.Htaccess {
+		folders = append(folders, k)
+	}
+	slices.Sort(folders)
+	f.files = append(f.files, fmt.Sprintf("%s as %s -> %s (%d MiB, rules %q, wp-config %s %s, home %s)", src.site.DocRoot, src.owner.Name, r.Account.Username, needMiB, folders, src.dbName, src.dbUser, src.stagedHome()))
+	f.mu.Unlock()
+	if len(protection.Folders) > 0 {
+		if err := protect(protection); err != nil {
+			return MigrateFilesResult{}, err
+		}
+	}
+	return MigrateFilesResult{WordPress: src.dbName != ""}, f.failFiles
 }
 func (f *fakeMigrate) SaveArchive(ctx context.Context, id string, size int64, body io.Reader) (*cpmove.Archive, error) {
 	data, err := io.ReadAll(io.LimitReader(body, size))

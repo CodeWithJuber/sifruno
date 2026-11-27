@@ -815,9 +815,14 @@ func regularAt(dir *os.File, name string) bool {
 	return unix.Fstatat(int(d.Fd()), base, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT == unix.S_IFREG
 }
 
-func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string, r record, l backupLeftover) (MigrateDatabaseResult, error) {
-	if m.e.prepare() != nil || m.tools() != nil || r.Account.UID <= 0 || r.Account.GID <= 0 || !validDatabaseName(db) || l.Users[db] == "" {
+func (m *migrator) Database(ctx context.Context, rec migrationRecord, source, db string, r record, l backupLeftover) (MigrateDatabaseResult, error) {
+	if m.e.prepare() != nil || m.tools() != nil || r.Account.UID <= 0 || r.Account.GID <= 0 || !validDatabaseName(db) || !validDatabaseName(source) || l.Users[db] == "" {
 		return MigrateDatabaseResult{}, ErrUnavailable
+	}
+	// Only a site from another Linux server is renamed: its database
+	// takes the account's prefix here.
+	if source != db && rec.Via != ViaServer {
+		return MigrateDatabaseResult{}, ErrInvalid
 	}
 	out, code, err := m.e.rootSQL(ctx, databaseExistsSQL(db))
 	if err != nil || code != 0 {
@@ -829,13 +834,13 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 	if rec.Via == ViaArchive {
 		return m.archiveDatabase(ctx, rec, db, r, l)
 	}
-	objects, _ := cpsource.ObjectsSQL(db)
+	objects, _ := cpsource.ObjectsSQL(source)
 	found, err := m.remoteSQL(ctx, rec, objects)
 	if err != nil {
 		return MigrateDatabaseResult{}, err
 	}
 	if kinds := strings.Fields(string(found)); len(kinds) > 0 {
-		return MigrateDatabaseResult{}, &MigrationError{Step: "database", Detail: "The database " + db + " on the old server has " + strings.Join(uniqueWords(kinds), ", ") + ". This version copies tables and rows only, because those objects run as a named MariaDB user."}
+		return MigrateDatabaseResult{}, &MigrationError{Step: "database", Detail: "The database " + source + " on the old server has " + strings.Join(uniqueWords(kinds), ", ") + ". This version copies tables and rows only, because those objects run as a named MariaDB user."}
 	}
 	stage, err := m.e.newStage(l.Op)
 	if err != nil {
@@ -862,13 +867,13 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 		return MigrateDatabaseResult{}, ErrUnavailable
 	}
 	capped := &cappedWriter{w: file, max: min(uint64(maxDumpBytes), roomLeft(avail, total))}
-	command, _ := cpsource.DumpCommand(db)
+	command, _ := cpsource.DumpCommand(source)
 	out, code, err = m.Remote(ctx, rec, command, nil, capped, backupTimeout)
 	syncErr := file.Sync()
 	file.Close()
 	switch {
 	case capped.over:
-		return MigrateDatabaseResult{}, &MigrationError{Step: "space", Detail: "The dump of " + db + " grew past the free space this server keeps, so it was stopped."}
+		return MigrateDatabaseResult{}, &MigrationError{Step: "space", Detail: "The dump of " + source + " grew past the free space this server keeps, so it was stopped."}
 	case err != nil:
 		return MigrateDatabaseResult{}, err
 	case code == 255:
@@ -878,7 +883,7 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 	}
 	// The source's rows are counted after its dump; a site that changed
 	// meanwhile shows up as a difference, which the panel reports.
-	source, sourceTables, err := m.count(ctx, db, func(sql string) ([]byte, error) { return m.remoteSQL(ctx, rec, sql) })
+	sourceRows, sourceTables, err := m.count(ctx, source, func(sql string) ([]byte, error) { return m.remoteSQL(ctx, rec, sql) })
 	if err != nil {
 		return MigrateDatabaseResult{}, err
 	}
@@ -899,7 +904,7 @@ func (m *migrator) Database(ctx context.Context, rec migrationRecord, db string,
 	names := uniqueWords(append(sourceTables, copiedTables...))
 	result := MigrateDatabaseResult{Database: db, Tables: make([]MigrationTable, 0, len(names))}
 	for _, t := range names {
-		src, inSource := source[t]
+		src, inSource := sourceRows[t]
 		cp, inCopy := copied[t]
 		if !inSource {
 			src = -1

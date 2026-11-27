@@ -16,7 +16,8 @@ import (
 //	GET  /v1/migrations/{id}                    the migration
 //	POST /v1/migrations/{id}/host-key           fingerprint, reason
 //	GET  /v1/migrations/{id}/accounts           the source's accounts
-//	POST /v1/migrations/{id}/plan               username, reason
+//	GET  /v1/migrations/{id}/sites              another Linux server's websites
+//	POST /v1/migrations/{id}/plan               username, site, reason
 //	POST /v1/migrations/{id}/finish             reason
 //	GET  /v1/migrations/stale                   key lines that may still be on old servers
 //	POST /v1/migrations/{id}/stale-cleared      reason: the admin removed that line
@@ -24,7 +25,7 @@ import (
 //	POST /v1/accounts/{id}/migrate-database     migration, database, expected_revision, reason
 //	POST /v1/accounts/{id}/migrate-certificate  migration, expected_revision, reason
 var (
-	migrationPath   = regexp.MustCompile(`^/v1/migrations/([a-f0-9]{32})(/host-key|/accounts|/plan|/finish|/stale-cleared)?$`)
+	migrationPath   = regexp.MustCompile(`^/v1/migrations/([a-f0-9]{32})(/host-key|/accounts|/sites|/plan|/finish|/stale-cleared)?$`)
 	migrateCopyPath = regexp.MustCompile(`^/v1/accounts/([a-f0-9]{32})/(migrate-files|migrate-database|migrate-certificate)$`)
 )
 
@@ -159,6 +160,14 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 		answerMigration(w, struct {
 			Items any `json:"items"`
 		}{items}, err)
+	case action == "/sites" && r.Method == "GET":
+		if !noBody(r) || !backupDeadline(w, 2*migrateRemoteTimeout) {
+			return
+		}
+		items, err := s.migrationSites(ctx, id)
+		answerMigration(w, struct {
+			Items any `json:"items"`
+		}{items}, err)
 	case action == "/host-key" && r.Method == "POST":
 		var in body[MigrationPinInput]
 		if decodeBody(w, r, &in, []string{"fingerprint", "reason"}) != nil {
@@ -169,7 +178,7 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 		answerMigration(w, result, err)
 	case action == "/plan" && r.Method == "POST":
 		var in body[MigrationPlanInput]
-		if decodeBodyWithin(w, r, &in, []string{"username", "cpanel", "reason"}, maxCPanelRequest) != nil {
+		if decodeBodyWithin(w, r, &in, []string{"username", "site", "cpanel", "reason"}, maxCPanelRequest) != nil {
 			writeError(w, ErrInvalid)
 			return
 		}

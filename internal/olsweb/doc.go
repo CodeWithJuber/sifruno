@@ -22,7 +22,9 @@
 //     site's own lsphp extprocessor (lsapi over uds://tmp/lshttpd/
 //     sifruno-NAME.sock, started through the CGI daemon as extUser/extGroup =
 //     the account, with rlimits and LSAPI children), the php script handler
-//     that uses it, namespace 2 and cgroups 2 when an active site asks for
+//     that uses it, the PHP settings a migration carried from the site's
+//     root .htaccess as a phpIniOverride block (phpini.go), namespace 2 and
+//     cgroups 2 when an active site asks for
 //     them, a static context that maps /.well-known/acme-challenge/ to
 //     ACMEChallengeDir, a "module cache" block, and a rewrite
 //     block with .htaccess autoload plus vhost-level deny rules, then the

@@ -154,6 +154,11 @@ type Site struct {
 	// sorted by status.
 	HtaccessRedirects []HtaccessRedirect `json:"htaccess_redirects,omitempty"`
 	ErrorPages        []ErrorPage        `json:"error_pages,omitempty"`
+	// PHPSettings are the php_value and php_flag lines a migration
+	// converted from the site's root .htaccess (phpini.go), sorted by
+	// name, rendered as the vhost's phpIniOverride for an active site
+	// only: a suspended site runs no PHP.
+	PHPSettings []PHPSetting `json:"php_settings,omitempty"`
 }
 
 // Redirect answers requests with a 301 or 302 to Target. Exactly one of

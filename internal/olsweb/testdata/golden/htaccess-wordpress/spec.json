@@ -32,6 +32,13 @@
       "error_pages": [
         {"status": 403, "url": "/errors/403.html"},
         {"status": 404, "url": "/404.html"}
+      ],
+      "php_settings": [
+        {"name": "date.timezone", "value": "Europe/Berlin"},
+        {"name": "display_errors", "value": "off", "flag": true},
+        {"name": "max_execution_time", "value": "300"},
+        {"name": "memory_limit", "value": "512M"},
+        {"name": "upload_max_filesize", "value": "128M"}
       ]
     },
     {
@@ -50,6 +57,9 @@
       ],
       "error_pages": [
         {"status": 404, "url": "/404.html"}
+      ],
+      "php_settings": [
+        {"name": "memory_limit", "value": "256M"}
       ]
     }
   ]

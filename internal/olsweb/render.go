@@ -277,6 +277,7 @@ func renderVhost(v site) []byte {
 	autoLoad := "0"
 	if !v.Suspended {
 		renderPHP(&b, v)
+		renderPHPIni(&b, v.PHPSettings)
 		rules = append(append([]string(nil), denyRules...), redirectRules(v.Redirects)...)
 		// After the site's own redirects, so a redirected domain or path
 		// takes one hop to its target, not two.

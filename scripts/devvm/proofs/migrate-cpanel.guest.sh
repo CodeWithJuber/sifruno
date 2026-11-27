@@ -19,11 +19,14 @@
 # documentation gives for listaccts, domainuserdata,
 # php_get_vhost_versions, Mysql list_databases and list_users, for exactly
 # the accounts this script makes. Six accounts:
-#   shop<id>   WordPress with its rewrite rules and the stock Akismet
-#              plugin, whose .htaccess (deny all, a <FilesMatch> allow-list,
-#              Apache 2.2 and 2.4 branches) the converter turns into an
-#              OpenLiteSpeed rule: the full path, from discovery to the DNS
-#              records, with the closed folder and its open files checked
+#   shop<id>   WordPress with a typical cPanel .htaccess (its rewrite
+#              rules, cPanel's PHP handler block, Expires, deflate, caching
+#              and security headers, Options -Indexes), which moves Native
+#              with no note, and the stock Akismet plugin, whose .htaccess
+#              (deny all, a <FilesMatch> allow-list, Apache 2.2 and 2.4
+#              branches) the converter turns into an OpenLiteSpeed rule: the
+#              full path, from discovery to the DNS records, with the closed
+#              folder and its open files checked
 #   staff<id>  a password-protected folder (.htaccess + a user file in
 #              .htpasswds, as cPanel's Directory Privacy keeps it) and a
 #              folder closed with Deny from all, two address-list folders
@@ -32,7 +35,7 @@
 #              password, 200 with it, 403 for the closed folder, the lists
 #              by client address, and every other spelling of the paths
 #   odd<id>    an .htaccess with a directive the converter does not know:
-#              refused before anything is created
+#              refused before anything is created, naming its file and line
 #   trig<id>   a PHP site whose database has a trigger: the copy fails at
 #              the database and the job removes what it created
 #   race<id>   a tenant that swaps a folder for a link to /root while the
@@ -256,7 +259,12 @@ secret > "$WORK/admin.pw"
 podman cp "$WORK/admin.pw" "$CTR:/root/admin.pw"
 in_ctr "cd /home/$SHOP/public_html && runuser -u $SHOP -- $WPRUN core install --url=http://$SHOP_DOMAIN --title='$TITLE' --admin_user=standin --admin_email=standin@proof.test --skip-email --prompt=admin_password < /root/admin.pw && rm -f /root/admin.pw" >/dev/null 2>&1
 wp "post create --post_title='Moved with Sifruno' --post_status=publish" >/dev/null 2>&1
-# WordPress's own rewrite block, and a rewrite deny OpenLiteSpeed honours.
+# A typical cPanel WordPress .htaccess: WordPress's own rewrite block,
+# cPanel's PHP handler block for the site's PHP package, and the caching,
+# compression and header lines hosting guides and cache plugins add.
+# OpenLiteSpeed acts on the rewrite lines; every other line is harmless to
+# ignore or handled by Sifruno (internal/htaccess handling.go), so the site
+# moves Native with no note.
 in_ctr "cat > /home/$SHOP/public_html/.htaccess <<'HT'
 # BEGIN WordPress
 <IfModule mod_rewrite.c>
@@ -268,6 +276,39 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress
+
+# php -- BEGIN cPanel-generated handler, do not edit
+# Set the \"ea-php$PHPXY\" package as the default \"PHP\" programming language.
+<IfModule mime_module>
+  AddHandler application/x-httpd-ea-php$PHPXY .php .php${PHPXY:0:1} .phtml
+</IfModule>
+# php -- END cPanel-generated handler, do not edit
+
+<IfModule mod_expires.c>
+ExpiresActive On
+ExpiresByType image/png \"access plus 1 year\"
+ExpiresByType text/css \"access plus 1 month\"
+ExpiresByType application/javascript \"access plus 1 month\"
+ExpiresDefault \"access plus 2 days\"
+</IfModule>
+<IfModule mod_deflate.c>
+AddOutputFilterByType DEFLATE text/plain text/html text/xml text/css \\
+  application/javascript application/json image/svg+xml
+BrowserMatch ^Mozilla/4 gzip-only-text/html
+BrowserMatch \\bMSIE !no-gzip !gzip-only-text/html
+</IfModule>
+<IfModule mod_headers.c>
+Header set X-Content-Type-Options nosniff
+Header always set X-Frame-Options SAMEORIGIN
+<FilesMatch \"\\.(js|css|png|jpg|svg|woff2)\$\">
+Header set Cache-Control \"max-age=2592000, public\"
+</FilesMatch>
+Header unset ETag
+</IfModule>
+FileETag None
+Options -Indexes
+AddType image/webp .webp
+AddDefaultCharset UTF-8
 HT
 chown -R $SHOP:apache /home/$SHOP/public_html
 find /home/$SHOP/public_html -type d -exec chmod 0750 {} +; find /home/$SHOP/public_html -type f -exec chmod 0640 {} +"
@@ -943,9 +984,16 @@ sample_stop
 m() { json "$WORK/job.json" "d['job']['migration']$1"; }
 check "the move succeeded" test "$state" = succeeded
 check "the tier is Native (rewrite rules, and Akismet's access rules converted)" test "$(m "['tier']")" = native
+check "the typical cPanel .htaccess (PHP handler block, Expires, deflate, headers, Options -Indexes) left no note (notes: $(m "['notes']"))" test "$(m "['notes']")" = "[]"
 echo "  converted: $(m "['converted']")"
 check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.json" "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
 check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
+src_ht="$(in_ctr "sha256sum /home/$SHOP/public_html/.htaccess" | cut -d' ' -f1)"
+check "the copy's .htaccess is the old site's, byte for byte" test -n "$src_ht" -a "$src_ht" = "$(sha256sum "/home/$SHOP/public_html/.htaccess" 2>/dev/null | cut -d' ' -f1)"
+if command -v panelctl >/dev/null 2>&1; then
+  echo "  panelctl htaccess scan --details of the copy's public_html (as the panel decides the move):"
+  panelctl htaccess scan --root "/home/$SHOP/public_html" --layout single --details 2>&1 | sed -n '/^site /,$p' | sed 's/^/    /'
+fi
 src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
 dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"
 check "wp-config.php arrived unchanged (same sha256) and is the site user's" test -n "$src_sum" -a "$src_sum" = "$dst_sum" -a "$(stat -c %U "/home/$SHOP/public_html/wp-config.php" 2>/dev/null)" = "$SHOP"
@@ -989,6 +1037,7 @@ echo "  verify: $(m "['verify']['verdict']")"
 echo "  pages $(m "['verify']['pages_compared']") compared, $(m "['verify']['pages_pass']") pass, $(m "['verify']['pages_fail']") fail; notes: $(m "['notes']")"
 check "verify ran and found no difference (cutover allowed by verify)" test "$(m "['verify']['cutover_allowed']")" = True
 gate="$(m "['gate']")"
+check "with verify green and no note, the cutover gate opened without an acceptance (gate: $gate)" test "$gate" = open
 if [ "$gate" = closed ]; then
   # Only notes (such as a PHP version this server maps) close it; the
   # proof accepts them on purpose, as an admin would, with a reason.
@@ -1102,9 +1151,13 @@ echo "## 5b. $ODD_DOMAIN: a directive the converter does not know is refused"
 connect odd; pin odd >/dev/null 2>&1; install_key odd
 run_job "$ODD"
 echo "  why: $(json "$WORK/job.json" "d['job']['error']['why']")"
+echo "  next: $(json "$WORK/job.json" "d['job']['error']['next']")"
 echo "  technical: $(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
 check "the move stops at the old server's site, before anything is created" test "$state" = failed -a "$(json "$WORK/job.json" "d['job']['error']['step']")" = source
 check "the reason names the directives this panel does not know" grep -q 'directives this panel does not know' "$WORK/job.json"
+check "Technical details names the file, line and directive (tools/.htaccess line 2 (SifrunoProofUnknown On))" grep -qF 'tools/.htaccess line 2 (SifrunoProofUnknown On): a directive this panel does not know' <<<"$(json "$WORK/job.json" "d['job']['error'].get('technical','')")"
+check "the next step names that line to remove or change on the old server" grep -qF 'remove or change tools/.htaccess line 2 (SifrunoProofUnknown On)' <<<"$(json "$WORK/job.json" "d['job']['error']['next']")"
+check "the reason does not claim a protected folder would open: the unknown line is the cause" bash -c "! grep -q 'open to everyone' <<<\"\$1\"" _ "$(json "$WORK/job.json" "d['job']['error']['why']")"
 check "no account $ODD was created" bash -c "! getent passwd $ODD"
 check "the key is removed after the refusal too" in_ctr "! grep -q 'sifruno-migration-$SRC' /root/.ssh/authorized_keys"
 check "no staging folder or migration folder is left" bash -c "[ -z \"\$(ls -A /var/lib/sifruno-restore 2>/dev/null)\" ] && [ ! -e $STATE/migrate/$SRC ]"

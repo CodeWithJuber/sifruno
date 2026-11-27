@@ -1,0 +1,321 @@
+# A typical cPanel WordPress .htaccess moves to OpenLiteSpeed (Native); an
+# unknown directive is refused naming its file and line
+#
+# Run 2026-11-27 on a new server the nightly script made and kept
+# (scripts/ci/nightly-fresh-install.sh with SIFRUNO_NIGHTLY_KEEP=1: a
+# g6-standard-2 Linode, AlmaLinux 9.8, OpenLiteSpeed 1.9.4; its fresh-install
+# test passed 17 checks), deleted afterwards. The release on it was built from
+# a1cd2da; scripts/devvm/proof.sh migrate-cpanel, from d47b7d8, built and ran
+# the panel, broker and panelctl of that commit. SERVER_IP stands for the
+# server's public address. The old server is the cPanel stand-in (a Podman
+# container, not cPanel), as in migrate-cpanel.txt.
+#
+# What this run adds to migrate-cpanel.txt:
+#   - shop: the WordPress site's root .htaccess is the one a cPanel site
+#     usually has (WordPress's rewrite block, cPanel's PHP handler block for
+#     ea-php83, Expires, deflate, caching and security headers, FileETag,
+#     Options -Indexes, AddType, AddDefaultCharset). It moves Native with no
+#     note, the copy keeps it byte for byte, panelctl's scan of the copy shows
+#     each line's class, verify allows cutover and the gate opens without an
+#     acceptance. A .phtml file answers 403 on the copy, its source unsent.
+#   - odd: the unknown directive is refused before anything is created, with
+#     "tools/.htaccess line 2 (SifrunoProofUnknown On)" under Technical
+#     details and in the next step, and no claim that a folder would open.
+# A check by hand after the script is at the end.
+
+# Migration v1: one website account from a cPanel stand-in over root SSH
+# 2026-11-27T00:39:31Z  openlitespeed-1.9.4-3.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 podman-5.8.5-5.el9_9.x86_64 rsync-3.2.7-4.el9_9.x86_64 openssh-clients-9.9p1-17.el9_9.alma.1.x86_64
+# accounts shop39971, staff39971, odd39971, trig39971, race39971, hard39971; container sifruno-cpanel-standin-39971 from docker.io/library/almalinux@sha256:1d06c00a6025b4faf042d3827d9ea8dc6b7a75278cacc1c1399dcc7a89c07a01
+
+## 1. The broker and the panel
+PASS  the broker runs with the web operation on
+PASS  the panel answers on 127.0.0.1:50929 as sifpanel, its DNS address SERVER_IP
+PASS  /usr/bin/rsync is a root-owned program the broker admits
+PASS  /usr/bin/ssh is a root-owned program the broker admits
+PASS  /usr/bin/ssh-keyscan is a root-owned program the broker admits
+PASS  /usr/bin/cp is a root-owned program the broker admits
+PASS  /usr/bin/mariadb is a root-owned program the broker admits
+
+## 2. The cPanel stand-in (Podman, not cPanel)
+PASS  the stand-in's base image is the pinned digest
+  stand-in address: 10.88.0.2
+  stand-in PHP: 83 (reported to Sifruno as ea-php83)
+PASS  the stand-in has sshd, MariaDB, Apache, PHP-FPM, rsync and crontab
+PASS  this server has LSPHP 83 for the copy
+PASS  the stand-in's MariaDB, sshd and Apache run
+PASS  the stand-in's four accounts, sites and databases are made
+PASS  the stand-in WordPress keeps the stock Akismet .htaccess (deny all, <FilesMatch>, both branches)
+  Akismet , .htaccess sha256 63553e7f320285fe2417cdb00664a136958d70baa07d7325e86f0847f11dd17c (the converter's test pins WordPress 7.1.5's: 63553e7f...)
+PASS  the stand-in whmapi1 prints listaccts JSON for the six accounts
+PASS  the old WordPress site answers with its title
+PASS  the old staff site closes /private/ with 401
+PASS  the old staff site opens /private/ with the password (200)
+PASS  the old staff site denies /backups/backup.sql with 403
+PASS  the old staff site answers 401 for /pub/index.html, rewritten into /private/
+PASS  the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/
+PASS  the old staff site closes /office/ to this server (403) and opens /lobby/ (200)
+PASS  the old WordPress denies Akismet's folder with 403
+PASS  the old WordPress serves Akismet's allow-listed akismet.css with 200
+
+## 3. Sign in, connect, confirm the host key
+PASS  the panel signs in with the server's access key
+  migration 857d08d310c7d15cd4df875845ac618e; key line ends sifruno-migration-857d08d310c7d15cd4df875845ac618e
+PASS  connecting makes a key for this migration only
+PASS  its private key is root's, mode 0600, in a 0700 folder
+PASS  the old server is not read before its host key is confirmed (422)
+PASS  a fingerprint the server did not offer is refused (422)
+PASS  the fingerprint ssh-keygen shows on the old server is confirmed
+PASS  known_hosts holds only that key, under the migration alias
+PASS  without the key line on the old server, the sign-in is refused (422)
+PASS  the admin's command adds one restricted key line to root's authorized_keys
+  accounts listed: shop39971 staff39971 trig39971 race39971 hard39971 odd39971
+PASS  discovery lists the six accounts with whmapi1 listaccts
+
+## 4. Move shop39971.proof.test
+  job c497fc797aa5a48dc3b03a9f5064826a: succeeded
+    source   done     Found shop39971.proof.test: 1 database(s), 1 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 1 .htaccess file(s) with acc
+    account  done     Created the hosting account shop39971, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. It is a WordPress site. Protected folders went into the web server's config before the files did: /wp-content
+    database done     Copied 1 database(s) with the same names and users (same passwords): 12 tables, 159 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s); they run as the site's user on this server's clock.
+    verify   running  
+    key      pending  
+PASS  the move succeeded
+PASS  the tier is Native (rewrite rules, and Akismet's access rules converted)
+PASS  the typical cPanel .htaccess (PHP handler block, Expires, deflate, headers, Options -Indexes) left no note (notes: [])
+  converted: [{'file': 'wp-content/plugins/akismet/.htaccess', 'path': '/wp-content/plugins/akismet/', 'rule': 'closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akismet-frontend.js, akismet-refresh-logo.svg, akismet-refresh-logo@2x.png, akismet-rtl.css, akismet.css, akismet.js, arrow-left.svg, copy.svg, form.js, inter.css, logo-a-2x.png)'}]
+PASS  the job names Akismet's .htaccess as converted
+PASS  the account has the same name and /home/shop39971/public_html
+PASS  the copy's .htaccess is the old site's, byte for byte
+  panelctl htaccess scan --details of the copy's public_html (as the panel decides the move):
+    site .: compat access_control
+      .htaccess (/): native  
+        line 15 AddHandler [vendor, handled]: PHP handler: this server runs the site's .php files with the PHP version the migration reads from the old server's settings for the site, and refuses (403) the other PHP suffixes, such as .phtml and .php8, so their source is never sent
+        line 20 ExpiresActive [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 21 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 22 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 23 ExpiresByType [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 24 ExpiresDefault [caching, ignored]: browser caching hint: browsers ask again sooner, and the site answers the same
+        line 27 AddOutputFilterByType [compression, ignored]: compression: OpenLiteSpeed compresses by its own settings
+        line 29 BrowserMatch [environment, ignored]: compression hint: OpenLiteSpeed compresses by its own settings
+        line 30 BrowserMatch [environment, ignored]: compression hint: OpenLiteSpeed compresses by its own settings
+        line 33 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 34 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 36 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 38 Header [headers, ignored]: caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server
+        line 40 FileETag [caching, ignored]: ETag format: OpenLiteSpeed makes its own ETags
+        line 41 Options [other, handled]: OpenLiteSpeed does this already here: every Sifruno vhost has autoIndex 0 (no folder listings), OpenLiteSpeed 1.9.4 has no content negotiation (MultiViews), and the vhost follows links that stay inside the home (allowSymbolLink 1, restrained 1)
+        line 42 AddType [mime_handlers, ignored]: MIME type for files that are not scripts: OpenLiteSpeed names types from its own list
+        line 43 AddDefaultCharset [mime_handlers, ignored]: character set hint for static files: PHP pages send their own
+      wp-content/plugins/akismet/.htaccess (/wp-content/plugins/akismet/): compat access_control 
+        line 5 Order [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 6 Deny [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 11 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 15 <FilesMatch> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 17 Allow [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 21 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 26 <FilesMatch> [access_control]: file-scoped access rule that OLS does not enforce from .htaccess
+        line 28 Allow [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        line 32 Require [access_control]: deny/allow rule that OLS does not enforce from .htaccess
+        access deny_allow /wp-content/plugins/akismet/ files="" methods="" expect=403
+        access deny_allow /wp-content/plugins/akismet/ files="^(form\\.js|akismet(-frontend|-admin)?\\.js|akismet(-admin)?(-rtl)?\\.css|inter\\.css)$" methods="" expect=0
+        access deny_allow /wp-content/plugins/akismet/ files="^(logo-a-2x\\.png|akismet-refresh-logo\\.svg|akismet-refresh-logo@2x\\.png|arrow-left\\.svg|akismet-activation-banner-elements\\.png|copy\\.svg)$" methods="" expect=0
+      moves to OpenLiteSpeed: yes
+        converted: wp-content/plugins/akismet/.htaccess for /wp-content/plugins/akismet/
+        PHP handler: .htaccess line 15 for /: ea-php83
+PASS  wp-config.php arrived unchanged (same sha256) and is the site user's
+PASS  mail, .ssh and logs folders of the old home were left out
+PASS  the database user shop39971_wpu has the same password hash as on the old server
+PASS  the database shop39971_wp has the same rows (wp_posts 5 = 5)
+PASS  the site's own user signs in to its database with the old password (wp-config unchanged)
+PASS  the copy runs PHP 8.3 (lsphp83), the old site's version
+PASS  the vhost has Akismet's folder as a regex context closed to all
+PASS  the copy answers 403 for /wp-content/plugins/akismet/, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/akismet.php, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/readme.txt, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/_inc/, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/akismet.php/akismet.css, as the old site
+PASS  the copy answers 200 for the allow-listed /wp-content/plugins/akismet/_inc/akismet.css, as the old site (200)
+PASS  the copy answers 200 for the allow-listed /wp-content/plugins/akismet/_inc/akismet-frontend.js, as the old site (200)
+PASS  the copy answers 200 for the allow-listed /wp-content/plugins/akismet/_inc/img/logo-a-2x.png, as the old site (200)
+  probes: [{'path': '/wp-content/plugins/akismet/', 'kind': 'deny'}, {'path': '/wp-content/plugins/akismet/_inc/', 'kind': 'deny'}, {'path': '/wp-content/plugins/akismet/_inc/akismet-admin.css', 'kind': 'allow'}, {'path': '/wp-content/plugins/akismet/_inc/akismet-admin.js', 'kind': 'allow'}, {'path': '/wp-content/plugins/akismet/_inc/akismet-frontend.js', 'kind': 'allow'}]
+PASS  verify checked Akismet's closed folder and its open files, all passing
+PASS  a moved 0640 file of group apache keeps its mode, has the site's group, and nobody reads it through its ACL
+PASS  a moved 0750 folder of group apache keeps its mode, and nobody reads and enters it through its ACL
+PASS  the home and public_html keep the web server's own ACL entries (--x, r-x)
+PASS  verify probed Akismet's _inc/ subfolder as closed (403)
+PASS  the scheduled job arrived in the site user's crontab
+PASS  the preview (this server, the site's Host header) serves the site's title
+PASS  the preview serves the moved post
+PASS  the copy answers 403 for info.phtml, and its source is not sent
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  pages 7 compared, 7 pass, 0 fail; notes: []
+PASS  verify ran and found no difference (cutover allowed by verify)
+PASS  with verify green and no note, the cutover gate opened without an acceptance (gate: open)
+PASS  the cutover gate is open (gate: open)
+  DNS records: [{'name': 'shop39971.proof.test', 'type': 'A', 'value': 'SERVER_IP'}, {'name': 'www.shop39971.proof.test', 'type': 'A', 'value': 'SERVER_IP'}]
+PASS  marked ready, the panel names A records for the domain and www at SERVER_IP
+PASS  the migration key is gone from the old server's authorized_keys
+PASS  and from this server
+PASS  the job says the old server refused the key afterwards
+PASS  no password or hash was in any process's arguments during the move
+PASS  the job record holds no password or hash
+PASS  the panel lists the moved site under Websites
+
+## 5. staff39971.proof.test: a password folder, a closed folder and two address lists move, converted
+  job 6635e25e856d433ea5929ac9682c4922: succeeded
+    source   done     Found staff39971.proof.test: 1 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 4 .htaccess file(s) with ac
+    account  done     Created the hosting account staff39971, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. Mail, logs and the old server's settings stayed there. Protected folders went into the web server's config be
+    database done     Copied 1 database(s) with the same names and users (same passwords): 0 tables, 0 rows, every table's rows match.
+    cron     skipped  No scheduled jobs to copy.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  converted: [{'file': 'backups/.htaccess', 'path': '/backups/', 'rule': 'closed to everyone (403)'}, {'file': 'lobby/.htaccess', 'path': '/lobby/', 'rule': 'closed to 127.0.0.2/32'}, {'file': 'office/.htaccess', 'path': '/office/', 'rule': 'open only to 127.0.0.2/32'}, {'file': 'private/.htaccess', 'path': '/private/', 'rule': 'password "Staff area" for any user in its password file (401)'}]
+PASS  the move succeeded (Native: four folders converted, the root rewrite rules kept)
+PASS  the job names the four converted .htaccess files
+PASS  the vhost has a realm whose user file is outside the home
+PASS  the realm file is root's, 0640, readable by the web server user (nobody) through its ACL
+PASS  the realm file holds the old user and hash, comments left out
+PASS  the realm's folder is root's, 0750
+PASS  the copy answers 401 for /private/ without the password
+PASS  the copy answers 401 for /private/sub/ without the password
+PASS  the copy answers 401 for /private/ with a wrong password
+PASS  the copy answers 200 for /private/ with the password, and serves the page
+PASS  the copy answers 200 for /private/sub/ with the password
+PASS  the copy runs PHP in the password folder with the password
+PASS  the copy answers 403 for /backups/ and /backups/backup.sql
+PASS  the copy answers 401 for //private/index.html without the password (got 401)
+PASS  the copy answers 401 for /./private/index.html without the password (got 401)
+PASS  the copy answers 401 for /x/../private/index.html without the password (got 401)
+PASS  the copy answers 401 for /%70rivate/index.html without the password (got 401)
+PASS  the copy answers 401 for /private%2Findex.html without the password (got 401)
+PASS  the copy answers 401 for /%2e/private/index.html without the password (got 401)
+PASS  the copy answers 401 for /private/%2e%2e/private/index.html without the password (got 401)
+PASS  the copy answers 401 for /private/index.html/ without the password (got 401)
+PASS  the copy answers 401 for /private/sub/ without the password (got 401)
+PASS  the copy answers 401 for /private//index.html without the password (got 401)
+PASS  the copy answers 403 for //backups/backup.sql without the password (got 403)
+PASS  the copy answers 403 for /%62ackups/backup.sql without the password (got 403)
+PASS  the copy answers 403 for /backups/./backup.sql without the password (got 403)
+PASS  the copy answers 403 for /backups/%2e/backup.sql without the password (got 403)
+PASS  the copy answers 403 for /backups/backup.sql/ without the password (got 403)
+PASS  the copy answers 403 for /backups//backup.sql without the password (got 403)
+PASS  the copy answers 301 for /private without the password (got 301)
+PASS  and that redirect names /private/
+PASS  the copy answers 301 for /backups without the password (got 301)
+PASS  the copy answers 404 for /PRIVATE/index.html without the password (got 404)
+PASS  the copy answers 404 for /Backups/backup.sql without the password (got 404)
+PASS  the copy answers 401 for /pub/index.html, rewritten into /private/
+PASS  the copy does not show /private/ content through /pub/
+PASS  the copy answers 200 for /pub/index.html with the password
+PASS  the copy answers 403 for /old-backups/backup.sql, rewritten into /backups/
+PASS  the copy opens /office/ to 127.0.0.2, its one allowed address (200)
+PASS  the copy closes /office/ to 127.0.0.1 (403)
+PASS  the copy closes /lobby/ to 127.0.0.2, its one denied address (403)
+PASS  the copy opens /lobby/ to 127.0.0.1 (200)
+PASS  the vhost lists the address without a prefix length (OpenLiteSpeed refuses /32)
+  port 80 listeners: LISTEN 0 4096 0.0.0.0:80 0.0.0.0:* LISTEN 0 4096 0.0.0.0:80 0.0.0.0:*
+PASS  port 80 listens on IPv4 only (0.0.0.0:80, no [::]:80 or *:80)
+PASS  a request over IPv6 to port 80 is not answered
+PASS  the site's own page is open (200)
+  probes: [{'path': '/backups/', 'kind': 'deny'}, {'path': '/lobby/', 'kind': 'hosts', 'hosts': 'except', 'networks': ['127.0.0.2/32']}, {'path': '/office/', 'kind': 'hosts', 'hosts': 'only', 'networks': ['127.0.0.2/32']}, {'path': '/private/', 'kind': 'auth'}, {'path': '/private/sub/', 'kind': 'auth'}]; verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+PASS  verify probed /private/ (401) and /backups/ (403)
+PASS  the job keeps the address the old server's sshd saw this server come from (10.88.0.1), the one its Apache saw verify come from (10.88.0.1)
+PASS  verify probed /private/sub/ (auth) and /lobby/ and /office/ by their address lists
+  verify problems: []
+PASS  verify allows cutover only if the copy answers /private/sub/ 401, /lobby/ 200 and /office/ 403 to 127.0.0.1 (copy: yes yes yes)
+PASS  a folder the copy answers against its address list is named in verify's plain problems
+PASS  with the copy right, verify passes all five folder checks
+PASS  the key is removed after the move
+
+## 5b. odd39971.proof.test: a directive the converter does not know is refused
+  job 1b99b0d539b31f991964722ae3a5d306: failed
+    source   failed   The site's .htaccess files have directives this panel does not know. Moving the website as it is would change what it does. Nothing was created here.
+    account  skipped  
+    web      skipped  
+    files    skipped  
+    database skipped  
+    cron     skipped  
+    verify   skipped  
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  why: The site's .htaccess files have directives this panel does not know. Moving the website as it is would change what it does. Nothing was created here.
+  next: On the old server, remove or change tools/.htaccess line 2 (SifrunoProofUnknown On) (Technical details says why for each), then move the website again. If the website needs those lines, leave it on the old server for now: it needs the Apache tier, which this server does not offer yet.
+  technical: tier compat; causes access_control,unknown; tools/.htaccess line 2 (SifrunoProofUnknown On): a directive this panel does not know
+PASS  the move stops at the old server's site, before anything is created
+PASS  the reason names the directives this panel does not know
+PASS  Technical details names the file, line and directive (tools/.htaccess line 2 (SifrunoProofUnknown On))
+PASS  the next step names that line to remove or change on the old server
+PASS  the reason does not claim a protected folder would open: the unknown line is the cause
+PASS  no account odd39971 was created
+PASS  the key is removed after the refusal too
+PASS  no staging folder or migration folder is left
+
+## 6. trig39971.proof.test: a database with a trigger fails the copy, which is undone
+  job a52d0e77c6c2543e7e3309bf329a18f9: failed
+    source   done     Found trig39971.proof.test: 1 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on.
+    account  undone   Removed after a later step failed.
+    web      undone   Removed after a later step failed.
+    files    undone   Removed with the hosting account after a later step failed.
+    database failed   A database could not be copied. The database trig39971_app on the old server has trigger. This version copies tables and rows only, because those obje
+    cron     skipped  
+    verify   skipped  
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  why: A database could not be copied. The database trig39971_app on the old server has trigger. This version copies tables and rows only, because those objects run as a named MariaDB user.
+PASS  the move fails at the database step
+PASS  the account step is marked undone
+PASS  the created account trig39971 is gone
+PASS  the created database and user are gone
+PASS  the key is removed after the failure too
+
+## 7. race39971.proof.test: a folder swapped for a link to /root during the copy
+  job a2b71339a2fc660c4c7af656660fcedf: succeeded
+    source   done     Found race39971.proof.test: 0 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on.
+    account  done     Created the hosting account race39971, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. Mail, logs and the old server's settings stayed there.
+    database skipped  The account has no databases.
+    cron     skipped  No scheduled jobs to copy.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  ended succeeded; why: 
+PASS  the move finished, or stopped on what the account may not read or on the copied link
+PASS  nothing of /root reached this server (homes, staging)
+PASS  the key is removed afterwards
+
+## 8. hard39971.proof.test: a hard link to a root-only file
+PASS  the stand-in tenant holds a hard link to a root-only file
+  job 1565a6cea2d0dd5d837df3f7ec622951: failed
+    source   done     Found hard39971.proof.test: 0 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on.
+    account  undone   Removed after a later step failed.
+    web      undone   Removed after a later step failed.
+    files    failed   The website's files could not be copied from the old server. Some files or folders in the old home cannot be read by the account itself, so they were 
+    database skipped  
+    cron     skipped  
+    verify   skipped  
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  why: The website's files could not be copied from the old server. Some files or folders in the old home cannot be read by the account itself, so they were not copied and the copy stopped. Sifruno reads the home as the account, never as root. Give them to the account, or remove them, on the old server.
+PASS  the move stops on the file the account may not read
+PASS  the root-only content is nowhere on this server
+PASS  the failed move removed the account hard39971
+PASS  the key is removed after the failure too
+
+## 9. API tokens cannot move websites
+PASS  a token's request to open a source is refused (403 token_not_allowed)
+
+RESULT: every check passed
+
+## By hand after the script: a .phtml file under a converted folder
+# /lobby/ on the moved staff site is a converted folder (a regex context with
+# rewriting off) open to 127.0.0.1. A PHP file written there as .phtml, in
+# other spellings, and a .php5 name, asked from the server itself:
+#   curl -s -o /tmp/body -w "%{http_code} %{content_type}" -H "Host: staff39971.proof.test" "http://127.0.0.1$p"
+#   grep -q lobby-phtml-source /tmp/body && echo "  SOURCE SENT"
+/lobby/ 200 text/html
+/lobby/x.phtml 403 text/html
+/lobby/x.PHTML 403 text/html
+/lobby/x.%70html 403 text/html
+/lobby/x.php5 403 text/html
+# No line said SOURCE SENT. The file was removed afterwards.

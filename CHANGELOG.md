@@ -4,6 +4,17 @@
 
 ### Changed
 
+- Moving a website from cPanel no longer refuses `.htaccess` lines
+  OpenLiteSpeed can safely ignore or that Sifruno handles: cPanel's PHP
+  handler block, Expires, compression, caching and security headers,
+  `FileETag`, `Options -Indexes`, `AddType` and `AddDefaultCharset`.
+  `php_value` and `php_flag` move as notes to check before cutover. A
+  refusal names the file, line and directive, says a folder would open only
+  when an access rule is the reason, and names the lines to change on the
+  old server; `panelctl htaccess scan --details` shows the same.
+- Every website answers 403 for PHP files under `.phtml`, `.php3` to `.php8`,
+  `.phar`, `.pht` and `.phps` instead of sending their source: only `.php`
+  runs as PHP here.
 - A session ends after 30 minutes without use and at 12 hours, instead of
   15 minutes after sign-in. Before sign-in the panel shows only the sign-in
   form.

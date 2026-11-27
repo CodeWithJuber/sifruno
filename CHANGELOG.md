@@ -15,6 +15,10 @@
 - Every website answers 403 for PHP files under `.phtml`, `.php3` to `.php8`,
   `.phar`, `.pht` and `.phps` instead of sending their source: only `.php`
   runs as PHP here.
+- Every website answers 403 for backup copies and database dumps (names
+  ending in `.bak`, `.orig`, `.save`, `~` or `.sql`, such as
+  `index.php.bak`) instead of sending them: they can hold source code and
+  passwords.
 - A session ends after 30 minutes without use and at 12 hours, instead of
   15 minutes after sign-in. Before sign-in the panel shows only the sign-in
   form.

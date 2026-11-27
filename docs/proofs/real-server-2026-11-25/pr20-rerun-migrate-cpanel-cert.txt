@@ -1,0 +1,175 @@
+# Migration v1: one website account from a cPanel stand-in over root SSH
+# 2026-11-27T10:58:19Z  openlitespeed-1.9.5-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 podman-5.8.5-5.el9_9.x86_64 rsync-3.2.7-4.el9_9.x86_64 openssh-clients-9.9p1-17.el9_9.alma.1.x86_64
+# accounts shop77099, staff77099, odd77099, trig77099, race77099, hard77099; container sifruno-cpanel-standin-77099 from docker.io/library/almalinux@sha256:1d06c00a6025b4faf042d3827d9ea8dc6b7a75278cacc1c1399dcc7a89c07a01
+
+## 0. A throwaway certificate authority (the proof's, not public)
+  shop: subject=CN=shop77099.proof.test notAfter=Feb 25 10:58:20 2027 GMT X509v3 Subject Alternative Name: DNS:shop77099.proof.test, DNS:www.shop77099.proof.test, DNS:mail.shop77099.proof.test
+  staff: subject=CN=staff77099.proof.test notAfter=Feb 25 10:58:20 2027 GMT X509v3 Subject Alternative Name: DNS:staff77099.proof.test, DNS:www.staff77099.proof.test, DNS:mail.staff77099.proof.test
+  race: subject=CN=race77099.proof.test notAfter=Oct 1 00:00:00 2026 GMT X509v3 Subject Alternative Name: DNS:race77099.proof.test, DNS:www.race77099.proof.test, DNS:mail.race77099.proof.test
+PASS  the shop and staff certificates chain to the proof's root through the intermediate
+PASS  the race certificate expired on 2026-10-01
+PASS  this server's trust store holds the proof's root for the run
+
+## 1. The broker and the panel
+PASS  the broker runs with the web operation on
+PASS  the panel answers on 127.0.0.1:34779 as sifpanel, its DNS address SERVER_IP
+PASS  /usr/bin/rsync is a root-owned program the broker admits
+PASS  /usr/bin/ssh is a root-owned program the broker admits
+PASS  /usr/bin/ssh-keyscan is a root-owned program the broker admits
+PASS  /usr/bin/cp is a root-owned program the broker admits
+PASS  /usr/bin/mariadb is a root-owned program the broker admits
+
+## 2. The cPanel stand-in (Podman, not cPanel)
+PASS  the stand-in's base image is the pinned digest
+  stand-in address: 10.88.0.4
+  stand-in PHP: 83 (reported to Sifruno as ea-php83)
+PASS  the stand-in has sshd, MariaDB, Apache, PHP-FPM, rsync and crontab
+PASS  this server has LSPHP 83 for the copy
+PASS  the stand-in's MariaDB, sshd and Apache run
+PASS  the stand-in's four accounts, sites and databases are made
+PASS  the stand-in WordPress keeps the stock Akismet .htaccess (deny all, <FilesMatch>, both branches)
+  Akismet , .htaccess sha256 63553e7f320285fe2417cdb00664a136958d70baa07d7325e86f0847f11dd17c (the converter's test pins WordPress 7.1.5's: 63553e7f...)
+PASS  the stand-in whmapi1 prints listaccts JSON for the six accounts
+PASS  the old WordPress site answers with its title
+PASS  the old staff site closes /private/ with 401
+PASS  the old staff site opens /private/ with the password (200)
+PASS  the old staff site denies /backups/backup.sql and /backups/notes.txt with 403
+PASS  the old staff site answers 401 for /pub/index.html, rewritten into /private/
+PASS  the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/
+PASS  the old staff site closes /office/ to this server (403) and opens /lobby/ (200)
+PASS  the old WordPress denies Akismet's folder with 403
+PASS  the old WordPress serves Akismet's allow-listed akismet.css with 200
+PASS  the old WordPress answers 403 for /wp-config.php (<Files> rules)
+PASS  the old WordPress answers 403 for /xmlrpc.php (<Files> rules)
+PASS  the old WordPress answers 403 for /xmlrpc.php/x (<Files> rules)
+PASS  the old WordPress answers 403 for /readme.html (<Files> rules)
+PASS  the old WordPress answers 403 for /.user.ini (<Files> rules)
+PASS  the old WordPress answers 403 for /.htaccess (<Files> rules)
+PASS  the old WordPress serves the post at its pretty address (200)
+PASS  the old WordPress answers its 403 with the ErrorDocument page
+  old: /old-page/sub?x=1 -> 301 http://shop77099.proof.test/moved-with-sifruno/sub?x=1; /archive/2026/ -> 302 http://shop77099.proof.test/?m=2026
+PASS  the old WordPress redirects /old-page (Redirect 301) and /archive/2026/ (RedirectMatch 302)
+  old: fonts/proof.woff2 sends 'Access-Control-Allow-Origin: *'
+PASS  the old WordPress sends the CORS header on a font (WP Rocket)
+PASS  the old WordPress serves the backup index.php.bak with its PHP source (200): the leak the copy closes
+  old: sifruno-ini.php says {"sapi":"fpm-fcgi","waf":true,"display_errors":"off","max_execution_time":"300","max_input_time":"600","max_input_vars":"3000","memory_limit":"512M","post_max_size":"128M","session.gc_maxlifetime":"7200","upload_max_filesize":"128M","zlib.output_compression":"off"}
+PASS  the old WordPress's PHP (PHP-FPM) has the site's settings (memory_limit 512M, upload_max_filesize 128M ...) and ran Wordfence's file before the script
+
+## 2b. The old sites serve https: shop, staff and race with the proof CA's certificates
+PASS  the old shop site answers https with its certificate, which this server trusts
+PASS  the old staff site answers https with its certificate
+PASS  the old race site serves its expired certificate (curl refuses it)
+  the old servers' certificates (SHA-256): shop CB:CA:38:0E:D7:80:1B:3F:AD:5D:B6:F3:CD:C6:92:33:46:F9:37:C9:0D:3F:2B:9B:51:5E:74:40:29:3B:C9:86, staff 59:16:BD:E9:AC:6A:6D:16:7D:7D:8A:AE:CB:73:A4:18:01:3F:AC:11:9B:F3:B1:6E:C5:4B:2E:86:E4:DF:2F:97, race 9B:64:CA:B6:63:04:FF:D2:79:E9:E3:A0:60:F0:A9:92:0F:6D:4E:5C:70:90:1C:96:D5:04:0F:14:E0:F9:41:1E
+PASS  the stand-in whmapi1 prints shop's certificate, key and bundle for fetch_vhost_ssl_components, filtered to its virtual host
+
+## 3. Sign in, connect, confirm the host key
+PASS  the panel signs in with the server's access key
+  migration 32c575d08d0b4870db3bc88784904f32; key line ends sifruno-migration-32c575d08d0b4870db3bc88784904f32
+PASS  connecting makes a key for this migration only
+PASS  its private key is root's, mode 0600, in a 0700 folder
+PASS  the old server is not read before its host key is confirmed (422)
+PASS  a fingerprint the server did not offer is refused (422)
+PASS  the fingerprint ssh-keygen shows on the old server is confirmed
+PASS  known_hosts holds only that key, under the migration alias
+PASS  without the key line on the old server, the sign-in is refused (422)
+PASS  the admin's command adds one restricted key line to root's authorized_keys
+  accounts listed: shop77099 staff77099 trig77099 race77099 hard77099 odd77099
+PASS  discovery lists the six accounts with whmapi1 listaccts
+
+## 4. shop77099.proof.test over SSH: its certificate is copied
+  job 089a59c8956b956e1e62aa83d19f62c3: succeeded
+    source   done     Found shop77099.proof.test: 1 database(s), 1 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 14 .htaccess rule(s) are converted into the web server's config: / (files named .htaccess, .user.ini, readme.html, readme.txt, wp-config.php, xmlrpc.php closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (ak
+    account  done     Created the hosting account shop77099, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. It is a WordPress site. The converted .htaccess rules went into the web server's config before the files did: / (files named .htaccess, .user.ini, readme.html, readme.txt, wp-config.php, xmlrpc.php closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png
+    database done     Copied 1 database(s) with the same names and users (same passwords): 12 tables, 159 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s); they run as the site's user on this server's clock.
+    ssl      done     Copied the old server's certificate for shop77099.proof.test, issued by Sifruno proof intermediate 77099, valid until 2027-02-25: the site answers https on this server already. The panel replaces it with a Let's Encrypt certificate before then, once the domain points here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+PASS  the move succeeded
+  certificate step: done: Copied the old server's certificate for shop77099.proof.test, issued by Sifruno proof intermediate 77099, valid until 2027-02-25: the site answers https on this server already. The panel replaces it with a Let's Encrypt certificate before then, once the domain points here.
+PASS  the certificate step copied the old server's certificate, issued by the proof's intermediate
+  job record: certificate {'copied': True, 'not_after': '2027-02-25T10:58:20Z', 'issuer': 'Sifruno proof intermediate 77099'}; links https://shop77099.proof.test/ https://shop77099.proof.test/wp-admin/
+PASS  the job's links use https
+  this server serves shop77099.proof.test on 443 with SHA-256 CB:CA:38:0E:D7:80:1B:3F:AD:5D:B6:F3:CD:C6:92:33:46:F9:37:C9:0D:3F:2B:9B:51:5E:74:40:29:3B:C9:86 (the old server's: CB:CA:38:0E:D7:80:1B:3F:AD:5D:B6:F3:CD:C6:92:33:46:F9:37:C9:0D:3F:2B:9B:51:5E:74:40:29:3B:C9:86)
+PASS  this server serves the old site's own certificate for shop77099.proof.test
+PASS  curl --resolve shop77099.proof.test:443:127.0.0.1 with the proof's CA gets the moved site over https
+PASS  and www.shop77099.proof.test, which the certificate also names, the same way
+PASS  plain http on the copy goes to https (Always use HTTPS, on by default)
+  the broker's certificate path: root:root 700 /etc/sifruno/tls/ua4742accec8067182e9a24932b39af3;root:root 600 /etc/sifruno/tls/ua4742accec8067182e9a24932b39af3/cert.pem;root:root 600 /etc/sifruno/tls/ua4742accec8067182e9a24932b39af3/key.pem
+PASS  the key is in the broker's certificate path only: root's, 0600, and it matches the certificate
+PASS  the key is in no panel state, panel log, broker state, job record or process argument
+PASS  nor in the broker's journal or any answer the panel saw
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  pages 10 compared, 10 pass, 0 fail
+PASS  the comparison ran over https on both sides (the old server's https log has its requests)
+  the Domains tab's record: https {'on': True, 'not_after': '2027-02-25T10:58:20Z', 'source': 'copied'}
+PASS  the website's https says the certificate was copied from the old server, with its expiry
+  the certificate manager's record: [{'account_id': 'a4742accec8067182e9a24932b39af3f', 'domain': 'shop77099.proof.test', 'not_after': '2027-02-25T10:58:20Z', 'last_attempt': '0001-01-01T00:00:00Z', 'last_result': 'copied', 'copied': True}]
+PASS  the certificate manager records it as copied, so the renewal loop replaces it before it runs out
+PASS  the panel logged the copy, with no key
+  marked ready: gate ready, DNS records [{'name': 'shop77099.proof.test', 'type': 'A', 'value': 'SERVER_IP'}, {'name': 'www.shop77099.proof.test', 'type': 'A', 'value': 'SERVER_IP'}]
+PASS  the move is ready for cutover
+
+## 5. race77099.proof.test over SSH: its certificate expired, so it is not copied and the move finishes
+  job 3e54c5a70d97f88d5811d03928a78c36: succeeded
+    source   done     Found race77099.proof.test: 0 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on.
+    account  done     Created the hosting account race77099, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. Mail, logs and the old server's settings stayed there.
+    database skipped  The account has no databases.
+    cron     skipped  No scheduled jobs to copy.
+    ssl      skipped  The old server's certificate was not copied. It expired on 2026-10-01. The site uses http on this server until race77099.proof.test points here; then the panel gets it a certificate by itself.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      running
+PASS  the move succeeded
+  certificate step: skipped: The old server's certificate was not copied. It expired on 2026-10-01. The site uses http on this server until race77099.proof.test points here; then the panel gets it a certificate by itself.
+PASS  the step says plainly that the expired certificate was not copied and https follows the DNS
+  job record: certificate {'copied': False, 'why': "The old server's certificate was not copied. It expired on 2026-10-01."}
+PASS  the copy answers over http
+PASS  this server does not serve the expired certificate (83:7C:A5:04:74:C4:84:62:6C:C2:DB:DB:22:82:84:C8:BA:69:F6:31:DB:15:2F:3B:75:03:C9:3F:D6:5D:66:D8)
+PASS  the broker staged and installed nothing for it
+  the Domains tab's record: https {'on': False, 'not_after': ''}
+PASS  the website has no certificate yet
+PASS  the comparison ran over http, as before
+  marked ready: gate ready, DNS records [{'name': 'race77099.proof.test', 'type': 'A', 'value': 'SERVER_IP'}, {'name': 'www.race77099.proof.test', 'type': 'A', 'value': 'SERVER_IP'}]
+PASS  the move is ready for cutover all the same
+
+## 6. The WHM API stand-in on port 2087 (Python; not cPanel)
+10176dbe0dfad0f10a1508b35cdd5cd6a64f115c5dd02e0ec4feeaf2759ce1f2
+  WHM stand-in: https://10.88.0.4:2087, certificate SHA-256 20:FE:08:56:D5:0A:9C:42:30:50:91:36:1F:59:23:75:EA:40:88:E6:24:BE:32:D9:4C:4F:97:FA:51:C9:7A:5B (self-signed)
+PASS  the WHM stand-in answers on port 2087 over HTTPS
+
+## 7. staff77099.proof.test with the WHM login: its certificate comes through WHM's API
+PASS  WHM's login connects (200)
+PASS  the old server's SSH key is confirmed (200)
+  job a2c998e728ac80482b6fb2b324c09e99: succeeded
+    source   done     Found staff77099.proof.test: 1 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 4 .htaccess rule(s) are converted into the web server's config: /backups/ (closed to everyone (403)); /lobby/ (closed to 127.0.0.2/32); /office/ (open only to 127.0.0.2/32); /private/ (password "Staff area" for any user in its password file (401)).
+    account  done     Created the hosting account staff77099, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. Mail, logs and the old server's settings stayed there. The converted .htaccess rules went into the web server's config before the files did: /backups/ (closed to everyone (403)); /lobby/ (closed to 127.0.0.2/32); /office/ (open only to 127.0.0.2/32); /private/ (password "Staff area" for any user in its password file (401)).
+    database done     Copied 1 database(s) with the same names and users (same passwords): 0 tables, 0 rows, every table's rows match.
+    cron     skipped  No scheduled jobs to copy.
+    ssl      done     Copied the old server's certificate for staff77099.proof.test, issued by Sifruno proof intermediate 77099, valid until 2027-02-25: the site answers https on this server already. The panel replaces it with a Let's Encrypt certificate before then, once the domain points here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      running
+PASS  the move succeeded
+  certificate step: done: Copied the old server's certificate for staff77099.proof.test, issued by Sifruno proof intermediate 77099, valid until 2027-02-25: the site answers https on this server already. The panel replaces it with a Let's Encrypt certificate before then, once the domain points here.
+PASS  the certificate step copied the old server's certificate
+PASS  WHM was asked for it: fetch_vhost_ssl_components
+  WHM calls:  2 authorizesshkey, 1 deletesshkey, 1 domainuserdata, 1 fetch_vhost_ssl_components, 1 importsshkey, 2 listaccts, 1 listaccts refused, 1 listsshkeys, 1 php_get_vhost_versions, 2 uapi_cpanel
+PASS  this server serves the old site's own certificate for staff77099.proof.test
+PASS  curl --resolve staff77099.proof.test:443:127.0.0.1 with the proof's CA gets the moved site over https
+PASS  its password folder answers 401 over https without the password, 200 with it
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  the Domains tab's record: https {'on': True, 'not_after': '2027-02-25T10:58:20Z', 'source': 'copied'}
+PASS  the website's https says the certificate was copied
+PASS  the key is in no panel state, panel log, broker state, job record or process argument
+PASS  the key went to the broker's certificate path
+PASS  the WHM login is in no panel state or log
+
+## 8. The proof's root leaves this server's trust store
+PASS  the trust store no longer holds the proof's root
+
+RESULT: every check passed

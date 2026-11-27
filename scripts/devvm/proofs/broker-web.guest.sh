@@ -125,11 +125,13 @@ echo "  openlitespeed -t exited $ols_code; new lines after the tenant moved publ
 comm -13 <(printf '%s\n' "$baseline") <(norm <"$raw") | grep -v '^$' | sed 's/^/    /'
 # The broker's own rule (olsTestPasses) on that saved output. The third
 # argument names the broken vhost as rewritten by another account's change,
-# with the document root its config names.
+# with the document root its config names. grep reads all of the test's
+# output: grep -q stops at the match, the test binary's next write then dies
+# of SIGPIPE (exit 141), and pipefail failed about 1 run in 5.
 # shellcheck disable=SC2317 # called through check
 judge() { SIFRUNO_OLS_TEST_OUTPUT="$raw" SIFRUNO_OLS_TEST_CODE="$ols_code" SIFRUNO_OLS_TEST_CHANGED="$1" SIFRUNO_OLS_TEST_WANT="$2" \
   SIFRUNO_OLS_TEST_DOCROOT_GONE="${3:-}" \
-  "$BIN/hostaccounts.test" -test.run '^TestOLSOutputOnThisHost$' -test.v 2>&1 | grep -q -- '--- PASS: TestOLSOutputOnThisHost'; }
+  "$BIN/hostaccounts.test" -test.run '^TestOLSOutputOnThisHost$' -test.v 2>&1 | grep -- '--- PASS: TestOLSOutputOnThisHost' >/dev/null; }
 check "the broker's config test passes this output for another account's change" judge "" pass
 check "it passes it when that change rewrote the broken vhost: only the missing document root is excused" \
   judge "" pass "$bvhost=/home/$BROKEN_USER/public_html/"

@@ -198,9 +198,12 @@ type MigrationPinInput struct {
 }
 
 // MigrationPlanInput names the source account to read. CPanel is required
-// for a WHM migration and refused for an SSH one.
+// for a WHM migration and refused for an SSH one. For a migration from
+// another Linux server, Site is the domain of the website to read and
+// Username the account name it gets here.
 type MigrationPlanInput struct {
 	Username string         `json:"username"`
+	Site     string         `json:"site,omitempty"`
 	CPanel   *CPanelAnswers `json:"cpanel,omitempty"`
 	Reason   string         `json:"reason"`
 }
@@ -259,10 +262,15 @@ type MigrationPlan struct {
 	// connections come from (its SSH_CONNECTION), or empty when it did not
 	// say: verify needs it for folders open to some addresses only.
 	ClientAddress string `json:"client_address"`
-	// NotCarried is what a backup file holds that does not move, each with
-	// its reason (sitemodel); empty for a move from a server, whose
-	// skipped grants and cron lines are listed above.
+	// NotCarried is what a backup file or another Linux server holds that
+	// does not move, each with its reason (sitemodel); empty for a move
+	// from a cPanel server, whose skipped grants and cron lines are listed
+	// above.
 	NotCarried []sitemodel.Item `json:"not_carried,omitempty"`
+	// Site is the website read from another Linux server: its folder and
+	// owner there, its web server and the database wp-config.php names;
+	// nil for cPanel.
+	Site *MigrationSite `json:"site,omitempty"`
 }
 
 // MigrateFilesInput copies the source account of the same name into the
@@ -332,6 +340,7 @@ type MigrationService interface {
 	GetMigration(context.Context, string) (Migration, error)
 	PinMigrationHostKey(context.Context, string, MigrationPinInput, string) (Migration, error)
 	MigrationAccounts(context.Context, string) ([]cpsource.Account, error)
+	MigrationSites(context.Context, string) ([]MigrationSite, error)
 	PlanMigration(context.Context, string, MigrationPlanInput, string) (MigrationPlan, error)
 	MigrateFiles(context.Context, string, MigrateFilesInput, string) (MigrateFilesResult, error)
 	MigrateDatabase(context.Context, string, MigrateDatabaseInput, string) (MigrateDatabaseResult, error)
@@ -352,15 +361,19 @@ func validMigrationHost(s string) bool {
 }
 
 func validMigrationOpen(in MigrationOpenInput, actor string) bool {
-	return validMigrationHost(in.Host) && in.Port >= 1 && in.Port <= 65535 && (in.Via == "" || in.Via == ViaWHM) && validText(in.Reason, 500) && validText(actor, 120)
+	return validMigrationHost(in.Host) && in.Port >= 1 && in.Port <= 65535 && validServerVia(in.Via) && validText(in.Reason, 500) && validText(actor, 120)
 }
+
+// validServerVia is a migration that reads a server over SSH: cPanel over
+// SSH (""), cPanel through WHM, or another Linux server.
+func validServerVia(via string) bool { return via == "" || via == ViaWHM || via == ViaServer }
 
 func validMigrationPin(in MigrationPinInput, actor string) bool {
 	return strings.HasPrefix(in.Fingerprint, "SHA256:") && len(in.Fingerprint) <= 64 && resticSafeArgumentSet.MatchString(strings.ReplaceAll(in.Fingerprint, "+", "-")) && validText(in.Reason, 500) && validText(actor, 120)
 }
 
 func validMigrationPlan(in MigrationPlanInput, actor string) bool {
-	return validUsername(in.Username) && validText(in.Reason, 500) && validText(actor, 120)
+	return validUsername(in.Username) && (in.Site == "" || cpsource.ValidDomain(in.Site)) && validText(in.Reason, 500) && validText(actor, 120)
 }
 
 func validMigrateFiles(in MigrateFilesInput, actor string) bool {
@@ -394,7 +407,7 @@ func (m migrationRecord) valid() bool {
 	if m.Via == ViaArchive {
 		return idPattern.MatchString(m.ID) && m.Host == "" && m.Port == 0 && len(m.HostKeys) == 0 && m.PublicKey == "" && m.Pinned == "" && !m.CreatedAt.IsZero() && validArchive(m.Archive)
 	}
-	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() || (m.Via != "" && m.Via != ViaWHM) || m.Archive != nil {
+	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() || !validServerVia(m.Via) || m.Archive != nil {
 		return false
 	}
 	if _, _, ok := normalizeSSHKey(m.PublicKey); !ok {

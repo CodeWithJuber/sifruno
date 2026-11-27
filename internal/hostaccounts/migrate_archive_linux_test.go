@@ -109,7 +109,7 @@ func TestArchiveDatabaseLoadsTheBackupsDump(t *testing.T) {
 		}
 		return run(ctx, c)
 	}
-	got, err := m.Database(context.Background(), rec, "fixtureacct_wp", r, l)
+	got, err := m.Database(context.Background(), rec, "fixtureacct_wp", "fixtureacct_wp", r, l)
 	if err != nil || len(got.Tables) == 0 || got.Tables[0].Source != got.Tables[0].Copy {
 		t.Fatalf("database: %+v %v", got, err)
 	}
@@ -120,12 +120,12 @@ func TestArchiveDatabaseLoadsTheBackupsDump(t *testing.T) {
 	// refuses one before its dump; the job's undo drops the database.
 	f.localObjects = "trigger\n"
 	var failed *MigrationError
-	if _, err := m.Database(context.Background(), rec, "fixtureacct_wp", r, backupLeftover{Op: strings.Repeat("5", 32), Users: l.Users}); !errors.As(err, &failed) || failed.Step != "database" || !strings.Contains(failed.Detail, "trigger") {
+	if _, err := m.Database(context.Background(), rec, "fixtureacct_wp", "fixtureacct_wp", r, backupLeftover{Op: strings.Repeat("5", 32), Users: l.Users}); !errors.As(err, &failed) || failed.Step != "database" || !strings.Contains(failed.Detail, "trigger") {
 		t.Fatalf("a trigger in the dump: %v", err)
 	}
 	f.localObjects = ""
 	l.Op = strings.Repeat("7", 32)
-	if _, err := m.Database(context.Background(), rec, "fixtureacct_shop", r, backupLeftover{Op: l.Op, Users: map[string]string{"fixtureacct_shop": "sifruno_rst_0123456789abcdef"}}); !errors.As(err, &failed) || failed.Step != "database" {
+	if _, err := m.Database(context.Background(), rec, "fixtureacct_shop", "fixtureacct_shop", r, backupLeftover{Op: l.Op, Users: map[string]string{"fixtureacct_shop": "sifruno_rst_0123456789abcdef"}}); !errors.As(err, &failed) || failed.Step != "database" {
 		t.Fatalf("a dump the file does not hold: %v", err)
 	}
 }

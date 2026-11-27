@@ -106,6 +106,22 @@
 
 ### Added
 
+- Move a website here from another Linux server whose websites Apache or
+  nginx serves with PHP-FPM (a plain server, DirectAdmin, or Plesk or
+  HestiaCP running one web server): connect over SSH, confirm the
+  fingerprint, let Sifruno's move key in by a command run as root there or
+  with root's password or a private key (used once, never kept), pick a
+  website the web server names, and see what moves and what will not
+  before anything is made. Its files come as their owner, nginx's rules
+  (redirects, closed folders, rewrites, try_files) become rules
+  OpenLiteSpeed acts on, a WordPress database moves under the account's
+  name with the same password and wp-config.php pointed at it, and the
+  PHP version, the owner's cron jobs and the certificate come too. A site
+  with a line Sifruno does not convert, such as `proxy_pass`, is refused
+  with the file and line, and nothing is made. A database moves only when
+  the user and password in wp-config.php are that database's own on the
+  old server, and a website folder another user could point elsewhere
+  with a link is refused.
 - A QR code to scan with the authenticator app, on the first-run setup, on
   a customer's setup page and where Account changes the app. The panel
   draws it in the browser from the app's link (our own encoder, no new

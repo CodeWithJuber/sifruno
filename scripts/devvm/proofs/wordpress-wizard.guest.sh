@@ -125,7 +125,6 @@ case "${1:-}" in
     answer="${answer% }"
     echo "  over http: ${answer:-no answer}"
     check "over http the site serves WordPress, or sends the visitor to its https address" test "$ok" = yes
-    check "wp-admin redirects to the login page" bash -c "curl -s -o /dev/null -w '%{http_code}' -H 'Host: $domain' http://127.0.0.1/wp-admin/ | grep -qx 302"
 
     # HTTPS: the certificate comes from this run's Pebble, so curl trusts
     # nothing but that root. The broker keeps a site's files in
@@ -142,6 +141,10 @@ case "${1:-}" in
       sleep 2
     done
     check "the site serves WordPress over https with a certificate from Pebble's root" test "$ok" = yes
+    # "Always use HTTPS", on by default since da3d2c1, sends plain http to
+    # https before WordPress answers, so its login redirect is over https.
+    check "plain http for wp-admin goes to https" test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $domain" http://127.0.0.1/wp-admin/)" = "301 https://$domain/wp-admin/"
+    check "wp-admin redirects to the login page" bash -c "curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --resolve '$domain:443:127.0.0.1' --cacert '$dir/pebble-root.pem' https://$domain/wp-admin/ | grep -q '^302 https://$domain/wp-login.php'"
     served="$(openssl s_client -connect 127.0.0.1:443 -servername "$domain" </dev/null 2>/dev/null | openssl x509 2>/dev/null)"
     san="$(printf '%s\n' "$served" | openssl x509 -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ')"
     echo "  names in the served certificate: ${san:-none}"

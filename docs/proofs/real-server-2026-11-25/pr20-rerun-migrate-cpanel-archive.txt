@@ -1,0 +1,131 @@
+# Migration v1: one website account from a cPanel stand-in over root SSH
+# 2026-11-27T11:04:53Z  openlitespeed-1.9.5-1.el9.x86_64 mariadb-server-10.11.18-1.module_el9.8.0+315+b08bed7e.alma.1.x86_64 podman-5.8.5-5.el9_9.x86_64 rsync-3.2.7-4.el9_9.x86_64 openssh-clients-9.9p1-17.el9_9.alma.1.x86_64
+# accounts shop77493, staff77493, odd77493, trig77493, race77493, hard77493; container sifruno-cpanel-standin-77493 from docker.io/library/almalinux@sha256:1d06c00a6025b4faf042d3827d9ea8dc6b7a75278cacc1c1399dcc7a89c07a01
+
+## 1. The broker and the panel
+PASS  the broker runs with the web operation on
+PASS  the panel answers on 127.0.0.1:37441 as sifpanel, its DNS address SERVER_IP
+PASS  /usr/bin/rsync is a root-owned program the broker admits
+PASS  /usr/bin/ssh is a root-owned program the broker admits
+PASS  /usr/bin/ssh-keyscan is a root-owned program the broker admits
+PASS  /usr/bin/cp is a root-owned program the broker admits
+PASS  /usr/bin/mariadb is a root-owned program the broker admits
+
+## 2. The cPanel stand-in (Podman, not cPanel)
+PASS  the stand-in's base image is the pinned digest
+  stand-in address: 10.88.0.6
+  stand-in PHP: 83 (reported to Sifruno as ea-php83)
+PASS  the stand-in has sshd, MariaDB, Apache, PHP-FPM, rsync and crontab
+PASS  this server has LSPHP 83 for the copy
+PASS  the stand-in's MariaDB, sshd and Apache run
+PASS  the stand-in's four accounts, sites and databases are made
+PASS  the stand-in WordPress keeps the stock Akismet .htaccess (deny all, <FilesMatch>, both branches)
+  Akismet , .htaccess sha256 63553e7f320285fe2417cdb00664a136958d70baa07d7325e86f0847f11dd17c (the converter's test pins WordPress 7.1.5's: 63553e7f...)
+PASS  the stand-in whmapi1 prints listaccts JSON for the six accounts
+PASS  the old WordPress site answers with its title
+PASS  the old staff site closes /private/ with 401
+PASS  the old staff site opens /private/ with the password (200)
+PASS  the old staff site denies /backups/backup.sql and /backups/notes.txt with 403
+PASS  the old staff site answers 401 for /pub/index.html, rewritten into /private/
+PASS  the old staff site answers 403 for /old-backups/backup.sql, rewritten into /backups/
+PASS  the old staff site closes /office/ to this server (403) and opens /lobby/ (200)
+PASS  the old WordPress denies Akismet's folder with 403
+PASS  the old WordPress serves Akismet's allow-listed akismet.css with 200
+PASS  the old WordPress answers 403 for /wp-config.php (<Files> rules)
+PASS  the old WordPress answers 403 for /xmlrpc.php (<Files> rules)
+PASS  the old WordPress answers 403 for /xmlrpc.php/x (<Files> rules)
+PASS  the old WordPress answers 403 for /readme.html (<Files> rules)
+PASS  the old WordPress answers 403 for /.user.ini (<Files> rules)
+PASS  the old WordPress answers 403 for /.htaccess (<Files> rules)
+PASS  the old WordPress serves the post at its pretty address (200)
+PASS  the old WordPress answers its 403 with the ErrorDocument page
+  old: /old-page/sub?x=1 -> 301 http://shop77493.proof.test/moved-with-sifruno/sub?x=1; /archive/2026/ -> 302 http://shop77493.proof.test/?m=2026
+PASS  the old WordPress redirects /old-page (Redirect 301) and /archive/2026/ (RedirectMatch 302)
+  old: fonts/proof.woff2 sends 'Access-Control-Allow-Origin: *'
+PASS  the old WordPress sends the CORS header on a font (WP Rocket)
+PASS  the old WordPress serves the backup index.php.bak with its PHP source (200): the leak the copy closes
+  old: sifruno-ini.php says {"sapi":"fpm-fcgi","waf":true,"display_errors":"off","max_execution_time":"300","max_input_time":"600","max_input_vars":"3000","memory_limit":"512M","post_max_size":"128M","session.gc_maxlifetime":"7200","upload_max_filesize":"128M","zlib.output_compression":"off"}
+PASS  the old WordPress's PHP (PHP-FPM) has the site's settings (memory_limit 512M, upload_max_filesize 128M ...) and ran Wordfence's file before the script
+
+## 3. Backup files of shop77493 and staff77493, in the layout cPanel documents
+PASS  the stand-in made cpmove-shop77493.tar.gz with cp/, userdata/, cron/, mysql/ and homedir/
+PASS  its mysql.sql holds the user's grants as MariaDB prints them, with the hash
+  cpmove-shop77493.tar.gz: 70325405 bytes, 4283 entries; cpmove-staff77493.tar.gz: 2598 bytes
+PASS  the panel signs in with the server's access key
+PASS  an upload without the CSRF token is refused (403)
+
+## 4. Move shop77493.proof.test from its backup file
+  answer: {'user': 'shop77493', 'domain': 'shop77493.proof.test', 'databases': ['shop77493_wp'], 'home_bytes': 144888530}
+  not carried: ['The PHP setting session.save_path is not one a website sets ', 'The PHP setting session.save_path is not one a website sets ', 'Email accounts and their mail stay with the old host: this v', "The DNS zone is not carried: the domain's DNS stays where it"]
+PASS  the upload is read: account shop77493, shop77493.proof.test, the database shop77493_wp
+PASS  it says that mail, the DNS zone and cPanel's session.save_path do not move
+PASS  the file is root's 0600 in the migration's own 0700 folder
+PASS  the file is the one uploaded (same sha256)
+PASS  no migration key was made for a backup file
+PASS  the source lists the file's one account
+  job f12e18162affc3b1e6dc140f696a8e76: succeeded
+    source   done     Found shop77493.proof.test: 1 database(s), 1 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 14 .htaccess rule(s) are converted into the web server's config: / (files named .htaccess, .user.ini, readme.html, readme.txt, wp-config.php, xmlrpc.php closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (ak
+    account  done     Created the hosting account shop77493, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. It is a WordPress site. The converted .htaccess rules went into the web server's config before the files did: / (files named .htaccess, .user.ini, readme.html, readme.txt, wp-config.php, xmlrpc.php closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png
+    database done     Loaded 1 database(s) from the backup file with the same names and users (same passwords): 12 tables, 159 rows.
+    cron     done     Copied 1 scheduled job(s); they run as the site's user on this server's clock.
+    ssl      skipped  The backup file has no certificate for shop77493.proof.test. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     Deleted the uploaded backup file from this server.
+PASS  the move succeeded
+PASS  its first and last steps name the backup file
+PASS  the tier is Native (rewrite rules kept; the <Files> rules, Akismet's access rules, redirects and error page converted)
+PASS  the job names the root .htaccess's closed names, Akismet's folder, the two redirects, the error page and nine PHP settings as converted
+PASS  the account has the same name and /home/shop77493/public_html
+PASS  wp-config.php arrived unchanged (same sha256) and is the site user's
+PASS  the backup's mail folder was left out
+PASS  the database user shop77493_wpu has the same password hash as in the backup
+PASS  the database shop77493_wp has the same rows (wp_posts 5 = 5)
+PASS  the site's own user signs in to its database with the old password (wp-config unchanged)
+  database step: Loaded 1 database(s) from the backup file with the same names and users (same passwords): 12 tables, 159 rows.
+PASS  the copy runs PHP 8.3 (lsphp83), the backup's version
+PASS  the copy answers 403 for /wp-content/plugins/akismet/, as the old site
+PASS  the copy answers 403 for /wp-content/plugins/akismet/akismet.php, as the old site
+PASS  the copy answers 200 for the allow-listed akismet.css, as the old site
+PASS  the scheduled job arrived in the site user's crontab
+PASS  the preview (this server, the site's Host header) serves the site's title
+PASS  the preview serves the moved post
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  pages 10 compared, 10 pass, 0 fail; notes: ["Check before cutover: .htaccess line 38 (SetEnvIf Origin): sets a variable only this file's Header lines test, and those headers are not sent here: the copy does not set it. Check that the site's code does not read it before cutover.", "Check before cutover: .htaccess line 39 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.", "Check before cutover: .htaccess line 47 (Header set Access-Control-Allow-Origin): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover.", "Check before cutover: .htaccess line 292 (Header set X-Robots-Tag): OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send X-Robots-Tag: search engines may list pages or files the old site kept out of their results. Check them before cutover.", "Check before cutover: .user.ini line 13 (auto_prepend_file): the old server's PHP ran a file before every script (auto_prepend_file), often a security plugin's firewall such as Wordfence's extended protection. This server's PHP does not read .user.ini files, so after the move that file does not run and the firewall's extended protection is off, while the plugin itself still runs. Check the plugin's firewall settings on the copy before cutover.", 'The PHP setting session.save_path is not one a website sets for itself here, so it was not carried.', "Email accounts and their mail stay with the old host: this version moves the website. Point the domain's MX records where the mail is.", "The DNS zone is not carried: the domain's DNS stays where it is, and the move names the records to change."]
+PASS  verify compared the copy with the old site and found no difference
+PASS  the cutover gate is open (gate: accepted)
+PASS  marked ready, the panel names A records for the domain at SERVER_IP
+PASS  the uploaded file is deleted from this server, its folder too
+PASS  the job says the file was deleted
+PASS  no password or hash was in any process's arguments during the upload and the move
+PASS  the job record holds no password or hash
+
+## 5. Move staff77493.proof.test from its backup file: a password folder, a closed folder and address lists, converted
+PASS  the staff backup is read
+  job cee8dd60667cacd29414167eb0027e9b: succeeded
+    source   done     Found staff77493.proof.test: 1 database(s), 0 scheduled job(s), PHP 8.3 (ea-php83), .htaccess rules OpenLiteSpeed acts on. 4 .htaccess rule(s) are converted into the web server's config: /backups/ (closed to everyone (403)); /lobby/ (closed to 127.0.0.2/32); /office/ (open only to 127.0.0.2/32); /private/ (password "Staff area" for any user in its password file (401)).
+    account  done     Created the hosting account staff77493, the same name as on the old server.
+    web      done     The site is on this server with PHP 8.3 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied the home folder with public_html. Mail, logs and the old server's settings stayed there. The converted .htaccess rules went into the web server's config before the files did: /backups/ (closed to everyone (403)); /lobby/ (closed to 127.0.0.2/32); /office/ (open only to 127.0.0.2/32); /private/ (password "Staff area" for any user in its password file (401)).
+    database done     Loaded 1 database(s) from the backup file with the same names and users (same passwords): 0 tables, 0 rows.
+    cron     skipped  No scheduled jobs to copy.
+    ssl      skipped  The backup file has no certificate for staff77493.proof.test. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER LOCKED: 2 failed check(s)
+    key      done     Deleted the uploaded backup file from this server.
+PASS  the move succeeded
+  converted: [{'file': 'backups/.htaccess', 'path': '/backups/', 'rule': 'closed to everyone (403)'}, {'file': 'lobby/.htaccess', 'path': '/lobby/', 'rule': 'closed to 127.0.0.2/32'}, {'file': 'office/.htaccess', 'path': '/office/', 'rule': 'open only to 127.0.0.2/32'}, {'file': 'private/.htaccess', 'path': '/private/', 'rule': 'password "Staff area" for any user in its password file (401)'}]
+PASS  the copy closes /private/ with 401
+PASS  the copy opens /private/ with the password from the backup's user file (200)
+PASS  the copy denies /backups/backup.sql with 403
+PASS  the copy answers 401 for /pub/index.html, rewritten into /private/
+PASS  the uploaded staff file is deleted
+
+## 6. Hostile and wrong files are refused before anything is made
+PASS  a file with a name that climbs out of its folder is refused (422)
+  why: The backup file could not be used. The backup file is damaged or in a form Sifruno does not read. It must be the .tar.gz (or .tar) that cPanel's backup makes, whole, with no name outside its top folder.
+PASS  and says it is damaged or in a form Sifruno does not read
+PASS  nothing was written outside, nor kept
+PASS  a file that is not a backup is refused (422) and nothing is kept
+
+RESULT: every check passed

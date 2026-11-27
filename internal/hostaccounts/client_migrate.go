@@ -65,6 +65,24 @@ func (c *client) PinMigrationHostKey(ctx context.Context, id string, in Migratio
 	return out, err
 }
 
+// MigrationSites lists another Linux server's websites, each with what
+// moves and what does not.
+func (c *client) MigrationSites(ctx context.Context, id string) ([]MigrationSite, error) {
+	if !idPattern.MatchString(id) {
+		return nil, ErrInvalid
+	}
+	var out struct {
+		Items []MigrationSite `json:"items"`
+	}
+	if err := c.send(ctx, c.slow, "GET", "/v1/migrations/"+id+"/sites", nil, &out, maxMigrationAnswer); err != nil {
+		return nil, err
+	}
+	if out.Items == nil {
+		out.Items = []MigrationSite{}
+	}
+	return out.Items, nil
+}
+
 // MigrationAccounts lists the source's cPanel accounts.
 func (c *client) MigrationAccounts(ctx context.Context, id string) ([]cpsource.Account, error) {
 	if !idPattern.MatchString(id) {

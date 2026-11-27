@@ -36,9 +36,9 @@ const (
 
 var (
 	migrationStalePath  = regexp.MustCompile(`^/api/v1/websites/migrations/stale-keys/[a-f0-9]{32}/cleared$`)
-	migrationSourcePath = regexp.MustCompile(`^/api/v1/websites/migrations/sources/[a-f0-9]{32}/(host-key|cancel)$`)
+	migrationSourcePath = regexp.MustCompile(`^/api/v1/websites/migrations/sources/[a-f0-9]{32}/(host-key|cancel|install-key)$`)
 	migrationJobPath    = regexp.MustCompile(`^/api/v1/websites/migrations/[a-f0-9]{32}/(verify|accept|ready)$`)
-	migrationReadPath   = regexp.MustCompile(`^/api/v1/websites/migrations/sources/[a-f0-9]{32}/accounts$`)
+	migrationReadPath   = regexp.MustCompile(`^/api/v1/websites/migrations/sources/[a-f0-9]{32}/(accounts|sites)$`)
 )
 
 // migrationRoute names a migration POST as wizardFields keys it, or "".
@@ -68,7 +68,7 @@ func migrationRoute(p string) string {
 // isMigrationSlow is a route that talks to the old server.
 func isMigrationSlow(r *http.Request) bool {
 	route := migrationRoute(r.URL.Path)
-	return migrationReadPath.MatchString(r.URL.Path) || route == "migration-source" || route == "migration-whm" || route == "migration-cancel"
+	return migrationReadPath.MatchString(r.URL.Path) || route == "migration-source" || route == "migration-whm" || route == "migration-cancel" || route == "migration-install-key"
 }
 
 // MigrationSource is the old server as the page shows it: the key line the
@@ -81,7 +81,7 @@ type MigrationSource struct {
 	InstallCommand string                          `json:"install_command" doc:"Run as root on the old server to add the key line."`
 	HostKeys       []hostaccounts.MigrationHostKey `json:"host_keys"`
 	Pinned         string                          `json:"pinned_fingerprint" doc:"The confirmed fingerprint; empty until the admin confirms one."`
-	Via            string                          `json:"via" doc:"whm when connected with the old server's WHM login, archive for an uploaded cPanel backup file, empty for the SSH path."`
+	Via            string                          `json:"via" doc:"whm when connected with the old server's WHM login, archive for an uploaded cPanel backup file, server for another Linux server (Apache or nginx), empty for the cPanel SSH path."`
 	Archive        *hostaccounts.MigrationArchive  `json:"archive,omitempty" doc:"For an uploaded backup file: the account, domain and databases it holds, and what will not move."`
 	ExpiresAt      time.Time                       `json:"expires_at"`
 }
@@ -120,6 +120,7 @@ func migrationAccounts(items []cpsource.Account) []MigrationAccount {
 type migrationSourceBody struct {
 	Host string `json:"host" maxLength:"253" doc:"The old server's host name or IPv4 address."`
 	Port int    `json:"port" minimum:"1" maximum:"65535" doc:"Its SSH port, usually 22."`
+	Via  string `json:"via,omitempty" maxLength:"16" doc:"server for another Linux server (Apache or nginx), whose websites are read from its web server; empty for a cPanel server."`
 }
 type migrationSourceInput struct{ Body migrationSourceBody }
 type migrationSourceIDInput struct {
@@ -185,7 +186,8 @@ type staleClearedOutput struct {
 type migrationStartInput struct {
 	Body struct {
 		Source   string `json:"source" pattern:"^[a-f0-9]{32}$" doc:"The old server's migration ID."`
-		Username string `json:"username" maxLength:"32" doc:"The account to move; it keeps this name here."`
+		Username string `json:"username" maxLength:"32" doc:"The account to move; it keeps this name here. For another Linux server, the account name the website gets here."`
+		Site     string `json:"site,omitempty" maxLength:"253" doc:"For another Linux server only: the domain of the website to move, as its web server names it."`
 	}
 }
 type migrationAcceptInput struct {
@@ -258,7 +260,10 @@ func registerMigrations(a huma.API, o Options) {
 		if err != nil {
 			return nil, err
 		}
-		m, err := b.OpenMigration(ctx, hostaccounts.MigrationOpenInput{Host: in.Body.Host, Port: in.Body.Port, Reason: migrationReason}, siteActor(ctx))
+		if in.Body.Via != "" && in.Body.Via != hostaccounts.ViaServer {
+			return nil, newMigrationProblem(http.StatusUnprocessableEntity, "The way of moving must be empty (a cPanel server) or server (another Linux server).", "Reload the page, then press Connect again.", "")
+		}
+		m, err := b.OpenMigration(ctx, hostaccounts.MigrationOpenInput{Host: in.Body.Host, Port: in.Body.Port, Via: in.Body.Via, Reason: migrationReason}, siteActor(ctx))
 		if err != nil {
 			return nil, migrationBrokerError(err)
 		}
@@ -373,7 +378,7 @@ func registerMigrations(a huma.API, o Options) {
 		if _, err := broker(); err != nil {
 			return nil, err
 		}
-		job, err := o.Wizard.StartMigration(ctx, wizard.MigrationInput{Source: in.Body.Source, Username: in.Body.Username}, siteActor(ctx))
+		job, err := o.Wizard.StartMigration(ctx, wizard.MigrationInput{Source: in.Body.Source, Username: in.Body.Username, Site: in.Body.Site}, siteActor(ctx))
 		if err != nil {
 			return nil, wizardError(err)
 		}
@@ -403,6 +408,7 @@ func registerMigrations(a huma.API, o Options) {
 	change("ready-migration", "ready", func(ctx context.Context, id, _, actor string) (wizard.Job, error) {
 		return o.Wizard.ReadyMigration(ctx, id, actor)
 	})
+	registerServerMigrations(a, op, broker)
 }
 
 // connectWHM is D-0005's connection (steps 1 and 2, and the host key's

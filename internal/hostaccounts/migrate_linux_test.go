@@ -888,7 +888,7 @@ func TestMigrateDatabaseDumpsOverSSHAndImportsAsTheSiteUser(t *testing.T) {
 		}
 		return run(ctx, c)
 	}
-	got, err := m.Database(context.Background(), rec, "fixtureacct_wp", r, l)
+	got, err := m.Database(context.Background(), rec, "fixtureacct_wp", "fixtureacct_wp", r, l)
 	if err != nil || len(got.Tables) != 2 || got.Tables[0] != (MigrationTable{Table: "wp_options", Source: 120, Copy: 120}) {
 		t.Fatalf("database: %+v %v", got, err)
 	}
@@ -910,14 +910,14 @@ func TestMigrateDatabaseDumpsOverSSHAndImportsAsTheSiteUser(t *testing.T) {
 	// A difference in the copy is reported, not hidden.
 	f.counts = "wp_options\t120\nwp_posts\t2\n"
 	l.Op = strings.Repeat("7", 32)
-	if got, err = m.Database(context.Background(), rec, "fixtureacct_wp", r, l); err != nil || got.Tables[1] != (MigrationTable{Table: "wp_posts", Source: 3, Copy: 2}) {
+	if got, err = m.Database(context.Background(), rec, "fixtureacct_wp", "fixtureacct_wp", r, l); err != nil || got.Tables[1] != (MigrationTable{Table: "wp_posts", Source: 3, Copy: 2}) {
 		t.Fatalf("a difference: %+v %v", got, err)
 	}
 	// A database with a trigger on the source is refused before the dump.
 	f.objects = "trigger\n"
 	l.Op = strings.Repeat("8", 32)
 	var failed *MigrationError
-	if _, err = m.Database(context.Background(), rec, "fixtureacct_wp", r, l); !errors.As(err, &failed) || failed.Step != "database" || !strings.Contains(failed.Detail, "trigger") {
+	if _, err = m.Database(context.Background(), rec, "fixtureacct_wp", "fixtureacct_wp", r, l); !errors.As(err, &failed) || failed.Step != "database" || !strings.Contains(failed.Detail, "trigger") {
 		t.Fatalf("a trigger: %v", err)
 	}
 }

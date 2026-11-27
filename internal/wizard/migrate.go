@@ -64,7 +64,11 @@ type Migration struct {
 	Source     string `json:"source"`
 	SourceHost string `json:"source_host"`
 	SourceUser string `json:"source_user"`
-	// Via is "whm" for a move connected with the old server's WHM login.
+	// SourceSite is the domain of the website moved from another Linux
+	// server; its account here is the job's Username.
+	SourceSite string `json:"source_site,omitempty"`
+	// Via is "whm" for a move connected with the old server's WHM login,
+	// "archive" for a backup file, "server" for another Linux server.
 	Via  string `json:"via,omitempty"`
 	Tier string `json:"tier,omitempty"`
 	// WWW says the old site answered for www.<domain> too, so the DNS
@@ -265,10 +269,13 @@ func (r *Runner) migrationOptions() *MigrationOptions {
 
 var sourceIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-// MigrationInput names the confirmed source and the account to move.
+// MigrationInput names the confirmed source and the account to move. For
+// another Linux server, Site is the domain of the website to move and
+// Username the account name it gets here.
 type MigrationInput struct {
 	Source   string
 	Username string
+	Site     string
 }
 
 // StartMigration checks the request, records a migration job and runs it
@@ -306,6 +313,10 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 		return Job{}, refuse(ErrConflict, "Confirm the old server's fingerprint first, so Sifruno knows it talks to the right server.")
 	case source.Via == hostaccounts.ViaWHM && !o.WHM.Has(in.Source):
 		return Job{}, refuse(ErrConflict, "This panel no longer holds the WHM login for that connection: it keeps it in memory only, and the panel restarted. Press Stop and remove the key, then connect with the WHM login again.")
+	case source.Via == hostaccounts.ViaServer && !validDomain(in.Site):
+		return Job{}, refuse(ErrInvalid, "site must be the domain of the website on the old server, as its web server names it.")
+	case source.Via != hostaccounts.ViaServer && in.Site != "":
+		return Job{}, refuse(ErrInvalid, "site is only for a website on another Linux server; a cPanel account is named by its user name.")
 	}
 	accounts, err := r.accounts.List(ctx)
 	if err != nil {
@@ -324,9 +335,13 @@ func (r *Runner) StartMigration(ctx context.Context, in MigrationInput, actor st
 	if source.Via == hostaccounts.ViaArchive {
 		retitle(&job)
 	}
-	job.Migration = &Migration{Source: in.Source, SourceHost: sourceName(source), SourceUser: in.Username, Via: source.Via, Gate: GateClosed, Address: o.Address,
+	started := "Started moving the account " + in.Username + " from " + sourceName(source) + "."
+	if source.Via == hostaccounts.ViaServer {
+		started = "Started moving " + in.Site + " from " + sourceName(source) + " into the account " + in.Username + "."
+	}
+	job.Migration = &Migration{Source: in.Source, SourceHost: sourceName(source), SourceUser: in.Username, SourceSite: in.Site, Via: source.Via, Gate: GateClosed, Address: o.Address,
 		Databases: []string{}, DatabaseUsers: []string{}, Tables: []TableDifference{}, Notes: []string{}, Probes: []migrateverify.Probe{},
-		Activity: []Activity{{At: timestamp(now), Actor: actor, What: "Started moving the account " + in.Username + " from " + sourceName(source) + "."}}}
+		Activity: []Activity{{At: timestamp(now), Actor: actor, What: started}}}
 	if err = r.store.put(job); err != nil {
 		r.store.forget(id)
 		return Job{}, refuse(ErrUnavailable, "The panel could not save the job record, so nothing was moved. Check the panel's state directory, then try again.")
@@ -356,6 +371,7 @@ type migrationRun struct {
 	cpanel    *hostaccounts.CPanelAnswers
 	plan      hostaccounts.MigrationPlan
 	php       string
+	home      string
 	madeDBs   []string
 	madeUsers []string
 	wordpress bool
@@ -576,9 +592,12 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 		}
 		mr.cpanel = answers
 	}
-	plan, err := mr.options.Broker.PlanMigration(ctx, m.Source, hostaccounts.MigrationPlanInput{Username: m.SourceUser, CPanel: mr.cpanel, Reason: migrateReason}, j.actor)
+	plan, err := mr.options.Broker.PlanMigration(ctx, m.Source, hostaccounts.MigrationPlanInput{Username: m.SourceUser, Site: m.SourceSite, CPanel: mr.cpanel, Reason: migrateReason}, j.actor)
 	if err != nil {
 		return "", j.migrationFailure(err)
+	}
+	if m.Via == hostaccounts.ViaServer {
+		return j.serverSource(ctx, plan)
 	}
 	mr.plan = plan
 	for _, u := range plan.Users {
@@ -672,6 +691,10 @@ func (j *run) migrateAccount(ctx context.Context) (string, *stepError) {
 		return "", j.brokerFailure(err)
 	}
 	j.accountID, j.revision = a.ID, a.Revision
+	j.migration.home = a.Home
+	if j.job.Migration.Via == hostaccounts.ViaServer {
+		return "Created the hosting account " + a.Username + " for " + j.job.Domain + ".", nil
+	}
 	return "Created the hosting account " + a.Username + ", the same name as on the old server.", nil
 }
 
@@ -719,6 +742,9 @@ func (j *run) migrateFiles(ctx context.Context) (string, *stepError) {
 	}
 	if len(res.Folders) > 0 {
 		protected = " The converted .htaccess rules went into the web server's config before the files did: " + folderPaths(res.Folders) + "."
+	}
+	if j.job.Migration.Via == hostaccounts.ViaServer && j.migration.plan.Site != nil {
+		return serverFilesMessage(j.migration.plan, res, protected), nil
 	}
 	if res.WordPress {
 		return "Copied the home folder with public_html. It is a WordPress site." + protected, nil
@@ -778,6 +804,14 @@ func (j *run) migrateDatabases(ctx context.Context) (string, *stepError) {
 			}
 		}
 	}
+	if m.Via == hostaccounts.ViaServer {
+		if j.migration.dbDiffers > 0 {
+			j.note(fmt.Sprintf("%d table(s) have a different number of rows on the old server than in the copy. The old site may have changed during the copy; check them.", j.migration.dbDiffers))
+		}
+		if text := j.serverDatabasesMessage(); text != "" {
+			return text, nil
+		}
+	}
 	if m.Via == hostaccounts.ViaArchive {
 		// A backup file has no live database to count against.
 		return fmt.Sprintf("Loaded %d database(s) from the backup file with the same names and users (same passwords): %d tables, %d rows.", len(plan.Databases), j.migration.dbTables, j.migration.dbRows), nil
@@ -790,6 +824,7 @@ func (j *run) migrateDatabases(ctx context.Context) (string, *stepError) {
 }
 
 func (j *run) migrateCron(ctx context.Context) (string, *stepError) {
+	moved := j.job.Migration.Via == hostaccounts.ViaServer && j.serverCron()
 	jobs := j.migration.cronJobs
 	if len(jobs) == 0 {
 		j.skip(j.index(StepCron), "No scheduled jobs to copy.")
@@ -800,6 +835,9 @@ func (j *run) migrateCron(ctx context.Context) (string, *stepError) {
 		return "", j.brokerFailure(err)
 	}
 	j.revision = res.Account.Revision
+	if moved {
+		return clip(fmt.Sprintf("Copied %d scheduled job(s) of %s's crontab; they run as the site's user on this server's clock, and where they named %s they now name %s.", len(jobs), j.job.Migration.SourceUser, j.migration.plan.Site.DocRoot, j.migration.home+"/public_html")), nil
+	}
 	return fmt.Sprintf("Copied %d scheduled job(s); they run as the site's user on this server's clock.", len(jobs)), nil
 }
 

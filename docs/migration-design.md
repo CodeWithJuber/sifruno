@@ -265,14 +265,63 @@ output stays under Technical details.
 - PHP settings from the root `.htaccess` carried into the site's
   `phpIniOverride` on a move from a cPanel server or backup file, and the
   `.user.ini` firewall note.
+- The SSH adapter end to end (adapter 3, the third answer to "where is the
+  website now?"): the broker reads the web server's own view of its
+  configuration (`nginx -T`, `httpd -S` or `apache2ctl -S`, then each
+  virtual host file), PHP-FPM's pools and versions, each document root's
+  owner and wp-config.php, through `sitesource`'s fixed commands
+  (hostaccounts README, "From another Linux server"). An nginx site's
+  converted rules are written as the `.htaccess` files the copy's own scan
+  converts, so they reach OpenLiteSpeed and verify as an Apache site's do;
+  the `.htaccess` files nginx never read stay behind. The panel adds the
+  move's key with root's password or a private key (`internal/keyinstall`)
+  besides the command the admin runs, and shows each website's summary
+  before anything is made.
 
-Not built yet: the broker's steps for a server that is not cPanel (and so
-the third answer to "where is the website now?"), the panel API clients
-for DirectAdmin and CyberPanel (CyberPanel publishes no API for listing
-websites; its source would have to be read), PHP settings from a
-`.user.ini` or nginx's `fastcgi_param PHP_VALUE` (the model reads them,
-`sitemodel.PHP`, but no copy applies them, and its own list is wider than
-the converter's), and an export button.
+Choices made for the SSH adapter (2026-11-27), each reversible:
+
+- **Database names here.** Sifruno names an account's databases and users
+  `<account>_...`, and a plain server's are not, so a WordPress site's
+  database `wordpress` becomes `<account>_wordpress` and its user `wpuser`
+  `<account>_wpuser` (`sitemodel.Database.SourceName` keeps the old name).
+  The user keeps its password: the broker makes its mysql_native_password
+  hash from wp-config.php's `DB_PASSWORD` and keeps neither, and the copy
+  points the staged wp-config.php at the new names (`DB_NAME`, `DB_USER`,
+  `DB_HOST` 'localhost'), changing nothing else.
+- **Where the password is not readable.** A site with no wp-config.php, one
+  whose `DB_` values are built from code or the environment, or one whose
+  database is on another server moves without its database, and the
+  summary says so before anything is made. Typing the database's details
+  in the panel, which this design names for such sites, is not built yet:
+  their configuration names the old database and user, which the account's
+  prefix renames, so a typed password alone would not keep the site
+  working; the person copies such a database by hand.
+- **Who reads the files.** rsync's sender, and the reads of wp-config.php,
+  run as the document root's owner (`runuser -u`), as root only when root
+  owns the folder; a document root outside `/var/www`, `/srv`, `/home` and
+  `/usr/share/nginx/html` is refused, so a vhost pointed at `/` or `/etc`
+  cannot hand system files to a tenant. A link on the way to the document
+  root, or a folder on the way that another user could swap for one, is
+  refused, and a root-owned document root holding anything another user
+  can change is refused, so a tenant cannot lead root's reads elsewhere.
+- **Whose database.** wp-config.php is the tenant's file, and the dump runs
+  as the database's root, so the database it names moves only when the
+  site proves it is its own: not one of the server's own schemas, and the
+  named localhost user has the password wp-config.php gives
+  (mysql_native_password) and a grant on that database. A user that signs
+  in another way (MySQL 8's `caching_sha2_password`) cannot be checked
+  this way, so its database does not move and the summary says so.
+- **Two web servers.** A domain both nginx and Apache name (nginx in front
+  of Apache, as Plesk and HestiaCP run them) is refused for now, as are
+  two blocks for one domain that serve it differently.
+
+Not built yet: the panel API clients for DirectAdmin and CyberPanel
+(CyberPanel publishes no API for listing websites, and its OpenLiteSpeed
+configuration is not read), a database typed in for a site that is not
+WordPress, nginx in front of Apache, PHP settings on a move from another
+Linux server (`.user.ini` and nginx's `fastcgi_param PHP_VALUE`: the model
+reads them, `sitemodel.PHP`, but no copy applies them, and its own list is
+wider than the converter's), and an export button.
 
 ## Not in this design yet
 

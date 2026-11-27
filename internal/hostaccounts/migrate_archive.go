@@ -189,7 +189,7 @@ func (s *store) planArchive(ctx context.Context, m migrationRecord, in Migration
 	if plan.Cron == nil {
 		plan.Cron = []cpsource.CronLine{}
 	}
-	if err := s.planTier(ctx, m, m.Archive.Home, &plan); err != nil {
+	if err := s.planTier(ctx, m, m.Archive.Home, nil, &plan); err != nil {
 		return MigrationPlan{}, err
 	}
 	return plan, nil

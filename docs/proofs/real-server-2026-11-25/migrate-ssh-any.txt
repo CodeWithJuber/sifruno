@@ -1,0 +1,530 @@
+# Move a website from another Linux server (Apache or nginx), through the panel in a browser, on real servers, 2026-11-27
+# Panel server: a new Linode g6-standard-2 (de-fra-2) that scripts/ci/nightly-fresh-install.sh made and kept
+# (SIFRUNO_NIGHTLY_KEEP=1, the owner's admin key added): AlmaLinux 9.8, SELinux Enforcing, OpenLiteSpeed 1.9.5,
+# MariaDB 10.11.18. Its fresh-install test passed 17 checks, 0 failed, with the release built from 36f2392; the
+# releases built from ceadb39, c6c3f0e and 1ea2ee9 were then installed in place with their own install.sh.
+# Two stand-ins, new Linodes g6-nanode-1 (de-fra-2) made through the Linode API, tagged sifruno-test and
+# delete-after-use, labeled sifruno-owner-test-sshany-apache and -nginx, each behind its own Cloud Firewall that
+# admits TCP 22, 80 and 443 from the runner and the panel server only, the owner's admin key added:
+#   Apache stand-in: AlmaLinux 9.8, httpd 2.4.62 with PHP-FPM 8.2.36 (the php:8.2 module; RHEL's php.conf hands
+#     every site's PHP to one pool), MariaDB 10.5.29. A WordPress site at /var/www/wp owned by apache, its .htaccess
+#     with WordPress's block and "Redirect 301 /old-page /new-page", private/.htaccess "Require all denied", and a
+#     cron job in apache's crontab; a plain PHP site at /var/www/plain owned by its own user plainsite, with its own
+#     deny folder, redirect and cron job.
+#   nginx stand-in: Debian 12.15, nginx 1.22.1 with PHP-FPM 8.2.36, MariaDB 10.11.19. A WordPress site at
+#     /var/www/blog owned by www-data, with try_files, "location /private/ { deny all; }", "location = /old-page
+#     { return 301 /new-page; }" and the .ht deny, a stale wp-content/.htaccess nginx never read, and a cron job in
+#     www-data's crontab; an application site whose only location is a proxy_pass.
+# The browser: agent-browser 0.45.0 (Chrome) on the runner, on the panel's loopback through an SSH forward. Root's
+# password, the private key and its passphrase, the database passwords, the admin's password and code reached the
+# browser and the servers on stdin only. SERVER_IP is the panel server and SOURCE_IP the stand-in each section
+# names; their sslip.io names read SOURCE-IP. A PASS or FAIL line with two spaces is a check this proof made.
+
+## 1. The panel: first-run setup in the browser (the panel on its loopback, through an SSH forward on a port the panel admits as its own origin)
+PASS  the admin is made and signed in
+
+
+# The installer adds LSPHP 8.3 only. The first move of a PHP 8.2 site stopped at its web step (the broker found
+# no lsphp82 and held the account for recovery; a broker restart finished the operation once lsphp82 was there).
+# So lsphp82 and the same extensions as lsphp83 were added by hand (dnf install lsphp82 ...), the leftover account
+# wpsite deleted through the panel, and the move run again:
+
+# Sections 2 and 3 ran on the release built from ceadb39; 4 to 8 on c6c3f0e; 9 on 1ea2ee9, the branch head's code.
+
+## 2. Move the Apache stand-in's WordPress (wp.SOURCE-IP.sslip.io) at 1440 px, letting Sifruno in with root's password
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+PASS  the move's key got in (password) and the old server's websites are listed
+PASS  the form no longer holds the password or key
+  sites listed: move-site-plain.SOURCE-IP.sslip.io, move-site-wp.SOURCE-IP.sslip.io
+  summary of the site:
+    | wp.SOURCE-IP.sslip.io
+    | Web server
+    | Apache
+    | Files
+    | /var/www/wp owned by apache; they go into the account's public_html
+    | Also answers
+    | www.wp.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | wordpress, named in wp-config.php: it moves with its user and password, under the account's name
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | The website's block names no PHP-FPM pool of its own; the old server runs PHP 8.2 only, so that is its version.
+    | Technical details
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  account name here: wpsite
+PASS  the move starts and the page follows its job
+  job state: succeeded
+    source   done     Found wp.SOURCE-IP.sslip.io on apache (/etc/httpd/conf.d/wp.conf line 1): files in /var/www/wp owned by apache, its database wordpress, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 3 rule(s) become the web server's config: /private/ (closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akismet-frontend.js, ak
+    account  done     Created the hosting account wpsite for wp.SOURCE-IP.sslip.io.
+    web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied /var/www/wp (owned by apache there) into public_html, read as apache. It is a WordPress site; its wp-config.php now names the database wpsite_wordpress and the user wpsite_wpuser. The converted .htaccess rules went into the web server's config before the files did: /private/ (closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akism
+    database done     Copied the database wordpress as wpsite_wordpress, with its user as wpsite_wpuser and the same password: 12 tables, 161 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s) of apache's crontab; they run as the site's user on this server's clock, and where they named /var/www/wp they now name /home/wpsite/public_html.
+    ssl      skipped  The old server has no certificate for wp.SOURCE-IP.sslip.io. The site uses http on this server: certificates are not set up here.
+    verify   running
+    key      pending
+  the job, once its comparison and key steps ended:
+    source   done     Found wp.SOURCE-IP.sslip.io on apache (/etc/httpd/conf.d/wp.conf line 1): files in /var/www/wp owned by apache, its database wordpress, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 3 rule(s) become the web server's config: /private/ (closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akismet-frontend.js, ak
+    account  done     Created the hosting account wpsite for wp.SOURCE-IP.sslip.io.
+    web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied /var/www/wp (owned by apache there) into public_html, read as apache. It is a WordPress site; its wp-config.php now names the database wpsite_wordpress and the user wpsite_wpuser. The converted .htaccess rules went into the web server's config before the files did: /private/ (closed to everyone (403)); /wp-content/plugins/akismet/ (closed to everyone (403); except 15 named files open to everyone (akismet-activation-banner-elements.png, akismet-admin-rtl.css, akismet-admin.css, akismet-admin.js, akism
+    database done     Copied the database wordpress as wpsite_wordpress, with its user as wpsite_wpuser and the same password: 12 tables, 161 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s) of apache's crontab; they run as the site's user on this server's clock, and where they named /var/www/wp they now name /home/wpsite/public_html.
+    ssl      skipped  The old server has no certificate for wp.SOURCE-IP.sslip.io. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  pages 7 compared, 7 pass, 0 to check, 0 fail; closed URLs 6 as the old site, 0 not
+  notes: []
+  gate: open
+
+## 3. Checks of the moved WordPress on both servers
+PASS  every file arrived with the same content (3787 files, sha256 each)
+PASS  the copy's files are the account's own
+  wp-config.php on the old server: define('DB_NAME','wordpress'); define('DB_USER','wpuser'); define('DB_HOST','localhost');
+  wp-config.php here:              define('DB_NAME','wpsite_wordpress'); define('DB_USER','wpsite_wpuser'); define('DB_HOST','localhost');
+PASS  wp-config.php names the database wpsite_wordpress, the user wpsite_wpuser and localhost
+PASS  its DB_PASSWORD line and every other line are unchanged
+  rows: wp_commentmeta 0 wp_comments 1 wp_links 0 wp_options 125 wp_postmeta 2 wp_posts 4 wp_term_relationships 1 wp_term_taxonomy 1 wp_termmeta 0 wp_terms 1 wp_usermeta 16 wp_users 1
+PASS  every table has the same rows on both servers (12 tables)
+PASS  wpsite_wpuser signs in to wpsite_wordpress here with the old password
+  PHP: the old server runs PHP 8.2.36 (PHP-FPM); the copy's vhost runs /usr/local/lsws/lsphp82/bin/lsphp
+PASS  the copy runs the old site's PHP version
+  deny rule: old: 403  | copy: 403
+PASS  the deny rule answers 403 on the copy, as on the old site
+  redirect: old: 301 http://wp.SOURCE-IP.sslip.io/new-page | copy: 301 http://wp.SOURCE-IP.sslip.io/new-page
+PASS  the redirect answers 301 to the same place on the copy
+  home page: old 'Apache stand-in blog', copy 'Apache stand-in blog'
+PASS  the copy's home page is the old one's
+  cron here: MAILTO="" */15 * * * * /usr/bin/php /home/wpsite/public_html/wp-cron.php >/dev/null 2>&1
+PASS  the scheduled job runs the copy's own folder
+  process arguments, read five times a second during the move: panel samples=6939 hits=0; old server samples=6849 hits=0
+PASS  no password, key passphrase or password hash was in any process's arguments, on either server
+  secrets found in the panel's state, the broker's state and the two services' logs: 0 files, 0 log lines
+PASS  the job record, the broker's records and the logs hold none of them
+
+# The release built from c6c3f0e (the branch head: the page names the third source in its subtitle) was then
+# installed in place on the panel server with its install.sh, and the rest ran on it.
+
+## 4. Move the Apache stand-in's plain PHP site (plain.SOURCE-IP.sslip.io) at 390 px, the admin running the key line as root
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+PASS  the admin ran the shown line as root on the old server
+PASS  the move's key got in (command) and the old server's websites are listed
+  sites listed: move-site-plain.SOURCE-IP.sslip.io, move-site-wp.SOURCE-IP.sslip.io
+  summary of the site:
+    | plain.SOURCE-IP.sslip.io
+    | Web server
+    | Apache
+    | Files
+    | /var/www/plain owned by plainsite; they go into the account's public_html
+    | Also answers
+    | www.plain.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | None found
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | The website's block names no PHP-FPM pool of its own; the old server runs PHP 8.2 only, so that is its version.
+    | Technical details
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  account name here: plainsite
+PASS  the move starts and the page follows its job
+  job state: succeeded
+    source   done     Found plain.SOURCE-IP.sslip.io on apache (/etc/httpd/conf.d/plain.conf line 1): files in /var/www/plain owned by plainsite, no database, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 2 rule(s) become the web server's config: /private/ (closed to everyone (403)); /old-page (redirect (301) to /about.html).
+    account  done     Created the hosting account plainsite for plain.SOURCE-IP.sslip.io.
+    web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied /var/www/plain (owned by plainsite there) into public_html, read as plainsite. The converted .htaccess rules went into the web server's config before the files did: /private/ (closed to everyone (403)); /old-page (redirect (301) to /about.html).
+    database skipped  The account has no databases.
+    cron     done     Copied 1 scheduled job(s) of plainsite's crontab; they run as the site's user on this server's clock, and where they named /var/www/plain they now name /home/plainsite/public_html.
+    ssl      skipped  The old server has no certificate for plain.SOURCE-IP.sslip.io. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  the job, once its comparison and key steps ended:
+    source   done     Found plain.SOURCE-IP.sslip.io on apache (/etc/httpd/conf.d/plain.conf line 1): files in /var/www/plain owned by plainsite, no database, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 2 rule(s) become the web server's config: /private/ (closed to everyone (403)); /old-page (redirect (301) to /about.html).
+    account  done     Created the hosting account plainsite for plain.SOURCE-IP.sslip.io.
+    web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied /var/www/plain (owned by plainsite there) into public_html, read as plainsite. The converted .htaccess rules went into the web server's config before the files did: /private/ (closed to everyone (403)); /old-page (redirect (301) to /about.html).
+    database skipped  The account has no databases.
+    cron     done     Copied 1 scheduled job(s) of plainsite's crontab; they run as the site's user on this server's clock, and where they named /var/www/plain they now name /home/plainsite/public_html.
+    ssl      skipped  The old server has no certificate for plain.SOURCE-IP.sslip.io. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  pages 1 compared, 1 pass, 0 to check, 0 fail; closed URLs 1 as the old site, 0 not
+  notes: ["The site has no wp-config.php, so Sifruno cannot tell which database it uses, and none is copied. Copy it by hand if it has one (the Databases tab makes one here)."]
+  gate: closed
+
+## 5. Checks of the moved plain PHP site on both servers
+PASS  every file arrived with the same content (6 files, sha256 each)
+PASS  the copy's files are the account's own
+  PHP: the old server runs PHP 8.2.36 (PHP-FPM); the copy's vhost runs /usr/local/lsws/lsphp82/bin/lsphp
+PASS  the copy runs the old site's PHP version
+  deny rule: old: 403  | copy: 403
+PASS  the deny rule answers 403 on the copy, as on the old site
+  redirect: old: 301 http://plain.SOURCE-IP.sslip.io/about.html | copy: 301 http://plain.SOURCE-IP.sslip.io/about.html
+PASS  the redirect answers 301 to the same place on the copy
+  home page: old 'Plain site on PHP 8.2.36', copy 'Plain site on PHP 8.2.36'
+PASS  the copy's home page is the old one's
+  cron here: MAILTO="" */30 * * * * /usr/bin/php /home/plainsite/public_html/task.php
+PASS  the scheduled job runs the copy's own folder
+  process arguments, read five times a second during the move: panel samples=251 hits=0; old server samples=245 hits=0
+PASS  no password, key passphrase or password hash was in any process's arguments, on either server
+  secrets found in the panel's state, the broker's state and the two services' logs: 0 files, 0 log lines
+PASS  the job record, the broker's records and the logs hold none of them
+  accepted with the reason "The plain site uses no database.": 200 accepted
+PASS  the cutover gate is open once a person accepted the note
+
+
+# A first move of the nginx WordPress (below, run again) succeeded with the same results, but its argument
+# watcher was void: its list of secrets ended with an empty line, which grep -F -f reads as a pattern that matches
+# everything, so every sample "hit". The list was fixed, the moved website deleted from its page (account, files,
+# database and user), and the move run again.
+
+## 6. Move the nginx stand-in's WordPress (blog.SOURCE-IP.sslip.io) at 390 px, letting Sifruno in with a private key and its passphrase; its proxy_pass site is refused
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+PASS  the move's key got in (key) and the old server's websites are listed
+PASS  the form no longer holds the password or key
+  sites listed: move-site-app.SOURCE-IP.sslip.io, move-site-blog.SOURCE-IP.sslip.io
+PASS  app.SOURCE-IP.sslip.io is shown as one that cannot move as it is
+PASS  it names proxy_pass in plain words
+PASS  and offers no Move button for it
+PASS  its file and line are under Technical details
+  summary of the site:
+    | blog.SOURCE-IP.sslip.io
+    | Web server
+    | nginx
+    | Files
+    | /var/www/blog owned by www-data; they go into the account's public_html
+    | Also answers
+    | www.blog.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | wordpress, named in wp-config.php: it moves with its user and password, under the account's name
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  account name here: blog
+PASS  the move starts and the page follows its job
+  job state: succeeded
+    source   done     Found blog.SOURCE-IP.sslip.io on nginx (/etc/nginx/sites-enabled/blog line 1): files in /var/www/blog owned by www-data, its database wordpress, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 1 rule(s) become the web server's config: /private/ (closed to everyone (403)).
+    account  done     Created the hosting account blog for blog.SOURCE-IP.sslip.io.
+    web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied /var/www/blog (owned by www-data there) into public_html, read as www-data. nginx's rules became the .htaccess files OpenLiteSpeed reads; the folder's own .htaccess files stayed there, as nginx never read them. It is a WordPress site; its wp-config.php now names the database blog_wordpress and the user blog_wpuser. The converted .htaccess rules went into the web server's config before the files did: /private/ (closed to everyone (403)).
+    database done     Copied the database wordpress as blog_wordpress, with its user as blog_wpuser and the same password: 12 tables, 161 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s) of www-data's crontab; they run as the site's user on this server's clock, and where they named /var/www/blog they now name /home/blog/public_html.
+    ssl      skipped  The old server has no certificate for blog.SOURCE-IP.sslip.io. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  the job, once its comparison and key steps ended:
+    source   done     Found blog.SOURCE-IP.sslip.io on nginx (/etc/nginx/sites-enabled/blog line 1): files in /var/www/blog owned by www-data, its database wordpress, 1 scheduled job(s), PHP 8.2 (php8.2-fpm), rules OpenLiteSpeed acts on. 1 rule(s) become the web server's config: /private/ (closed to everyone (403)).
+    account  done     Created the hosting account blog for blog.SOURCE-IP.sslip.io.
+    web      done     The site is on this server with PHP 8.2 and 1024 MiB of disk. Visitors still reach the old server: DNS has not changed.
+    files    done     Copied /var/www/blog (owned by www-data there) into public_html, read as www-data. nginx's rules became the .htaccess files OpenLiteSpeed reads; the folder's own .htaccess files stayed there, as nginx never read them. It is a WordPress site; its wp-config.php now names the database blog_wordpress and the user blog_wpuser. The converted .htaccess rules went into the web server's config before the files did: /private/ (closed to everyone (403)).
+    database done     Copied the database wordpress as blog_wordpress, with its user as blog_wpuser and the same password: 12 tables, 161 rows, every table's rows match.
+    cron     done     Copied 1 scheduled job(s) of www-data's crontab; they run as the site's user on this server's clock, and where they named /var/www/blog they now name /home/blog/public_html.
+    ssl      skipped  The old server has no certificate for blog.SOURCE-IP.sslip.io. The site uses http on this server: certificates are not set up here.
+    verify   done     CUTOVER ALLOWED: every compared page and closed URL matches the old site
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  verify: CUTOVER ALLOWED: every compared page and closed URL matches the old site
+  pages 9 compared, 9 pass, 0 to check, 0 fail; closed URLs 1 as the old site, 0 not
+  notes: []
+  gate: open
+
+## 7. Checks of the moved nginx WordPress on both servers
+PASS  nginx's own .htaccess files were left out of the copy (wp-content/.htaccess is not there)
+  .htaccess files in the copy, written from nginx's rules: ./.htaccess ./private/.htaccess
+PASS  every file arrived with the same content (3783 files, sha256 each)
+PASS  the copy's files are the account's own
+  wp-config.php on the old server: define('DB_NAME','wordpress'); define('DB_USER','wpuser'); define('DB_HOST','localhost');
+  wp-config.php here:              define('DB_NAME','blog_wordpress'); define('DB_USER','blog_wpuser'); define('DB_HOST','localhost');
+PASS  wp-config.php names the database blog_wordpress, the user blog_wpuser and localhost
+PASS  its DB_PASSWORD line and every other line are unchanged
+  rows: wp_commentmeta 0 wp_comments 1 wp_links 0 wp_options 125 wp_postmeta 2 wp_posts 4 wp_term_relationships 1 wp_term_taxonomy 1 wp_termmeta 0 wp_terms 1 wp_usermeta 16 wp_users 1
+PASS  every table has the same rows on both servers (12 tables)
+PASS  blog_wpuser signs in to blog_wordpress here with the old password
+  PHP: the old server runs PHP 8.2.36 (PHP-FPM); the copy's vhost runs /usr/local/lsws/lsphp82/bin/lsphp
+PASS  the copy runs the old site's PHP version
+  deny rule: old: 403  | copy: 403
+PASS  the deny rule answers 403 on the copy, as on the old site
+  redirect: old: 301 http://blog.SOURCE-IP.sslip.io/new-page | copy: 301 http://blog.SOURCE-IP.sslip.io/new-page
+PASS  the redirect answers 301 to the same place on the copy
+  home page: old 'nginx stand-in blog', copy 'nginx stand-in blog'
+PASS  the copy's home page is the old one's
+  cron here: MAILTO="" */10 * * * * /usr/bin/php /home/blog/public_html/wp-cron.php >/dev/null 2>&1
+PASS  the scheduled job runs the copy's own folder
+  process arguments, read five times a second during the move: panel samples=314 hits=0; old server samples=310 hits=0
+PASS  no password, key passphrase or password hash was in any process's arguments, on either server
+  secrets found in the panel's state, the broker's state and the two services' logs: 0 files, 0 log lines
+PASS  the job record, the broker's records and the logs hold none of them
+
+## 8. The refused site at 1440 px: app.SOURCE-IP.sslip.io, which nginx passes to an application (proxy_pass)
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+PASS  the move's key got in (key) and the old server's websites are listed
+PASS  the form no longer holds the password or key
+  sites listed: move-site-app.SOURCE-IP.sslip.io, move-site-blog.SOURCE-IP.sslip.io
+PASS  app.SOURCE-IP.sslip.io is shown as one that cannot move as it is
+PASS  it names proxy_pass in plain words
+PASS  and offers no Move button for it
+PASS  its file and line are under Technical details
+  the API asked to move app.SOURCE-IP.sslip.io anyway: 202 43c6f49456b8489e50710bff8eeee6b3
+    source   failed   The old server's configuration for app.SOURCE-IP.sslip.io has lines this server does not convert (/etc/nginx/sites-enabled/app line 5), so moving it as it is would change what it does. Nothing was created here.
+    account  skipped
+    web      skipped
+    files    skipped
+    database skipped
+    cron     skipped
+    ssl      skipped
+    verify   skipped
+    key      done     The old server no longer accepts the migration key, and this server deleted it.
+  what: The website on the old server cannot be moved as it is.
+  why: The old server's configuration for app.SOURCE-IP.sslip.io has lines this server does not convert (/etc/nginx/sites-enabled/app line 5), so moving it as it is would change what it does. Nothing was created here.
+  next: Leave this website on the old server for now, or change those lines there (Technical details says why for each), then move it again.
+  technical details: refused: /etc/nginx/sites-enabled/app line 5: proxy_pass: Sifruno does not convert this directive, so the site would behave differently here.
+PASS  the move ends at its first step with the refused line named
+PASS  nothing was made: no account appsite, no database
+
+
+
+## 9. The screens, on the release built from 1ea2ee9 (installed in place): each stand-in connected again up to
+## its summary, then Stop and remove the key. The stand-ins' addresses are replaced in the page before each screenshot.
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+  screenshot: move-from-1440.png (addresses masked)
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+  screenshot: move-confirm-1440.png (addresses masked)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+  screenshot: move-letin-password-1440.png (addresses masked)
+PASS  the move's key got in (password) and the old server's websites are listed
+PASS  the form no longer holds the password or key
+  sites listed: move-site-plain.SOURCE-IP.sslip.io, move-site-wp.SOURCE-IP.sslip.io
+  summary of the site:
+    | wp.SOURCE-IP.sslip.io
+    | Web server
+    | Apache
+    | Files
+    | /var/www/wp owned by apache; they go into the account's public_html
+    | Also answers
+    | www.wp.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | wordpress, named in wp-config.php: it moves with its user and password, under the account's name
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | The website's block names no PHP-FPM pool of its own; the old server runs PHP 8.2 only, so that is its version.
+    | Technical details
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  screenshot: move-summary-apache-wp-1440.png (addresses masked)
+  account name here: wpsite
+  after Stop and remove the key: Stopped. The old server now refuses the migration key. This server deleted its own copy of the key.
+PASS  Stop and remove the key takes the key off the old server and deletes it here
+PASS  the old server's root keys hold no migration line
+  screenshot: move-stopped-1440.png (addresses masked)
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+  screenshot: move-from-390.png (addresses masked)
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+  screenshot: move-confirm-390.png (addresses masked)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+  screenshot: move-letin-command-390.png (addresses masked)
+PASS  the admin ran the shown line as root on the old server
+PASS  the move's key got in (command) and the old server's websites are listed
+  sites listed: move-site-plain.SOURCE-IP.sslip.io, move-site-wp.SOURCE-IP.sslip.io
+  summary of the site:
+    | plain.SOURCE-IP.sslip.io
+    | Web server
+    | Apache
+    | Files
+    | /var/www/plain owned by plainsite; they go into the account's public_html
+    | Also answers
+    | www.plain.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | None found
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | The website's block names no PHP-FPM pool of its own; the old server runs PHP 8.2 only, so that is its version.
+    | Technical details
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  screenshot: move-summary-apache-plain-390.png (addresses masked)
+  account name here: plainsite
+  after Stop and remove the key: Stopped. The old server now refuses the migration key. This server deleted its own copy of the key.
+PASS  Stop and remove the key takes the key off the old server and deletes it here
+PASS  the old server's root keys hold no migration line
+  screenshot: move-stopped-390.png (addresses masked)
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+  screenshot: move-from-390.png (addresses masked)
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+  screenshot: move-confirm-390.png (addresses masked)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+  screenshot: move-letin-key-390.png (not kept: the private key showed in its field; taken again below with it hidden)
+PASS  the move's key got in (key) and the old server's websites are listed
+PASS  the form no longer holds the password or key
+  sites listed: move-site-app.SOURCE-IP.sslip.io, move-site-blog.SOURCE-IP.sslip.io
+PASS  app.SOURCE-IP.sslip.io is shown as one that cannot move as it is
+PASS  it names proxy_pass in plain words
+PASS  and offers no Move button for it
+PASS  its file and line are under Technical details
+  screenshot: move-refused-390.png (addresses masked)
+  summary of the site:
+    | blog.SOURCE-IP.sslip.io
+    | Web server
+    | nginx
+    | Files
+    | /var/www/blog owned by www-data; they go into the account's public_html
+    | Also answers
+    | www.blog.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | wordpress, named in wp-config.php: it moves with its user and password, under the account's name
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  screenshot: move-summary-nginx-blog-390.png (addresses masked)
+  account name here: blog
+  after Stop and remove the key: Stopped. The old server now refuses the migration key. This server deleted its own copy of the key.
+PASS  Stop and remove the key takes the key off the old server and deletes it here
+PASS  the old server's root keys hold no migration line
+  screenshot: move-stopped-390.png (addresses masked)
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+  screenshot: move-from-1440.png (addresses masked)
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+  screenshot: move-confirm-1440.png (addresses masked)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+  screenshot: move-letin-key-1440.png (not kept: the private key showed in its field; the 390 px one below has it hidden)
+PASS  the move's key got in (key) and the old server's websites are listed
+PASS  the form no longer holds the password or key
+  sites listed: move-site-app.SOURCE-IP.sslip.io, move-site-blog.SOURCE-IP.sslip.io
+PASS  app.SOURCE-IP.sslip.io is shown as one that cannot move as it is
+PASS  it names proxy_pass in plain words
+PASS  and offers no Move button for it
+PASS  its file and line are under Technical details
+  screenshot: move-refused-1440.png (addresses masked)
+  summary of the site:
+    | blog.SOURCE-IP.sslip.io
+    | Web server
+    | nginx
+    | Files
+    | /var/www/blog owned by www-data; they go into the account's public_html
+    | Also answers
+    | www.blog.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | wordpress, named in wp-config.php: it moves with its user and password, under the account's name
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  screenshot: move-summary-nginx-blog-1440.png (addresses masked)
+  account name here: blog
+  after Stop and remove the key: Stopped. The old server now refuses the migration key. This server deleted its own copy of the key.
+PASS  Stop and remove the key takes the key off the old server and deletes it here
+PASS  the old server's root keys hold no migration line
+  screenshot: move-stopped-1440.png (addresses masked)
+  screenshot: move-job-apache-wp-390.png (addresses masked)
+  screenshot: move-job-apache-wp-compare-390.png (addresses masked)
+  screenshot: move-job-apache-wp-1440.png (addresses masked)
+  screenshot: move-job-apache-wp-compare-1440.png (addresses masked)
+  screenshot: move-job-apache-plain-390.png (addresses masked)
+  screenshot: move-job-apache-plain-compare-390.png (addresses masked)
+  screenshot: move-job-apache-plain-1440.png (addresses masked)
+  screenshot: move-job-apache-plain-compare-1440.png (addresses masked)
+  screenshot: move-job-nginx-blog-390.png (addresses masked)
+  screenshot: move-job-nginx-blog-compare-390.png (addresses masked)
+  screenshot: move-job-nginx-blog-1440.png (addresses masked)
+  screenshot: move-job-nginx-blog-compare-1440.png (addresses masked)
+  screenshot: move-job-nginx-refused-390.png (addresses masked)
+  screenshot: move-job-nginx-refused-1440.png (addresses masked)
+PASS  Move a website here asks where the website is, with Another Linux server as an answer
+  screenshot: move-from-390.png (addresses masked)
+PASS  the page shows the fingerprint ssh-keygen -lf prints on the old server (the same SHA256 fingerprint; the server is deleted)
+  screenshot: move-confirm-390.png (addresses masked)
+PASS  the fingerprint is confirmed; the page asks how Sifruno gets in
+  screenshot: move-letin-key-390.png (addresses masked)
+PASS  the move's key got in (key) and the old server's websites are listed
+PASS  the form no longer holds the password or key
+  sites listed: move-site-app.SOURCE-IP.sslip.io, move-site-blog.SOURCE-IP.sslip.io
+PASS  app.SOURCE-IP.sslip.io is shown as one that cannot move as it is
+PASS  it names proxy_pass in plain words
+PASS  and offers no Move button for it
+PASS  its file and line are under Technical details
+  screenshot: move-refused-390.png (addresses masked)
+  summary of the site:
+    | blog.SOURCE-IP.sslip.io
+    | Web server
+    | nginx
+    | Files
+    | /var/www/blog owned by www-data; they go into the account's public_html
+    | Also answers
+    | www.blog.SOURCE-IP.sslip.io
+    | PHP
+    | 8.2 (the old server runs php8.2-fpm)
+    | Database
+    | wordpress, named in wp-config.php: it moves with its user and password, under the account's name
+    | Certificate
+    | None named; the site uses http here until its domain points here
+    | What will not move, or moves differently
+    | Email, DNS and FTP accounts stay on the old server; this moves the website's files, its database and its jobs.
+    | .htaccess files in the website's folder are left out: nginx does not read them, so they were not in force there. Its own rules come over instead.
+    | Account name here
+    |
+    | The hosting account the website gets on this server: 3 to 32 lowercase letters, digits or _. Its database names start with it.
+PASS  the summary lists what will not move before anything is made
+  screenshot: move-summary-nginx-blog-390.png (addresses masked)
+  account name here: blog
+  after Stop and remove the key: Stopped. The old server now refuses the migration key. This server deleted its own copy of the key.
+PASS  Stop and remove the key takes the key off the old server and deletes it here
+PASS  the old server's root keys hold no migration line
+  screenshot: move-stopped-390.png (addresses masked)
+
+RESULT: 126 passed, 0 failed

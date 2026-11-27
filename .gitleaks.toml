@@ -32,4 +32,7 @@ regexes = [
   # internal/cpsource): a private key block with a body of at most 16
   # characters, which no real key has.
   '''-----BEGIN (RSA )?PRIVATE KEY-----\\n[A-Za-z0-9+/=]{1,16}\\n-----END (RSA )?PRIVATE KEY-----''',
+  # The client test in web/src/lib/wordpress-api.test.mjs sends the header line of
+  # an OpenSSH key alone, with no key in it, as the body of the install-key call.
+  '''installKey\(sourceId, \{ private_key: "-{5}BEGIN OPENSSH PRIVATE [K]EY-{5}", passphrase: "" \}\)''',
 ]

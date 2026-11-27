@@ -1785,6 +1785,84 @@ against, each table's source count is the copy's. The certificate step
 reads `apache_tls/DOMAIN` and checks it as an SSH move's certificate. No
 command runs on any other server.
 
+### From another Linux server
+
+`POST /v1/migrations` with `via: "server"` opens a migration to a server
+that is not cPanel (Plesk, DirectAdmin, HestiaCP, a plain Apache or nginx
+server with PHP-FPM) exactly as the SSH path does: its own key, the host
+keys read and one confirmed before any command runs, the same lifetime,
+finish and stale lines. What it reads is the web server's own view of its
+configuration, through `internal/sitesource`'s fixed commands, each run as
+root over the migration's SSH with every path checked first:
+
+- `GET /v1/migrations/{id}/sites` lists the websites: `nginx -T` (every
+  file nginx read), `httpd -S` or `apache2ctl -S` (the files that hold
+  virtual hosts, each then read with `head -c`, from `/etc/httpd`,
+  `/etc/apache2` or DirectAdmin's users' folders only, at most 64 of 1 MiB),
+  the PHP-FPM pool files' `listen` lines and each `php-fpm -v`, `stat` of
+  each document root (which must be a folder below `/var/www`, `/srv`,
+  `/home` or `/usr/share/nginx/html`) and of every folder on its way, and
+  wp-config.php read as the folder's owner (`runuser -u`). A link anywhere
+  on the way is refused, and so is a folder on the way that another user
+  could swap for one: each must be root's without group or other write,
+  or the document root's own owner's when that is not root. A root-owned
+  document root is refused too when `find -P` finds anything in it that
+  another user owns, or a folder the group or others may write, since
+  root reads it. Each site comes with its domain, aliases,
+  folder, owner, PHP, the database wp-config.php names, the name it gets
+  here, and what does not move (`not_carried`) or stops it (`refused`,
+  each with its file and line). No password or hash is in the answer.
+- `POST /v1/migrations/{id}/plan` with `site` (the domain) and `username`
+  (the account name here) reads that site again. A site whose block has a
+  line `sitesource` does not convert answers a plan that is not Native,
+  line by line, and the panel makes nothing. A WordPress site's database
+  moves under the account's prefix (`wordpress` becomes
+  `<account>_wordpress`, its user `<account>_wpuser`) with the same
+  password: the plan carries the user's mysql_native_password hash made
+  from wp-config.php's password, which the broker keeps no copy of. The
+  site owner writes wp-config.php and the dump runs as the database's
+  root, so the database moves only when the site proves it is its own: it
+  is not one of the server's own (`mysql`, `information_schema`,
+  `performance_schema`, `sys`), and on the old server the user
+  wp-config.php names, at localhost, has a mysql_native_password hash
+  equal to the one made from wp-config.php's password and a grant on that
+  database (`SHOW CREATE USER` and `mysql.db`, as for cPanel). A database
+  wp-config.php does not name plainly, one on another server, or one the
+  site does not prove is its own does not move, and the plan says why.
+  The folder owner's crontab is read
+  (never root's). For the tier the document root's `.htaccess` files are
+  fetched as its owner and scanned, as for cPanel; for an nginx site its
+  converted rules (`sitesource.ConvertNginx`) are written as the
+  `.htaccess` files the scan converts instead, and the `.htaccess` files
+  nginx never read are named as left out.
+- `migrate-files` reads the site by the account's domain again and copies
+  its document root with rsync, the sender as the folder's owner
+  (`runuser -u OWNER -- /usr/bin/rsync`, root only when root owns the
+  folder), into the root-only staging folder as `public_html`, with the
+  groups `nobody`, `apache`, `www-data` and `nginx` marked for the web
+  server's read (D-0001). An nginx site's `.htaccess` files stay behind and
+  its converted rules are written in their place, and a WordPress site's
+  `wp-config.php` has its first `DB_NAME`, `DB_USER` and `DB_HOST`
+  pointed at the names here, on that staged copy, before `placeFiles`
+  does what it does for cPanel: the scan and conversion again, protected
+  folders first, `cp` as the site's user.
+- `migrate-database` takes the name here; the broker reads the site's
+  wp-config.php again and copies only the database it names, dumped on the
+  source under its own name and loaded under the one here.
+- `migrate-certificate` reads the certificate and key files the site's
+  block names, as root, from `/etc/letsencrypt`, `/etc/pki`, `/etc/ssl`
+  or the web server's folders only, and checks them as an SSH move's.
+
+Not carried from such a server yet: a database of a site that is not
+WordPress (no file says which one it uses), a WordPress database whose
+user signs in another way than mysql_native_password (MySQL 8's default
+`caching_sha2_password`) or is not a localhost user, PHP settings, mail, DNS and FTP,
+aliases (named, not added), a domain that nginx and Apache both name (nginx
+in front of Apache, as Plesk and HestiaCP run them), two blocks for one
+domain that serve it differently, a password folder whose document root is
+not a `public_html` (its user file cannot be found in the copy), and
+OpenLiteSpeed's own configuration (CyberPanel).
+
 ## Verification cost
 
 Every request checks every account's files: its passwd and group identity (from

@@ -97,7 +97,7 @@ func (f *fakeAccounts) Create(ctx context.Context, in hostaccounts.CreateInput, 
 		return hostaccounts.Account{}, hostaccounts.ErrConflict
 	}
 	f.next++
-	a := hostaccounts.Account{ID: fmt.Sprintf("%032x", f.next), Username: in.Username, Domain: in.Domain, State: "active", Revision: 1}
+	a := hostaccounts.Account{ID: fmt.Sprintf("%032x", f.next), Username: in.Username, Domain: in.Domain, Home: "/home/" + in.Username, State: "active", Revision: 1}
 	f.accounts = append(f.accounts, a)
 	return a, nil
 }

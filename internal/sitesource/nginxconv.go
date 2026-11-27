@@ -43,7 +43,11 @@ type Conversion struct {
 	HTTPSRedirect bool
 	PHP           bool
 	PHPSource     string
-	TLS           *TLSFiles
+	// PHPPass is the PHP location's fastcgi_pass as written, so the
+	// caller can find the PHP-FPM pool behind a socket that names no
+	// version (unix:/run/php-fpm/www.sock).
+	PHPPass string
+	TLS     *TLSFiles
 }
 
 // TLSFiles are the certificate and key files a server block names.
@@ -560,6 +564,7 @@ func (v *converter) tryFiles(d *Directive, cond string) {
 func (v *converter) php(d *Directive, label string, pass *Directive, block []*Directive) {
 	v.c.PHP = true
 	if len(pass.Args) == 1 {
+		v.c.PHPPass = pass.Args[0]
 		if m := phpSocket.FindStringSubmatch(pass.Args[0]); m != nil {
 			v.c.PHPSource = "php" + m[1] + "." + m[2] + "-fpm"
 		}

@@ -1,0 +1,53 @@
+# Broker web operation: access, quota and an OpenLiteSpeed vhost from a typed request
+# 2026-11-27T10:24:07Z  openlitespeed-1.9.5-1.el9.x86_64 lsphp83-8.3.37-1.el9.x86_64
+# site user web75047, domain web75047.proof.test
+
+## 1. The broker runs with the web operation on
+PASS  the broker started with --web-user nobody
+
+## 2. An account and a page in its public_html
+PASS  the site user wrote index.php
+
+## 3. The web operation puts the site live
+  took 3 s
+PASS  the result records PHP 8.3 and a 200 MiB quota
+PASS  OpenLiteSpeed's user may traverse the home (ACL u:65534:--x)
+PASS  OpenLiteSpeed's user may read public_html (ACL u:65534:r-x)
+PASS  the home and public_html keep mode 0750
+PASS  a 200 MiB hard quota is set
+PASS  the broker wrote the vhost config (0600)
+PASS  the server fragment names the vhost
+PASS  the page is served for web75047.proof.test, PHP running as web75047
+PASS  /.htaccess is denied (403)
+PASS  /.git/config is denied (403)
+PASS  OpenLiteSpeed is still running after the graceful reload
+
+## 4. A config OpenLiteSpeed would reject changes nothing
+  broker answered: broker refused: web configuration rejected
+PASS  the broker refused a site for a PHP that is not installed, as a rejected config
+PASS  the config files are byte for byte unchanged
+PASS  the account revision did not move
+PASS  the site still serves
+
+## 5. A tenant's symlink cannot redirect the access grant
+  === RUN   TestRootOnlyWebAccessFollowsNoLink
+  --- PASS: TestRootOnlyWebAccessFollowsNoLink (0.00s)
+PASS  the grant writes the ACLs, then refuses a symlinked or replaced public_html and leaves the target without an ACL
+
+## 6. What OpenLiteSpeed reports when a tenant breaks its own site
+  openlitespeed -t exited 1; new lines after the tenant moved public_html:
+    [WARN] [config:server:vhosts:vhost:sifruno-u30d24124632f51d78c68600507ffee9] configuration failed!
+    [WARN] Path for document root is not accessible: /home/brk75047/public_html/
+PASS  the broker's config test passes this output for another account's change
+PASS  it passes it when that change rewrote the broken vhost: only the missing document root is excused
+PASS  it fails the same output for a change to the broken site itself
+
+## 7. Deleting the account takes the site out first
+PASS  the vhost config is gone
+PASS  the server fragment no longer names it
+PASS  the Linux user is gone
+PASS  OpenLiteSpeed is still running
+PASS  the domain no longer serves the page
+PASS  openlitespeed -t reports no error afterwards
+
+RESULT: all checks passed

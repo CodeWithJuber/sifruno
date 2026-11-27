@@ -82,6 +82,12 @@ func (m *migrationSpy) MigrationAccounts(context.Context, string) ([]cpsource.Ac
 	}
 	return []cpsource.Account{{User: "shopone", Domain: "shop.example.test", DiskUsedMiB: 14}}, nil
 }
+func (m *migrationSpy) MigrationSites(context.Context, string) ([]hostaccounts.MigrationSite, error) {
+	if !m.pinned {
+		return nil, &hostaccounts.MigrationError{Step: "host_key", Detail: "not confirmed"}
+	}
+	return []hostaccounts.MigrationSite{{Domain: "blog.example.test", Server: "nginx", Where: "/etc/nginx/conf.d/blog.conf line 1", DocRoot: "/var/www/blog", Owner: "nginx", Account: "blog", PHP: "8.2", Movable: true}}, nil
+}
 func (m *migrationSpy) PlanMigration(context.Context, string, hostaccounts.MigrationPlanInput, string) (hostaccounts.MigrationPlan, error) {
 	return hostaccounts.MigrationPlan{Username: "shopone", Domain: "shop.example.test", PHPSource: "ea-php83", Tier: "native"}, nil
 }

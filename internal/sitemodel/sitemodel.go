@@ -136,7 +136,9 @@ type Redirect struct {
 // Item is one thing that does not move: Part names which part of the site
 // ("database", "cron", "domain", "rule", "php", "mail"), Text says in plain
 // words what and why, and Where points at the file and line when there is
-// one.
+// one. Part "info" is what moves differently without anything lost (a
+// database that takes the account's prefix, .htaccess files nginx never
+// read): the summary shows it, and a move's job says it in its steps.
 type Item struct {
 	Part  string `json:"part"`
 	Text  string `json:"text"`

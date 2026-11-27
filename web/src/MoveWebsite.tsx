@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
-import { ArrowRight, CircleAlert, CircleCheck, CircleX, Copy, Eye, EyeOff, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
+import { ArrowRight, CircleAlert, CircleCheck, CircleX, Eye, EyeOff, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -20,6 +20,8 @@ import type { MigrationRecord } from "@/lib/migration-record";
 import { jobProgress, validJobId } from "@/lib/wordpress-api";
 import type { WebsiteJob } from "@/lib/wordpress-api";
 import { MoveFromBackup } from "@/MoveFromBackup";
+import { CopyBlock, ProblemBox } from "@/MoveParts";
+import { MoveFromServer } from "@/MoveFromServer";
 import { Explanation, problemFrom, StepList, TechnicalDetails } from "@/NewWebsite";
 import type { Problem } from "@/NewWebsite";
 import { useShell } from "@/shell/context";
@@ -36,45 +38,6 @@ const panel = "rounded-lg border border-border bg-card p-5 md:p-6";
 const control = "h-10 pointer-coarse:h-12";
 const linkButton = (variant: "default" | "outline") =>
   cn(buttonVariants({ variant, className: variant === "default" ? `${control} text-primary-foreground!` : control }));
-
-function ProblemBox({ problem, onRetry }: { problem: Problem; onRetry?: () => void }) {
-  return <Alert className="text-start" data-testid="move-problem">
-    <CircleAlert aria-hidden="true" />
-    <AlertTitle>{problem.what}</AlertTitle>
-    <AlertDescription className="text-start text-foreground">
-      <Explanation problem={problem} />
-      <TechnicalDetails className="mt-3">{problem.technical}</TechnicalDetails>
-      {onRetry && <Button variant="outline" size="sm" className="mt-3" onClick={onRetry}><RefreshCw aria-hidden="true" />Try again</Button>}
-    </AlertDescription>
-  </Alert>;
-}
-
-// A command or line to copy, with a button whose result is announced in a
-// status bubble beside it (never inside the button, whose children are not
-// announced). Copying again is allowed at any time.
-function CopyBlock({ id, label, value }: { id: string; label: string; value: string }) {
-  const [message, setMessage] = useState("");
-  const timer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  const copy = async () => {
-    window.clearTimeout(timer.current);
-    setMessage("");
-    let ok = true;
-    try { await navigator.clipboard.writeText(value); } catch { ok = false; }
-    requestAnimationFrame(() => setMessage(ok ? "Copied" : "Copy failed: select the text and copy it yourself"));
-    timer.current = window.setTimeout(() => setMessage(""), 2500);
-  };
-  return <div className="flex flex-col gap-2">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <span id={`${id}-label`} className="text-sm font-medium">{label}</span>
-      <span className="flex items-center gap-2">
-        <span role="status" className="text-xs text-muted-foreground">{message}</span>
-        <Button type="button" variant="outline" size="sm" onClick={() => void copy()} aria-describedby={`${id}-label`} data-testid={`${id}-copy`}><Copy aria-hidden="true" />Copy</Button>
-      </span>
-    </div>
-    <pre id={id} tabIndex={0} aria-labelledby={`${id}-label`} className="overflow-x-auto rounded-md border border-border bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all">{value}</pre>
-  </div>;
-}
 
 // Key lines the panel could not prove removed from an old server: each
 // says which line to remove and where, until the admin says it is done.
@@ -152,10 +115,11 @@ function MoveSteps({ way, current }: { way: Way; current: number }) {
 const emptyLogin: WHMLogin = { address: "", token: "", password: "", ssh_port: "", tls_fingerprint: "" };
 
 // Where the website is now: the first question of the move.
-type From = "cpanel" | "archive";
+type From = "cpanel" | "archive" | "server";
 const sources: { value: From; title: string; what: string }[] = [
   { value: "cpanel", title: "cPanel server", what: "You can sign in to the old server's WHM, or run one command there as root." },
   { value: "archive", title: "cPanel backup file", what: "You have the full account backup the old host's cPanel made (a cpmove or backup .tar.gz file)." },
+  { value: "server", title: "Another Linux server (Apache or nginx)", what: "Websites Apache or nginx serves with PHP-FPM: a plain server, DirectAdmin, or Plesk or HestiaCP running one web server. You can sign in to it as root over SSH." },
 ];
 
 export function MoveWebsite() {
@@ -165,6 +129,7 @@ export function MoveWebsite() {
   useEffect(() => { if (!from) headingRef.current?.focus(); }, [from]);
   if (from === "archive") return <div className="flex w-full max-w-3xl flex-col gap-5"><MoveFromBackup onBack={() => setFrom(undefined)} /></div>;
   if (from === "cpanel") return <MoveFromCPanel onBack={() => setFrom(undefined)} />;
+  if (from === "server") return <div className="flex w-full max-w-3xl flex-col gap-5"><StaleKeys /><MoveFromServer onBack={() => setFrom(undefined)} /></div>;
   return <div className="flex w-full max-w-3xl flex-col gap-5" data-testid="move-website" data-stage="from">
     <StaleKeys />
     <section className={`${panel} flex flex-col gap-5`} data-testid="move-from">
@@ -173,7 +138,7 @@ export function MoveWebsite() {
         <p className="text-sm">Sifruno copies one website at a time: its files, databases, scheduled jobs and certificate. The old site keeps running until you change DNS.</p>
       </div>
       <form onSubmit={(e) => { e.preventDefault(); setFrom(choice); }} className="flex flex-col gap-4">
-        <RadioGroup value={choice} onValueChange={(value) => setChoice(value === "archive" ? "archive" : "cpanel")} aria-label="Where the website is now">
+        <RadioGroup value={choice} onValueChange={(value) => setChoice(value === "archive" || value === "server" ? value : "cpanel")} aria-label="Where the website is now">
           {sources.map((s) => <FieldLabel key={s.value} htmlFor={`move-from-${s.value}`}>
             <Field orientation="horizontal">
               <RadioGroupItem value={s.value} id={`move-from-${s.value}`} data-testid={`move-from-${s.value}`} />

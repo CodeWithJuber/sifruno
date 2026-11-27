@@ -374,22 +374,25 @@ export async function request(operation: Operation, url: string, options: Reques
       throw new WordPressApiError(0, failed, options.signal?.aborted ? "The request was cancelled." : "The panel could not reach its server.", "Check that Sifruno is running and this computer is online, then try again.", `${where}: ${options.signal?.aborted ? "cancelled" : "network error"}`);
     }
     const value: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) {
-      const problem = object(value) ? value : {};
-      const detail = serverText(problem.detail);
-      const title = serverText(problem.title, 100);
-      const explained = explain(operation, response.status, detail);
-      // A move's failure carries its own next step and, apart from it, what
-      // the old server printed (technical), shown under Technical details.
-      const next = serverText(problem.next) || explained.next;
-      const technical = serverText(problem.technical, 1100);
-      throw new WordPressApiError(response.status, failed, explained.why, next, `${where} returned HTTP ${response.status}${title ? ` (${title})` : ""}${technical ? `\n${technical}` : ""}`, problem);
-    }
+    if (!response.ok) throw problemError(operation, response.status, value, failed, where);
     return value;
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", cancel);
   }
+}
+
+// problemError explains a refused request from its problem body. A move's
+// failure carries its own next step and, apart from it, what the old server
+// printed (technical), shown under Technical details.
+export function problemError(operation: Operation, status: number, value: unknown, failed: string, where: string): WordPressApiError {
+  const problem = object(value) ? value : {};
+  const detail = serverText(problem.detail);
+  const title = serverText(problem.title, 100);
+  const explained = explain(operation, status, detail);
+  const next = serverText(problem.next) || explained.next;
+  const technical = serverText(problem.technical, 1100);
+  return new WordPressApiError(status, failed, explained.why, next, `${where} returned HTTP ${status}${title ? ` (${title})` : ""}${technical ? `\n${technical}` : ""}`, problem);
 }
 
 const unexpected = (operation: Operation, where: string) =>

@@ -9,7 +9,8 @@ const sitesURL = moduleURL(readFileSync(new URL("./sites-api.ts", import.meta.ur
 const recordURL = moduleURL(readFileSync(new URL("./migration-record.ts", import.meta.url), "utf8"));
 const wordpressURL = moduleURL(readFileSync(new URL("./wordpress-api.ts", import.meta.url), "utf8").replace('"./sites-api"', JSON.stringify(sitesURL)).replace('"./migration-record"', JSON.stringify(recordURL)));
 const api = await import(wordpressURL);
-const migrations = await import(moduleURL(readFileSync(new URL("./migration-api.ts", import.meta.url), "utf8").replace('"./wordpress-api"', JSON.stringify(wordpressURL))));
+const archiveURL = moduleURL(readFileSync(new URL("./migration-archive.ts", import.meta.url), "utf8"));
+const migrations = await import(moduleURL(readFileSync(new URL("./migration-api.ts", import.meta.url), "utf8").replace('"./wordpress-api"', JSON.stringify(wordpressURL)).replaceAll('"./migration-archive"', JSON.stringify(archiveURL))));
 
 const jobId = "0123456789abcdef0123456789abcdef";
 const password = "correct horse battery";

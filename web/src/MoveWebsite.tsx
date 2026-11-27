@@ -19,6 +19,7 @@ import { certificateNote, hostsLine } from "@/lib/migration-record";
 import type { MigrationRecord } from "@/lib/migration-record";
 import { jobProgress, validJobId } from "@/lib/wordpress-api";
 import type { WebsiteJob } from "@/lib/wordpress-api";
+import { MoveFromBackup } from "@/MoveFromBackup";
 import { Explanation, problemFrom, StepList, TechnicalDetails } from "@/NewWebsite";
 import type { Problem } from "@/NewWebsite";
 import { useShell } from "@/shell/context";
@@ -150,7 +151,46 @@ function MoveSteps({ way, current }: { way: Way; current: number }) {
 
 const emptyLogin: WHMLogin = { address: "", token: "", password: "", ssh_port: "", tls_fingerprint: "" };
 
+// Where the website is now: the first question of the move.
+type From = "cpanel" | "archive";
+const sources: { value: From; title: string; what: string }[] = [
+  { value: "cpanel", title: "cPanel server", what: "You can sign in to the old server's WHM, or run one command there as root." },
+  { value: "archive", title: "cPanel backup file", what: "You have the full account backup the old host's cPanel made (a cpmove or backup .tar.gz file)." },
+];
+
 export function MoveWebsite() {
+  const [from, setFrom] = useState<From>();
+  const [choice, setChoice] = useState<From>("cpanel");
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (!from) headingRef.current?.focus(); }, [from]);
+  if (from === "archive") return <div className="flex w-full max-w-3xl flex-col gap-5"><MoveFromBackup onBack={() => setFrom(undefined)} /></div>;
+  if (from === "cpanel") return <MoveFromCPanel onBack={() => setFrom(undefined)} />;
+  return <div className="flex w-full max-w-3xl flex-col gap-5" data-testid="move-website" data-stage="from">
+    <StaleKeys />
+    <section className={`${panel} flex flex-col gap-5`} data-testid="move-from">
+      <div className="flex flex-col gap-1">
+        <h2 ref={headingRef} tabIndex={-1} className="outline-none">Where is the website now?</h2>
+        <p className="text-sm">Sifruno copies one website at a time: its files, databases, scheduled jobs and certificate. The old site keeps running until you change DNS.</p>
+      </div>
+      <form onSubmit={(e) => { e.preventDefault(); setFrom(choice); }} className="flex flex-col gap-4">
+        <RadioGroup value={choice} onValueChange={(value) => setChoice(value === "archive" ? "archive" : "cpanel")} aria-label="Where the website is now">
+          {sources.map((s) => <FieldLabel key={s.value} htmlFor={`move-from-${s.value}`}>
+            <Field orientation="horizontal">
+              <RadioGroupItem value={s.value} id={`move-from-${s.value}`} data-testid={`move-from-${s.value}`} />
+              <FieldContent>
+                <FieldTitle>{s.title}</FieldTitle>
+                <FieldDescription className="text-start">{s.what}</FieldDescription>
+              </FieldContent>
+            </Field>
+          </FieldLabel>)}
+        </RadioGroup>
+        <div><Button type="submit" className={control} data-testid="move-from-continue">Continue<ArrowRight aria-hidden="true" /></Button></div>
+      </form>
+    </section>
+  </div>;
+}
+
+function MoveFromCPanel({ onBack }: { onBack: () => void }) {
   const navigate = useNavigate();
   const [way, setWay] = useState<Way>("whm");
   const [stage, setStage] = useState<Stage>("connect");
@@ -332,7 +372,10 @@ export function MoveWebsite() {
       <Separator />
       <div className="flex flex-col items-start gap-1 text-sm">
         <span className="text-muted-foreground">No WHM access on the old server?</span>
-        <Button type="button" variant="outline" className={control} onClick={() => switchWay("ssh")} data-testid="move-use-ssh">Use SSH instead (no WHM access)</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" className={control} onClick={() => switchWay("ssh")} data-testid="move-use-ssh">Use SSH instead (no WHM access)</Button>
+          <Button type="button" variant="outline" className={control} onClick={onBack} data-testid="move-back">Back</Button>
+        </div>
       </div>
     </section>}
 
@@ -359,6 +402,7 @@ export function MoveWebsite() {
         <div className="flex flex-wrap gap-2">
           <Button type="submit" className={control} disabled={Boolean(busy)} data-testid="move-connect">{busy ? "Connecting…" : "Connect"}</Button>
           <Button type="button" variant="outline" className={control} onClick={() => switchWay("whm")}>Connect with the WHM login instead</Button>
+          <Button type="button" variant="outline" className={control} onClick={onBack}>Back</Button>
         </div>
       </form>
     </section>}

@@ -71,6 +71,24 @@ func TestConvertPatterns(t *testing.T) {
 		// On 2.4 the Files section's Require does not lift mod_access_compat's
 		// Deny from all (Satisfy All), so nothing opens.
 		{"files grant under compat deny", "Deny from all\n<IfModule mod_authz_core.c>\n<Files a.css>\nRequire all granted\n</Files>\n</IfModule>\n", FolderRule{Hosts: none}},
+		// <Files> sections closing names in a folder not closed to everyone.
+		{"files deny in open dir", "<Files wp-config.php>\nOrder Allow,Deny\nDeny from all\n</Files>\n",
+			FolderRule{Hosts: all, Deny: &Names{Exact: []string{"wp-config.php"}}}},
+		{"files deny pair", "<Files \".user.ini\">\n<IfModule mod_authz_core.c>\n\tRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\n\tOrder deny,allow\n\tDeny from all\n</IfModule>\n</Files>\n",
+			FolderRule{Hosts: all, Deny: &Names{Exact: []string{".user.ini"}}}},
+		{"filesmatch deny names", "<FilesMatch \"^(wp-config\\.php|readme\\.html)$\">\nRequire all denied\n</FilesMatch>\n<Files xmlrpc.php>\nDeny from all\n</Files>\n",
+			FolderRule{Hosts: all, Deny: &Names{Exact: []string{"readme.html", "wp-config.php", "xmlrpc.php"}}}},
+		{"filesmatch deny endings", "<FilesMatch \"\\.(sql|bak|log)$\">\nRequire all denied\n</FilesMatch>\n",
+			FolderRule{Hosts: all, Deny: &Names{Endings: []string{".bak", ".log", ".sql"}}}},
+		{"files tilde deny ending", "<Files ~ \"~$\">\nDeny from all\n</Files>\n", FolderRule{Hosts: all, Deny: &Names{Endings: []string{"~"}}}},
+		{"files leading star", "<Files *.php>\ndeny from all\n</Files>\n", FolderRule{Hosts: all, Deny: &Names{Endings: []string{".php"}}}},
+		{"files deny under a network rule", "Order Deny,Allow\nDeny from 192.0.2.0/24\n<Files secret.json>\nDeny from all\n</Files>\n",
+			FolderRule{Hosts: Hosts{Kind: HostsExcept, Networks: []string{"192.0.2.0/24"}}, Deny: &Names{Exact: []string{"secret.json"}}}},
+		// Apache answers 403 before it asks for the password.
+		{"files deny under a password", "AuthType Basic\nAuthName Staff\nAuthUserFile /home/u/.htpasswd\nRequire valid-user\n<Files .htpasswd>\nRequire all denied\n</Files>\n",
+			FolderRule{Hosts: all, Realm: &Realm{Name: "Staff", UserFile: "/home/u/.htpasswd"}, Deny: &Names{Exact: []string{".htpasswd"}}}},
+		// A closed folder closes the names already.
+		{"files deny in closed dir", "Deny from all\n<Files x.php>\nDeny from all\n</Files>\n", FolderRule{Hosts: none}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -132,7 +150,20 @@ func TestConvertRefusals(t *testing.T) {
 		"filesmatch caseless":       "Deny from all\n<FilesMatch \"(?i)^a\\.css$\">\nAllow from all\n</FilesMatch>\n",
 		"files php":                 "Deny from all\n<Files index.php>\nAllow from all\n</Files>\n",
 		"files no suffix":           "Deny from all\n<Files README>\nAllow from all\n</Files>\n",
-		"files deny in open dir":    "<Files wp-config.php>\nOrder Allow,Deny\nDeny from all\n</Files>\n",
+		"files open in open dir":    "<Files a.css>\nAllow from all\n</Files>\n",
+		"files allow then deny":     "Deny from all\n<Files a.css>\nAllow from all\n</Files>\n<Files a.css>\nDeny from all\n</Files>\n",
+		"deny some clients":         "<Files xmlrpc.php>\nOrder Deny,Allow\nDeny from all\nAllow from 192.0.2.1\n</Files>\n",
+		"deny unanchored":           "<FilesMatch \"wp-config\">\nRequire all denied\n</FilesMatch>\n",
+		"deny prefix":               "<FilesMatch \"^wp-config\">\nRequire all denied\n</FilesMatch>\n",
+		"deny caseless":             "<FilesMatch \"(?i)\\.sql$\">\nRequire all denied\n</FilesMatch>\n",
+		"deny star inside":          "<Files \"wp-*.php\">\nDeny from all\n</Files>\n",
+		"deny every name":           "<Files \"*\">\nDeny from all\n</Files>\n",
+		"deny endless pattern":      "<FilesMatch \"\\.(php|inc).*$\">\nRequire all denied\n</FilesMatch>\n",
+		"deny empty ending":         "<FilesMatch \"(\\.sql)?$\">\nRequire all denied\n</FilesMatch>\n",
+		"deny odd name":             "<Files \"a+b.php\">\nDeny from all\n</Files>\n",
+		"deny with rewrite inside":  "<Files x.php>\nDeny from all\nRewriteRule ^ - [F]\n</Files>\n",
+		"deny and folder rewrite":   "RewriteEngine On\nRewriteRule ^x$ /y [L]\nOrder Deny,Allow\nDeny from 192.0.2.1\n<Files a.php>\nDeny from all\n</Files>\n",
+		"deny other ifmodule":       "<Files x.php>\n<IfModule mod_litespeed.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n</Files>\n",
 		"files in password dir":     auth + "Require valid-user\n<Files a.css>\nRequire all granted\n</Files>\n",
 		"files partial open":        "Deny from all\n<Files a.css>\nOrder Deny,Allow\nDeny from all\nAllow from 192.0.2.1\n</Files>\n",
 		"password in files":         "Deny from all\n<Files a.css>\nAuthType Basic\n</Files>\n",
@@ -331,6 +362,9 @@ func FuzzConvert(f *testing.F) {
 	f.Add([]byte("Order Deny,Allow\nDeny from all\nAllow from 2001:db8::/32 198.51.100.7\n"), "/o/")
 	f.Add([]byte("Allow from all\nDeny from 203.0.113.0/24\nRequire ip 10\n"), "/o/")
 	f.Add([]byte("Order Allow,Deny\nDeny from all\nOptions -Indexes\n"), "/o/")
+	f.Add([]byte("<files wp-config.php>\norder allow,deny\ndeny from all\n</files>\n"), "/")
+	f.Add([]byte("<FilesMatch \"\\.(sql|ba(k|ck))$\">\nRequire all denied\n</FilesMatch>\n<Files *~>\nDeny from all\n</Files>\n"), "/w/")
+	f.Add([]byte("<FilesMatch \"^(readme|license)\\.(html|txt)$\">\nRequire all denied\n</FilesMatch>\n"), "/")
 	f.Fuzz(func(t *testing.T, data []byte, urlPath string) {
 		if len(data) > 4096 {
 			return
@@ -350,8 +384,18 @@ func FuzzConvert(f *testing.F) {
 			return
 		}
 		rule := c.Rule
-		if !validRulePath(rule.Path) || rule.Path != urlPath {
+		if (!validRulePath(rule.Path) && (rule.Path != "/" || rule.Folder())) || rule.Path != urlPath {
 			t.Fatalf("path %q", rule.Path)
+		}
+		if rule.Deny != nil {
+			if len(rule.Deny.Exact)+len(rule.Deny.Endings) == 0 || len(rule.Deny.Exact)+len(rule.Deny.Endings) > MaxRuleNames || len(rule.Allow) > 0 {
+				t.Fatalf("deny %+v", rule)
+			}
+			for _, name := range append(slices.Clone(rule.Deny.Exact), rule.Deny.Endings...) {
+				if !denyName(name) {
+					t.Fatalf("deny name %q", name)
+				}
+			}
 		}
 		switch rule.Hosts.Kind {
 		case HostsAll, HostsNone:
@@ -397,8 +441,10 @@ func FuzzConvert(f *testing.F) {
 			t.Fatalf("closed rule from text without deny, order or require: %q", data)
 		}
 		// Never more open than Apache: an independent model of Apache's
-		// access check (oracle_test.go) is asked for sample clients.
+		// access check (oracle_test.go) is asked for sample clients, and one
+		// of its <Files> handling for sample names.
 		checkOracle(t, data, rule)
+		checkNamesOracle(t, data, rule)
 	})
 }
 

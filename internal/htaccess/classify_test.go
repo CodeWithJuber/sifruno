@@ -283,7 +283,7 @@ func TestClassifyFixtures(t *testing.T) {
 		{name: "403 redirect at the site root", urlPath: "/", data: "Redirect 403 /secret\nRedirectMatch 404 ^/\\.git\nRedirect 301 /old /new\n", verdict: VerdictCompat, causes: []string{CauseAccessControl}, findings: []string{
 			"1 Redirect access_control false deny_allow /secret status=403",
 			"2 RedirectMatch access_control false deny_allow / url_regex=^/\\.git status=404",
-			"3 Redirect redirect_alias false",
+			"3 Redirect redirect_alias false converted",
 		}, rules: []string{
 			"1 deny_allow /secret files= methods= expect=403",
 			"2 deny_allow / files= methods= expect=0",
@@ -327,7 +327,7 @@ func TestClassifyFixtures(t *testing.T) {
 		{name: "RewriteCond not followed by RewriteRule stops OLS", urlPath: "/", data: "RewriteEngine On\nRewriteCond %{HTTPS} off\nErrorDocument 404 /404.html\nRewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]\nRewriteRule ^x$ /y [L]\n", verdict: VerdictConvertible, findings: []string{
 			"1 RewriteEngine rewrite true",
 			"2 RewriteCond rewrite false",
-			"3 ErrorDocument error_documents false",
+			"3 ErrorDocument error_documents false converted",
 			"4 RewriteRule rewrite false",
 			"5 RewriteRule rewrite false",
 		}},

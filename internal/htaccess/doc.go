@@ -11,10 +11,12 @@
 // Most directives OLS ignores are not access control. handling.go sorts them:
 // harmless to ignore (caching, compression and MIME hints, caching and
 // security headers), handled by Sifruno another way (cPanel's PHP handler,
-// Options -Indexes), or a warning a person checks before cutover (php_value,
-// php_flag). A file whose ignored lines all have such a class is native;
-// any other ignored line keeps it convertible, and ConvertSite refuses it
-// naming the file, line and directive.
+// Options -Indexes), converted into the vhost (redirects and error pages of
+// the root .htaccess, redirect.go), or a warning a person checks before
+// cutover (php_value, php_flag, CORS and X-Robots-Tag headers). A file
+// whose ignored lines all have such a class is native; any other ignored
+// line keeps it convertible, and ConvertSite refuses it naming the file,
+// line and directive.
 //
 // The package is read-only. It parses, classifies and converts files; it
 // does not rewrite or serve anything, and a verdict here is a pre-flight
@@ -190,6 +192,18 @@
 //     (src/http/httpreq.cpp setMimeBySuffix, "Path info is not allowed for
 //     static file"), and a folder name without a dot cannot be a script, so
 //     "/folder/script.php/allowed.css" stays closed.
+//   - <Files> sections that close names in a folder not closed to everyone
+//     (FolderRule.Deny) become one regex context per rule, written ahead of
+//     every folder's: HttpContext::match (src/http/httpcontext.cpp) tries
+//     the regex contexts in the order of the config and takes the first
+//     that matches. It answers 403 for a path part with one of the names
+//     or endings, and for everything below that part, which covers a
+//     script's path info (/xmlrpc.php/x); the certificate challenge path is
+//     left out. Names that include an index file close the folder's own
+//     addresses too, which OpenLiteSpeed would answer with that file. The
+//     regex sees the decoded, cleaned path (src/http/httpreq.cpp
+//     normalizeDecodedReqPath, GPath::clean), so %-escapes, "//" and "/../"
+//     reach it resolved.
 //
 // Unverified until the dev VM proof runs it: that OpenLiteSpeed loads the
 // rendered regex contexts and realms without warnings, serves index files

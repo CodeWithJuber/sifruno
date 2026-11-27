@@ -34,8 +34,16 @@ import (
 //	                                                           vhost refuses .phtml, .php8 ...
 //	             Options -Indexes, -MultiViews, +FollowSymLinks the vhost does the same
 //	             CacheLookup on                                the vhost's cache module looks up
+//	             ErrorDocument code default (root .htaccess)   OpenLiteSpeed's own page
+//	converted    Redirect, RedirectMatch, RedirectPermanent,   the vhost carries them
+//	               RedirectTemp 301/302, ErrorDocument code    (redirect.go)
+//	               /path, at the top of the root .htaccess
 //	warning      php_value, php_flag                           no safe conversion yet; shown at
 //	                                                           cutover for a person to check
+//	             Header on CORS headers or X-Robots-Tag        the vhost cannot send them yet
+//	             SetEnvIf*/BrowserMatch* setting only          they condition headers that are
+//	               variables Header lines test (env=)          not sent here either
+//	             ErrorDocument code "text" (root .htaccess)    OpenLiteSpeed's own page instead
 //
 // The reasons, with their evidence, are in the comments of handle.
 type Handling string
@@ -46,6 +54,10 @@ const (
 	HandlingIgnored Handling = "ignored"
 	// HandlingSifruno: Sifruno does the same job another way.
 	HandlingSifruno Handling = "handled"
+	// HandlingConverted: OpenLiteSpeed does not read it from .htaccess, and
+	// the root broker writes the same rule into the site's vhost
+	// (SiteConversion.Redirects and ErrorPages).
+	HandlingConverted Handling = "converted"
 	// HandlingWarning: OpenLiteSpeed does not apply it and Sifruno does not
 	// convert it, but losing it opens nothing. The site moves, and the
 	// migration shows the line as a note a person accepts before cutover.
@@ -79,9 +91,10 @@ type PHPHandler struct {
 
 // handle classifies one directive OpenLiteSpeed does not act on. name is
 // lower case; envRead holds the lower-case environment variables the file's
-// rewrite lines read (rewriteEnvReads). It returns no Handling for a line
-// no class covers; php is the PHP package a handler line names.
-func handle(name string, args []string, envRead map[string]bool) (h Handling, reason, php string) {
+// rewrite lines read (rewriteEnvReads), and headerEnv those its Header
+// lines test (headerEnvReads). It returns no Handling for a line no class
+// covers; php is the PHP package a handler line names.
+func handle(name string, args []string, envRead, headerEnv map[string]bool) (h Handling, reason, php string) {
 	arg := func(i int) string {
 		if i < len(args) {
 			return args[i]
@@ -101,6 +114,17 @@ func handle(name string, args []string, envRead map[string]bool) (h Handling, re
 	case "header":
 		if headerIsHint(args) {
 			return HandlingIgnored, "caching or security response header: the copy does not send it, which changes how long browsers keep files or drops a browser-side defence, and opens nothing on the server", ""
+		}
+		// CORS and X-Robots-Tag change what other sites and search engines
+		// do with the site's answers, and losing them opens nothing on the
+		// server. OpenLiteSpeed 1.9.4 sends extra headers only from a
+		// context's "Header Operations" (extraHeaders,
+		// src/http/httpcontext.cpp); Sifruno's vhost has no context that
+		// covers the whole site (a regex context would turn the site's
+		// rewrite rules off below it, as for a converted folder), so it
+		// cannot send them yet, and a person checks them before cutover.
+		if h := warnedHeader(args); h != "" {
+			return HandlingWarning, headerWarning(h), ""
 		}
 	case "requestheader":
 		// The HTML5 Boilerplate fix for proxies that mangle
@@ -126,6 +150,12 @@ func handle(name string, args []string, envRead map[string]bool) (h Handling, re
 		// made this line access control before handle runs.
 		if compressionVariables(name, args, envRead) {
 			return HandlingIgnored, "compression hint: OpenLiteSpeed compresses by its own settings", ""
+		}
+		// WP Rocket's CORS block sets IS_CORS for "Header ... env=IS_CORS".
+		// Such a variable conditions a header the copy does not send
+		// either, but PHP could read it too, so a person checks.
+		if headerVariables(name, args, envRead, headerEnv) {
+			return HandlingWarning, "sets a variable only this file's Header lines test, and those headers are not sent here: the copy does not set it. Check that the site's code does not read it before cutover.", ""
 		}
 	case "addtype":
 		if pkg, ok := phpHandler(args); ok {
@@ -208,10 +238,87 @@ var hintHeaders = map[string]bool{
 // headerIsHint reads Header [always|onsuccess] action header [value ...]
 // (mod_headers) and reports a covered action on a hint header.
 func headerIsHint(args []string) bool {
+	h := headerName(args)
+	return h != "" && hintHeaders[h]
+}
+
+// headerName is the lower-case header a Header line with a covered action
+// changes, or "". mod_headers cuts the name at its first colon
+// (modules/metadata/mod_headers.c header_inout_cmd: "The header name can
+// include the colon, or not"), so WP Rocket's "Header append Vary:
+// Accept-Encoding" changes Vary.
+func headerName(args []string) string {
 	if len(args) > 0 && (strings.EqualFold(args[0], "always") || strings.EqualFold(args[0], "onsuccess")) {
 		args = args[1:]
 	}
-	return len(args) >= 2 && headerActions[strings.ToLower(args[0])] && hintHeaders[strings.ToLower(args[1])]
+	if len(args) < 2 || !headerActions[strings.ToLower(args[0])] {
+		return ""
+	}
+	name, _, _ := strings.Cut(args[1], ":")
+	return strings.ToLower(name)
+}
+
+// warnedHeaders are the response headers a site can lose without anything
+// on the server opening, but whose loss a person should see: CORS headers
+// let pages on other domains (a CDN, another site) use the site's fonts,
+// scripts and answers, and X-Robots-Tag keeps files out of search results.
+var warnedHeaders = map[string]bool{
+	"access-control-allow-origin": true, "access-control-allow-methods": true,
+	"access-control-allow-headers": true, "access-control-allow-credentials": true,
+	"access-control-expose-headers": true, "access-control-max-age": true,
+	"x-robots-tag": true,
+}
+
+// warnedHeader is the header of a Header line on a warned header, or "".
+func warnedHeader(args []string) string {
+	if h := headerName(args); warnedHeaders[h] {
+		return h
+	}
+	return ""
+}
+
+func headerWarning(h string) string {
+	const base = "OpenLiteSpeed does not send response headers from .htaccess, and this server cannot write them into the site's configuration yet, so the copy does not send "
+	if h == "x-robots-tag" {
+		return base + "X-Robots-Tag: search engines may list pages or files the old site kept out of their results. Check them before cutover."
+	}
+	return base + "this CORS header (Access-Control-*): browsers then refuse the site's fonts, scripts or answers to pages on other domains, such as a CDN. Check them before cutover."
+}
+
+// headerEnvReads lists, lower case, the environment variables the file's
+// Header lines test with env=VAR or env=!VAR.
+func headerEnvReads(lines []Line) map[string]bool {
+	read := map[string]bool{}
+	for _, l := range lines {
+		if l.Kind != LineDirective || !strings.EqualFold(l.Node.Name, "Header") {
+			continue
+		}
+		for _, a := range l.Node.Args {
+			if v, ok := strings.CutPrefix(strings.ToLower(a), "env="); ok {
+				read[strings.TrimPrefix(v, "!")] = true
+			}
+		}
+	}
+	return read
+}
+
+// headerVariables reports a SetEnvIf-family line that sets only variables
+// the file's Header lines test and no rewrite line reads.
+func headerVariables(name string, args []string, envRead, headerEnv map[string]bool) bool {
+	skip := 2
+	if strings.HasPrefix(name, "browsermatch") || name == "setenvifexpr" {
+		skip = 1
+	}
+	if len(args) <= skip {
+		return false
+	}
+	for _, v := range args[skip:] {
+		v, _, _ = strings.Cut(strings.TrimPrefix(v, "!"), "=")
+		if v = strings.ToLower(v); !headerEnv[v] || envRead[v] {
+			return false
+		}
+	}
+	return true
 }
 
 func compressionFilters(list string) bool {

@@ -306,10 +306,10 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	}
 	// A line OpenLiteSpeed ignores that nothing covers is not an access
 	// rule: the plan names it as a line to change.
-	other := htaccess.ClassifyFile(".htaccess", "/", []byte("RewriteEngine On\nHeader set X-Robots-Tag noindex\n"))
+	other := htaccess.ClassifyFile(".htaccess", "/", []byte("RewriteEngine On\nHeader set Set-Cookie a=b\n"))
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictConvertible, Files: []htaccess.FileResult{other}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "compat" || plan.TierAccess || !slices.Equal(plan.TierFix, []string{".htaccess line 2 (Header set X-Robots-Tag noindex)"}) ||
+	if err != nil || plan.Tier != "compat" || plan.TierAccess || !slices.Equal(plan.TierFix, []string{".htaccess line 2 (Header set Set-Cookie)"}) ||
 		!slices.Equal(plan.TierCauses, []string{htaccess.CauseNotConverted}) || len(plan.TierWarnings) != 0 {
 		t.Fatalf("not converted: %+v %v", plan, err)
 	}

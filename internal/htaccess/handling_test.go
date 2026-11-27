@@ -119,9 +119,16 @@ func TestHandlingOfEachClass(t *testing.T) {
 		// A warning at cutover.
 		{"php_value upload_max_filesize 64M", HandlingWarning},
 		{"php_flag display_errors Off", HandlingWarning},
+		{"Header set X-Robots-Tag noindex", HandlingWarning},
+		{"Header set Access-Control-Allow-Origin *", HandlingWarning},
+		{"Header always set Access-Control-Allow-Methods \"GET, POST\"", HandlingWarning},
+		{"ErrorDocument 404 \"Page not found\"", HandlingWarning},
+		// Converted into the vhost.
+		{"ErrorDocument 404 /404.php", HandlingConverted},
+		{"Redirect 301 /old /new", HandlingConverted},
+		{"RedirectMatch 302 ^/blog/(.*)$ https://example.com/news/$1", HandlingConverted},
 		// Not covered: the file stays off the Native tier.
-		{"Header set X-Robots-Tag noindex", ""},
-		{"Header set Access-Control-Allow-Origin *", ""},
+		{"Header set Set-Cookie a=b", ""},
 		{"Header echo ^X-", ""},
 		{"Header edit Cache-Control ^(.*)$ $1", ""},
 		{"RequestHeader set X-Forwarded-Proto https", ""},
@@ -143,8 +150,10 @@ func TestHandlingOfEachClass(t *testing.T) {
 		{"Options -FollowSymLinks", ""},
 		{"CacheLookup off", ""},
 		{"php_admin_value open_basedir none", ""},
-		{"ErrorDocument 404 /404.php", ""},
-		{"Redirect 301 /old /new", ""},
+		{"ErrorDocument 404 https://example.com/404", ""},
+		{"ErrorDocument 404 /404.php?code=404", ""},
+		{"Redirect 307 /old /new", ""},
+		{"Redirect 301 /old ftp://example.com/", ""},
 		{"DirectoryIndex index.html", ""},
 		{"SetEnv WP_ENVIRONMENT_TYPE staging", ""},
 	} {
@@ -271,13 +280,13 @@ func TestUnknownSectionRefusesWithItsLine(t *testing.T) {
 }
 
 func TestNotConvertedLineRefusesWithItsLine(t *testing.T) {
-	got := ConvertSite(siteOf(map[string]string{".htaccess": cpanelWordPress + "Header set X-Robots-Tag noindex\nErrorDocument 404 /missing.html\n"}))
+	got := ConvertSite(siteOf(map[string]string{".htaccess": cpanelWordPress + "Header set Set-Cookie a=b\nErrorDocument 404 https://example.com/missing\n"}))
 	if got.Native || len(got.Refused) != 2 {
 		t.Fatalf("%+v", got.Refused)
 	}
 	lines := strings.Count(cpanelWordPress, "\n")
 	for i, want := range []FileRefusal{
-		{File: ".htaccess", Line: lines + 1, Directive: "Header set X-Robots-Tag noindex", Cause: CauseNotConverted},
+		{File: ".htaccess", Line: lines + 1, Directive: "Header set Set-Cookie", Cause: CauseNotConverted},
 		{File: ".htaccess", Line: lines + 2, Directive: "ErrorDocument 404", Cause: CauseNotConverted},
 	} {
 		r := got.Refused[i]

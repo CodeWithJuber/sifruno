@@ -129,6 +129,10 @@ type Finding struct {
 	Label string `json:"label"`
 	// PHP is the PHP package a handler line names (PHPHandler).
 	PHP string `json:"php_handler,omitempty"`
+	// Redirect and ErrorPage are what a converted redirect or
+	// ErrorDocument line becomes in the vhost (redirect.go).
+	Redirect  *Redirect  `json:"redirect,omitempty"`
+	ErrorPage *ErrorPage `json:"error_page,omitempty"`
 }
 
 // AccessRule groups access findings that a verify step would test together.
@@ -181,6 +185,7 @@ func Classify(f *File, name, urlPath string) FileResult {
 	c := &classifier{file: name, urlPath: urlPath, root: urlPath == "/", problems: append([]Problem(nil), f.Problems...)}
 	c.envFeedsAccess = feedsAccess(f.Nodes)
 	c.envRead = rewriteEnvReads(f.Lines)
+	c.headerEnv = headerEnvReads(f.Lines)
 	c.walk(f.Nodes, scope{})
 	if stop := olsStopLine(f.Lines); stop > 0 {
 		for i := range c.findings {
@@ -213,13 +218,16 @@ func Classify(f *File, name, urlPath string) FileResult {
 		r.Causes = sortedCauses(causes)
 	}
 	if convertible(r) {
-		skip := map[int]bool{}
+		skip, kept := map[int]bool{}, map[int]bool{}
 		for _, g := range r.Findings {
-			if g.Handling != "" {
+			switch {
+			case g.Handling != "":
 				skip[g.Line] = true
+			case g.Honoured && g.Category != CategoryStructure:
+				kept[g.Line] = true
 			}
 		}
-		r.Conversion = convert(f, urlPath, skip)
+		r.Conversion = convert(f, urlPath, skip, kept)
 	}
 	r.RewriteToPath = rewriteToPath(f.Lines)
 	return r
@@ -268,8 +276,10 @@ type classifier struct {
 	problems       []Problem
 	marker         bool
 	envFeedsAccess bool
-	// envRead holds the environment variables rewrite lines read.
+	// envRead holds the environment variables rewrite lines read, and
+	// headerEnv those Header lines test with env=.
 	envRead    map[string]bool
+	headerEnv  map[string]bool
 	satisfyAny bool
 	plain      facts
 }
@@ -510,9 +520,23 @@ func (c *classifier) directive(n *Node, sc scope) Finding {
 	}
 	if !f.Honoured {
 		var reason string
-		f.Handling, reason, f.PHP = handle(name, n.Args, c.envRead)
-		if f.Handling != "" {
+		switch name {
+		case "redirect", "redirectmatch", "redirectpermanent", "redirecttemp":
+			f.Handling, reason, f.Redirect = c.convertRedirect(name, n.Args, sc)
+		case "errordocument":
+			f.Handling, reason, f.ErrorPage = c.convertErrorDocument(n.Args, sc)
+		default:
+			f.Handling, reason, f.PHP = handle(name, n.Args, c.envRead, c.headerEnv)
+		}
+		// A refused redirect or ErrorDocument line says why.
+		if f.Handling != "" || reason != "" {
 			f.Reason = reason
+		}
+		if f.Redirect != nil {
+			f.Redirect.Line = n.Line
+		}
+		if f.ErrorPage != nil {
+			f.ErrorPage.Line = n.Line
 		}
 	}
 	if f.Reason == "" {

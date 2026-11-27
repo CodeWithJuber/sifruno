@@ -41,6 +41,14 @@ func TestMoveFromAnotherLinuxServerRoutes(t *testing.T) {
 	if w := websiteRequest(f.handler, "POST", key, map[string]any{"password": "x", "user": "admin"}, cookie, csrf); w.Code != 422 {
 		t.Fatalf("an unknown field: %d %s", w.Code, w.Body.String())
 	}
+	// A password or passphrase over its limit is refused without the
+	// answer repeating it.
+	long := strings.Repeat("overlong-secret-", 125)
+	for _, body := range []map[string]any{{"password": long}, {"private_key": "k", "passphrase": long}} {
+		if w := websiteRequest(f.handler, "POST", key, body, cookie, csrf); w.Code != 422 || strings.Contains(w.Body.String(), "overlong-secret") {
+			t.Fatalf("an over-long secret: %d %s", w.Code, w.Body.String())
+		}
+	}
 	w = websiteRequest(f.handler, "GET", base+"/sources/"+testSourceID+"/sites", nil, cookie, "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"domain":"blog.example.test"`) || !strings.Contains(w.Body.String(), `"account":"blog"`) {
 		t.Fatalf("sites: %d %s", w.Code, w.Body.String())

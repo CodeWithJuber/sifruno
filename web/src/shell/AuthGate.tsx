@@ -6,6 +6,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { AuthenticatorQr } from "@/components/qr-code";
 import { AuthError, beginPasskeyLogin, beginSetup, finishPasskeyLogin, finishSetup, groupedSecret, onThisServer, passkeyLoginStatus, signInAdmin, signInWithKey } from "@/lib/auth-api";
 import type { AuthSession, PasskeyStatus, SetupSecret } from "@/lib/auth-api";
 import { credentialJSON, passkeyBrowserProblem, passkeySupport, requestOptions, signalUnknown } from "@/lib/passkey";
@@ -270,15 +271,18 @@ function Setup({ keySession, onSession }: { keySession: AuthSession | null; onSe
   </section>;
 
   return <section className={panel} aria-labelledby="setup-title" data-testid="setup-code">
-    <Heading id="setup-title" icon={<ShieldCheck />} title="Connect your authenticator app">Add this key to an app such as Google Authenticator, Microsoft Authenticator or 1Password, then enter the code it shows. Step 3 of 3.</Heading>
-    <div className="mb-4 rounded-md border border-border bg-muted p-3">
-      <div className="text-xs text-muted-foreground">Key for {username.trim()}</div>
-      <code className="mt-1 block font-mono text-base tracking-wider break-all" data-testid="setup-secret">{groupedSecret(secret.secret)}</code>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => void copy()}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copied ? "Copied" : "Copy key"}</Button>
-        <a className={buttonVariants({ variant: "outline", size: "sm" })} href={secret.otpauth_uri}><ExternalLink aria-hidden="true" />Open in authenticator app</a>
+    <Heading id="setup-title" icon={<ShieldCheck />} title="Connect your authenticator app">Scan the code with an app such as Google Authenticator, Microsoft Authenticator or 1Password, or type its key there, then enter the code the app shows. Step 3 of 3.</Heading>
+    <div className="mb-4 flex flex-wrap items-start gap-4 rounded-md border border-border bg-muted p-3">
+      <AuthenticatorQr uri={secret.otpauth_uri} username={username.trim()} testId="setup-qr" />
+      <div className="min-w-0 flex-1 basis-48">
+        <div className="text-xs text-muted-foreground">Or type this key for {username.trim()}</div>
+        <code className="mt-1 block font-mono text-base tracking-wider break-all" data-testid="setup-secret">{groupedSecret(secret.secret)}</code>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => void copy()}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copied ? "Copied" : "Copy key"}</Button>
+          <a className={buttonVariants({ variant: "outline", size: "sm" })} href={secret.otpauth_uri}><ExternalLink aria-hidden="true" />Open in authenticator app</a>
+        </div>
       </div>
-      <p className="mt-3 text-xs">The key is shown only now. Anyone with it can make codes, so do not share it or save it in a note.</p>
+      <p className="basis-full text-xs">The code and the key are shown only now. Anyone with them can make codes, so do not share them, photograph them or save them in a note.</p>
     </div>
     <form onSubmit={create}>
       <FieldGroup>

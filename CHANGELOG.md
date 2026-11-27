@@ -83,6 +83,11 @@
 
 ### Added
 
+- A QR code to scan with the authenticator app, on the first-run setup, on
+  a customer's setup page and where Account changes the app. The panel
+  draws it in the browser from the app's link (our own encoder, no new
+  dependency), so the key goes nowhere; the key and the link stay beside
+  it.
 - Move a website here from a cPanel backup file: "Move a website here" now
   asks where the website is, and for a backup file (cpmove-USER.tar.gz,
   USER.tar.gz or backup-…_USER.tar.gz, up to 32 GiB) shows what it holds

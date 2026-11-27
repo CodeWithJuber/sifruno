@@ -387,6 +387,10 @@ function PanelSidebar({ direction, page, publicPreview, role, status, theme, onT
         <SidebarGroupLabel className="text-sidebar-muted-foreground">Administration</SidebarGroupLabel>
         <SidebarGroupContent><SidebarMenu className="gap-0.5">{top("admin").map(item)}</SidebarMenu></SidebarGroupContent>
       </SidebarGroup>}
+      {top("advanced").length > 0 && <SidebarGroup>
+        <SidebarGroupLabel className="text-sidebar-muted-foreground">Advanced</SidebarGroupLabel>
+        <SidebarGroupContent><SidebarMenu className="gap-0.5">{top("advanced").map(item)}</SidebarMenu></SidebarGroupContent>
+      </SidebarGroup>}
       </nav>
     </SidebarContent>
     <SidebarFooter className="border-t border-sidebar-border px-3 py-3">

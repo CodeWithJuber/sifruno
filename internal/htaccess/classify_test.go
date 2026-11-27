@@ -128,6 +128,9 @@ const wordfenceBlock = `# Wordfence WAF
 
 func render(f Finding) string {
 	s := fmt.Sprintf("%d %s %s %t", f.Line, f.Directive, f.Category, f.Honoured)
+	if f.Handling != "" {
+		s += " " + string(f.Handling)
+	}
 	if a := f.Access; a != nil {
 		s += fmt.Sprintf(" %s %s", a.Kind, a.Path)
 		if a.Files != "" {
@@ -173,28 +176,30 @@ func TestClassifyFixtures(t *testing.T) {
 			"5 <IfModule> structure true", "6 RewriteEngine rewrite true", "7 RewriteRule rewrite true", "8 RewriteBase rewrite true",
 			"9 RewriteRule rewrite true", "10 RewriteCond rewrite true", "11 RewriteCond rewrite true", "12 RewriteRule rewrite true",
 		}},
+		// AddEncoding (line 4) serves W3TC's pre-compressed files with their
+		// encoding; OpenLiteSpeed ignoring it changes those responses.
 		{name: "W3TC and WP Rocket blocks", urlPath: "/", data: cachePluginBlocks + wordpressBlock, verdict: VerdictConvertible, findings: append([]string{
 			"2 <IfModule> structure true",
-			"3 AddType mime_handlers false",
+			"3 AddType mime_handlers false ignored",
 			"4 AddEncoding mime_handlers false",
 			"6 <IfModule> structure true",
 			"7 <IfModule> structure true",
-			"8 AddOutputFilterByType compression false",
+			"8 AddOutputFilterByType compression false ignored",
 			"11 <IfModule> structure true",
-			"12 ExpiresActive caching false",
-			"13 ExpiresByType caching false",
+			"12 ExpiresActive caching false ignored",
+			"13 ExpiresByType caching false ignored",
 			"15 <FilesMatch> structure false",
-			"16 FileETag caching false",
+			"16 FileETag caching false ignored",
 			"17 <IfModule> structure true",
-			"18 Header headers false",
-			"19 Header headers false",
+			"18 Header headers false ignored",
+			"19 Header headers false ignored",
 			"24 <IfModule> structure true",
-			"25 Header headers false",
+			"25 Header headers false ignored",
 		}, shift(wordpressFindings, 27)...)},
-		{name: "LiteSpeed Cache plugin", urlPath: "/", data: liteSpeedCacheBlock, verdict: VerdictConvertible, findings: []string{
+		{name: "LiteSpeed Cache plugin", urlPath: "/", data: liteSpeedCacheBlock, verdict: VerdictNative, findings: []string{
 			"3 <IfModule> vendor true",
 			"4 RewriteEngine vendor true",
-			"5 CacheLookup vendor false",
+			"5 CacheLookup vendor false handled",
 			"6 RewriteRule vendor true",
 			"7 RewriteRule vendor true",
 			"10 RewriteRule vendor true",
@@ -226,14 +231,14 @@ func TestClassifyFixtures(t *testing.T) {
 			"1 deny_allow / files=wp-config.php methods= expect=0",
 			"5 deny_allow / files=\\.(env|log)$ methods= expect=0",
 		}},
-		{name: "php_value lines", urlPath: "/", data: "php_value upload_max_filesize 64M\nphp_value post_max_size 64M\nphp_flag display_errors Off\n", verdict: VerdictConvertible, findings: []string{
-			"1 php_value php_settings false",
-			"2 php_value php_settings false",
-			"3 php_flag php_settings false",
+		{name: "php_value lines", urlPath: "/", data: "php_value upload_max_filesize 64M\nphp_value post_max_size 64M\nphp_flag display_errors Off\n", verdict: VerdictNative, findings: []string{
+			"1 php_value php_settings false warning",
+			"2 php_value php_settings false warning",
+			"3 php_flag php_settings false warning",
 		}},
-		{name: "cPanel PHP handler block", urlPath: "/", data: cpanelHandler, verdict: VerdictConvertible, findings: []string{
+		{name: "cPanel PHP handler block", urlPath: "/", data: cpanelHandler, verdict: VerdictNative, findings: []string{
 			"3 <IfModule> structure true",
-			"4 AddHandler vendor false",
+			"4 AddHandler vendor false handled",
 		}},
 		{name: "unknown directive", urlPath: "/", data: "RewriteEngine On\nFooBarDirective on\n", verdict: VerdictCompat, causes: []string{CauseUnknown}, findings: []string{
 			"1 RewriteEngine rewrite true",
@@ -244,7 +249,7 @@ func TestClassifyFixtures(t *testing.T) {
 		}, rules: []string{"1 deny_allow /private/ files= methods= expect=403"}},
 		{name: "Wordfence WAF block", urlPath: "/", data: wordfenceBlock, verdict: VerdictCompat, causes: []string{CauseAccessControl}, findings: []string{
 			"2 <IfModule> structure true",
-			"3 php_value vendor false",
+			"3 php_value vendor false warning",
 			"5 <Files> access_control false deny_allow / files=.user.ini regex=false",
 			"6 <IfModule> structure true",
 			"7 Require access_control false deny_allow / files=.user.ini regex=false",
@@ -252,17 +257,20 @@ func TestClassifyFixtures(t *testing.T) {
 			"10 Order access_control false deny_allow / files=.user.ini regex=false",
 			"11 Deny access_control false deny_allow / files=.user.ini regex=false",
 		}, rules: []string{"5 deny_allow / files=.user.ini methods= expect=0"}},
-		{name: "Laravel listing switch", urlPath: "/", data: "<IfModule mod_rewrite.c>\n    <IfModule mod_negotiation.c>\n        Options -MultiViews -Indexes\n    </IfModule>\n    RewriteEngine On\n    RewriteRule ^ index.php [L]\n</IfModule>\n", verdict: VerdictCompat, causes: []string{CauseAccessControl}, findings: []string{
+		{name: "Laravel listing switch", urlPath: "/", data: "<IfModule mod_rewrite.c>\n    <IfModule mod_negotiation.c>\n        Options -MultiViews -Indexes\n    </IfModule>\n    RewriteEngine On\n    RewriteRule ^ index.php [L]\n</IfModule>\n", verdict: VerdictNative, findings: []string{
 			"1 <IfModule> structure true",
 			"2 <IfModule> structure true",
-			"3 Options access_control false listing /",
+			"3 Options other false handled",
 			"5 RewriteEngine rewrite true",
 			"6 RewriteRule rewrite true",
-		}, rules: []string{"3 listing / files= methods= expect=0"}},
-		{name: "symlink options only", urlPath: "/", data: "Options +FollowSymLinks -MultiViews\nRewriteEngine On\n", verdict: VerdictConvertible, findings: []string{
-			"1 Options other false",
+		}},
+		{name: "symlink options only", urlPath: "/", data: "Options +FollowSymLinks -MultiViews\nRewriteEngine On\n", verdict: VerdictNative, findings: []string{
+			"1 Options other false handled",
 			"2 RewriteEngine rewrite true",
 		}},
+		{name: "listing turned on", urlPath: "/", data: "Options +Indexes\n", verdict: VerdictCompat, causes: []string{CauseAccessControl}, findings: []string{
+			"1 Options access_control false listing /",
+		}, rules: []string{"1 listing / files= methods= expect=0"}},
 		{name: "uploads directory without PHP", urlPath: "/wp-content/uploads/", data: "php_flag engine off\nRemoveHandler .php .phtml\n<FilesMatch \"\\.php$\">\nSetHandler none\n</FilesMatch>\n", verdict: VerdictCompat, causes: []string{CauseAccessControl}, findings: []string{
 			"1 php_flag access_control false exec /wp-content/uploads/",
 			"2 RemoveHandler access_control false exec /wp-content/uploads/",

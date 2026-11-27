@@ -27,6 +27,8 @@ import (
 //	AuthType Basic, AuthName, AuthUserFile,
 //	  Require valid-user | Require user ...         Realm
 //	Options -Indexes                                nothing: listings are off
+//	lines with a handling class (handling.go),      passed over: OpenLiteSpeed
+//	  and <IfModule>/<Files> holding only them        ignores them either way
 //
 // A file that holds any other directive or section, a rewrite rule among
 // them, refuses: the converted folder's rule turns rewriting off below it.
@@ -105,8 +107,19 @@ func convertible(r FileResult) bool {
 // Convert converts one parsed .htaccess at the folder with URL path
 // urlPath ("/" for the site root).
 func Convert(f *File, urlPath string) *Conversion {
+	return convert(f, urlPath, nil)
+}
+
+// convert is Convert passing over the lines in skip: lines the classifier
+// gave a handling class (handling.go), which OpenLiteSpeed ignores whether
+// or not the folder is converted and which are never access control. A
+// section is passed over only when every line in it is.
+func convert(f *File, urlPath string, skip map[int]bool) *Conversion {
 	if len(f.Problems) > 0 {
 		return refuse(f.Problems[0].Line, "the file has lines Apache cannot read")
+	}
+	if urlPath == "/" {
+		return refuse(0, "access rules for the whole site, which this server does not convert")
 	}
 	if !validRulePath(urlPath) {
 		return refuse(0, "the folder's name has characters this server does not put in its rules")
@@ -119,7 +132,7 @@ func Convert(f *File, urlPath string) *Conversion {
 	}
 	var first *FolderRule
 	for _, authzCore := range worlds {
-		e := &evaluator{authzCore: authzCore}
+		e := &evaluator{authzCore: authzCore, skip: skip}
 		e.walk(f.Nodes, &e.dir)
 		if e.err != nil {
 			return e.err
@@ -194,6 +207,30 @@ type evaluator struct {
 	userFile  string
 	authLine  int
 	err       *Conversion
+	// skip holds the lines convert passes over.
+	skip map[int]bool
+}
+
+// skippable reports a section that only scopes what it holds (<IfModule>,
+// <Files>, <FilesMatch>) and holds only skipped lines. Apache makes no
+// access configuration for a section without an access directive
+// (doc.go, "Converting access rules"), so passing over it changes no
+// rule.
+func (e *evaluator) skippable(n *Node) bool {
+	switch strings.ToLower(n.Name) {
+	case "ifmodule", "files", "filesmatch":
+	default:
+		return false
+	}
+	for _, c := range n.Children {
+		switch {
+		case c.Kind == KindDirective && !e.skip[c.Line]:
+			return false
+		case c.Kind == KindSection && !e.skippable(c):
+			return false
+		}
+	}
+	return true
 }
 
 func (e *evaluator) fail(line int, reason string) {
@@ -218,6 +255,9 @@ func (e *evaluator) walk(nodes []*Node, sec *section) {
 }
 
 func (e *evaluator) section(n *Node, sec *section) {
+	if e.skippable(n) {
+		return
+	}
 	switch strings.ToLower(n.Name) {
 	case "ifmodule":
 		if len(n.Args) != 1 || !authzCoreNames[strings.TrimPrefix(n.Args[0], "!")] {
@@ -246,6 +286,9 @@ func (e *evaluator) section(n *Node, sec *section) {
 }
 
 func (e *evaluator) directive(n *Node, sec *section) {
+	if e.skip[n.Line] {
+		return
+	}
 	name := strings.ToLower(n.Name)
 	inDir := sec == &e.dir
 	switch name {
@@ -773,19 +816,29 @@ func quoteArg(s string) string {
 
 // SiteConversion is the converter's answer for a scanned site: the rules to
 // enforce, or the files it refused. Native reports a site OpenLiteSpeed
-// serves as Apache did: every file native or converted.
+// serves as Apache did: every file native or converted. Warnings are the
+// lines a person checks before cutover, and PHP the lines that chose a PHP
+// version on the old server, for the migration to compare with its plan.
 type SiteConversion struct {
-	Native  bool          `json:"native"`
-	Rules   []FolderRule  `json:"rules"`
-	Refused []FileRefusal `json:"refused,omitempty"`
+	Native   bool          `json:"native"`
+	Rules    []FolderRule  `json:"rules"`
+	Refused  []FileRefusal `json:"refused,omitempty"`
+	Warnings []FileWarning `json:"warnings,omitempty"`
+	PHP      []PHPHandler  `json:"php_handlers,omitempty"`
 }
 
-// FileRefusal is why a site is not Native: a file, or the site itself
-// (File empty) for a cause such as a link the scan did not follow.
+// FileRefusal is why a site is not Native: a line of a file, a whole file
+// (Line 0), or the site itself (File empty) for a cause such as a link the
+// scan did not follow. Directive is the line's label (handling.go label).
+// Cause is one of Causes or CauseNotConverted; it is CauseAccessControl
+// when the refusal concerns an access rule, which OpenLiteSpeed would
+// leave open.
 type FileRefusal struct {
-	File   string `json:"file,omitempty"`
-	Line   int    `json:"line,omitempty"`
-	Reason string `json:"reason"`
+	File      string `json:"file,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	Directive string `json:"directive,omitempty"`
+	Cause     string `json:"cause,omitempty"`
+	Reason    string `json:"reason"`
 }
 
 // ConvertSite decides whether a scanned site is Native with its converted
@@ -799,7 +852,7 @@ func ConvertSite(site SiteResult) SiteConversion {
 	for _, cause := range site.Causes {
 		switch cause {
 		case CauseSymlinkNotFollowed, CauseScanTruncated, CauseUnreadableDir:
-			out.Refused = append(out.Refused, FileRefusal{Reason: causeReason[cause]})
+			out.Refused = append(out.Refused, FileRefusal{Cause: cause, Reason: causeReason[cause]})
 		}
 	}
 	// A verdict no file accounts for is not one this function can judge.
@@ -814,29 +867,45 @@ func ConvertSite(site SiteResult) SiteConversion {
 				continue
 			}
 			if f.Conversion.Rule.Path == "/" {
-				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Reason: "access rules for the whole site, which this server does not convert"})
+				line, directive := firstAccess(f)
+				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: line, Directive: directive, Cause: CauseAccessControl, Reason: "access rules for the whole site, which this server does not convert"})
 				continue
 			}
 			rule := *f.Conversion.Rule
 			rule.File = f.Path
 			out.Rules = append(out.Rules, rule)
 		case convertible(f) && f.Conversion != nil:
-			out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: f.Conversion.Line, Reason: f.Conversion.Refused})
+			// A refusal of the whole file names its first access rule.
+			line, directive, cause := f.Conversion.Line, labelAt(f, f.Conversion.Line), causeAt(f, f.Conversion.Line)
+			if line == 0 {
+				line, directive = firstAccess(f)
+			}
+			out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: line, Directive: directive, Cause: cause, Reason: f.Conversion.Refused})
 		default:
-			out.Refused = append(out.Refused, FileRefusal{File: f.Path, Reason: fileReason(f)})
+			out.Refused = append(out.Refused, fileRefusals(f)...)
 		}
 	}
 	for _, rule := range out.Rules {
 		for _, f := range site.Files {
 			if f.URLPath != rule.Path && strings.HasPrefix(f.URLPath, rule.Path) {
-				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Reason: "an .htaccess below the converted folder " + rule.Path})
+				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Cause: CauseAccessControl, Reason: "an .htaccess below the converted folder " + rule.Path})
 			}
 		}
 	}
 	if len(out.Rules) > 0 {
 		for _, f := range site.Files {
 			if f.RewriteToPath > 0 {
-				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: f.RewriteToPath, Reason: "a rewrite rule whose result the request itself or a file path can choose, which OpenLiteSpeed could serve without the protected folders' checks"})
+				out.Refused = append(out.Refused, FileRefusal{File: f.Path, Line: f.RewriteToPath, Directive: labelAt(f, f.RewriteToPath), Cause: CauseAccessControl, Reason: "a rewrite rule whose result the request itself or a file path can choose, which OpenLiteSpeed could serve without the protected folders' checks"})
+			}
+		}
+	}
+	for _, f := range site.Files {
+		for _, g := range f.Findings {
+			switch {
+			case g.Handling == HandlingWarning:
+				out.Warnings = append(out.Warnings, FileWarning{File: f.Path, Line: g.Line, Directive: g.Label, Reason: g.Reason})
+			case g.Handling == HandlingSifruno && (strings.EqualFold(g.Directive, "AddHandler") || strings.EqualFold(g.Directive, "AddType")):
+				out.PHP = append(out.PHP, PHPHandler{File: f.Path, Line: g.Line, Directive: g.Label, Path: f.URLPath, Package: g.PHP})
 			}
 		}
 	}
@@ -932,16 +1001,84 @@ var causeReason = map[string]string{
 	CauseUnreadableDir:      "a folder the check could not read",
 }
 
-func fileReason(f FileResult) string {
-	switch {
-	case f.Error != "":
-		return "the file " + f.Error
-	case f.Verdict == VerdictConvertible:
-		return "directives OpenLiteSpeed ignores (headers, caching, PHP settings or similar)"
-	case slices.Contains(f.Causes, CauseUnknown):
-		return "directives this panel does not know"
-	case slices.Contains(f.Causes, CauseMalformed):
-		return "lines Apache cannot read"
+// fileRefusals names each line that keeps a file the converter does not
+// take off the Native tier: a file the scan could not read, lines Apache
+// cannot read, unknown directives, and lines OpenLiteSpeed ignores that no
+// handling class covers (handling.go). The file's access rules are named
+// only when nothing else is wrong with it, so a refusal names an access
+// rule only when that rule is the reason.
+func fileRefusals(f FileResult) []FileRefusal {
+	if f.Error != "" {
+		cause := CauseUnreadableFile
+		if len(f.Causes) > 0 {
+			cause = f.Causes[0]
+		}
+		return []FileRefusal{{File: f.Path, Cause: cause, Reason: "the file " + f.Error}}
 	}
-	return "access rules mixed with other directives"
+	var out []FileRefusal
+	for _, p := range f.Problems {
+		out = append(out, FileRefusal{File: f.Path, Line: p.Line, Cause: CauseMalformed, Reason: "a line Apache cannot read: " + p.Reason})
+	}
+	for _, g := range f.Findings {
+		switch {
+		case g.Category == CategoryUnknown:
+			out = append(out, FileRefusal{File: f.Path, Line: g.Line, Directive: g.Label, Cause: CauseUnknown, Reason: "a directive this panel does not know"})
+		case g.Category != CategoryStructure && g.Category != CategoryAccessControl && !g.Honoured && g.Handling == "":
+			out = append(out, FileRefusal{File: f.Path, Line: g.Line, Directive: g.Label, Cause: CauseNotConverted, Reason: g.Reason})
+		}
+	}
+	if len(out) == 0 {
+		for _, g := range f.Findings {
+			if g.Category == CategoryAccessControl {
+				out = append(out, FileRefusal{File: f.Path, Line: g.Line, Directive: g.Label, Cause: CauseAccessControl, Reason: g.Reason})
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	if len(out) == 0 {
+		out = append(out, FileRefusal{File: f.Path, Reason: "rules OpenLiteSpeed does not act on"})
+	}
+	return out
+}
+
+// firstAccess is the line and label of a file's first access rule.
+func firstAccess(f FileResult) (int, string) {
+	for _, g := range f.Findings {
+		if g.Category == CategoryAccessControl {
+			return g.Line, g.Label
+		}
+	}
+	return 0, ""
+}
+
+// labelAt is the label of the directive at a line of a file, if any.
+func labelAt(f FileResult, line int) string {
+	if g := findingAt(f, line); g != nil {
+		return g.Label
+	}
+	return ""
+}
+
+// causeAt says why the converter stopped at a line: an access rule it
+// cannot carry, or, when the line holds no access rule, that line itself
+// (an unknown directive or one OpenLiteSpeed ignores). A refusal of the
+// file as a whole (line 0) concerns its access rules.
+func causeAt(f FileResult, line int) string {
+	g := findingAt(f, line)
+	switch {
+	case g == nil || g.Category == CategoryAccessControl:
+		return CauseAccessControl
+	case g.Category == CategoryUnknown:
+		return CauseUnknown
+	}
+	return CauseNotConverted
+}
+
+func findingAt(f FileResult, line int) *Finding {
+	for i := range f.Findings {
+		if line > 0 && f.Findings[i].Line == line {
+			return &f.Findings[i]
+		}
+	}
+	return nil
 }

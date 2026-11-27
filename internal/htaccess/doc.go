@@ -8,6 +8,14 @@
 // files hold a listed access pattern is Native after all, with those rules
 // moved into the vhost (convert.go).
 //
+// Most directives OLS ignores are not access control. handling.go sorts them:
+// harmless to ignore (caching, compression and MIME hints, caching and
+// security headers), handled by Sifruno another way (cPanel's PHP handler,
+// Options -Indexes), or a warning a person checks before cutover (php_value,
+// php_flag). A file whose ignored lines all have such a class is native;
+// any other ignored line keeps it convertible, and ConvertSite refuses it
+// naming the file, line and directive.
+//
 // The package is read-only. It parses, classifies and converts files; it
 // does not rewrite or serve anything, and a verdict here is a pre-flight
 // estimate, not proof of behaviour on a running server. A later migration

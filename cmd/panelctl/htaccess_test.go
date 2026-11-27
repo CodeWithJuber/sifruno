@@ -64,8 +64,9 @@ func TestHtaccessScanSummaryHidesNamesAndPaths(t *testing.T) {
 	}
 	for _, want := range []string{
 		"layout cpanel",
-		"sites: 3 (native 0, convertible 1, compat 2)",
-		".htaccess files: 5 (native 2, convertible 1, compat 2, not readable 0)",
+		// bob's Expires lines are harmless to ignore.
+		"sites: 3 (native 1, convertible 0, compat 2)",
+		".htaccess files: 5 (native 3, convertible 0, compat 2, not readable 0)",
 		"  access_control: 4\n",
 		"  unknown: 1\n",
 		"  access_control: 1\n",

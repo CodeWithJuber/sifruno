@@ -86,6 +86,9 @@ type Totals struct {
 	UnreadableFiles      int              `json:"unreadable_files"`
 	Directives           int              `json:"directives"`
 	DirectivesByCategory map[Category]int `json:"directives_by_category"`
+	// DirectivesByHandling counts the directives OLS ignores that a
+	// handling class covers (handling.go).
+	DirectivesByHandling map[Handling]int `json:"directives_by_handling"`
 	// TopUnknown holds lower-cased unknown directive names. Names that do not
 	// look like a directive are counted under one placeholder so stray text
 	// cannot leak customer data into the aggregate.
@@ -419,6 +422,7 @@ func totals(sites []SiteResult, withoutDocroot int) Totals {
 		SitesByVerdict:         map[Verdict]int{},
 		FilesByVerdict:         map[Verdict]int{},
 		DirectivesByCategory:   map[Category]int{},
+		DirectivesByHandling:   map[Handling]int{HandlingIgnored: 0, HandlingSifruno: 0, HandlingWarning: 0},
 		CompatSitesByCause:     map[string]int{},
 		CompatSitesByCauseSet:  map[string]int{},
 		TopUnknown:             []NameCount{},
@@ -463,6 +467,9 @@ func totals(sites []SiteResult, withoutDocroot int) Totals {
 			for _, g := range f.Findings {
 				t.Directives++
 				t.DirectivesByCategory[g.Category]++
+				if g.Handling != "" {
+					t.DirectivesByHandling[g.Handling]++
+				}
 				if g.Category == CategoryUnknown {
 					name := strings.Trim(g.Directive, "<>")
 					if !directiveName.MatchString(name) {

@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { addDomain, addRedirect, aliasHttps, alwaysHttps, alwaysHttpsOutcome, certificateOrigin, checkDomain, checkRedirectFrom, checkRedirectTo, exampleOtherDomain, getSiteDomains, maxAliases, maxPathLength, maxRedirects, maxTargetLength, normalizeDomain, redirectKind, removeDomain, removeRedirect, setAlwaysHttps, SiteDomainsApiError, statusLabel } from "@/lib/site-domains-api";
 import type { AliasHttps, SiteDomains as Domains, WebsiteRedirect } from "@/lib/site-domains-api";
+import { dayLabel, httpsState } from "@/lib/websites-api";
 import { useShell } from "@/shell/context";
 // The busy ring a working button shows, as on the wizard's screens.
 import "./new-website.css";
@@ -283,18 +284,36 @@ function AddRedirectForm({ site, busy, announcer, onSubmit }: { site: Domains; b
 // with a valid certificate; otherwise it cannot be pressed, and the section
 // says why and what to do next. While a change is saved, it shows the new
 // position and cannot be pressed again.
-function AlwaysHttpsSection({ site, locked, saving, status, failure, onChange }: { site: Domains; locked: boolean; saving?: boolean; status: string; failure?: Problem; onChange: (on: boolean) => void }) {
+// The site's certificate in one line, so the tab named SSL says where it
+// stands before anything else.
+function CertificateLine({ site }: { site: Domains }) {
+  const https = httpsState(site.https);
+  const [Icon, tone, text] = https.kind === "on"
+    ? [Lock, "text-primary", https.until ? `Valid until ${dayLabel(https.until)}. The panel renews it by itself.` : "In place."]
+    : https.kind === "expired"
+      ? [TriangleAlert, "text-destructive", `Expired on ${dayLabel(https.since)}. Visitors get a security warning on https://.`]
+      : [LockOpen, "text-muted-foreground", "None yet. Visitors reach the site over http://."];
+  return <div className="flex items-start gap-2 text-sm" data-testid="certificate-line" data-state={https.kind}>
+    <Icon className={`mt-0.5 size-4 shrink-0 ${tone}`} aria-hidden="true" />
+    <span><span className="font-medium text-foreground">Certificate:</span> <span className="text-foreground">{text}</span></span>
+  </div>;
+}
+
+function AlwaysHttpsSection({ site, admin, locked, saving, status, failure, onChange }: { site: Domains; admin: boolean; locked: boolean; saving?: boolean; status: string; failure?: Problem; onChange: (on: boolean) => void }) {
   const [dnsOpen, setDnsOpen] = useState(false);
-  const state = alwaysHttps(site);
+  const state = alwaysHttps(site, new Date(), admin);
   const blocked = state.kind !== "ready";
   const checked = saving ?? site.always_https;
   const describedBy = ["always-https-hint", blocked ? "always-https-blocked" : "", status && saving === undefined ? "always-https-status" : ""].filter(Boolean).join(" ");
   return <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="always-https-heading" data-testid="always-https-section" data-state={state.kind} data-on={String(site.always_https)}>
     <h3 id="always-https-heading">HTTPS</h3>
+    <CertificateLine site={site} />
     <Field orientation="horizontal" data-disabled={blocked ? true : undefined} className="gap-4">
       <FieldContent>
         <FieldLabel htmlFor="always-https">Always use HTTPS</FieldLabel>
-        <FieldDescription id="always-https-hint" className="text-start" data-testid="always-https-hint">Send visitors from http:// to https:// once a valid certificate is in force.</FieldDescription>
+        <FieldDescription id="always-https-hint" className="text-start" data-testid="always-https-hint">{blocked && site.always_https
+          ? "On. It starts sending visitors from http:// to https:// once a valid certificate is in force."
+          : "Send visitors from http:// to https:// once a valid certificate is in force."}</FieldDescription>
       </FieldContent>
       <Switch id="always-https" checked={checked} disabled={blocked} readOnly={locked} aria-busy={saving !== undefined}
         aria-describedby={describedBy} onCheckedChange={(on) => { if (!locked) onChange(on); }} data-testid="always-https-switch" />
@@ -496,7 +515,7 @@ export function SiteDomains({ accountId }: { accountId: string }) {
       </>}
     </section>
 
-    {canHttps && <AlwaysHttpsSection site={site} locked={Boolean(busy)} saving={busy === "always-https" ? httpsTarget : undefined} status={httpsStatus}
+    {canHttps && <AlwaysHttpsSection site={site} admin={!viewer.restricted} locked={Boolean(busy)} saving={busy === "always-https" ? httpsTarget : undefined} status={httpsStatus}
       failure={failure?.where === "always-https" ? failure.problem : undefined} onChange={switchHttps} />}
 
     <section className={`${panel} flex flex-col gap-4 p-5 md:p-6`} aria-labelledby="redirects-list-heading" data-testid="redirects-section">

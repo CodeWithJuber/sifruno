@@ -177,21 +177,25 @@ export type AlwaysHttps =
   | { kind: "ready" }
   | { kind: "not-live" | "no-certificates-here" | "no-certificate" | "expired"; why: string; next: string };
 
-export function alwaysHttps(site: Pick<SiteDomains, "domain" | "state" | "https" | "aliases">, now: Date = new Date()): AlwaysHttps {
+// admin: the reader runs this server, so "ask whoever runs this server"
+// would send them to themselves; they get what to check on the server.
+export function alwaysHttps(site: Pick<SiteDomains, "domain" | "state" | "https" | "aliases">, now: Date = new Date(), admin = false): AlwaysHttps {
   if (site.state !== "active") {
     return site.state === "suspended"
       ? { kind: "not-live", why: "This website is suspended, so its domains answer with an error page.", next: "Resume the website in its Settings tab to change this." }
-      : { kind: "not-live", why: "The hosting account needs a check by whoever runs this server.", next: "Ask whoever runs this server to check the website." };
+      : { kind: "not-live", why: "The hosting account needs a check by whoever runs this server.", next: admin ? "Open Hosting accounts, under Advanced in the menu, to see what the account needs." : "Ask whoever runs this server to check the website." };
   }
   if (!site.https.on) {
     // An alias says "off" only when this server has no certificate manager.
     if (site.aliases.some((alias) => alias.https === "off")) {
-      return { kind: "no-certificates-here", why: "Certificates are not set up on this server, so the website has none and stays on http://.", next: "Ask whoever runs this server to set up certificates." };
+      return { kind: "no-certificates-here", why: "Certificates are not set up on this server, so the website has none and stays on http://.", next: admin ? "On the server, as root, run the installer again with your email address: ./install.sh --acme-email you@example.com. Websites then get certificates by themselves." : "Ask whoever runs this server to set up certificates." };
     }
     // The panel asks for one by itself once the domain points here, but
     // one may still not come (the certificate authority refuses or limits
-    // it), so the step ends with who to ask.
-    return { kind: "no-certificate", why: "This website has no certificate yet, so visitors cannot be sent to https:// without a security warning.", next: `Get a certificate on this tab first: point ${site.domain} at this server with the DNS record below. The panel tries every few hours; if no certificate comes within a day, ask whoever runs this server.` };
+    // it), so the step ends with who to ask, or for an admin where to look.
+    return { kind: "no-certificate", why: "This website has no certificate yet, so visitors cannot be sent to https:// without a security warning.", next: admin
+      ? `Point ${site.domain} at this server with the DNS record below, and keep port 80 open to the internet: the certificate authority checks the domain there. The panel asks every few hours by itself. If none comes within a day, see why on the server: journalctl -u sifruno | grep acme`
+      : `Get a certificate on this tab first: point ${site.domain} at this server with the DNS record below. The panel tries every few hours; if no certificate comes within a day, ask whoever runs this server.` };
   }
   const until = site.https.not_after ? new Date(site.https.not_after) : undefined;
   if (until && !Number.isNaN(until.getTime()) && until.getTime() <= now.getTime()) {

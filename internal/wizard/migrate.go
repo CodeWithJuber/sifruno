@@ -598,8 +598,11 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 	if plan.Tier != "native" {
 		return "", tierRefusal(plan)
 	}
+	// Each warning names its file and line and says what differs: a
+	// header or error text not carried, a lower memory_limit, a .user.ini
+	// this server's PHP does not read.
 	for _, w := range plan.TierWarnings {
-		j.note("A .htaccess line is not carried over: " + w)
+		j.note("Check before cutover: " + w)
 	}
 	for _, u := range plan.Users {
 		if u.Hash == "" {

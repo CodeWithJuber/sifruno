@@ -408,15 +408,15 @@ func TestNotConvertedLinesNameWhatToChange(t *testing.T) {
 	}
 }
 
-// TestTierWarningsKeepTheGateClosed: a PHP setting OpenLiteSpeed does not
-// apply is shown as a note, which keeps the cutover gate closed until a
-// person accepts it.
+// TestTierWarningsKeepTheGateClosed: what the copy will not do as the old
+// server did (here a .user.ini's auto_prepend_file) is shown as a note,
+// which keeps the cutover gate closed until a person accepts it.
 func TestTierWarningsKeepTheGateClosed(t *testing.T) {
 	f := newMigrationFixture(t)
-	f.broker.plan.TierWarnings = []string{".htaccess line 12 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings from .htaccess"}
+	f.broker.plan.TierWarnings = []string{".user.ini line 2 (auto_prepend_file): the old server's PHP ran a file before every script"}
 	job := f.migrate(t)
 	m := job.Migration
-	if job.State != StateSucceeded || m.Gate != GateClosed || !slices.Contains(m.Notes, "A .htaccess line is not carried over: .htaccess line 12 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings from .htaccess") {
+	if job.State != StateSucceeded || m.Gate != GateClosed || !slices.Contains(m.Notes, "Check before cutover: .user.ini line 2 (auto_prepend_file): the old server's PHP ran a file before every script") {
 		t.Fatalf("job: %+v %+v", job.State, m)
 	}
 }

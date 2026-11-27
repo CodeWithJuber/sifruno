@@ -11,9 +11,11 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"sifruno/internal/cpmove"
+	"sifruno/internal/cpsource"
 )
 
 // archiveName is the backup file in its migration's folder.
@@ -55,15 +57,29 @@ func (m *migrator) SaveArchive(ctx context.Context, id string, size int64, body 
 	syncErr := f.Sync()
 	f.Close()
 	switch {
-	case ctx.Err() != nil:
-		return nil, &MigrationError{Step: "archive", Detail: "The upload took longer than this server waits, so it stopped."}
-	case err != nil || n != size:
-		return nil, &MigrationError{Step: "archive", Detail: "The upload of the backup file stopped before its end, so nothing was kept."}
+	case ctx.Err() != nil || err != nil || n != size:
+		return nil, &MigrationError{Step: "archive", Detail: "The upload of the backup file stopped before its end (the connection ended, or it took longer than two hours), so nothing was kept."}
 	case syncErr != nil:
 		return nil, ErrUnavailable
 	}
-	return m.readArchive(ctx, id, nil)
+	// The first read has its own time, whatever the upload took.
+	read, cancel := context.WithTimeout(context.WithoutCancel(ctx), archiveReadTimeout)
+	defer cancel()
+	return m.readArchive(read, id, nil)
 }
+
+// archiveReadTimeout bounds one read of a kept backup file.
+const archiveReadTimeout = 30 * time.Minute
+
+// archiveRatio bounds how much a backup file may expand: a site's files and
+// dumps compress some tenfold, a file of zeros a thousandfold. Every step
+// reads the whole file again, holding the backup lock for the database
+// steps, so a file that expands past this is refused instead of costing
+// minutes of root's CPU on each step.
+const (
+	archiveRatio       = 64
+	minArchiveExpanded = 1 << 30
+)
 
 // ReadArchive reads the migration's backup file again, extracting nothing.
 func (m *migrator) ReadArchive(ctx context.Context, rec migrationRecord) (*cpmove.Archive, error) {
@@ -96,6 +112,7 @@ func (m *migrator) readArchive(ctx context.Context, id string, sink cpmove.Sink)
 	}
 	limits := cpmove.DefaultLimits()
 	limits.MaxArchiveBytes = info.Size()
+	limits.MaxExpandedBytes = min(limits.MaxExpandedBytes, max(minArchiveExpanded, info.Size()*archiveRatio))
 	if sink == nil {
 		sink = discardSink{}
 	}
@@ -210,7 +227,7 @@ func homeHtaccess(name string, dir bool) (string, bool) {
 
 // extractArchive reads the migration's backup file into dir (a fresh
 // root-only staging folder) through keep, within the free space margin.
-func (m *migrator) extractArchive(ctx context.Context, rec migrationRecord, dir string, keep func(string, bool) (string, bool)) error {
+func (m *migrator) extractArchive(ctx context.Context, rec migrationRecord, dir string, most uint64, keep func(string, bool) (string, bool)) error {
 	avail, total, _, err := m.e.space(m.e.stage)
 	if err != nil {
 		return ErrUnavailable
@@ -220,10 +237,10 @@ func (m *migrator) extractArchive(ctx context.Context, rec migrationRecord, dir 
 		return ErrUnavailable
 	}
 	defer root.Close()
-	sink := &stageSink{root: cpmove.RootSink{Root: root}, keep: keep, budget: roomLeft(avail, total)}
+	sink := &stageSink{root: cpmove.RootSink{Root: root}, keep: keep, budget: min(most, roomLeft(avail, total))}
 	_, err = m.readArchive(ctx, rec.ID, sink)
 	if sink.full {
-		return &MigrationError{Step: "space", Detail: "The copy from the backup file reached the free space this server keeps, so it was stopped."}
+		return &MigrationError{Step: "space", Detail: "The copy from the backup file reached the free space this server keeps (or, for a database dump, the 32 GiB one may take), so it was stopped."}
 	}
 	return err
 }
@@ -234,7 +251,7 @@ func (m *migrator) archivePreflight(ctx context.Context, rec migrationRecord, st
 	if unix.Mkdirat(int(stage.Fd()), "htaccess", 0700) != nil {
 		return ErrUnavailable
 	}
-	return m.extractArchive(ctx, rec, filepath.Join(stagePath, "htaccess"), homeHtaccess)
+	return m.extractArchive(ctx, rec, filepath.Join(stagePath, "htaccess"), maxDumpBytes, homeHtaccess)
 }
 
 // archiveDatabase loads one database's dump from the backup file into the
@@ -266,6 +283,18 @@ func (m *migrator) archiveDatabase(ctx context.Context, rec migrationRecord, db 
 		}
 		return MigrateDatabaseResult{}, err
 	}
+	// The SSH path refuses a database with views, triggers, routines or
+	// events before its dump, because those run as a named MariaDB user.
+	// A backup's dump is only known once loaded: the same refusal follows
+	// the load, and the failed step's undo drops the database.
+	objects, _ := cpsource.ObjectsSQL(db)
+	found, err := m.localSQL(ctx)(objects)
+	if err != nil {
+		return MigrateDatabaseResult{}, err
+	}
+	if kinds := strings.Fields(string(found)); len(kinds) > 0 {
+		return MigrateDatabaseResult{}, &MigrationError{Step: "database", Detail: "The database " + db + " in the backup file has " + strings.Join(uniqueWords(kinds), ", ") + ". This version copies tables and rows only, because those objects run as a named MariaDB user."}
+	}
 	copied, tables, err := m.count(ctx, db, m.localSQL(ctx))
 	if err != nil {
 		return MigrateDatabaseResult{}, err
@@ -281,7 +310,7 @@ func (m *migrator) archiveDatabase(ctx context.Context, rec migrationRecord, db 
 // <stage>/db/<db>.sql, as the SSH path's dump lands there.
 func (m *migrator) archiveDump(ctx context.Context, rec migrationRecord, stagePath, db string) error {
 	want := "mysql/" + db + ".sql"
-	err := m.extractArchive(ctx, rec, filepath.Join(stagePath, "db"), func(name string, dir bool) (string, bool) {
+	err := m.extractArchive(ctx, rec, filepath.Join(stagePath, "db"), maxDumpBytes, func(name string, dir bool) (string, bool) {
 		return db + ".sql", !dir && name == want
 	})
 	if err != nil {

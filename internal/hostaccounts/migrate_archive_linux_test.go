@@ -107,8 +107,15 @@ func TestArchiveDatabaseLoadsTheBackupsDump(t *testing.T) {
 	if staged != "CREATE TABLE t (id int);\n" {
 		t.Fatalf("the import read %q", staged)
 	}
-	l.Op = strings.Repeat("7", 32)
+	// A dump that made a trigger is refused once loaded, as the SSH path
+	// refuses one before its dump; the job's undo drops the database.
+	f.localObjects = "trigger\n"
 	var failed *MigrationError
+	if _, err := m.Database(context.Background(), rec, "fixtureacct_wp", r, backupLeftover{Op: strings.Repeat("5", 32), Users: l.Users}); !errors.As(err, &failed) || failed.Step != "database" || !strings.Contains(failed.Detail, "trigger") {
+		t.Fatalf("a trigger in the dump: %v", err)
+	}
+	f.localObjects = ""
+	l.Op = strings.Repeat("7", 32)
 	if _, err := m.Database(context.Background(), rec, "fixtureacct_shop", r, backupLeftover{Op: l.Op, Users: map[string]string{"fixtureacct_shop": "sifruno_rst_0123456789abcdef"}}); !errors.As(err, &failed) || failed.Step != "database" {
 		t.Fatalf("a dump the file does not hold: %v", err)
 	}

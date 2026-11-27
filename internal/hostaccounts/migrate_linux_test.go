@@ -34,10 +34,13 @@ type fakeSource struct {
 	ran  []ranCommand
 	home map[string]string // relative path -> content rsync writes; "->x" makes a link
 	// remote answers a remote command by its prefix.
-	remote   map[string]string
-	dump     string
-	objects  string // what the source's object check finds
-	failCopy bool
+	remote  map[string]string
+	dump    string
+	objects string // what the source's object check finds
+	// localObjects is what the object check on this server finds after a
+	// backup file's dump is loaded.
+	localObjects string
+	failCopy     bool
 	// realCopy runs cp and the mode fix for real (realProgram); modes are
 	// the modes rsync writes entries with (default 0644 and 0755).
 	realCopy bool
@@ -154,6 +157,8 @@ func (f *fakeSource) run(_ context.Context, c backupCommand) ([]byte, int, error
 		switch {
 		case strings.HasPrefix(stdin, "SELECT COUNT(*) FROM information_schema.SCHEMATA"):
 			return answer("1\n")
+		case strings.HasPrefix(stdin, "SELECT 'missing'"):
+			return answer(f.localObjects)
 		case strings.HasPrefix(stdin, "SELECT TABLE_NAME"):
 			return answer("wp_options\nwp_posts\n")
 		case strings.HasPrefix(stdin, "SELECT 'wp_options'"):

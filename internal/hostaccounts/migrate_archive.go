@@ -224,7 +224,7 @@ func archiveFailure(err error) error {
 	case errors.Is(err, cpmove.ErrNotCPMove):
 		return &MigrationError{Step: "archive", Detail: "The file is not a cPanel account backup: it has no cp/USER file for the account its top folder names, or its main domain cannot be read."}
 	case errors.Is(err, cpmove.ErrLimit):
-		return &MigrationError{Step: "archive", Detail: "The backup file holds more than this server takes in one move: a file over 32 GiB, more than 100,000 entries, a name longer than 4096 bytes, or more data than this server has free."}
+		return &MigrationError{Step: "archive", Detail: "The backup file holds more than this server takes in one move: a file over 32 GiB, more than 100,000 entries, a name longer than 4096 bytes, more data than this server has free, or more than 64 times its own size once unpacked."}
 	case errors.Is(err, sitemodel.ErrInvalid):
 		return &MigrationError{Step: "archive", Detail: installDetail([]byte(err.Error())) + "."}
 	case errors.Is(err, cpmove.ErrCanceled):

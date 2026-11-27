@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -314,7 +315,7 @@ func (m *migrator) Files(ctx context.Context, rec migrationRecord, home string, 
 	if rec.Via == ViaArchive {
 		// The backup file's home, staged as rsync stages the old server's:
 		// root's, in the root-only staging folder, within the margin.
-		if err := m.extractArchive(ctx, rec, stagePath+"/files", func(name string, _ bool) (string, bool) { return inHome(name) }); err != nil {
+		if err := m.extractArchive(ctx, rec, stagePath+"/files", math.MaxUint64, func(name string, _ bool) (string, bool) { return inHome(name) }); err != nil {
 			return MigrateFilesResult{}, err
 		}
 		return m.placeFiles(ctx, stage, stagePath, home, r, protect)

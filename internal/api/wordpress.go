@@ -82,14 +82,15 @@ var wizardFields = map[string][]wizardField{
 	"redirect-remove": {{name: "from"}, {name: "expected_revision", whole: true}},
 	"always-https":    {{name: "always_https", flag: true}, {name: "expected_revision", whole: true}},
 	// Move a website here (migrations.go).
-	"migration-source":        {{name: "host"}, {name: "port", whole: true}},
+	"migration-source":        {{name: "host"}, {name: "port", whole: true}, {name: "via"}},
+	"migration-install-key":   {{name: "password"}, {name: "private_key"}, {name: "passphrase"}},
 	"migration-whm":           {{name: "address"}, {name: "token"}, {name: "password"}, {name: "ssh_port", whole: true}, {name: "tls_fingerprint"}},
 	"migration-host-key":      {{name: "fingerprint"}},
 	"migration-cancel":        {},
 	"migration-stale-cleared": {},
 	"migration-archive":       {}, // the backup file's bytes, read as a stream
 
-	"migration":        {{name: "source"}, {name: "username"}},
+	"migration":        {{name: "source"}, {name: "username"}, {name: "site"}},
 	"migration-verify": {},
 	"migration-accept": {{name: "reason"}},
 	"migration-ready":  {},
@@ -211,7 +212,12 @@ func allowedWizardMutation(r *http.Request) bool { return wizardRoute(r) != "" }
 // prepareWizardJSON checks a body under /api/v1/websites (the wizard's
 // request, or one of the site page's changes) before Huma decodes it.
 func prepareWizardJSON(w http.ResponseWriter, r *http.Request) bool {
-	return prepareStrictJSON(w, r, wizardFields[wizardRoute(r)])
+	route := wizardRoute(r)
+	if route == "migration-install-key" {
+		// A private key in PEM form is larger than the other bodies.
+		return prepareStrictJSONWithin(w, r, wizardFields[route], maxInstallKeyBody)
+	}
+	return prepareStrictJSON(w, r, wizardFields[route])
 }
 
 // prepareStrictJSON bounds and checks a POST body before Huma decodes it:

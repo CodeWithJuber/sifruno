@@ -311,7 +311,7 @@ export function MoveFromServer({ onBack }: { onBack: () => void }) {
               <RadioGroupItem value={s.domain} id={`move-site-${s.domain}`} data-testid={`move-site-${s.domain}`} />
               <FieldContent>
                 <FieldTitle className="break-all">{s.domain}{!s.movable && <Badge variant="outline">Cannot move as it is</Badge>}</FieldTitle>
-                <FieldDescription className="text-start break-all">{serverName(s)}{s.doc_root ? `, files in ${s.doc_root}` : ""}{s.wordpress ? ", WordPress" : ""}</FieldDescription>
+                <FieldDescription className="text-start break-words">{serverName(s)}{s.doc_root ? `, files in ${s.doc_root}` : ""}{s.wordpress ? ", WordPress" : ""}</FieldDescription>
               </FieldContent>
             </Field>
           </FieldLabel>)}
@@ -321,8 +321,8 @@ export function MoveFromServer({ onBack }: { onBack: () => void }) {
           <h3 className="text-base font-medium break-all">{site.domain}</h3>
           <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
             <dt className="text-muted-foreground">Web server</dt><dd>{serverName(site)}</dd>
-            {site.doc_root && <><dt className="text-muted-foreground">Files</dt><dd className="break-all"><code>{site.doc_root}</code>{site.owner && <> owned by <code>{site.owner}</code>; they go into the account's <code>public_html</code></>}</dd></>}
-            {site.www && <><dt className="text-muted-foreground">Also answers</dt><dd className="break-all">www.{site.domain}</dd></>}
+            {site.doc_root && <><dt className="text-muted-foreground">Files</dt><dd className="break-words"><code>{site.doc_root}</code>{site.owner && <> owned by <code>{site.owner}</code>; they go into the account's <code>public_html</code></>}</dd></>}
+            {site.www && <><dt className="text-muted-foreground">Also answers</dt><dd className="break-words">www.{site.domain}</dd></>}
             <dt className="text-muted-foreground">PHP</dt><dd>{site.php}{site.php_source ? ` (the old server runs ${site.php_source})` : " (the old server does not name its version)"}</dd>
             <dt className="text-muted-foreground">Database</dt><dd className="break-words">{site.database ? <><code>{site.database}</code>, named in wp-config.php: it moves with its user and password, under the account's name</> : "None found"}</dd>
             <dt className="text-muted-foreground">Certificate</dt><dd>{site.certificate ? "Copied when a trusted authority issued it and it is valid for 7 days more" : "None named; the site uses http here until its domain points here"}</dd>

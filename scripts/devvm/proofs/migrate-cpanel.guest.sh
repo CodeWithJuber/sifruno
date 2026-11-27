@@ -919,7 +919,10 @@ archive_proof() {
   echo "  answer: $(json "$WORK/answer.json" "{k: d['source']['archive'][k] for k in ('user','domain','databases','home_bytes')}")"
   echo "  not carried: $(json "$WORK/answer.json" "[i['text'][:60] for i in d['source']['archive']['not_carried']]")"
   check "the upload is read: account $SHOP, $SHOP_DOMAIN, the database ${SHOP}_wp" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['archive']['user']+' '+d['source']['archive']['domain']+' '+','.join(d['source']['archive']['databases'])")" = "$SHOP $SHOP_DOMAIN ${SHOP}_wp"
-  check "it says that mail and the DNS zone do not move" test "$(json "$WORK/answer.json" "sorted({i['part'] for i in d['source']['archive']['not_carried']})")" = "['dns', 'mail']"
+  # Since 11f4a13 the shop's root .htaccess holds cPanel's MultiPHP INI
+  # block, whose session.save_path (in both its IfModule branches) is
+  # cPanel's own folder and does not move.
+  check "it says that mail, the DNS zone and cPanel's session.save_path do not move" test "$(json "$WORK/answer.json" "(sorted({i['part'] for i in d['source']['archive']['not_carried']}), sorted({i['text'] for i in d['source']['archive']['not_carried'] if i['part'] == 'php'}))")" = "(['dns', 'mail', 'php'], ['The PHP setting session.save_path is not one a website sets for itself here, so it was not carried.'])"
   check "the file is root's 0600 in the migration's own 0700 folder" test "$(stat -c '%U %a' "$STATE/migrate/$SRC/archive" "$STATE/migrate/$SRC" 2>/dev/null | paste -sd ' ')" = "root 600 root 700"
   check "the file is the one uploaded (same sha256)" test "$(sha256sum < "$STATE/migrate/$SRC/archive" | cut -d' ' -f1)" = "$(sha256sum < "$WORK/cpmove-$SHOP.tar.gz" | cut -d' ' -f1)"
   check "no migration key was made for a backup file" test ! -e "$STATE/migrate/$SRC/ssh_key"
@@ -930,8 +933,10 @@ archive_proof() {
   sample_stop
   check "the move succeeded" test "$state" = succeeded
   check "its first and last steps name the backup file" test "$(json "$WORK/job.json" "[s['title'] for s in d['job']['steps'] if s['name'] in ('source','key')]")" = "['Read the website from the backup file', 'Delete the uploaded backup file']"
-  check "the tier is Native (rewrite rules, and Akismet's access rules converted)" test "$(jm "['tier']")" = native
-  check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.json" "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
+  # The same shop as over SSH (section 4 there): since f80526b and 11f4a13
+  # its root .htaccess also holds the plugin blocks and PHP settings.
+  check "the tier is Native (rewrite rules kept; the <Files> rules, Akismet's access rules, redirects and error page converted)" test "$(jm "['tier']")" = native
+  check "the job names the root .htaccess's closed names, Akismet's folder, the two redirects, the error page and nine PHP settings as converted" test "$(json "$WORK/job.json" "[(x['file'], x['path']) for x in d['job']['migration']['converted']]")" = "[('.htaccess', '/'), ('wp-content/plugins/akismet/.htaccess', '/wp-content/plugins/akismet/'), ('.htaccess', '/old-page'), ('.htaccess', '^/archive/([0-9]+)/?\$'), ('.htaccess', '/403.html'), ('.htaccess', 'display_errors'), ('.htaccess', 'max_execution_time'), ('.htaccess', 'max_input_time'), ('.htaccess', 'max_input_vars'), ('.htaccess', 'memory_limit'), ('.htaccess', 'post_max_size'), ('.htaccess', 'session.gc_maxlifetime'), ('.htaccess', 'upload_max_filesize'), ('.htaccess', 'zlib.output_compression')]"
   check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
   src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
   dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"

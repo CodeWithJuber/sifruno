@@ -156,7 +156,8 @@ export function WebsiteLayout({ accountId }: { accountId: string }) {
         {/* A partly deleted site no longer serves, so it has nothing to open. */}
         {!partly && <>
           <div className="flex flex-wrap gap-2">
-            <SiteLink href={site.url} label="Open site" domain={site.domain} variant="default" testId="open-site" />
+            {/* Outline, so each tab's own action is the page's one primary button. */}
+            <SiteLink href={site.url} label="Open site" domain={site.domain} variant="outline" testId="open-site" />
             {site.kind === "wordpress" && <SiteLink href={site.admin_url} label="WordPress admin" domain={site.domain} variant="outline" testId="open-admin" />}
             <Button variant="outline" className={control} aria-expanded={dnsOpen} aria-controls="dns-help" onClick={() => setDnsOpen((value) => !value)} data-testid="set-up-dns">Set up DNS</Button>
           </div>

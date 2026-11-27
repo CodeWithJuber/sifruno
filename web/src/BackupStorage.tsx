@@ -106,7 +106,7 @@ function TargetFormView({ storage, onSaved }: { storage: Storage; onSaved: (save
       <Field data-invalid={errors.user ? true : undefined}>
         <FieldLabel htmlFor="backup-target-user">{fieldLabels.user}</FieldLabel>
         <Input {...bind("user")} {...identifier} className={control} type="text" enterKeyHint="next" value={values.user} onChange={(e) => set("user", e.target.value)} />
-        <FieldDescription id="backup-target-user-hint" className="text-start">The SFTP user the backups sign in as.</FieldDescription>
+        <FieldDescription id="backup-target-user-hint" className="text-start">The user on the storage server that the backups sign in as.</FieldDescription>
         <FieldProblem id="backup-target-user-error" message={errors.user} />
       </Field>
       <Field data-invalid={errors.path ? true : undefined}>

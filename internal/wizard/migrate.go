@@ -14,6 +14,7 @@ import (
 	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/migrateverify"
+	"sifruno/internal/sitemodel"
 	"sifruno/internal/whmsource"
 )
 
@@ -606,14 +607,10 @@ func (j *run) migrateSource(ctx context.Context) (string, *stepError) {
 	if !exact {
 		j.note(fmt.Sprintf("The old server runs PHP %q; this server offers 8.1 to 8.4, so the copy runs PHP %s. Check the preview for errors.", clip(plan.PHPSource), php))
 	}
-	if len(plan.Aliases) > 0 {
-		j.note("The site's other domains (" + strings.Join(plan.Aliases, ", ") + ") were not added; this version moves the main domain. Add them on the website's Domains tab.")
-	}
-	for _, s := range plan.GrantsSkipped {
-		j.note("A database grant was not copied: " + s + ".")
-	}
-	for _, s := range plan.CronSkipped {
-		j.note("A scheduled-job line was not copied: " + s + ".")
+	// The plan as the website model: what it does not carry is a note.
+	site := cpanelSite(plan, sitemodel.SourceCPanel, php, exact)
+	for _, item := range site.NotCarried {
+		j.note(item.Text)
 	}
 	for _, line := range plan.Cron {
 		job := hostaccounts.CronJob{Schedule: line.Schedule, Command: line.Command}

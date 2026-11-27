@@ -161,11 +161,10 @@ func TestHtaccessScanDetailsNameEachLine(t *testing.T) {
 	}
 	for _, want := range []string{
 		"    line 3 AddHandler [vendor, handled]: PHP handler",
-		"    line 6 php_value [php_settings, warning]: OpenLiteSpeed does not apply PHP settings from .htaccess",
+		"    line 6 php_value [php_settings, converted]: PHP setting: OpenLiteSpeed does not read it from .htaccess",
 		"    line 7 Header [headers, ignored]: caching or security response header",
 		"  moves to OpenLiteSpeed: no\n",
 		"    refused: tools/.htaccess line 2 (SifrunoUnknown On): a directive this panel does not know\n",
-		"    warning: .htaccess line 6 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings",
 		"    PHP handler: .htaccess line 3 for /: ea-php81\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -182,6 +181,7 @@ func TestHtaccessScanDetailsNameEachLine(t *testing.T) {
 		"    converted: .htaccess for /\n",
 		"    converted: line 8, redirect (301) of /old to /new\n",
 		"    converted: line 9, error page /404.html for 404\n",
+		"    converted: line 6, PHP setting upload_max_filesize 64M\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("details lack %q:\n%s", want, out)

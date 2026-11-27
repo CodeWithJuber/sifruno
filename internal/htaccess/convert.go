@@ -1073,8 +1073,9 @@ func quoteArg(s string) string {
 // SiteConversion is the converter's answer for a scanned site: the rules to
 // enforce, or the files it refused. Native reports a site OpenLiteSpeed
 // serves as Apache did: every file native or converted. Warnings are the
-// lines a person checks before cutover, and PHP the lines that chose a PHP
-// version on the old server, for the migration to compare with its plan.
+// lines a person checks before cutover (the document root .user.ini's
+// among them), and PHP the lines that chose a PHP version on the old
+// server, for the migration to compare with its plan.
 type SiteConversion struct {
 	Native   bool          `json:"native"`
 	Rules    []FolderRule  `json:"rules"`
@@ -1086,6 +1087,10 @@ type SiteConversion struct {
 	// pages by status, the last line for a status winning, as in Apache.
 	Redirects  []Redirect  `json:"redirects,omitempty"`
 	ErrorPages []ErrorPage `json:"error_pages,omitempty"`
+	// PHPSettings are the root .htaccess's converted php_value and
+	// php_flag lines, each setting once, its last line winning
+	// (phpsettings.go).
+	PHPSettings []PHPSetting `json:"php_settings,omitempty"`
 }
 
 // MaxSiteRedirects bounds the redirects a site's root .htaccess converts;
@@ -1200,11 +1205,17 @@ func ConvertSite(site SiteResult) SiteConversion {
 			out.ErrorPages = append(out.ErrorPages, p)
 		}
 	}
+	settings, refused := sitePHPSettings(site.Files)
+	if refused != nil {
+		out.Refused = append(out.Refused, *refused)
+	}
+	out.PHPSettings = settings
+	out.Warnings = append(out.Warnings, site.UserINI...)
 	sort.Slice(out.ErrorPages, func(i, j int) bool { return out.ErrorPages[i].Status < out.ErrorPages[j].Status })
 	sort.Slice(out.Rules, func(i, j int) bool { return out.Rules[i].Path < out.Rules[j].Path })
 	out.Native = len(out.Refused) == 0
 	if !out.Native {
-		out.Rules, out.Redirects, out.ErrorPages = []FolderRule{}, nil, nil
+		out.Rules, out.Redirects, out.ErrorPages, out.PHPSettings = []FolderRule{}, nil, nil, nil
 	}
 	return out
 }

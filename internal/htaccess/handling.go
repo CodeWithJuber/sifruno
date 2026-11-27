@@ -29,18 +29,23 @@ import (
 //	               suffixes that are not scripts, and of the
 //	               usual type for HTML, SVG, JS and XML
 //	             AddDefaultCharset, AddCharset                 character set hint
+//	             php_value, php_flag Off for a setting PHP     PHP 8 has no such setting
+//	               5.4 removed (register_globals ...)
 //	handled      AddHandler/AddType of cPanel's PHP handler    the PHP version comes from the
 //	               for PHP suffixes only                       migration plan (PHPHandler); the
 //	                                                           vhost refuses .phtml, .php8 ...
 //	             Options -Indexes, -MultiViews, +FollowSymLinks the vhost does the same
 //	             CacheLookup on                                the vhost's cache module looks up
 //	             ErrorDocument code default (root .htaccess)   OpenLiteSpeed's own page
+//	             session.save_path naming cPanel's session     this server's PHP keeps sessions
+//	               folder, in the root .htaccess               in its own folder
 //	converted    Redirect, RedirectMatch, RedirectPermanent,   the vhost carries them
 //	               RedirectTemp 301/302, ErrorDocument code    (redirect.go)
 //	               /path, at the top of the root .htaccess
-//	warning      php_value, php_flag                           no safe conversion yet; shown at
-//	                                                           cutover for a person to check
-//	             Header on CORS headers or X-Robots-Tag        the vhost cannot send them yet
+//	             php_value, php_flag of a listed setting with  the vhost's phpIniOverride
+//	               a checked value, at the top of the root     carries them (phpsettings.go)
+//	               .htaccess
+//	warning      Header on CORS headers or X-Robots-Tag        the vhost cannot send them yet
 //	             SetEnvIf*/BrowserMatch* setting only          they condition headers that are
 //	               variables Header lines test (env=)          not sent here either
 //	             ErrorDocument code "text" (root .htaccess)    OpenLiteSpeed's own page instead
@@ -56,7 +61,7 @@ const (
 	HandlingSifruno Handling = "handled"
 	// HandlingConverted: OpenLiteSpeed does not read it from .htaccess, and
 	// the root broker writes the same rule into the site's vhost
-	// (SiteConversion.Redirects and ErrorPages).
+	// (SiteConversion.Redirects, ErrorPages and PHPSettings).
 	HandlingConverted Handling = "converted"
 	// HandlingWarning: OpenLiteSpeed does not apply it and Sifruno does not
 	// convert it, but losing it opens nothing. The site moves, and the
@@ -185,17 +190,6 @@ func handle(name string, args []string, envRead, headerEnv map[string]bool) (h H
 		if len(args) > 0 && strings.EqualFold(args[len(args)-1], "on") {
 			return HandlingSifruno, "LiteSpeed cache lookup: this server's cache module looks up every request already", ""
 		}
-	case "php_value", "php_flag":
-		// php_value and php_flag reach PHP only through Apache's mod_php or
-		// LiteSpeed Enterprise. OpenLiteSpeed 1.9.4 reads PHP settings only
-		// from a vhost or context phpIniOverride (doc.go), and LSPHP reads
-		// .user.ini only when LSPHP_ENABLE_USER_INI=on is in its environment
-		// (php-src sapi/litespeed/lsapi_main.c, PHP_MINIT_FUNCTION), which
-		// Sifruno's extprocessor does not set (olsweb renderPHP). So there
-		// is no safe conversion in this code: the copy runs with this
-		// server's default for the setting. "engine off" is access control
-		// and never gets here.
-		return HandlingWarning, phpSettingReason(arg(0)), ""
 	}
 	if strings.HasPrefix(name, "deflate") || strings.HasPrefix(name, "brotli") || strings.HasPrefix(name, "mod_gzip_") {
 		if e, ok := lookup(name); ok && e.category == CategoryCompression {
@@ -206,14 +200,6 @@ func handle(name string, args []string, envRead, headerEnv map[string]bool) (h H
 }
 
 const phpHandlerReason = "PHP handler: this server runs the site's .php files with the PHP version the migration reads from the old server's settings for the site, and refuses (403) the other PHP suffixes, such as .phtml and .php8, so their source is never sent"
-
-func phpSettingReason(setting string) string {
-	const base = "OpenLiteSpeed does not apply PHP settings from .htaccess, and this server's PHP does not read .user.ini files, so the copy uses this server's default for this setting."
-	if strings.EqualFold(setting, "auto_prepend_file") {
-		return base + " The file PHP loaded before every script (often a firewall such as Wordfence's) is not loaded: check the site's security plugin before cutover."
-	}
-	return base + " Check the site where the setting matters (upload sizes, memory and time limits, error display) before cutover."
-}
 
 // headerActions are the Header actions that add, change or remove a
 // response header outright. echo, edit and note are not covered.

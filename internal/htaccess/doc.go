@@ -12,11 +12,14 @@
 // harmless to ignore (caching, compression and MIME hints, caching and
 // security headers), handled by Sifruno another way (cPanel's PHP handler,
 // Options -Indexes), converted into the vhost (redirects and error pages of
-// the root .htaccess, redirect.go), or a warning a person checks before
-// cutover (php_value, php_flag, CORS and X-Robots-Tag headers). A file
-// whose ignored lines all have such a class is native; any other ignored
-// line keeps it convertible, and ConvertSite refuses it naming the file,
-// line and directive.
+// the root .htaccess, redirect.go, and its php_value and php_flag lines of
+// listed settings, phpsettings.go), or a warning a person checks before
+// cutover (CORS and X-Robots-Tag headers). A file whose ignored lines all
+// have such a class is native; any other ignored line keeps it
+// convertible, and ConvertSite refuses it naming the file, line and
+// directive. The scan also reads the site root's .user.ini, which this
+// server's PHP does not, and warns when it runs a file before or after
+// every script (phpsettings.go).
 //
 // The package is read-only. It parses, classifies and converts files; it
 // does not rewrite or serve anything, and a verdict here is a pre-flight

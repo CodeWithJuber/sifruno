@@ -116,9 +116,10 @@ func TestHandlingOfEachClass(t *testing.T) {
 		{"Options -MultiViews -Indexes", HandlingSifruno},
 		{"Options +FollowSymLinks", HandlingSifruno},
 		{"CacheLookup on", HandlingSifruno},
+		{"php_flag magic_quotes_gpc Off", HandlingIgnored},
+		{"php_value register_globals 0", HandlingIgnored},
+		{"php_value session.save_path \"/var/cpanel/php/sessions/ea-php81\"", HandlingSifruno},
 		// A warning at cutover.
-		{"php_value upload_max_filesize 64M", HandlingWarning},
-		{"php_flag display_errors Off", HandlingWarning},
 		{"Header set X-Robots-Tag noindex", HandlingWarning},
 		{"Header set Access-Control-Allow-Origin *", HandlingWarning},
 		{"Header always set Access-Control-Allow-Methods \"GET, POST\"", HandlingWarning},
@@ -127,6 +128,8 @@ func TestHandlingOfEachClass(t *testing.T) {
 		{"ErrorDocument 404 /404.php", HandlingConverted},
 		{"Redirect 301 /old /new", HandlingConverted},
 		{"RedirectMatch 302 ^/blog/(.*)$ https://example.com/news/$1", HandlingConverted},
+		{"php_value upload_max_filesize 64M", HandlingConverted},
+		{"php_flag display_errors Off", HandlingConverted},
 		// Not covered: the file stays off the Native tier.
 		{"Header set Set-Cookie a=b", ""},
 		{"Header echo ^X-", ""},
@@ -150,6 +153,10 @@ func TestHandlingOfEachClass(t *testing.T) {
 		{"Options -FollowSymLinks", ""},
 		{"CacheLookup off", ""},
 		{"php_admin_value open_basedir none", ""},
+		{"php_admin_value memory_limit 256M", ""},
+		{"php_value auto_prepend_file /home/u/public_html/wordfence-waf.php", ""},
+		{"php_value session.save_path /home/u/tmp", ""},
+		{"php_flag register_globals On", ""},
 		{"ErrorDocument 404 https://example.com/404", ""},
 		{"ErrorDocument 404 /404.php?code=404", ""},
 		{"Redirect 307 /old /new", ""},
@@ -244,7 +251,7 @@ func TestHarmlessLinesBesideAConvertedRule(t *testing.T) {
 	// OpenLiteSpeed ignores these lines with or without the converted rule,
 	// and none of them changes who may enter the folder.
 	got := ConvertSite(siteOf(map[string]string{
-		"private/.htaccess": "Deny from all\nOptions -MultiViews -Indexes\n<IfModule mod_expires.c>\nExpiresActive On\n</IfModule>\n<IfModule mod_php.c>\nphp_value max_execution_time 300\n</IfModule>\n",
+		"private/.htaccess": "Deny from all\nOptions -MultiViews -Indexes\n<IfModule mod_expires.c>\nExpiresActive On\n</IfModule>\n<IfModule mod_headers.c>\nHeader set X-Robots-Tag noindex\n</IfModule>\n<IfModule mod_php.c>\nphp_flag magic_quotes_gpc off\n</IfModule>\n",
 	}))
 	if !got.Native || len(got.Rules) != 1 || got.Rules[0].Hosts.Kind != HostsNone {
 		t.Fatalf("%+v", got)
@@ -299,29 +306,21 @@ func TestNotConvertedLineRefusesWithItsLine(t *testing.T) {
 	}
 }
 
-func TestPHPValueIsAWarning(t *testing.T) {
+func TestPHPSettingsBesideATypicalRoot(t *testing.T) {
 	text := cpanelWordPress + "php_value upload_max_filesize 64M\nphp_flag display_errors Off\nphp_value auto_prepend_file '/home/alice/public_html/wordfence-waf.php'\n"
-	got := ConvertSite(siteOf(map[string]string{".htaccess": text}))
-	if !got.Native || len(got.Refused) != 0 {
-		t.Fatalf("%+v", got)
-	}
 	lines := strings.Count(cpanelWordPress, "\n")
-	want := []FileWarning{
-		{File: ".htaccess", Line: lines + 1, Directive: "php_value upload_max_filesize 64M"},
-		{File: ".htaccess", Line: lines + 2, Directive: "php_flag display_errors Off"},
-		// The path is not shown: it can name the account.
-		{File: ".htaccess", Line: lines + 3, Directive: "php_value auto_prepend_file"},
+	got := ConvertSite(siteOf(map[string]string{".htaccess": text}))
+	// The path is not shown: it can name the account.
+	if got.Native || len(got.Refused) != 1 || got.Refused[0].Line != lines+3 || got.Refused[0].Directive != "php_value auto_prepend_file" || got.Refused[0].Cause != CauseNotConverted || !strings.Contains(got.Refused[0].Reason, "firewall") {
+		t.Fatalf("%+v", got.Refused)
 	}
-	if len(got.Warnings) != len(want) {
-		t.Fatalf("warnings %+v", got.Warnings)
+	if len(got.PHPSettings) != 0 || len(got.Warnings) != 0 {
+		t.Fatalf("a refused site carries %+v, warns %+v", got.PHPSettings, got.Warnings)
 	}
-	for i, w := range got.Warnings {
-		if w.File != want[i].File || w.Line != want[i].Line || w.Directive != want[i].Directive || !strings.Contains(w.Reason, "OpenLiteSpeed does not apply PHP settings from .htaccess") {
-			t.Errorf("warning %d: %+v, want %+v", i, w, want[i])
-		}
-	}
-	if !strings.Contains(got.Warnings[2].Reason, "before every script") {
-		t.Errorf("auto_prepend_file warning does not say what is lost: %q", got.Warnings[2].Reason)
+	got = ConvertSite(siteOf(map[string]string{".htaccess": cpanelWordPress + "php_value upload_max_filesize 64M\nphp_flag display_errors Off\n"}))
+	want := []PHPSetting{{Line: lines + 1, Name: "upload_max_filesize", Value: "64M"}, {Line: lines + 2, Name: "display_errors", Value: "off", Flag: true}}
+	if !got.Native || !reflect.DeepEqual(got.PHPSettings, want) || len(got.Warnings) != 0 {
+		t.Fatalf("%+v", got)
 	}
 }
 

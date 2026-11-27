@@ -130,9 +130,12 @@ type Finding struct {
 	// PHP is the PHP package a handler line names (PHPHandler).
 	PHP string `json:"php_handler,omitempty"`
 	// Redirect and ErrorPage are what a converted redirect or
-	// ErrorDocument line becomes in the vhost (redirect.go).
-	Redirect  *Redirect  `json:"redirect,omitempty"`
-	ErrorPage *ErrorPage `json:"error_page,omitempty"`
+	// ErrorDocument line becomes in the vhost (redirect.go), and
+	// PHPSetting what a converted php_value or php_flag line becomes
+	// (phpsettings.go).
+	Redirect   *Redirect   `json:"redirect,omitempty"`
+	ErrorPage  *ErrorPage  `json:"error_page,omitempty"`
+	PHPSetting *PHPSetting `json:"php_setting,omitempty"`
 }
 
 // AccessRule groups access findings that a verify step would test together.
@@ -525,10 +528,12 @@ func (c *classifier) directive(n *Node, sc scope) Finding {
 			f.Handling, reason, f.Redirect = c.convertRedirect(name, n.Args, sc)
 		case "errordocument":
 			f.Handling, reason, f.ErrorPage = c.convertErrorDocument(n.Args, sc)
+		case "php_value", "php_flag", "php_admin_value", "php_admin_flag":
+			f.Handling, reason, f.PHPSetting = c.convertPHP(name, n.Args, sc)
 		default:
 			f.Handling, reason, f.PHP = handle(name, n.Args, c.envRead, c.headerEnv)
 		}
-		// A refused redirect or ErrorDocument line says why.
+		// A refused redirect, ErrorDocument or PHP line says why.
 		if f.Handling != "" || reason != "" {
 			f.Reason = reason
 		}
@@ -537,6 +542,9 @@ func (c *classifier) directive(n *Node, sc scope) Finding {
 		}
 		if f.ErrorPage != nil {
 			f.ErrorPage.Line = n.Line
+		}
+		if f.PHPSetting != nil {
+			f.PHPSetting.Line = n.Line
 		}
 	}
 	if f.Reason == "" {

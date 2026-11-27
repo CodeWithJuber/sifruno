@@ -232,9 +232,9 @@ func TestClassifyFixtures(t *testing.T) {
 			"5 deny_allow / files=\\.(env|log)$ methods= expect=0",
 		}},
 		{name: "php_value lines", urlPath: "/", data: "php_value upload_max_filesize 64M\nphp_value post_max_size 64M\nphp_flag display_errors Off\n", verdict: VerdictNative, findings: []string{
-			"1 php_value php_settings false warning",
-			"2 php_value php_settings false warning",
-			"3 php_flag php_settings false warning",
+			"1 php_value php_settings false converted",
+			"2 php_value php_settings false converted",
+			"3 php_flag php_settings false converted",
 		}},
 		{name: "cPanel PHP handler block", urlPath: "/", data: cpanelHandler, verdict: VerdictNative, findings: []string{
 			"3 <IfModule> structure true",
@@ -249,7 +249,7 @@ func TestClassifyFixtures(t *testing.T) {
 		}, rules: []string{"1 deny_allow /private/ files= methods= expect=403"}},
 		{name: "Wordfence WAF block", urlPath: "/", data: wordfenceBlock, verdict: VerdictCompat, causes: []string{CauseAccessControl}, findings: []string{
 			"2 <IfModule> structure true",
-			"3 php_value vendor false warning",
+			"3 php_value vendor false",
 			"5 <Files> access_control false deny_allow / files=.user.ini regex=false",
 			"6 <IfModule> structure true",
 			"7 Require access_control false deny_allow / files=.user.ini regex=false",

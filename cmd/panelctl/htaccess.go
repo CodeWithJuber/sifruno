@@ -169,6 +169,9 @@ func writeMove(b *strings.Builder, conv htaccess.SiteConversion) {
 	for _, p := range conv.ErrorPages {
 		fmt.Fprintf(b, "    converted: line %d, error page %s for %d\n", p.Line, p.URL, p.Status)
 	}
+	for _, p := range conv.PHPSettings {
+		fmt.Fprintf(b, "    converted: line %d, PHP setting %s %s\n", p.Line, p.Name, p.Value)
+	}
 	for _, w := range conv.Warnings {
 		fmt.Fprintf(b, "    warning: %s: %s\n", where(w.File, w.Line, w.Directive), w.Reason)
 	}

@@ -212,8 +212,15 @@ if [ -n "$PHPXY" ] && [ ! -x "$LSWS/lsphp$PHPXY/bin/lsphp" ]; then
   dnf -y -q install "lsphp$PHPXY" "lsphp$PHPXY-common" "lsphp$PHPXY-mysqlnd" >/dev/null 2>&1
 fi
 check "this server has LSPHP $PHPXY for the copy" test -x "$LSWS/lsphp$PHPXY/bin/lsphp"
+# OpenSSH 9.8 and later (the stand-in's packages now bring 9.9) block a
+# source address for a while after refused sign-ins (PerSourcePenalties:
+# authfail 5 s each, from 15 s). The proof refuses sign-ins from this
+# server on purpose, before a key is installed and after each removal, so
+# the stand-in turns that off; an sshd that does not know the keyword
+# keeps its file as it was.
 in_ctr "ssh-keygen -A >/dev/null; mkdir -p /root/.ssh && chmod 700 /root/.ssh && : > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys; \
-  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config; /usr/sbin/sshd; \
+  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config; \
+  echo 'PerSourcePenalties no' >> /etc/ssh/sshd_config; /usr/sbin/sshd -t || sed -i '/^PerSourcePenalties no$/d' /etc/ssh/sshd_config; /usr/sbin/sshd; \
   mariadb-install-db --user=mysql >/dev/null 2>&1; (mysqld_safe --user=mysql >/dev/null 2>&1 &); \
   mkdir -p /run/php-fpm && php-fpm -D; httpd -k start" >/dev/null 2>&1
 for _ in $(seq 1 30); do in_ctr "mysql -e 'select 1'" >/dev/null 2>&1 && break; sleep 1; done

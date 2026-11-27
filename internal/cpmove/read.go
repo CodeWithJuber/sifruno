@@ -384,6 +384,9 @@ func (rd *reader) archive() (*Archive, error) {
 	}
 	site := yamlFile(rd.meta["userdata/"+s.Domain])
 	home, root := site.value("homedir"), site.value("documentroot")
+	if strings.HasPrefix(home, "/") && path.Clean(home) == home && len(home) <= 256 {
+		s.Home = home
+	}
 	if rel, ok := strings.CutPrefix(root, home+"/"); home != "" && ok && path.Clean(rel) == rel && !strings.HasPrefix(rel, "../") {
 		s.DocRoot = rel
 	} else if root != "" {

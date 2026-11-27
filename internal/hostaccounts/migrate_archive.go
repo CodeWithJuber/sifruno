@@ -96,8 +96,10 @@ func (s *store) openArchiveMigration(ctx context.Context, in MigrationArchiveInp
 		_ = s.migrate.Forget(id)
 		return Migration{}, &MigrationError{Step: "source", Detail: "The website's files are not in the account's public_html folder. This version moves only sites kept in public_html."}
 	}
+	// The old home's path is where its .htaccess files' AuthUserFile lines
+	// point; one this does not take is cPanel's usual.
 	home := a.Site.Home
-	if home == "" {
+	if !validArchiveHome(home, a.Site.Account) {
 		home = "/home/" + a.Site.Account
 	}
 	archive := &MigrationArchive{User: a.Site.Account, Domain: a.Site.Domain, Databases: []string{}, Bytes: in.Size, HomeBytes: a.HomeBytes, Home: home, NotCarried: slices.Clone(a.Site.NotCarried)}

@@ -322,6 +322,10 @@ func (s *ServerSite) ResolvePHP(pools []FPMPool, versions map[string]string) {
 			}
 		}
 	}
+	// An nginx block without fastcgi_pass runs no PHP at all.
+	if s.Server == "nginx" && s.PHPPass == "" {
+		return
+	}
 	distinct := []string{}
 	for _, v := range versions {
 		if !slices.Contains(distinct, v) {
@@ -330,6 +334,6 @@ func (s *ServerSite) ResolvePHP(pools []FPMPool, versions map[string]string) {
 	}
 	if len(distinct) == 1 {
 		s.PHPSource = "php" + distinct[0] + "-fpm"
-		s.Notes = append(s.Notes, sitemodel.Item{Part: "php", Text: "The website's block names no PHP-FPM pool of its own; the old server runs PHP " + distinct[0] + " only, so that is its version.", Where: s.Where})
+		s.Notes = append(s.Notes, sitemodel.Item{Part: "info", Text: "The website's block names no PHP-FPM pool of its own; the old server runs PHP " + distinct[0] + " only, so that is its version.", Where: s.Where})
 	}
 }

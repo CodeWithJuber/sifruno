@@ -237,10 +237,16 @@ func TestPHPComesFromThePoolOrTheOnlyVersion(t *testing.T) {
 			t.Errorf("%s: %q, want %q", pass, s.PHPSource, want)
 		}
 	}
-	only := ServerSite{}
+	only := ServerSite{Server: "apache"}
 	only.ResolvePHP(nil, map[string]string{"/usr/sbin/php-fpm": "8.3"})
-	if only.PHPSource != "php8.3-fpm" || !strings.Contains(items(only.Notes), "runs PHP 8.3 only") {
+	if only.PHPSource != "php8.3-fpm" || !strings.Contains(items(only.Notes), "runs PHP 8.3 only") || only.Notes[0].Part != "info" {
 		t.Fatalf("only = %+v", only)
+	}
+	// An nginx block without fastcgi_pass runs no PHP.
+	static := ServerSite{Server: "nginx"}
+	static.ResolvePHP(nil, map[string]string{"/usr/sbin/php-fpm": "8.3"})
+	if static.PHPSource != "" || len(static.Notes) != 0 {
+		t.Fatalf("static = %+v", static)
 	}
 	for source, want := range map[string]string{"php8.2-fpm": "8.2 true", "php8.0-fpm": "8.1 false", "php7.4-fpm": "8.1 false", "php9.0-fpm": "8.4 false", "": "8.3 false"} {
 		v, exact := PHPVersion(source)

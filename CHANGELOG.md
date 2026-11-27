@@ -20,7 +20,8 @@
   `ErrorDocument` pages move into the site's web server config. CORS and
   `X-Robots-Tag` headers, which this server cannot send yet, are notes to
   accept before cutover. What still cannot move is refused, naming the
-  line.
+  line. `proof.sh migrate-cpanel` shows it on a real server
+  (`docs/proofs/real-server-2026-11-25/migrate-htaccess-wp.txt`).
 - Every website answers 403 for PHP files under `.phtml`, `.php3` to `.php8`,
   `.phar`, `.pht` and `.phps` instead of sending their source: only `.php`
   runs as PHP here.

@@ -126,14 +126,38 @@ func ConfigFileCommand(file string) (string, error) {
 	return headPath + " -c " + strconv.Itoa(maxConfigRead) + " -- " + file, nil
 }
 
-// StatCommand prints what a document root is, its owner's name and number,
-// and its group's name: "directory|apache|48|apache". stat does not
-// follow a link, so a root that is one says "symbolic link".
+// StatCommand prints, for every folder on the document root's path and
+// the root itself, its path, what it is, its owner's name and number and
+// its mode: "/var/www/blog|directory|apache|48|755". stat does not follow
+// the link it is asked about, so a folder on the path that is a link says
+// "symbolic link" (ParsePath refuses it).
 func StatCommand(root string) (string, error) {
 	if !ValidDocRoot(root) {
 		return "", ErrServer
 	}
-	return statPath + " -c '%F|%U|%u|%G' -- " + root, nil
+	return statPath + " -c '%n|%F|%U|%u|%a' -- " + strings.Join(pathFolders(root), " "), nil
+}
+
+// pathFolders are the folders a path goes through, from the first below /
+// to the path itself.
+func pathFolders(p string) []string {
+	var out []string
+	for i := 1; i <= len(p); i++ {
+		if i == len(p) || p[i] == '/' {
+			out = append(out, p[:i])
+		}
+	}
+	return out
+}
+
+// RootTreeCommand prints the first entry below a root-owned document root
+// that someone other than root could change: owned by another user, or a
+// folder others or the group may write. find -P never follows a link.
+func RootTreeCommand(root string) (string, error) {
+	if !ValidDocRoot(root) {
+		return "", ErrServer
+	}
+	return "/usr/bin/find -P " + root + ` -xdev \( ! -uid 0 -o -type d \( -perm -0002 -o -perm -0020 \) \) -print -quit`, nil
 }
 
 // DiskCommand prints the MiB the document root holds on its own
@@ -346,24 +370,56 @@ type Owner struct {
 // nothing).
 var ErrNotFolder = errors.New("the document root is not a folder")
 
-// ParseStat reads StatCommand's answer.
-func ParseStat(out []byte) (Owner, error) {
-	line, ok := strings.CutSuffix(string(out), "\n")
-	if !ok || strings.Contains(line, "\n") {
+// PathError names a folder on a document root's path that another user
+// than the root's owner (or root) could change, so the path could lead
+// somewhere else by the time the copy reads it.
+type PathError struct{ Folder string }
+
+func (e *PathError) Error() string { return e.Folder + " can be changed by another user" }
+
+// ParsePath reads StatCommand's answer for root. Every folder on the path
+// must be a folder, not a link, and be root's without group or other write,
+// or belong to the root's own owner: then nobody else can swap a part of
+// the path for a link to another user's files or the server's. It returns
+// who owns the root.
+func ParsePath(out []byte, root string) (Owner, error) {
+	text, ok := strings.CutSuffix(string(out), "\n")
+	folders := pathFolders(root)
+	lines := strings.Split(text, "\n")
+	if !ok || len(lines) != len(folders) {
 		return Owner{}, ErrServer
 	}
-	parts := strings.Split(line, "|")
-	if len(parts) != 4 {
-		return Owner{}, ErrServer
+	type entry struct {
+		owner Owner
+		mode  int64
 	}
-	if parts[0] != "directory" {
-		return Owner{}, ErrNotFolder
+	entries := make([]entry, len(lines))
+	for i, line := range lines {
+		parts := strings.Split(line, "|")
+		if len(parts) != 5 || parts[0] != folders[i] {
+			return Owner{}, ErrServer
+		}
+		if parts[1] != "directory" {
+			return Owner{}, ErrNotFolder
+		}
+		uid, err := strconv.Atoi(parts[3])
+		if err != nil || uid < 0 || uid > 1<<31-2 || strconv.Itoa(uid) != parts[3] || !ValidSystemUser(parts[2]) || (uid == 0) != (parts[2] == "root") {
+			return Owner{}, ErrServer
+		}
+		mode, err := strconv.ParseInt(parts[4], 8, 32)
+		if err != nil || mode < 0 || mode > 07777 {
+			return Owner{}, ErrServer
+		}
+		entries[i] = entry{Owner{Name: parts[2], UID: uid}, mode}
 	}
-	uid, err := strconv.Atoi(parts[2])
-	if err != nil || uid < 0 || uid > 1<<31-2 || strconv.Itoa(uid) != parts[2] || !ValidSystemUser(parts[1]) || (uid == 0) != (parts[1] == "root") {
-		return Owner{}, ErrServer
+	owner := entries[len(entries)-1].owner
+	for i, e := range entries[:len(entries)-1] {
+		rootsOnly := e.owner.UID == 0 && e.mode&0022 == 0
+		if !rootsOnly && (owner.UID == 0 || e.owner.UID != owner.UID) {
+			return Owner{}, &PathError{Folder: folders[i]}
+		}
 	}
-	return Owner{Name: parts[1], UID: uid}, nil
+	return owner, nil
 }
 
 // ParseDiskMiB reads DiskCommand's answer: "123\t/var/www/site".

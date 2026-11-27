@@ -1801,8 +1801,14 @@ root over the migration's SSH with every path checked first:
   `/etc/apache2` or DirectAdmin's users' folders only, at most 64 of 1 MiB),
   the PHP-FPM pool files' `listen` lines and each `php-fpm -v`, `stat` of
   each document root (which must be a folder below `/var/www`, `/srv`,
-  `/home` or `/usr/share/nginx/html`), and wp-config.php read as the
-  folder's owner (`runuser -u`). Each site comes with its domain, aliases,
+  `/home` or `/usr/share/nginx/html`) and of every folder on its way, and
+  wp-config.php read as the folder's owner (`runuser -u`). A link anywhere
+  on the way is refused, and so is a folder on the way that another user
+  could swap for one: each must be root's without group or other write,
+  or the document root's own owner's when that is not root. A root-owned
+  document root is refused too when `find -P` finds anything in it that
+  another user owns, or a folder the group or others may write, since
+  root reads it. Each site comes with its domain, aliases,
   folder, owner, PHP, the database wp-config.php names, the name it gets
   here, and what does not move (`not_carried`) or stops it (`refused`,
   each with its file and line). No password or hash is in the answer.
@@ -1813,9 +1819,17 @@ root over the migration's SSH with every path checked first:
   moves under the account's prefix (`wordpress` becomes
   `<account>_wordpress`, its user `<account>_wpuser`) with the same
   password: the plan carries the user's mysql_native_password hash made
-  from wp-config.php's password, which the broker keeps no copy of. A
-  database wp-config.php does not name plainly, or one on another server,
-  does not move, and the plan says why. The folder owner's crontab is read
+  from wp-config.php's password, which the broker keeps no copy of. The
+  site owner writes wp-config.php and the dump runs as the database's
+  root, so the database moves only when the site proves it is its own: it
+  is not one of the server's own (`mysql`, `information_schema`,
+  `performance_schema`, `sys`), and on the old server the user
+  wp-config.php names, at localhost, has a mysql_native_password hash
+  equal to the one made from wp-config.php's password and a grant on that
+  database (`SHOW CREATE USER` and `mysql.db`, as for cPanel). A database
+  wp-config.php does not name plainly, one on another server, or one the
+  site does not prove is its own does not move, and the plan says why.
+  The folder owner's crontab is read
   (never root's). For the tier the document root's `.htaccess` files are
   fetched as its owner and scanned, as for cPanel; for an nginx site its
   converted rules (`sitesource.ConvertNginx`) are written as the
@@ -1840,7 +1854,9 @@ root over the migration's SSH with every path checked first:
   or the web server's folders only, and checks them as an SSH move's.
 
 Not carried from such a server yet: a database of a site that is not
-WordPress (no file says which one it uses), PHP settings, mail, DNS and FTP,
+WordPress (no file says which one it uses), a WordPress database whose
+user signs in another way than mysql_native_password (MySQL 8's default
+`caching_sha2_password`) or is not a localhost user, PHP settings, mail, DNS and FTP,
 aliases (named, not added), a domain that nginx and Apache both name (nginx
 in front of Apache, as Plesk and HestiaCP run them), two blocks for one
 domain that serve it differently, a password folder whose document root is

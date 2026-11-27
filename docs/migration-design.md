@@ -300,7 +300,17 @@ Choices made for the SSH adapter (2026-11-27), each reversible:
   run as the document root's owner (`runuser -u`), as root only when root
   owns the folder; a document root outside `/var/www`, `/srv`, `/home` and
   `/usr/share/nginx/html` is refused, so a vhost pointed at `/` or `/etc`
-  cannot hand system files to a tenant.
+  cannot hand system files to a tenant. A link on the way to the document
+  root, or a folder on the way that another user could swap for one, is
+  refused, and a root-owned document root holding anything another user
+  can change is refused, so a tenant cannot lead root's reads elsewhere.
+- **Whose database.** wp-config.php is the tenant's file, and the dump runs
+  as the database's root, so the database it names moves only when the
+  site proves it is its own: not one of the server's own schemas, and the
+  named localhost user has the password wp-config.php gives
+  (mysql_native_password) and a grant on that database. A user that signs
+  in another way (MySQL 8's `caching_sha2_password`) cannot be checked
+  this way, so its database does not move and the summary says so.
 - **Two web servers.** A domain both nginx and Apache name (nginx in front
   of Apache, as Plesk and HestiaCP run them) is refused for now, as are
   two blocks for one domain that serve it differently.

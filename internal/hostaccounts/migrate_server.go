@@ -188,14 +188,42 @@ func (s *store) serverOwner(ctx context.Context, m migrationRecord, root string)
 	if code != 0 {
 		return sitesource.Owner{}, &MigrationError{Step: "source", Detail: installDetail([]byte("The website's folder " + root + " is not on the old server.")), Output: installDetail(errOut)}
 	}
-	owner, err := sitesource.ParseStat(out)
+	owner, err := sitesource.ParsePath(out, root)
+	var changeable *sitesource.PathError
 	switch {
 	case errors.Is(err, sitesource.ErrNotFolder):
-		return sitesource.Owner{}, &MigrationError{Step: "source", Detail: installDetail([]byte("The website's folder " + root + " is a link or not a folder. Point the web server at the real folder, or move the files there."))}
+		return sitesource.Owner{}, &MigrationError{Step: "source", Detail: installDetail([]byte("The website's folder " + root + ", or a folder on its way, is a link or not a folder. Point the web server at the real folder, or move the files there."))}
+	case errors.As(err, &changeable):
+		return sitesource.Owner{}, &MigrationError{Step: "source", Detail: installDetail([]byte("The folder " + changeable.Folder + " on the way to " + root + " belongs to another user than the website's folder, or others may write it, so it could lead somewhere else by the time Sifruno copies. Give it to root (and take others' write away) or to the folder's owner on the old server."))}
 	case err != nil:
 		return sitesource.Owner{}, &MigrationError{Step: "source", Detail: installDetail([]byte("The owner of " + root + " could not be read: a user without a name, or a name this version does not take."))}
 	}
+	if owner.UID == 0 {
+		if err := s.serverRootTree(ctx, m, root); err != nil {
+			return sitesource.Owner{}, err
+		}
+	}
 	return owner, nil
+}
+
+// serverRootTree refuses a root-owned document root holding anything
+// another user could change: Sifruno reads such a folder as root, and a
+// folder swapped for a link meanwhile would lead root to other files.
+func (s *store) serverRootTree(ctx context.Context, m migrationRecord, root string) error {
+	command, err := sitesource.RootTreeCommand(root)
+	if err != nil {
+		return ErrInvalid
+	}
+	out, code, errOut, err := s.serverCommand(ctx, m, command, 8192)
+	switch {
+	case err != nil:
+		return err
+	case code != 0:
+		return &MigrationError{Step: "source", Detail: installDetail([]byte("The website's folder " + root + " could not be checked on the old server.")), Output: installDetail(errOut)}
+	case len(bytes.TrimSpace(out)) > 0:
+		return &MigrationError{Step: "source", Detail: installDetail([]byte("The website's folder " + root + " belongs to root, but " + string(bytes.TrimSpace(out)) + " in it can be changed by another user. Sifruno reads a folder as root only when nobody else can change what is in it. Give the folder to the website's own user on the old server (chown -R), then try again."))}
+	}
+	return nil
 }
 
 // serverDatabaseOf reads the site's wp-config.php as the folder's owner.
@@ -241,8 +269,61 @@ func (s *store) serverDatabaseOf(ctx context.Context, m migrationRecord, root st
 	}
 	if d.user, ok = sitesource.HereName(account, c.User, 47); !ok {
 		d.problem = "Its database user " + clipText(c.User, 64) + " is too long to take the account's prefix here, or has characters this version does not take."
+		return d, nil
+	}
+	if d.problem, err = s.serverDatabaseOwned(ctx, m, c); err != nil {
+		return nil, err
 	}
 	return d, nil
+}
+
+// systemDatabases are the database server's own schemas. No website owns
+// one, whatever its wp-config.php says.
+var systemDatabases = []string{"mysql", "information_schema", "performance_schema", "sys"}
+
+// serverDatabaseOwned proves the database wp-config.php names is the
+// site's own before it is copied: on the old server, the user it names
+// has the password it gives and a grant on that database. The folder's
+// owner writes wp-config.php and the dump runs as the database's root, so
+// without this a site could name another site's database, or the
+// server's own, and have it copied into the account here. It returns why
+// the database does not move, or "".
+func (s *store) serverDatabaseOwned(ctx context.Context, m migrationRecord, c sitesource.WPConfig) (string, error) {
+	for _, system := range systemDatabases {
+		if strings.EqualFold(c.Name, system) {
+			return "Its wp-config.php names " + c.Name + ", the database server's own database, not a website's, so no database is copied.", nil
+		}
+	}
+	sql, err := cpsource.UsersSQL([]string{c.User})
+	if err != nil {
+		return "Its database user " + clipText(c.User, 64) + " has characters this version does not take, so its database is not copied.", nil
+	}
+	out, err := s.remote(ctx, m, cpsource.SQLCommand(), strings.NewReader(sql), "database")
+	var failed *MigrationError
+	if errors.As(err, &failed) && failed.Step == "database" {
+		return "The old server's database did not answer for the user " + c.User + " at localhost, the user wp-config.php names (no such user, or root cannot sign in to the database there), so Sifruno cannot tell that the database " + c.Name + " is this site's. It is not copied.", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer clear(out)
+	users, _, err := cpsource.ParseUsers(out, []string{c.User}, []string{c.Name})
+	if err != nil {
+		return "The old server's answer about the database user " + c.User + " could not be read, so Sifruno cannot tell that the database " + c.Name + " is this site's. It is not copied.", nil
+	}
+	u := users[0]
+	switch {
+	case u.Hash == "":
+		return "The old server's database user " + c.User + " signs in another way than with a mysql_native_password password, so Sifruno cannot check that wp-config.php's password is that user's. The database " + c.Name + " is not copied.", nil
+	case u.Hash != c.NativeHash():
+		return "The password in wp-config.php is not the old server's password for the database user " + c.User + ", so Sifruno cannot tell that the database " + c.Name + " is this site's. It is not copied; check that the site works on the old server.", nil
+	}
+	for _, g := range u.Grants {
+		if g.Database == c.Name {
+			return "", nil
+		}
+	}
+	return "The database user " + c.User + " has no grant on the database " + c.Name + " on the old server, so Sifruno cannot tell that the database is this site's. It is not copied.", nil
 }
 
 func clipText(s string, n int) string {

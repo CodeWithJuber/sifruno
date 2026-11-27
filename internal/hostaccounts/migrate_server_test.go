@@ -36,6 +36,26 @@ server {
 
 const serverWPConfig = "<?php\ndefine('DB_NAME', 'wordpress');\ndefine('DB_USER', 'wpuser');\ndefine('DB_PASSWORD', 'fixture-db-secret');\ndefine('DB_HOST', 'localhost');\n$table_prefix = 'wp_';\n"
 
+// serverStat is stat over the folders on the way to /var/www/blog.
+const serverStat = "/var|directory|root|0|755\n/var/www|directory|root|0|755\n/var/www/blog|directory|nginx|995|755\n"
+
+// serverUser is the old server's database answer for wpuser: its password
+// hash and a grant on db.
+func serverUser(hash, db string) string {
+	return "sifruno-user\twpuser\nCREATE USER `wpuser`@`localhost` IDENTIFIED BY PASSWORD '" + hash + "'\nsifruno-grant\twpuser\t" + db + "\t" + strings.TrimSuffix(strings.Repeat("Y\t", 18), "\t") + "\n"
+}
+
+// serverHash is the mysql_native_password hash of the password config
+// gives, as the broker makes it.
+func serverHash(t *testing.T, config string) string {
+	t.Helper()
+	c, err := sitesource.ParseWPConfig([]byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.NativeHash()
+}
+
 // serverMigrate answers the fixed commands of another Linux server.
 func serverMigrate(t *testing.T) (*store, *fakeMigrate, Migration) {
 	t.Helper()
@@ -50,7 +70,8 @@ func serverMigrate(t *testing.T) (*store, *fakeMigrate, Migration) {
 		sitesource.ApacheVhostsCommand: "",
 		sitesource.FPMPoolsCommand:     "== /etc/php-fpm.d/www.conf\nlisten = /run/php-fpm/www.sock\n",
 		sitesource.FPMVersionsCommand:  "== /usr/sbin/php-fpm PHP 8.2.13 (fpm-fcgi) (built: Nov 21 2023)\n",
-		stat:                           "directory|nginx|995|nginx\n",
+		stat:                           serverStat,
+		cpsource.SQLCommand():          serverUser(serverHash(t, serverWPConfig), "wordpress"),
 		wp:                             serverWPConfig,
 		du:                             "12\t/var/www/blog\n",
 		cron:                           "*/10 * * * * php /var/www/blog/wp-cron.php\n",
@@ -193,5 +214,97 @@ func TestServerWithoutAWebServerSaysSo(t *testing.T) {
 	f.fails = map[string]fakeFailure{sitesource.NginxDumpCommand: {out: "nginx: [emerg] unknown directive \"bogus\" in /etc/nginx/conf.d/x.conf:3", code: 1}}
 	if _, err = s.migrationSites(context.Background(), m.ID); !errors.As(err, &failed) || failed.Step != "source" || !strings.Contains(failed.Output, "unknown directive") {
 		t.Fatalf("a broken nginx: %v", err)
+	}
+}
+
+// A database moves only when the site proves it is its own: wp-config.php
+// names a website's database, and the old server's user it names has the
+// password it gives and a grant on it. Otherwise the site moves without it.
+func TestServerDatabaseMovesOnlyWhenTheSiteOwnsIt(t *testing.T) {
+	hash := serverHash(t, serverWPConfig)
+	other := serverHash(t, strings.Replace(serverWPConfig, "fixture-db-secret", "fixture-db-other", 1))
+	wp, _ := sitesource.WPConfigCommand("/var/www/blog", sitesource.Owner{Name: "nginx", UID: 995})
+	for _, c := range []struct {
+		name, config, users, want string
+		fails                     bool
+	}{
+		{"the server's own database", strings.Replace(serverWPConfig, "'wordpress'", "'MySQL'", 1), serverUser(hash, "wordpress"), "the database server's own database", false},
+		{"another password", serverWPConfig, serverUser(other, "wordpress"), "is not the old server's password", false},
+		{"a grant on another database", serverWPConfig, serverUser(hash, "bob_shop"), "has no grant on the database wordpress", false},
+		{"no such user", serverWPConfig, "", "did not answer for the user wpuser", true},
+		{"another sign-in method", serverWPConfig, "sifruno-user\twpuser\nCREATE USER `wpuser`@`localhost` IDENTIFIED VIA unix_socket\n", "signs in another way", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f, m := serverMigrate(t)
+			ctx := context.Background()
+			f.answers[wp] = c.config
+			f.answers[cpsource.SQLCommand()] = c.users
+			if c.fails {
+				f.fails = map[string]fakeFailure{cpsource.SQLCommand(): {out: "ERROR 1141 (42000) at line 2: There is no such grant defined for user 'wpuser' on host 'localhost'", code: 1}}
+			}
+			plan, err := s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "blog", Site: "blog.example.test", Reason: "Move a website here"}, "test operator")
+			if err != nil {
+				t.Fatal(err)
+			}
+			notes := ""
+			for _, item := range plan.NotCarried {
+				if item.Part == "database" {
+					notes += item.Text + "\n"
+				}
+			}
+			if len(plan.Databases) != 0 || len(plan.Users) != 0 || !strings.Contains(notes, c.want) {
+				t.Fatalf("databases %+v users %+v, notes:\n%s", plan.Databases, plan.Users, notes)
+			}
+			a := createFixtureNamed(t, s, "blog", "blog.example.test")
+			var failed *MigrationError
+			if _, err := s.migrateDatabase(ctx, a.ID, MigrateDatabaseInput{Migration: m.ID, Database: "blog_wordpress", ExpectedRevision: a.Revision, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "database" || len(f.databases) != 0 {
+				t.Fatalf("copied a database the site does not own: %v %v", err, f.databases)
+			}
+		})
+	}
+}
+
+// A document root reached through a folder another user could swap for a
+// link, or a root-owned one holding what another user can change, is
+// refused before anything is read from it as root.
+func TestServerRefusesAPathAnotherUserCouldRedirect(t *testing.T) {
+	stat, _ := sitesource.StatCommand("/var/www/blog")
+	tree, _ := sitesource.RootTreeCommand("/var/www/blog")
+	const rootOwned = "/var|directory|root|0|755\n/var/www|directory|root|0|755\n/var/www/blog|directory|root|0|755\n"
+	for _, c := range []struct {
+		name, stat, tree, want string
+	}{
+		{"a link on the way", "/var|directory|root|0|755\n/var/www|symbolic link|root|0|777\n/var/www/blog|directory|nginx|995|755\n", "", "is a link or not a folder"},
+		{"a folder others may write", "/var|directory|root|0|755\n/var/www|directory|root|0|777\n/var/www/blog|directory|nginx|995|755\n", "", "The folder /var/www on the way"},
+		{"a root-owned root another user can change", rootOwned, "/var/www/blog/uploads\n", "but /var/www/blog/uploads in it can be changed by another user"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f, m := serverMigrate(t)
+			f.answers[stat] = c.stat
+			f.answers[tree] = c.tree
+			sites, err := s.migrationSites(context.Background(), m.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			blog := sites[1]
+			if blog.Movable || len(blog.Refused) == 0 || !strings.Contains(blog.Refused[len(blog.Refused)-1].Text, c.want) {
+				t.Fatalf("blog = %+v", blog)
+			}
+			for _, command := range f.commands {
+				if strings.Contains(command, "wp-config.php") || strings.Contains(command, "/usr/bin/du ") {
+					t.Fatalf("%q ran on a refused path", command)
+				}
+			}
+		})
+	}
+	// A root-owned root nobody else can change is read as root.
+	s, f, m := serverMigrate(t)
+	f.answers[stat] = rootOwned
+	f.answers[tree] = ""
+	wp, _ := sitesource.WPConfigCommand("/var/www/blog", sitesource.Owner{Name: "root", UID: 0})
+	f.answers[wp] = serverWPConfig
+	sites, err := s.migrationSites(context.Background(), m.ID)
+	if err != nil || !sites[1].Movable || sites[1].Owner != "root" || sites[1].Database != "wordpress" {
+		t.Fatalf("a root-owned root: %+v %v", sites, err)
 	}
 }

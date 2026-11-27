@@ -257,17 +257,62 @@ func TestPHPComesFromThePoolOrTheOnlyVersion(t *testing.T) {
 }
 
 func TestStatNamesTheOwner(t *testing.T) {
-	o, err := ParseStat([]byte("directory|www-data|33|www-data\n"))
+	if c, _ := StatCommand("/var/www/wp"); c != "/usr/bin/stat -c '%n|%F|%U|%u|%a' -- /var /var/www /var/www/wp" {
+		t.Fatalf("stat command = %q", c)
+	}
+	const parents = "/var|directory|root|0|755\n/var/www|directory|root|0|755\n"
+	o, err := ParsePath([]byte(parents+"/var/www/wp|directory|www-data|33|2775\n"), "/var/www/wp")
 	if err != nil || o.Name != "www-data" || o.UID != 33 {
 		t.Fatalf("%+v %v", o, err)
 	}
-	if _, err := ParseStat([]byte("symbolic link|root|0|root\n")); !errors.Is(err, ErrNotFolder) {
-		t.Fatalf("a link: %v", err)
+	// A home folder the site's own user holds is on the way to its root.
+	home := "/home|directory|root|0|755\n/home/alice|directory|alice|1001|711\n/home/alice/public_html|directory|alice|1001|750\n"
+	if o, err := ParsePath([]byte(home), "/home/alice/public_html"); err != nil || o.Name != "alice" {
+		t.Fatalf("a home folder: %+v %v", o, err)
 	}
-	for _, bad := range []string{"directory|UNKNOWN user|1001|x\n", "directory|root|5|root\n", "directory|alice|-1|alice\n", "directory|alice|1001|alice", "directory|alice|1001\n"} {
-		if _, err := ParseStat([]byte(bad)); err == nil {
+	// A link anywhere on the way is refused, not only at the end: stat
+	// would follow /var/www/x to wherever it points.
+	for _, link := range []string{
+		parents + "/var/www/wp|symbolic link|root|0|777\n",
+		"/var|directory|root|0|755\n/var/www|symbolic link|root|0|777\n/var/www/wp|directory|root|0|755\n",
+	} {
+		if _, err := ParsePath([]byte(link), "/var/www/wp"); !errors.Is(err, ErrNotFolder) {
+			t.Errorf("a link on the way: %v", err)
+		}
+	}
+	// A folder on the way that another user could swap for a link: root's
+	// with group or other write, another user's, or the user's own on the
+	// way to a root-owned root (the user could lead root anywhere).
+	for _, c := range []struct{ out, root, folder string }{
+		{"/var|directory|root|0|755\n/var/www|directory|root|0|777\n/var/www/wp|directory|apache|48|755\n", "/var/www/wp", "/var/www"},
+		{"/var|directory|root|0|755\n/var/www|directory|root|0|775\n/var/www/wp|directory|apache|48|755\n", "/var/www/wp", "/var/www"},
+		{"/var|directory|root|0|755\n/var/www|directory|bob|1002|755\n/var/www/wp|directory|apache|48|755\n", "/var/www/wp", "/var/www"},
+		{"/home|directory|root|0|755\n/home/alice|directory|alice|1001|711\n/home/alice/etc|directory|root|0|755\n", "/home/alice/etc", "/home/alice"},
+	} {
+		var changeable *PathError
+		if _, err := ParsePath([]byte(c.out), c.root); !errors.As(err, &changeable) || changeable.Folder != c.folder {
+			t.Errorf("%q: %v", c.out, err)
+		}
+	}
+	for _, bad := range []string{
+		parents + "/var/www/wp|directory|UNKNOWN user|1001|755\n",
+		parents + "/var/www/wp|directory|root|5|755\n",
+		parents + "/var/www/wp|directory|alice|-1|755\n",
+		parents + "/var/www/wp|directory|alice|1001|755",
+		parents + "/var/www/wp|directory|alice|1001\n",
+		parents + "/var/www/wp|directory|alice|1001|9z\n",
+		parents + "/var/www/other|directory|alice|1001|755\n",
+		"/var/www/wp|directory|alice|1001|755\n",
+	} {
+		if _, err := ParsePath([]byte(bad), "/var/www/wp"); err == nil {
 			t.Errorf("%q is read", bad)
 		}
+	}
+	if c, _ := RootTreeCommand("/var/www/wp"); c != `/usr/bin/find -P /var/www/wp -xdev \( ! -uid 0 -o -type d \( -perm -0002 -o -perm -0020 \) \) -print -quit` {
+		t.Fatalf("root tree command = %q", c)
+	}
+	if _, err := RootTreeCommand("/etc"); err == nil {
+		t.Fatal("a folder outside the web roots is walked")
 	}
 	if c, _ := WPConfigCommand("/var/www/wp", Owner{Name: "apache", UID: 48}); c != "/usr/sbin/runuser -u apache -- /usr/bin/head -c 262145 -- /var/www/wp/wp-config.php" {
 		t.Fatalf("wp-config command = %q", c)

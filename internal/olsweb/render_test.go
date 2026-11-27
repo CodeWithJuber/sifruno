@@ -403,6 +403,10 @@ func TestDenyRules(t *testing.T) {
 		"/wp-config.php.orig", "/.wp-config.php.swp", "/blog/wp-config.php.old", "/WP-CONFIG.PHP.BAK",
 		"/wp-config.bak", "/wp-config.old", "/wp-config.orig", "/wp-config.save", "/wp-config.swp", "/wp-config.txt",
 		"/wp-content/debug.log", ".htaccess", "wp-config.php.bak",
+		// PHP files under suffixes only .php runs with here: OpenLiteSpeed
+		// would send their source (mime.properties default octet-stream).
+		"/page.phtml", "/old/index.php5", "/new/index.php8", "/wp-content/uploads/x.PHP7", "/lib.phar", "/source.phps",
+		"/a.pht", "/a.php3", "/a.php4",
 	} {
 		if !denied(path) {
 			t.Errorf("%s is not denied", path)
@@ -415,6 +419,7 @@ func TestDenyRules(t *testing.T) {
 		"/wp-content/themes/twentytwentyfive/style.css", "/wp-includes/js/jquery/jquery.min.js",
 		"/.well-known/acme-challenge/abc123", "/.well-known/security.txt", "/environment.html", "/feed/",
 		"/sitemap.xml", "/wp-sitemap.xml", "/2026/11/hello-world/", "/wp-content/cache/debug.log.html",
+		"/php5-notes/", "/photos.phtml-gallery/", "/phtml.html",
 	} {
 		if denied(path) {
 			t.Errorf("%s is denied but WordPress needs it", path)

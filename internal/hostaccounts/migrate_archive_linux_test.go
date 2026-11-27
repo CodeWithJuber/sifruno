@@ -72,11 +72,20 @@ func TestArchivePreflightStagesOnlyHtaccess(t *testing.T) {
 	m, _, _ := testMigrator(t)
 	rec := archiveRecord(t, m, fixtureArchive(t, "cpmove-fixtureacct", map[string]string{
 		"homedir/public_html/staff/.htaccess": "AuthType Basic\nAuthName \"Staff\"\nAuthUserFile /home/fixtureacct/.htpasswds/public_html/staff/passwd\nRequire valid-user\n",
+		"homedir/public_html/.user.ini":       "auto_prepend_file = '/home/fixtureacct/public_html/wordfence-waf.php'\n",
+		"homedir/public_html/staff/.user.ini": "auto_prepend_file = '/home/fixtureacct/public_html/x.php'\n",
 	}))
 	l := backupLeftover{Op: strings.Repeat("3", 32)}
 	site, home, err := m.Preflight(context.Background(), rec, "/home/fixtureacct", l)
 	if err != nil || home || site.Verdict != htaccess.VerdictCompat {
 		t.Fatalf("preflight: %+v %v %v", site, home, err)
+	}
+	// The document root's .user.ini is staged too, and no other.
+	if len(site.UserINI) != 1 || site.UserINI[0].File != ".user.ini" {
+		t.Fatalf(".user.ini warnings %+v", site.UserINI)
+	}
+	if _, err := os.Lstat(filepath.Join(m.e.stage, l.Op, "htaccess", "public_html", "staff", ".user.ini")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the tier check staged a folder's .user.ini")
 	}
 	if _, err := os.Lstat(filepath.Join(m.e.stage, l.Op, "htaccess", "public_html", "index.php")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the tier check staged more than .htaccess files")

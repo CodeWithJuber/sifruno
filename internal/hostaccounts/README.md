@@ -1545,9 +1545,9 @@ root step. The design, with the owner's choices recorded from Jev on
   this server come from (`client_address`, empty when its sshd does not
   say: verify then fails every folder open to some addresses only), and
   the tier. For the tier
-  rsync fetches only the `.htaccess` files of the home and public_html into
-  a root-only staging folder, and `internal/htaccess` scans and converts
-  them there. The answer carries the hashes: the panel hands them to its
+  rsync fetches only the `.htaccess` files of the home and public_html, and
+  public_html's own `.user.ini`, into a root-only staging folder, and
+  `internal/htaccess` scans and converts them there. The answer carries the hashes: the panel hands them to its
   database service on standard input and records none.
 - Tier (Jev: refuse what is not Native, 0.96; then D-0003, 0.93: build a
   fail-closed converter first). Only OpenLiteSpeed serves hosted accounts
@@ -1559,9 +1559,16 @@ root step. The design, with the owner's choices recorded from Jev on
   class covers (`internal/htaccess` handling.go): harmless to ignore
   (Expires, FileETag, compression, caching and security headers, plain
   `AddType`, `AddDefaultCharset`), handled by Sifruno (cPanel's PHP handler
-  block, `Options -Indexes`), or a warning (`php_value`, `php_flag`). The
+  block, `Options -Indexes`), converted (redirects, error pages, and the
+  root `.htaccess`'s `php_value` and `php_flag` lines of the settings
+  phpsettings.go lists, with checked values), or a warning (CORS and
+  `X-Robots-Tag` headers). The
   plan lists each converted file and what it became (`converted`), the
-  warnings (`tier_warnings`: those PHP settings, and a PHP handler naming
+  warnings (`tier_warnings`: those headers; a `memory_limit` above the
+  1024 MiB a new account's PHP may use, which the copy lowers to it; a
+  `.user.ini` in public_html that makes PHP run a file before or after
+  every script, such as Wordfence's extended protection, which this
+  server's PHP does not read; and a PHP handler naming
   another version than the plan's, which the panel shows as notes that keep
   the cutover gate closed until accepted), or why a site was refused, line by
   line (`tier_refusals`, "file line N (directive): reason", paths relative
@@ -1597,6 +1604,11 @@ root step. The design, with the owner's choices recorded from Jev on
   for up to three real files a closed folder leaves open, and each folder
   open to some addresses only with its rule, from which verify works out
   what each site must answer the address it sees verify come from (D-0002).
+  The root `.htaccess`'s redirects, error pages and PHP settings join the
+  same journaled set; olsweb writes the PHP settings as the vhost's
+  `phpIniOverride`, `memory_limit` no larger than the account's memory
+  (each lsphp process's address space), so they are in force before `cp`
+  makes the files reachable.
   A delete removes the site's realm files. The folders are a
   snapshot: a later edit of the tenant's `.htaccess` or user file changes
   nothing.

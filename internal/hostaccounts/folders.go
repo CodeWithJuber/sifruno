@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,20 +31,23 @@ import (
 
 // siteFolders is a record's protected folders and the SHA-256 of each realm
 // user file, keyed by its path, so a stored record names the exact files it
-// was applied with, and the redirects and error pages the migration
-// converted from the root .htaccess (olsweb moved.go). The canonical JSON
-// is a string in the record; a set from before the redirects has the same
-// JSON as before.
+// was applied with, and the redirects, error pages and PHP settings the
+// migration converted from the root .htaccess (olsweb moved.go and
+// phpini.go). PHPSettings hold the values the old server named, sorted by
+// name; webSites writes memory_limit no larger than the account's memory.
+// The canonical JSON is a string in the record; a set from before the
+// redirects or the PHP settings has the same JSON as before.
 type siteFolders struct {
-	Folders    []olsweb.Folder           `json:"folders"`
-	Users      map[string]string         `json:"users"`
-	Redirects  []olsweb.HtaccessRedirect `json:"redirects,omitempty"`
-	ErrorPages []olsweb.ErrorPage        `json:"error_pages,omitempty"`
+	Folders     []olsweb.Folder           `json:"folders"`
+	Users       map[string]string         `json:"users"`
+	Redirects   []olsweb.HtaccessRedirect `json:"redirects,omitempty"`
+	ErrorPages  []olsweb.ErrorPage        `json:"error_pages,omitempty"`
+	PHPSettings []olsweb.PHPSetting       `json:"php_settings,omitempty"`
 }
 
 // empty reports a set with nothing to render.
 func (f siteFolders) empty() bool {
-	return len(f.Folders) == 0 && len(f.Redirects) == 0 && len(f.ErrorPages) == 0
+	return len(f.Folders) == 0 && len(f.Redirects) == 0 && len(f.ErrorPages) == 0 && len(f.PHPSettings) == 0
 }
 
 // maxFoldersBytes bounds a set as the record holds it (canonical JSON,
@@ -96,7 +100,7 @@ func validStoredFolders(id, encoded string) bool {
 	if encoded == "" {
 		return true
 	}
-	if olsweb.CheckFolders(siteName(id), f.Folders) != nil || olsweb.CheckMoved(f.Redirects, f.ErrorPages) != nil {
+	if olsweb.CheckFolders(siteName(id), f.Folders) != nil || olsweb.CheckMoved(f.Redirects, f.ErrorPages) != nil || !validStoredPHP(f.PHPSettings) {
 		return false
 	}
 	files := olsweb.FolderRealmFiles(f.Folders)
@@ -112,6 +116,35 @@ func validStoredFolders(id, encoded string) bool {
 }
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// validStoredPHP checks recorded PHP settings: each one the htaccess
+// converter carries, as it carries it, and the list one olsweb writes for
+// an account at the largest memory a plan may give.
+func validStoredPHP(settings []olsweb.PHPSetting) bool {
+	for _, s := range settings {
+		if !htaccess.CarriedPHPSetting(htaccess.PHPSetting{Name: s.Name, Value: s.Value, Flag: s.Flag}) {
+			return false
+		}
+	}
+	return olsweb.CheckPHPSettings(sitePHP(settings, maxLimitMemoryMiB), maxLimitMemoryMiB) == nil
+}
+
+// sitePHP is a site's recorded PHP settings as its vhost writes them:
+// memory_limit no larger than memoryMiB, the account's memory, which
+// bounds each of its lsphp processes; -1 (no limit) becomes that memory
+// too. The rest are written as recorded.
+func sitePHP(settings []olsweb.PHPSetting, memoryMiB int) []olsweb.PHPSetting {
+	out := slices.Clone(settings)
+	for i, s := range out {
+		if s.Name != "memory_limit" {
+			continue
+		}
+		if mib, ok := olsweb.PHPSizeMiB(s.Value); !ok || mib > memoryMiB {
+			out[i].Value = strconv.Itoa(memoryMiB) + "M"
+		}
+	}
+	return out
+}
 
 // siteDirPattern is a site name as siteName makes it, which names the
 // site's directory in olsweb.RealmRoot.
@@ -137,12 +170,13 @@ func recordProtection(r record) siteFolders {
 
 // SiteProtection is what a migration's copy converted to: the folders and
 // each realm's user file, normalized, keyed by its path in olsweb.RealmRoot,
-// and the root .htaccess's redirects and error pages.
+// and the root .htaccess's redirects, error pages and PHP settings.
 type SiteProtection struct {
-	Folders    []olsweb.Folder
-	Users      map[string][]byte
-	Redirects  []olsweb.HtaccessRedirect
-	ErrorPages []olsweb.ErrorPage
+	Folders     []olsweb.Folder
+	Users       map[string][]byte
+	Redirects   []olsweb.HtaccessRedirect
+	ErrorPages  []olsweb.ErrorPage
+	PHPSettings []olsweb.PHPSetting
 }
 
 // protectionFolders maps converted rules (sorted by path, as ConvertSite
@@ -178,9 +212,19 @@ func protectionMoved(conv htaccess.SiteConversion) ([]olsweb.HtaccessRedirect, [
 	return redirects, pages
 }
 
+// protectionPHP maps the converted PHP settings, sorted by name.
+func protectionPHP(conv htaccess.SiteConversion) []olsweb.PHPSetting {
+	var out []olsweb.PHPSetting
+	for _, s := range conv.PHPSettings {
+		out = append(out, olsweb.PHPSetting{Name: s.Name, Value: s.Value, Flag: s.Flag})
+	}
+	slices.SortFunc(out, func(a, b olsweb.PHPSetting) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
 // converts reports a conversion with anything for the vhost to carry.
 func converts(conv htaccess.SiteConversion) bool {
-	return len(conv.Rules) > 0 || len(conv.Redirects) > 0 || len(conv.ErrorPages) > 0
+	return len(conv.Rules) > 0 || len(conv.Redirects) > 0 || len(conv.ErrorPages) > 0 || len(conv.PHPSettings) > 0
 }
 
 // MigrationFolder is one converted .htaccess in a migration's tier report:
@@ -212,6 +256,9 @@ func migrationMoved(conv htaccess.SiteConversion) []MigrationFolder {
 	}
 	for _, p := range conv.ErrorPages {
 		out = append(out, MigrationFolder{File: ".htaccess", Path: p.URL, Rule: fmt.Sprintf("error page for %d", p.Status)})
+	}
+	for _, s := range conv.PHPSettings {
+		out = append(out, MigrationFolder{File: ".htaccess", Path: s.Name, Rule: "PHP setting " + s.Value})
 	}
 	return out
 }
@@ -289,7 +336,7 @@ func (s *store) setSiteFolders(ctx context.Context, id string, p SiteProtection,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	want := siteFolders{Folders: p.Folders, Users: map[string]string{}, Redirects: p.Redirects, ErrorPages: p.ErrorPages}
+	want := siteFolders{Folders: p.Folders, Users: map[string]string{}, Redirects: p.Redirects, ErrorPages: p.ErrorPages, PHPSettings: p.PHPSettings}
 	if !idPattern.MatchString(id) || want.empty() || !validUserFiles(p) || !validText(reason, 500) || !validText(actor, 120) {
 		return ErrInvalid
 	}

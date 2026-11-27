@@ -552,16 +552,17 @@ func fetchArgs(rsh, host, home, dest string, webMark int) ([]string, bool) {
 }
 
 // htaccessArgs copies only the .htaccess files of the home and its
-// public_html into dest, keeping the folders, so the scan sees the site's
-// tree of rules. The sender runs as the account, as for the copy; files
-// stay root's in the root-only staging folder.
+// public_html, and public_html's own .user.ini, into dest, keeping the
+// folders, so the scan sees the site's tree of rules and what the old
+// server's PHP ran before every script. The sender runs as the account, as
+// for the copy; files stay root's in the root-only staging folder.
 func htaccessArgs(rsh, host, home, dest string) ([]string, bool) {
 	sender, ok := senderPath(home)
 	if !ok {
 		return nil, false
 	}
 	return []string{"--rsh=" + rsh, "--rsync-path=" + sender, "-rlt", "--prune-empty-dirs", "--one-file-system", "--timeout=300",
-		"--include=/public_html/", "--include=/public_html/**/", "--include=.htaccess", "--exclude=*",
+		"--include=/public_html/", "--include=/public_html/**/", "--include=.htaccess", "--include=/public_html/.user.ini", "--exclude=*",
 		"--", host + ":" + home + "/", dest + "/"}, true
 }
 

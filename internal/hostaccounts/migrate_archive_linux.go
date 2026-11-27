@@ -232,8 +232,8 @@ func inHome(name string) (string, bool) {
 }
 
 // homeHtaccess keeps what the tier check reads, as the SSH path's
-// htaccessArgs does: the folders of public_html and the .htaccess files of
-// the home and of public_html's tree.
+// htaccessArgs does: the folders of public_html, the .htaccess files of
+// the home and of public_html's tree, and public_html's .user.ini.
 func homeHtaccess(name string, dir bool) (string, bool) {
 	rest, ok := inHome(name)
 	if !ok {
@@ -242,7 +242,7 @@ func homeHtaccess(name string, dir bool) (string, bool) {
 	if dir {
 		return rest, rest == "." || rest == "public_html" || strings.HasPrefix(rest, "public_html/")
 	}
-	return rest, path.Base(rest) == ".htaccess" && (rest == ".htaccess" || strings.HasPrefix(rest, "public_html/"))
+	return rest, (path.Base(rest) == ".htaccess" && (rest == ".htaccess" || strings.HasPrefix(rest, "public_html/"))) || rest == "public_html/.user.ini"
 }
 
 // extractArchive reads the migration's backup file into dir (a fresh

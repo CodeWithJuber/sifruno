@@ -17,6 +17,7 @@ import (
 	"sifruno/internal/cpmove"
 	"sifruno/internal/cpsource"
 	"sifruno/internal/htaccess"
+	"sifruno/internal/olsweb"
 )
 
 // Migrations are not written to the accounts' journal, as backups are not:
@@ -844,9 +845,11 @@ func tierFix(conv htaccess.SiteConversion) (access bool, lines []string) {
 }
 
 // tierWarnings are the lines of a Native site a person checks before
-// cutover: what OpenLiteSpeed will not apply (htaccess.FileWarning), and a
-// PHP handler naming another version than the one the plan read for the
-// site, because this server runs every folder of a site with that one.
+// cutover: what OpenLiteSpeed will not apply (htaccess.FileWarning), a
+// memory_limit above the memory a new account's PHP may use, which the
+// copy runs with instead (sitePHP), and a PHP handler naming another
+// version than the one the plan read for the site, because this server
+// runs every folder of a site with that one.
 func tierWarnings(conv htaccess.SiteConversion, phpSource string) []string {
 	out := []string{}
 	add := func(text string) {
@@ -856,6 +859,15 @@ func tierWarnings(conv htaccess.SiteConversion, phpSource string) []string {
 	}
 	for _, w := range conv.Warnings {
 		add(tierWhere(w.File, w.Line, w.Directive) + ": " + w.Reason)
+	}
+	for _, s := range conv.PHPSettings {
+		if s.Name != "memory_limit" {
+			continue
+		}
+		memory := DefaultLimits.MemoryMiB
+		if mib, ok := olsweb.PHPSizeMiB(s.Value); !ok || mib > memory {
+			add(tierWhere(".htaccess", s.Line, s.Name) + fmt.Sprintf(": the old server let the site's PHP use %s of memory (-1 is no limit), but a website's PHP here may use at most its plan's %d MiB, so the copy runs with memory_limit %dM. Check the pages that need the most memory before cutover.", s.Value, memory, memory))
+		}
 	}
 	for _, p := range conv.PHP {
 		if p.Package == "" || phpDigits(p.Package) == phpDigits(phpSource) {

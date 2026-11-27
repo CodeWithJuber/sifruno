@@ -289,20 +289,39 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 	}
 	// A typical cPanel WordPress root moves: the handler block names the
 	// plan's PHP (ea-php82), the Expires and Header lines are harmless, and
-	// php_value is a warning naming its line.
+	// php_value is converted.
 	root := htaccess.ClassifyFile(".htaccess", "/", []byte("<IfModule mime_module>\n  AddHandler application/x-httpd-ea-php82 .php .php8 .phtml\n</IfModule>\n"+
 		"ExpiresActive On\nHeader set Cache-Control \"max-age=600\"\nphp_value upload_max_filesize 64M\n"))
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{root}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 1 || !strings.HasPrefix(plan.TierWarnings[0], ".htaccess line 6 (php_value upload_max_filesize 64M): OpenLiteSpeed does not apply PHP settings") {
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 0 || !reflect.DeepEqual(plan.Converted, []MigrationFolder{{File: ".htaccess", Path: "upload_max_filesize", Rule: "PHP setting 64M"}}) {
 		t.Fatalf("typical root: %+v %v", plan, err)
 	}
-	// A handler for another PHP version than the plan's is a warning too.
+	// A handler for another PHP version than the plan's is a warning.
 	legacy := htaccess.ClassifyFile("legacy/.htaccess", "/legacy/", []byte("AddHandler application/x-httpd-ea-php74 .php\n"))
 	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{root, legacy}}
 	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
-	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 2 || !strings.Contains(plan.TierWarnings[1], "legacy/.htaccess line 1 (AddHandler): the old server runs /legacy/ with PHP ea-php74") || !strings.Contains(plan.TierWarnings[1], "ea-php82") {
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 1 || !strings.Contains(plan.TierWarnings[0], "legacy/.htaccess line 1 (AddHandler): the old server runs /legacy/ with PHP ea-php74") || !strings.Contains(plan.TierWarnings[0], "ea-php82") {
 		t.Fatalf("another PHP version: %q %v", plan.TierWarnings, err)
+	}
+	// More memory than a new account's PHP may use is a warning naming the
+	// line, and so is a .user.ini that runs a file before every script.
+	big := htaccess.ClassifyFile(".htaccess", "/", []byte("php_value memory_limit 512M\nphp_value memory_limit -1\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{big},
+		UserINI: htaccess.UserINIWarnings(".user.ini", []byte("auto_prepend_file = '/home/fixtureacct/public_html/wordfence-waf.php'\n"))}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "native" || len(plan.TierWarnings) != 2 ||
+		!strings.HasPrefix(plan.TierWarnings[0], ".user.ini line 1 (auto_prepend_file): the old server's PHP ran a file before every script") ||
+		!strings.HasPrefix(plan.TierWarnings[1], ".htaccess line 2 (memory_limit): the old server let the site's PHP use -1") || !strings.Contains(plan.TierWarnings[1], "memory_limit 1024M") {
+		t.Fatalf("memory and .user.ini: %q %v", plan.TierWarnings, err)
+	}
+	// A setting it does not carry is a refusal naming its line.
+	prepend := htaccess.ClassifyFile(".htaccess", "/", []byte("RewriteEngine On\nphp_value auto_prepend_file /home/fixtureacct/public_html/wordfence-waf.php\n"))
+	f.site = htaccess.SiteResult{Verdict: htaccess.VerdictConvertible, Files: []htaccess.FileResult{prepend}}
+	plan, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Tier != "compat" || len(plan.TierRefusals) != 1 || !strings.HasPrefix(plan.TierRefusals[0], ".htaccess line 2 (php_value auto_prepend_file): auto_prepend_file names a file PHP runs before every script") ||
+		!slices.Equal(plan.TierFix, []string{".htaccess line 2 (php_value auto_prepend_file)"}) || len(plan.Converted) != 0 {
+		t.Fatalf("auto_prepend_file: %+v %v", plan, err)
 	}
 	// A line OpenLiteSpeed ignores that nothing covers is not an access
 	// rule: the plan names it as a line to change.

@@ -149,7 +149,7 @@ func webSites(items []record, except string) []olsweb.Site {
 		// an active site only.
 		extra := recordSiteDomains(r)
 		// The migration's converted .htaccess rules: folders, and the
-		// root .htaccess's redirects and error pages.
+		// root .htaccess's redirects, error pages and PHP settings.
 		protection := recordProtection(r)
 		site := olsweb.Site{
 			Name:              siteName(r.Account.ID),
@@ -160,6 +160,7 @@ func webSites(items []record, except string) []olsweb.Site {
 			Folders:           protection.Folders,
 			HtaccessRedirects: protection.Redirects,
 			ErrorPages:        protection.ErrorPages,
+			PHPSettings:       sitePHP(protection.PHPSettings, limits.MemoryMiB),
 			DocRoot:           r.Account.PublicHTML,
 			PHPVersion:        w.PHPVersion,
 			Suspended:         state == "suspended",

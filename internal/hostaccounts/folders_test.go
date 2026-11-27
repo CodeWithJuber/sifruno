@@ -3,9 +3,11 @@ package hostaccounts
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
+	"sifruno/internal/htaccess"
 	"sifruno/internal/olsweb"
 )
 
@@ -156,6 +158,84 @@ func TestSiteRedirectsWithoutFolders(t *testing.T) {
 	}
 }
 
+// PHP settings alone are a set too, and the vhost gets memory_limit no
+// larger than the account's memory.
+func TestSitePHPSettings(t *testing.T) {
+	s, f := webStore(t)
+	live := liveFixture(t, s)
+	defer busy(s, live.Account.ID)()
+	settings := []olsweb.PHPSetting{
+		{Name: "display_errors", Value: "off", Flag: true},
+		{Name: "memory_limit", Value: "-1"},
+		{Name: "upload_max_filesize", Value: "128M"},
+	}
+	p := SiteProtection{Users: map[string][]byte{}, PHPSettings: settings}
+	if err := s.setSiteFolders(context.Background(), live.Account.ID, p, "test operator", "Move a website here"); err != nil {
+		t.Fatal(err)
+	}
+	stored, ok := decodeFolders(recordFor(t, s, live.Account.ID).Folders)
+	if !ok || !reflect.DeepEqual(stored.PHPSettings, settings) {
+		t.Fatalf("recorded %+v", stored)
+	}
+	want := []olsweb.PHPSetting{settings[0], {Name: "memory_limit", Value: "1024M"}, settings[2]}
+	if site := siteOf(t, f.sites, live.Account.ID); !reflect.DeepEqual(site.PHPSettings, want) || len(site.Folders) != 0 {
+		t.Fatalf("site %+v", site)
+	}
+	if got := sitePHP([]olsweb.PHPSetting{{Name: "memory_limit", Value: "512M"}}, 1024); got[0].Value != "512M" {
+		t.Fatalf("a smaller memory_limit changed: %+v", got)
+	}
+	if got := sitePHP([]olsweb.PHPSetting{{Name: "memory_limit", Value: "2G"}}, 2048); got[0].Value != "2G" {
+		t.Fatalf("memory_limit at the plan's memory changed: %+v", got)
+	}
+}
+
+func TestStoredPHPSettingsAreChecked(t *testing.T) {
+	for name, settings := range map[string][]olsweb.PHPSetting{
+		"file setting": {{Name: "auto_prepend_file", Value: "x.php"}},
+		"path value":   {{Name: "max_input_vars", Value: "/etc/passwd"}},
+		"flag word":    {{Name: "display_errors", Value: "On", Flag: true}},
+		"unsorted":     {{Name: "memory_limit", Value: "256M"}, {Name: "display_errors", Value: "on", Flag: true}},
+		"twice":        {{Name: "memory_limit", Value: "256M"}, {Name: "memory_limit", Value: "128M"}},
+		"not a size":   {{Name: "memory_limit", Value: "lots"}},
+	} {
+		if validStoredPHP(settings) {
+			t.Errorf("%s: accepted %+v", name, settings)
+		}
+	}
+	if !validStoredPHP([]olsweb.PHPSetting{{Name: "date.timezone", Value: "Europe/Berlin"}, {Name: "memory_limit", Value: "99G"}}) {
+		t.Error("refused a set the converter makes")
+	}
+}
+
+// Every setting the converter carries is one olsweb writes.
+func TestEveryConvertedPHPSettingRenders(t *testing.T) {
+	var b strings.Builder
+	for _, line := range []string{
+		"php_value memory_limit -1", "php_value upload_max_filesize 64M", "php_value post_max_size 64M",
+		"php_value max_execution_time 300", "php_value max_input_time -1", "php_value max_input_vars 3000",
+		"php_value max_input_nesting_level 64", "php_value max_file_uploads 20", "php_value session.gc_maxlifetime 1440",
+		"php_value session.cookie_lifetime 0", "php_value default_socket_timeout -1", "php_value pcre.backtrack_limit 1000000",
+		"php_value pcre.recursion_limit 100000", "php_value error_reporting 32767", "php_flag display_errors on",
+		"php_flag display_startup_errors off", "php_flag log_errors on", "php_flag html_errors off", "php_flag short_open_tag off",
+		"php_flag session.cookie_httponly on", "php_flag session.cookie_secure on", "php_flag session.use_strict_mode on",
+		"php_flag session.use_only_cookies on", "php_value output_buffering 4096", "php_flag zlib.output_compression off",
+		"php_value date.timezone America/Argentina/Buenos_Aires",
+	} {
+		b.WriteString(line + "\n")
+	}
+	conv := htaccess.ConvertSite(htaccess.SiteResult{Verdict: htaccess.VerdictNative, Files: []htaccess.FileResult{htaccess.ClassifyFile(".htaccess", "/", []byte(b.String()))}})
+	if !conv.Native || len(conv.PHPSettings) != 26 {
+		t.Fatalf("%+v", conv)
+	}
+	settings := protectionPHP(conv)
+	if !validStoredPHP(settings) {
+		t.Fatalf("not a valid stored set: %+v", settings)
+	}
+	if err := olsweb.CheckPHPSettings(sitePHP(settings, DefaultLimits.MemoryMiB), DefaultLimits.MemoryMiB); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSiteFoldersRefusals(t *testing.T) {
 	s, f := webStore(t)
 	live := liveFixture(t, s)
@@ -175,6 +255,8 @@ func TestSiteFoldersRefusals(t *testing.T) {
 		"bad redirect":      {Redirects: []olsweb.HtaccessRedirect{{Prefix: "/a", Target: "/b%{HTTP_HOST}", Status: 301}}},
 		"redirect status":   {Redirects: []olsweb.HtaccessRedirect{{Prefix: "/a", Target: "/b", Status: 307}}},
 		"bad error page":    {ErrorPages: []olsweb.ErrorPage{{Status: 404, URL: "https://example.com/404"}}},
+		"file PHP setting":  {PHPSettings: []olsweb.PHPSetting{{Name: "auto_prepend_file", Value: "waf.php"}}},
+		"PHP setting value": {PHPSettings: []olsweb.PHPSetting{{Name: "memory_limit", Value: "256M\nphp_value engine 0"}}},
 	}
 	for name, p := range bad {
 		if err := s.setSiteFolders(ctx, live.Account.ID, p, "test operator", "x"); !errors.Is(err, ErrInvalid) {

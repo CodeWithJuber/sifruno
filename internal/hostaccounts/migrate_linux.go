@@ -467,6 +467,7 @@ func readProtection(files *os.File, sourceHome, site string, conv htaccess.SiteC
 	folders, userFiles := protectionFolders(site, conv.Rules)
 	p := SiteProtection{Folders: folders, Users: map[string][]byte{}}
 	p.Redirects, p.ErrorPages = protectionMoved(conv)
+	p.PHPSettings = protectionPHP(conv)
 	for _, f := range folders {
 		if f.Realm == nil {
 			continue

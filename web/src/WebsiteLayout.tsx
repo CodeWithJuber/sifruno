@@ -326,7 +326,7 @@ function ActivitySection({ backups, reading }: { backups?: SiteBackups; reading:
   return <section className={`${panel} flex flex-col gap-3 p-5 md:p-6`} aria-labelledby={`${ids}-heading`} data-testid="site-activity">
     <div className="flex flex-col gap-1">
       <h2 id={`${ids}-heading`}>Recent activity</h2>
-      <div className="text-sm text-muted-foreground">The site's last backup, restore and restore drill, and when it was made.</div>
+      <div className="text-sm text-muted-foreground">The site's last backup, restore and restore test, and when it was made.</div>
     </div>
     <ol className="m-0 flex list-none flex-col gap-3 p-0">
       {items.map((item) => <li key={item.id} className="flex items-start gap-3" data-testid="activity-item" data-kind={item.id} data-ok={String(item.ok)}>

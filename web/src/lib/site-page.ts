@@ -1,7 +1,7 @@
 import { dayLabel, httpsState } from "./websites-api";
 import type { WebsiteDetail, WebsiteUsage } from "./websites-api";
 import { diskUse } from "./site-tools-api";
-import { formatWhen } from "./site-backups-api";
+import { actorLabel, formatWhen } from "./site-backups-api";
 import type { SiteBackups } from "./site-backups-api";
 
 // One website's page: which tabs it shows in Simple and Advanced view, the
@@ -215,7 +215,7 @@ export function healthChecklist(site: WebsiteDetail, usage: Reading<WebsiteUsage
 export interface ActivityItem { id: "created" | "backup" | "restore" | "drill"; at: string; title: string; detail: string; ok: boolean }
 
 const restored: Record<string, string> = { files: "Restored the files from a backup", database: "Restored the database from a backup", both: "Restored the files and database from a backup" };
-const actorName = (actor: string) => actor === "scheduler" ? "the nightly schedule" : actor || "someone";
+const actorName = actorLabel;
 
 // What the API records for one site: its last backup, restore and restore
 // drill, and when it was made, newest first. It is not a full change log.
@@ -227,6 +227,6 @@ export function recentActivity(site: Pick<WebsiteDetail, "account_id" | "created
   const restore = backups?.last_restore;
   if (restore) items.push({ id: "restore", at: restore.finished_at, ok: restore.status === "succeeded", title: restore.status === "succeeded" ? restored[restore.what ?? "both"] ?? restored.both : "Restore failed", detail: `Started by ${actorName(restore.actor)}.${restore.status === "failed" && restore.message ? ` ${restore.message}` : ""}` });
   const drill = backups?.last_drill;
-  if (drill && drill.account_id === site.account_id) items.push({ id: "drill", at: drill.checked_at, ok: drill.passed, title: drill.passed ? "Restore drill passed" : "Restore drill failed", detail: drill.message });
+  if (drill && drill.account_id === site.account_id) items.push({ id: "drill", at: drill.checked_at, ok: drill.passed, title: drill.passed ? "Restore test passed" : "Restore test failed", detail: drill.message });
   return items.filter((item) => Number.isFinite(Date.parse(item.at))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 }

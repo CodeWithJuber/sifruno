@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Check, CircleAlert, CircleCheck, Copy, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { BackupsApiError, drillLine, resultTechnical } from "@/lib/site-backups-api";
+import { actorLabel, BackupsApiError, drillLine, resultTechnical } from "@/lib/site-backups-api";
 import type { DrillRecord, JobResult, PruneRecord } from "@/lib/site-backups-api";
 import { formatWhen, kindLabel, whatLabel } from "@/lib/site-backups-api";
 
@@ -56,19 +56,19 @@ export function ResultAlert({ result, timezone, testId }: { result: JobResult; t
     <AlertTitle>{kindLabel[result.kind]}{what} {failed ? "failed" : "finished"} {formatWhen(result.finished_at, timezone)}</AlertTitle>
     <AlertDescription className="flex flex-col gap-2 text-start text-foreground">
       <div className="text-sm text-foreground">{result.message}</div>
-      <div className="text-xs text-muted-foreground">Started by {result.actor === "scheduler" ? "the nightly schedule" : result.actor}.</div>
+      <div className="text-xs text-muted-foreground">Started by {actorLabel(result.actor)}.</div>
       {technical && <TechnicalDetails>{technical}</TechnicalDetails>}
     </AlertDescription>
   </Alert>;
 }
 
-// "Last restore drill: passed or failed, when, which site".
+// "Last restore test: passed or failed, when, which site" (the API's drill).
 export function DrillSummary({ drill, timezone }: { drill: DrillRecord | null; timezone: string }) {
   const technical = drill ? resultTechnical(drill) : "";
   return <div className="flex flex-col gap-2" data-testid="last-drill" data-passed={drill ? String(drill.passed) : undefined}>
     <div className="flex items-start gap-2 text-sm">
       {drill && (drill.passed ? <CircleCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" /> : <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />)}
-      <span><span className="font-medium text-foreground">Last restore drill:</span> <span className="text-foreground">{drillLine(drill, timezone)}</span></span>
+      <span><span className="font-medium text-foreground">Last restore test:</span> <span className="text-foreground">{drillLine(drill, timezone)}</span></span>
     </div>
     {drill && <div className="text-sm text-muted-foreground">{drill.message}</div>}
     {technical && <TechnicalDetails>{technical}{drill?.files ? `\nfiles compared: ${drill.files}` : ""}</TechnicalDetails>}

@@ -791,7 +791,7 @@ func (j *run) undo() (left, notes []string) {
 	for _, name := range []string{StepSSL, StepWeb, StepAccount} {
 		i := j.index(name)
 		if i < 0 {
-			continue // a migration has no ssl step
+			continue // a job without that step
 		}
 		step := &j.job.Steps[i]
 		if step.State != StepDone {

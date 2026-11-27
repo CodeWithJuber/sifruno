@@ -432,6 +432,75 @@ test("opening a source posts only host and port and trusts only a source with it
   });
 });
 
+// The owner's screen: cPanel's raw words as the reason and "Fix the value
+// the message names, then press Create website again." as the next step.
+test("a move's failure shows the server's reason and next step, and the old server's words only as technical details", async () => {
+  const preload = "2026/01/02 03:04:05 LD_Preload detected, refusing to run at bin/apitool.pl line 369.";
+  const why = "cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them (a security problem on the old server) or when cPanel's files are damaged or being updated.";
+  const next = "Check the old server's security and cPanel (cPanel support can help), then press Try again.";
+  await withFetch(async () => json({ status: 422, title: "Unprocessable Entity", detail: why, next, technical: `step cpanel_tool; the old server printed: ${preload}` }, 422), async () => {
+    await assert.rejects(migrations.listSourceAccounts(sourceId), (error) => error.status === 422 && error.message === "The old server's accounts could not be listed."
+      && error.detail === why && error.next === next && error.technical.includes(`/accounts returned HTTP 422`) && error.technical.includes("LD_Preload detect")
+      && !error.detail.includes("LD_Preload") && !error.next.includes("LD_Preload"));
+  });
+  // Without a next step from the server, a move never falls back to the website wizard's.
+  for (const status of [401, 404, 409, 413, 422, 503]) {
+    await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ status, detail: "Refused." }, status), async () => {
+      await assert.rejects(migrations.startMigration(sourceId, "shopone"), (error) => error.status === status && !/Create website|New website|site title/.test(error.next) && error.next.length > 0);
+    });
+  }
+  // A comparison that found differences carries why and what to do.
+  const record = migrationRecord({ gate: "closed", verify: { ...migrationRecord().verify, cutover_allowed: false, why: "The copy is not the same as the old site yet.", next: "Check each line below, then press Compare again." } });
+  const parsed = api.parseJob(migrationJob({ migration: record }));
+  assert.equal(parsed.migration.verify.why, "The copy is not the same as the old site yet.");
+  assert.equal(parsed.migration.verify.next, "Check each line below, then press Compare again.");
+  assert.equal(api.parseJob(migrationJob({ migration: migrationRecord({ verify: { ...migrationRecord().verify, why: 7 } }) })), undefined);
+});
+
+test("the WHM login is sent once, only the chosen secret, and a certificate to confirm is read from the 409", async () => {
+  const fingerprint = Array(32).fill("AB").join(":");
+  const source = { id: sourceId, host: "old.example.test", port: 22, key_line: `restrict ssh-ed25519 AAAA sifruno-migration-${sourceId}`, install_command: "x", host_keys: [{ type: "ssh-rsa", fingerprint: "SHA256:rsa" }, { type: "ssh-ed25519", fingerprint: "SHA256:ed" }], pinned_fingerprint: "", via: "whm", expires_at: "2026-11-25T10:00:00Z" };
+  const certificate = { fingerprint, trusted: false, subject: "CN=old.example.test", issuer: "CN=old.example.test", not_after: "2027-11-25T10:00:00Z" };
+  const posts = [];
+  const login = { address: " https://old.example.test:2087 ", token: " ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 ", password: "typed then switched", ssh_port: "", tls_fingerprint: "" };
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    posts.push({ url, body: JSON.parse(options.body) });
+    return posts.length === 1 ? json({ status: 409, detail: "Not trusted.", next: "Compare it.", certificate }, 409) : json({ source, accounts: [{ user: "shopone", domain: "shop.example.test", disk_used_mib: 40, disk_limit_mib: 0, suspended: false }], certificate });
+  }, async () => {
+    const error = await migrations.connectWHM(login, "token").catch((e) => e);
+    assert.deepEqual(migrations.certificateToConfirm(error), certificate);
+    const connected = await migrations.connectWHM({ ...login, tls_fingerprint: fingerprint }, "token");
+    assert.equal(connected.source.via, "whm");
+    assert.equal(connected.accounts[0].user, "shopone");
+    assert.equal(migrations.preferredHostKey(connected.source.host_keys).fingerprint, "SHA256:ed");
+  });
+  assert.equal(posts[0].url, "/api/v1/websites/migrations/whm");
+  assert.deepEqual(posts[0].body, { address: "https://old.example.test:2087", token: "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" });
+  assert.deepEqual(posts[1].body, { address: "https://old.example.test:2087", token: "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", tls_fingerprint: fingerprint });
+  await withFetch(async (url, options) => {
+    if (url === "/api/v1/session") return json(session);
+    posts.push({ url, body: JSON.parse(options.body) });
+    return json({ source, accounts: [], certificate: { ...certificate, trusted: true } });
+  }, async () => { await migrations.connectWHM({ ...login, ssh_port: "2222" }, "password"); });
+  assert.deepEqual(posts[2].body, { address: "https://old.example.test:2087", password: "typed then switched", ssh_port: 2222 });
+  // An SSH source is not taken as a WHM connection.
+  await withFetch(async (url) => url === "/api/v1/session" ? json(session) : json({ source: { ...source, via: "" }, accounts: [], certificate }), async () => {
+    await assert.rejects(migrations.connectWHM(login, "token"), { status: 0 });
+  });
+  assert.equal(migrations.parseSource({ source: { ...source, via: "ftp" } }), undefined);
+  assert.equal(migrations.parseSource({ source: { ...source, via: undefined } }).via, "");
+  for (const bad of ["", "http://old.example.test:2087", "root@old.example.test", "old example.test", "ftp://old.example.test"]) assert.ok(migrations.checkWHMAddress(bad), bad);
+  for (const good of ["old.example.test", "https://old.example.test:2087/cpsess123/"]) assert.equal(migrations.checkWHMAddress(good), undefined, good);
+  assert.ok(migrations.checkWHMSecret("token", "short"));
+  assert.equal(migrations.checkWHMSecret("token", "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"), undefined);
+  assert.ok(migrations.checkWHMSecret("password", ""));
+  assert.ok(migrations.checkWHMSecret("password", "a\nb"));
+  assert.equal(migrations.checkWHMSecret("password", "a: b"), undefined);
+  assert.equal(migrations.checkOptionalSSHPort(""), undefined);
+  assert.ok(migrations.checkOptionalSSHPort("70000"));
+});
+
 test("stale key lines are read only with the line they name, and cleared with the session", async () => {
   const key = { id: sourceId, host: "old.example.test", port: 22, line: `sifruno-migration-${sourceId}`, detail: "Remove the line.", since: "2026-11-24T10:00:00Z" };
   assert.deepEqual(migrations.parseStaleKeys({ keys: [key] }), [key]);

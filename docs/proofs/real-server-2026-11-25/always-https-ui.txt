@@ -1,0 +1,184 @@
+# Always use HTTPS in the panel, on a real server, 2026-11-26
+# Server: a new Linode g6-standard-2 (de-fra-2) that scripts/ci/nightly-fresh-install.sh made and kept
+# (SIFRUNO_NIGHTLY_KEEP=1, the owner's admin key added): AlmaLinux 9.8, SELinux Enforcing, OpenLiteSpeed 1.9.4,
+# lsphp83 8.3.37. Its fresh-install test passed 17 checks, 0 failed, with the release built from a00ed8d.
+# Then, by hand over SSH: TCP 80 and 443 opened to everyone and 8443 to the machine that ran the proofs, in the
+# Linode Cloud Firewall and in firewalld; the first admin made on the panel's loopback.
+#
+# Part 1: before certificates were set up, a PHP website made through the wizard's API on the panel's loopback
+# (signed in with the operator's access key), so it has no certificate and no certificate authority was asked.
+# The panel's renewal loop leaves such a site alone, so it stays without one.
+$ python3 -I create-php-site.py nocert.sifruno-proof.test
+job php: succeeded
+  step account: done (Created the hosting account nocert.)
+  step web: done (The site is live with PHP 8.3.)
+  step ssl: skipped (Certificates are not set up on this server.)
+  step database: skipped (No database was asked for.)
+  step placeholder: done (Added a placeholder page, public_html/index.php. Replace it with your website's files.)
+
+# Then the release built from d7f2ffd (the switch's UI and the broker's expiry render in it) was installed in
+# place: install.sh --panel-host SERVER_IP --acme-email admin@www.SERVER_IP.sslip.io. The panel's host is its IP,
+# so the panel keeps its self-signed certificate and asks Let's Encrypt for nothing.
+#
+# Part 2: scripts/devvm/proofs/public-ca-wizard.sh made a WordPress site at www.SERVER_IP.sslip.io with the run's
+# one Let's Encrypt order. Its transcript (26 passed, 0 failed), shortened to its sections, the SSL step and the result:
+# Public-CA wizard proof 2026-11-26T11:47:21Z
+# source d7f2ffd; runner: Ubuntu 24.04.5 LTS, curl 8.5.0, OpenSSL 3.0.13, agent-browser 0.45.0
+## Before the wizard
+## Browser: sign in over the internet and open the wizard
+## Browser: Create, then follow the job
+PASS  the job succeeds
+  step ssl: done (Installed a certificate for www.SERVER_IP.sslip.io, valid until 2027-02-24.)
+## The certificate, checked with this machine's system trust store
+PASS  the issuer is Let's Encrypt's production CA (not staging, not Pebble)
+## A browser that ignores no certificate error opens the site
+## The new site in Websites
+# 0 check(s) failed
+
+# A first run of the browser part on that release failed one check of the script's own: it read the help line by a
+# test id the page did not have yet. Its no-certificate screenshot also promised a retry that the renewal loop
+# (internal/acme, read, not run) does not make for this site. Both were fixed (a45f276), and the release built
+# from 6525f74 installed the same way.
+#
+# Part 3: scripts/devvm/proofs/always-https.sh as committed with this file (run from the working tree on 6525f74),
+# with the PHP site as NO_CERT_DOMAIN. It asks Let's Encrypt for nothing. Screenshots: always-https-ui/.
+# Always use HTTPS proof 2026-11-26T14:00:43Z
+# source 6525f74; runner: Ubuntu 24.04.5 LTS, curl 8.5.0
+# panel https://SERVER_IP:8443, website www.SERVER_IP.sslip.io, uncovered alias uncovered01642.sifruno-proof.test
+## The panel's API: the admin signs in over the internet
+PASS  the panel serves the self-signed certificate the login file names
+PASS  the admin owner signs in at https://SERVER_IP:8443 with password and authenticator code
+  GET /api/v1/websites/sites: HTTP 200; www.SERVER_IP.sslip.io: {"state":"active","https":{"on":true,"not_after":"2027-02-24T10:49:12Z"},"always_https":true,"revision":11,"aliases":[]}
+PASS  the panel lists www.SERVER_IP.sslip.io, live, with a certificate
+PASS  Always use HTTPS is on by default
+## 1. On: plain http for the certificate's name answers 301 to https, path and query kept
+  the certificate names: DNS:www.SERVER_IP.sslip.io
+  the site's rules in OpenLiteSpeed's config, over SSH:
+  vhconf | RewriteCond %{HTTPS} !on
+  vhconf | RewriteCond %{HTTP_HOST} ^www\.SERVER_IP\.sslip\.io(:[0-9]+)?$ [NC]
+  vhconf | RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+  vhconf | RewriteRule ^/?(.*)$ https://www.SERVER_IP.sslip.io/$1 [R=301,L]
+  curl -sD - http://www.SERVER_IP.sslip.io/some/path?x=1
+  < HTTP/1.1 301 Moved Permanently
+  < location: https://www.SERVER_IP.sslip.io/some/path?x=1
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 answers 301 to https://www.SERVER_IP.sslip.io/some/path?x=1
+PASS  http://www.SERVER_IP.sslip.io/ answers 301 to https://www.SERVER_IP.sslip.io/
+PASS  http://www.SERVER_IP.sslip.io/license.txt?a=b&c=d answers 301 to https://www.SERVER_IP.sslip.io/license.txt?a=b&c=d
+  https://www.SERVER_IP.sslip.io/ with this machine's system trust store: 200
+PASS  https://www.SERVER_IP.sslip.io/ answers 200 with a certificate this machine trusts
+  its title: Sifruno public CA proof
+  curl -L http://www.SERVER_IP.sslip.io/ ends: 200 1 https://www.SERVER_IP.sslip.io/ (status, redirects followed, last address)
+PASS  following it from http ends at https://www.SERVER_IP.sslip.io/ with 200 after one redirect: WordPress's own address is https, so no loop
+## 2. On: the ACME challenge path stays on http
+  a file the panel's certificate manager would write, /var/lib/sifruno-acme/sifruno-proof-1795701642, over http: 200, "challenge 1795701642"
+PASS  http://www.SERVER_IP.sslip.io/.well-known/acme-challenge/sifruno-proof-1795701642 answers 200 with the file, not a redirect
+  http://www.SERVER_IP.sslip.io/.well-known/acme-challenge/test: 404
+PASS  http://www.SERVER_IP.sslip.io/.well-known/acme-challenge/test is not redirected (404: there is no such file)
+## 3. On: an alias the certificate does not cover stays on http
+  POST domain-add uncovered01642.sifruno-proof.test: HTTP 200; aliases [{"name":"uncovered01642.sifruno-proof.test","https":"pending"}]
+PASS  the panel adds the alias uncovered01642.sifruno-proof.test
+  the site's rules in OpenLiteSpeed's config, over SSH (one name only):
+  vhconf | RewriteCond %{HTTPS} !on
+  vhconf | RewriteCond %{HTTP_HOST} ^www\.SERVER_IP\.sslip\.io(:[0-9]+)?$ [NC]
+  vhconf | RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+  vhconf | RewriteRule ^/?(.*)$ https://www.SERVER_IP.sslip.io/$1 [R=301,L]
+PASS  the alias is mapped to the site, and has no https rule
+  http://uncovered01642.sifruno-proof.test/license.txt?x=1 (Host header to the server): 200
+PASS  http://uncovered01642.sifruno-proof.test/license.txt?x=1 answers 200, not a redirect
+  http://uncovered01642.sifruno-proof.test/: 200
+PASS  http://uncovered01642.sifruno-proof.test/ answers 200, not a redirect
+PASS  the name the certificate covers still answers 301
+  the alias's HTTPS on the site page: waiting_for_dns
+PASS  no new certificate was asked for: the served one is the same
+## 4. The API refuses a switch that is not true or false, and a stale revision
+  always_https "no": HTTP 422: always_https must be true or false.
+PASS  "no" is refused with 422
+  an old revision: HTTP 409: This website changed after the page loaded it, so nothing changed. Reload the page, check the website, then try again.
+PASS  an old revision is refused with 409
+PASS  after both, http still answers 301
+## 5. Off through the panel's API: plain http serves the site
+  POST always-https false: HTTP 200; always_https false, revision 13
+PASS  the panel turns it off
+PASS  http://www.SERVER_IP.sslip.io/ answers 200
+  curl -sD - http://www.SERVER_IP.sslip.io/
+  < HTTP/1.1 200 OK
+PASS  http://www.SERVER_IP.sslip.io/license.txt?x=1 answers 200
+  http://www.SERVER_IP.sslip.io/some/path?x=1: 404 (WordPress has no such page)
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 is not redirected
+PASS  https://www.SERVER_IP.sslip.io/ still answers 200
+PASS  the site's config in OpenLiteSpeed has no https rule
+PASS  the website list says always_https false
+## 6. On again: 301 again
+  POST always-https true: HTTP 200; always_https true, revision 14
+PASS  the panel turns it on
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 answers 301 to https://www.SERVER_IP.sslip.io/some/path?x=1
+  curl -sD - http://www.SERVER_IP.sslip.io/some/path?x=1
+  < HTTP/1.1 301 Moved Permanently
+  < location: https://www.SERVER_IP.sslip.io/some/path?x=1
+PASS  http://www.SERVER_IP.sslip.io/ answers 301 again, not a cached page
+PASS  the ACME challenge path is still not redirected
+PASS  the uncovered alias still answers 200
+## 7. Clean up: the alias goes, the switch stays on
+  POST domain-remove uncovered01642.sifruno-proof.test: HTTP 200
+PASS  the panel removes the alias
+PASS  http still answers 301
+## 8. The Domains tab: the switch in a browser, at desktop width and at 390 px
+PASS  Chrome signs in as owner with password and authenticator code
+  the switch: true enabled; its label: Always use HTTPS; its help: Send visitors from http:// to https:// once a valid certificate is in force.
+PASS  the Domains tab shows Always use HTTPS, on, and it can change
+PASS  its label is "Always use HTTPS"
+PASS  its help line says when it applies
+  screenshot always-https-20261126T140040Z/desktop-1-on.png
+  pressed it at desktop width; the page says: Always use HTTPS is off. Visitors can use both http:// and https://.
+PASS  the switch shows off, with the outcome beside it
+PASS  http://www.SERVER_IP.sslip.io/ answers 200
+  curl -sD - http://www.SERVER_IP.sslip.io/some/path?x=1
+  < HTTP/1.1 404 Not Found
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 is not redirected
+PASS  https://www.SERVER_IP.sslip.io/ still answers 200
+PASS  the website list says always_https false
+  screenshot always-https-20261126T140040Z/desktop-2-off.png
+PASS  at 390 px the page does not scroll sideways
+  screenshot always-https-20261126T140040Z/390-1-off.png
+  pressed it at 390 px; the page says: Always use HTTPS is on. Visitors on http:// now go to https://.
+PASS  the switch shows on
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 answers 301 to https://www.SERVER_IP.sslip.io/some/path?x=1
+  curl -sD - http://www.SERVER_IP.sslip.io/some/path?x=1
+  < HTTP/1.1 301 Moved Permanently
+  < location: https://www.SERVER_IP.sslip.io/some/path?x=1
+PASS  http://www.SERVER_IP.sslip.io/ answers 301 to https://www.SERVER_IP.sslip.io/
+  screenshot always-https-20261126T140040Z/390-2-on.png
+  through the API, off and on again: HTTP 200, revision 19
+  pressed it on the older page: Always use HTTPS did not change. The website changed after the page read it, or another change to it was still running, so nothing changed. Next step: The page has read the website again and shows it as it is now. Check the switch, then try again if you still want the change. Technical details
+PASS  the page says Always use HTTPS did not change, because the website changed meanwhile
+PASS  the page has read the website again: the switch shows on
+PASS  http still answers 301
+  screenshot always-https-20261126T140040Z/390-3-changed-meanwhile.png
+## 9. A website with no certificate: the switch is shown, but cannot change
+  GET /api/v1/websites/sites: nocert.sifruno-proof.test: {"state":"active","https":{"on":false,"not_after":""},"always_https":true}
+  the switch: true disabled; the page says: This website has no certificate yet, so visitors cannot be sent to https:// without a security warning. Next step: Get a certificate on this tab first: point nocert.sifruno-proof.test at this server with the DNS record below. The panel tries every few hours; if no certificate comes within a day, ask whoever runs this server. Set up DNS for nocert.sifruno-proof.test
+PASS  the switch shows the setting (on) and cannot be pressed
+PASS  it says why: no certificate yet
+PASS  and what to do next: get a certificate on this tab first
+PASS  Set up DNS shows the record for nocert.sifruno-proof.test
+PASS  at 390 px the page does not scroll sideways
+  screenshot always-https-20261126T140040Z/390-4-no-certificate.png
+  screenshot always-https-20261126T140040Z/desktop-3-no-certificate.png
+  http://nocert.sifruno-proof.test/ (Host header to the server): 200
+PASS  http://nocert.sifruno-proof.test/ answers 200: nothing is redirected
+
+# 0 check(s) failed
+
+# Part 4: every certificate line in the panel's log on the server, after Part 3 (the account's ID replaced):
+# one certificate from Let's Encrypt for the run, and the panel's own stays self-signed.
+$ journalctl -u sifruno -o cat | grep -E 'acme:|TLS certificate'
+TLS certificate (self-signed: no --panel-host name is a public domain name, and Let's Encrypt issues this panel none for an IP address or a name like panel.test; browsers warn until you add --tls-cert), valid until 2027-12-28
+acme: www.SERVER_IP.sslip.io (account ID): certificate installed, valid until 2027-02-24
+TLS certificate (self-signed: no --panel-host name is a public domain name, and Let's Encrypt issues this panel none for an IP address or a name like panel.test; browsers warn until you add --tls-cert), valid until 2027-12-28
+
+# Part 5: the server deleted with the nightly script's cleanup, and checked through the Linode API.
+== 2026-11-26T14:14:42Z deleted: Linode 111979154 (sifruno-owner-test-httpsui1126)
+== 2026-11-26T14:15:10Z deleted: firewall 233379841 (sifruno-owner-test-httpsui1126)
+== 2026-11-26T14:15:17Z checked through the API: no Linode and no firewall named sifruno-owner-test-httpsui1126 is left
+GET /linode/instances/111979154: [{"reason":"Not found"}]
+GET /networking/firewalls/233379841: [{"reason":"Not found"}]

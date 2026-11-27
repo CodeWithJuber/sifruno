@@ -67,6 +67,34 @@ type SiteDomainsService interface {
 	SetSiteDomains(ctx context.Context, id string, in SiteDomainsInput, actor string) (SiteDomainsResult, error)
 }
 
+// AlwaysHTTPSInput turns a live site's "Always use HTTPS" on or off: whether
+// plain http for the domains its certificate covers is sent to https.
+// AlwaysHTTPS is required, so a request that leaves it out changes nothing.
+type AlwaysHTTPSInput struct {
+	AlwaysHTTPS      *bool  `json:"always_https"`
+	ExpectedRevision uint64 `json:"expected_revision"`
+	Reason           string `json:"reason"`
+}
+
+// AlwaysHTTPSService is implemented by the client; the broker serves it
+// from its store. The answer is the account, its PlainHTTP the new setting.
+type AlwaysHTTPSService interface {
+	SetAlwaysHTTPS(ctx context.Context, id string, in AlwaysHTTPSInput, actor string) (Account, error)
+}
+
+func validAlwaysHTTPSInput(in AlwaysHTTPSInput, actor string) bool {
+	return in.AlwaysHTTPS != nil && in.ExpectedRevision != 0 && validText(in.Reason, 500) && validText(actor, 120)
+}
+
+// httpsTarget is the journal target of an "Always use HTTPS" change: "on",
+// or "off" for plain http.
+func httpsTarget(plainHTTP bool) string {
+	if plainHTTP {
+		return "off"
+	}
+	return "on"
+}
+
 // ErrDomainTaken is a domains change refused because one of its aliases is
 // already a domain of another account: the account's own or an alias, in
 // either its www. form or without it, which OpenLiteSpeed maps as one name.
@@ -273,5 +301,21 @@ func (c *client) SetSiteDomains(ctx context.Context, id string, in SiteDomainsIn
 		Input SiteDomainsInput `json:"input"`
 		Actor string           `json:"actor"`
 	}{in, actor}, maxSiteDomainsRequestBytes, &out, maxResponseBytes)
+	return out, err
+}
+
+// SetAlwaysHTTPS asks the broker to turn the site's "Always use HTTPS" on
+// or off. A 422 web_rejected answer means the config with the change failed
+// its test and was restored: the account is unchanged.
+func (c *client) SetAlwaysHTTPS(ctx context.Context, id string, in AlwaysHTTPSInput, actor string) (Account, error) {
+	if !idPattern.MatchString(id) || !validAlwaysHTTPSInput(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	var out Account
+	// The change runs the web apply, which can take minutes on a busy host.
+	err := c.send(ctx, c.slow, "POST", "/v1/accounts/"+id+"/always-https", struct {
+		Input AlwaysHTTPSInput `json:"input"`
+		Actor string           `json:"actor"`
+	}{in, actor}, &out, maxResponseBytes)
 	return out, err
 }

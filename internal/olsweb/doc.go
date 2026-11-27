@@ -28,8 +28,12 @@
 //     block with .htaccess autoload plus vhost-level deny rules, then the
 //     site's redirects (redirect.go: a domain redirect is two RewriteCond
 //     lines, on the Host header and leaving the challenge path alone, and a
-//     RewriteRule; a path redirect is one RewriteRule; each [R=301|302,L]).
-//     The cache
+//     RewriteRule; a path redirect is one RewriteRule; each [R=301|302,L]),
+//     then, for a site with AlwaysHTTPS and its own certificate, one rule
+//     per domain the certificate covers that sends plain http to the same
+//     address on https (redirect.go httpsRules: RewriteCond lines on
+//     %{HTTPS}, the Host header and leaving the challenge path alone, then
+//     [R=301,L]). The cache
 //     block turns LSCache on with the site's own store in
 //     CacheRoot/sifruno-NAME and the stock values written out, enableCache
 //     0 among them: a page is cached only when the site's response asks.
@@ -40,6 +44,16 @@
 //     SuspendedDocRoot, so no path it names is under the tenant's home and
 //     the tenant cannot make its config test fail; SuspendedDocRoot must
 //     exist before such a render is tested.
+//   - The panel's own host names (Server.ChallengeHosts), when one is not a
+//     site's: one more virtualhost, NamePrefix+PanelChallengeName, mapped
+//     on the plain listeners only, in a suspended site's form (vhRoot and
+//     docRoot SuspendedDocRoot, no scripts, no symlinks, the cache module
+//     off, autoLoadHtaccess 0, one rule answering 403 to everything, and
+//     the web server's own user and group, Server.ChallengeUser and
+//     ChallengeGroup) with the challenge context, so the panel gets its own
+//     certificate over HTTP-01 and port 80 serves nothing else at that
+//     name. A name a site serves stays with the site, whose vhost serves
+//     the same folder.
 //   - An active site's protected folders (access.go), converted from a
 //     migrated site's .htaccess by internal/htaccess: one "realm" block per
 //     password folder, whose userDB is RealmFile(site, n) in RealmRoot
@@ -256,6 +270,39 @@
 //     files_unconfined_type and may write any file type. So CacheRoot keeps
 //     /var/lib's var_lib_t (cachedata's own label is usr_t, from "/usr/.*")
 //     and needs no file-context rule.
+//
+// Read 2026-11-25, same tag and docs, for the https redirect:
+//
+//   - /config/rewriterules/ [2024-07-29]: its "Redirect to HTTPS" example
+//     tests %{SERVER_PORT} 80; the page lists no server variables.
+//   - src/http/requestvars.cpp: "HTTPS" is a built-in variable (ServerVarNames,
+//     REF_HTTPS 152 in requestvars.h, below REF_END, so SubstItem::
+//     parseServerVar2 accepts it in a rewrite condition at 246), and its
+//     value is "on" when HttpSession::isHttps, else "off" (840-842).
+//   - src/http/httpreq.h isHttps (735-736): the request came over TLS
+//     (httpsession.cpp 246-249 and 567-570 set the crypto and the flag for a
+//     TLS connection), or it carries X-Forwarded-Proto: https or
+//     X-Forwarded-Scheme: https (httpreq.cpp 1609-1624). So a proxy that ends
+//     TLS in front of the site and says so gets no redirect loop, and a
+//     client that sends the header itself only keeps itself on http.
+//
+// Read 2026-11-26, same tag, for the panel's names (ChallengeHosts):
+//
+//   - src/http/vhostmap.cpp: a host name with no map line of its own falls
+//     back to the listener's catch-all ("map NAME *") only (wildMatch, 95-104),
+//     and none is rendered; findDedicated (269-297) serves one vhost for
+//     every name only when the catch-all is the listener's only map.
+//   - src/http/httpsession.cpp: a request whose host matches no vhost is
+//     answered 404 (1648-1661). So port 80 does not answer the panel's name
+//     until a vhost maps it, and Let's Encrypt's HTTP-01 check would fail.
+//
+// Seen 2026-11-26 on a real server (OpenLiteSpeed 1.9.4-3.el9, user and
+// group nobody): `openlitespeed -t` with the challenge vhost and no user or
+// group lines warns in its context "Uid of /var/lib/sifruno-suspended/ is
+// 0, smaller than minimum requirement 11, use server uid!" and the same for
+// its Gid, and the broker refuses a config with a warning for a vhost it
+// wrote, so the panel's name was never served. With "user nobody" and
+// "group nobody" in the virtualhost block the test prints no line for it.
 //
 // Read 2026-11-24, same tag and docs, for protected folders (internal/htaccess
 // doc.go, "Converting access rules", has the Apache side):

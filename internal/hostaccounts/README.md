@@ -122,8 +122,8 @@ the panel starts there, under the broker lock, with every account settled. It
 does not run while the account list or a snapshot is read, so a snapshot
 lease never sees a record change under it.
 
-The operations a tenant can reach (web, domains, cron, certificate, adopt, SFTP
-keys, plan) are refused (409) before anything is journaled once fewer than 19
+The operations a tenant can reach (web, domains, Always use HTTPS, cron,
+certificate, adopt, SFTP keys, plan) are refused (409) before anything is journaled once fewer than 19
 rows are free: their two rows and a spare, plus 16 that stay for the
 operator's suspend, resume and delete and the broker's own conflict record,
 which are refused only when fewer than 3 rows are free (an adopt that ends a
@@ -576,8 +576,11 @@ broker.
   lsws` restarts OpenLiteSpeed gracefully (its unit reloads with
   `lswsctrl restart`). The broker never edits `httpd_config.conf`: the
   installer adds `include /usr/local/lsws/conf/sifruno.conf` and
-  server-level `namespace 1` once, and the package's stock `module cache`
-  block if the file has none. New files take their SELinux label from
+  server-level `namespace 1` once, the package's stock `module cache`
+  block if the file has none, and removes the package's sample site
+  (`virtualHost Example` and its `listener Default` on 8088), so
+  `openlitespeed -t` no longer prints that vhost's two ownership warnings.
+  New files take their SELinux label from
   the directory they are written in.
 - Page cache (LSCache): each live site's `vhconf.conf` has its own
   `module cache` block with `ls_enabled 1` and its own store,
@@ -832,6 +835,61 @@ Limits for now:
 - A suspended site's domains and redirects do not change; resume it first.
 - That OpenLiteSpeed 1.9.4 applies the `RewriteCond` lines as Apache does
   is read from its documentation; the site-domains dev VM proof runs it.
+
+## Always use HTTPS
+
+A live site whose certificate is in force sends plain http to https: for
+each domain the certificate covers, olsweb renders a rule after the site's
+own redirects that answers 301 to the same address on https, path and
+query kept (`RewriteCond %{HTTPS} !on`, the Host header with or without a
+port, and not the ACME challenge path, so HTTP-01 renewal still works over
+http). It is on by default: the account's `plain_http` is false unless the
+site's owner turned the switch off, and an account stored before the field
+existed reads false. No rule is rendered while the site has no certificate
+or its certificate's NotAfter has passed, for a domain the certificate does
+not cover, or for a suspended site.
+
+`SetAlwaysHTTPS` (`POST /v1/accounts/{id}/always-https`) turns it on or
+off. The input is exactly `always_https` (`true` or `false`, required),
+`expected_revision` and `reason`; it needs the web operation on. The setting
+is kept with or without a certificate and takes effect once one is in force.
+
+The rule is rendered when the site list is installed: at every web change,
+about five seconds after the broker starts (the .htaccess watcher's first
+restart, which also brings an upgraded broker's rules into force), and
+after a tenant's .htaccess changes. A certificate whose renewal keeps
+failing would leave http redirected to an expired https after its NotAfter
+until the next of those, so the broker also renders the site list at that
+second (`https_expiry.go`): one timer, for the earliest NotAfter of a
+redirect the last render put in force, set again after every journaled
+change. The render is the .htaccess watcher's (`reloadWebServer`): under
+the store lock, never while an operation is unfinished, tested before it
+is loaded; it changes no account and journals nothing. A render that fails
+is logged by its class, naming no account, and tried again a minute later.
+A broker that did not render the config at start (no panel host) renders
+at once if a redirect's certificate expired while it was stopped.
+
+Checked before anything is journaled: the form (400 `invalid`), and the
+account (409 `conflict`) as for a domains change: the revision matches, the
+account is active, its site is live, no WordPress install is running, and
+its identity and folders verify. An unchanged setting changes nothing.
+
+The intent is journaled (action `https`, target `on` or `off`); its after
+is the account with the next revision and `plain_http` turned over, and
+replay refuses an https intent that changes anything else. Then the site
+list is rendered, tested and reloaded as for a domains change: a failed
+test restores the old files and ends it `rejected` with the account
+unchanged (422 `web_rejected`); any other failure leaves it pending, and
+the next start finishes it or ends it rejected. The answer is the account,
+and the account list shows `plain_http` when it is true.
+
+Limits for now:
+
+- The timer counts on the machine's clock: a clock stepped forward, or a
+  machine paused, leaves the render late by that much.
+- OpenLiteSpeed reads `%{HTTPS}` as `on` when the request carries
+  `X-Forwarded-Proto: https` (olsweb doc.go), so a client that sends it on
+  plain http is not redirected. That only keeps the client itself on http.
 
 ## Certificates
 
@@ -1461,6 +1519,21 @@ root step. The design, with the owner's choices recorded from Jev on
   `StrictHostKeyChecking=yes`, only the migration's key and known_hosts
   under the alias `sifruno-migration-source`, no agent, no password
   prompt, no forwarding, as root.
+- With the old server's WHM login (D-0005), `POST /v1/migrations` carries
+  `via: "whm"`, and the record keeps it. The panel, as itself and never as
+  root, holds the WHM login in memory for that connection only, adds the
+  broker's public key line through WHM's API, and fetches over HTTPS what
+  the copy asks of cPanel: WHM API 1 `listaccts` for the account,
+  `domainuserdata`, `php_get_vhost_versions` for its virtual host, and
+  UAPI `Mysql list_databases` and `list_users` through `uapi_cpanel`. Plan,
+  `migrate-files` and `migrate-database` carry them as `cpanel` (at most 1
+  MiB a request) and the broker reads them with the same `cpsource`
+  parsers and checks as the same answers over SSH: they are the old
+  server's word either way. For such a migration the broker runs no
+  `whmapi1` or `uapi` over SSH (a hijacked or broken cPanel refuses there;
+  rsync, the dump, `crontab -l` and SQL are not cPanel's tools and still
+  run over SSH), refuses a step without `cpanel`, and does not list
+  accounts itself; an SSH migration refuses `cpanel`.
 - `GET /v1/migrations/{id}/accounts` lists the source's accounts;
   `POST /v1/migrations/{id}/plan` (`username`, `reason`) reads one: its
   domain, home and document root (which must be `<home>/public_html`), PHP
@@ -1585,11 +1658,17 @@ root step. The design, with the owner's choices recorded from Jev on
 - Locks: `migrateMu` guards the records only; no source command runs
   under it, so a plan waiting for `backupMu` behind a long backup never
   holds up the admin's finish.
-- A failed step answers 422 `migration_failed` with the step (`connect`,
+- A failed step answers 422 `migration_failed` with the step, the
+  broker's own words (`detail`) and, apart from them, the end of the error
+  output only (`output`): what a source command printed on standard output
+  can hold password hashes. The panel shows `output` under Technical
+  details only and explains each step (D-0006): `unreachable`,
+  `key_refused` and `host_key_changed` are read from ssh's own message
+  (`connect` when it names none), `cpanel_tool` is whmapi1 or uapi exiting
+  with an error, `cpanel_output` is their answer not in its documented
+  JSON, `account_missing` an account the old server does not have; then
   `host_key`, `source`, `tier`, `space`, `fetch`, `copy`, `reload`,
-  `database`, `dump`, `import`, `compare`, `remove_key`) and the end of its error
-  output only: what a source command printed on standard output can hold
-  password hashes.
+  `database`, `dump`, `import`, `compare` and `remove_key`.
   Copies run one at a time with backups (they share the staging root and
   the temporary users), and their root-side leftovers go through the
   backup leftover list.

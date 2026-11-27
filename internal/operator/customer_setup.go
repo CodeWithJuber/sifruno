@@ -211,5 +211,5 @@ func (m *Manager) finishCustomerSetup(w http.ResponseWriter, r *http.Request) {
 	m.customers.Store(&next)
 	delete(m.customerPending, hash)
 	m.adminMu.Unlock()
-	m.startSession(w, r, username, true)
+	m.startSession(w, r, username, true, false)
 }

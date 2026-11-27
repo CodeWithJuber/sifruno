@@ -27,7 +27,7 @@ import (
 
 const (
 	adminsFile     = "admins.json"
-	maxAdminsBytes = 64 << 10
+	maxAdminsBytes = 1 << 20 // 16 admins with 10 passkeys each, with room to spare
 	maxAdmins      = 16
 	minPassword    = 12  // characters (NIST SP 800-63B minimum is 8; admins get more)
 	maxPassword    = 256 // bytes; Argon2 cost does not depend on length, this bounds parsing
@@ -65,6 +65,7 @@ type adminRecord struct {
 	Password  passwordHash `json:"password"`
 	TOTP      adminTOTP    `json:"totp"`
 	CreatedAt time.Time    `json:"created_at"`
+	loginPasskeys
 }
 
 type adminFile struct {
@@ -138,11 +139,11 @@ func (f adminFile) validate() error {
 	if f.Version != 1 || len(f.Admins) > maxAdmins {
 		return errors.New("unsupported admin file")
 	}
-	seen := map[string]bool{}
+	seen, passkeys := map[string]bool{}, map[string]bool{}
 	for _, a := range f.Admins {
 		_, _, hashOK := a.Password.decode()
 		_, secretOK := decodeTOTPSecret(a.TOTP.Secret)
-		if !validUsername(a.Username) || seen[a.Username] || !hashOK || !secretOK || a.TOTP.LastStep < 0 || a.CreatedAt.IsZero() {
+		if !validUsername(a.Username) || seen[a.Username] || !hashOK || !secretOK || a.TOTP.LastStep < 0 || a.CreatedAt.IsZero() || a.loginPasskeys.validate(passkeys) != nil {
 			return errors.New("invalid admin record")
 		}
 		seen[a.Username] = true

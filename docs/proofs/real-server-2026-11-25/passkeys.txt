@@ -1,0 +1,166 @@
+# Passkeys on a real server, 2026-11-26
+# Server: a new Linode g6-standard-2 (de-fra-2), ID 112012320, that scripts/ci/nightly-fresh-install.sh made and kept
+# (SIFRUNO_NIGHTLY_KEEP=1, the owner's admin key added): AlmaLinux 9.8, kernel 5.14.0-687.60.1.el9_8, SELinux Enforcing.
+# Its fresh-install test passed 17 checks, 0 failed, with the release built from c430769 (the branch head with the
+# saved sessions, 61b2efd, and passkeys, e9483d3 and 13d1a39).
+# Then, by hand: TCP 80 opened to everyone (Let's Encrypt's HTTP-01 check) and 8443 to the machine that ran the proof,
+# in the run's own Linode Cloud Firewall (API) and in firewalld; the first admin, admin, made on the panel's loopback
+# with the access key (which stayed on the server); the TOTP secret and a random password kept in 0600 files on the
+# runner, typed from those files, never in a process's arguments.
+
+$ install.sh --panel-host panel.SERVER_IP.sslip.io,SERVER_IP --acme-email admin@panel.SERVER_IP.sslip.io   (in place)
+$ grep -o -- '--https-listen.*' /etc/systemd/system/sifruno.service
+  | --https-listen 0.0.0.0:8443 --panel-host panel.SERVER_IP.sslip.io,SERVER_IP --phpmyadmin-listen 0.0.0.0:8444 --phpmyadmin-upstream 127.0.0.1:8090 --phpmyadmin-uid 993 --acme-email admin@panel.SERVER_IP.sslip.io
+$ journalctl -u sifruno -o cat | grep -E "Panel over HTTPS|TLS certificate|Panel certificate"
+  | Panel over HTTPS on 0.0.0.0:8443 for panel.SERVER_IP.sslip.io, SERVER_IP — password or passkey sign-in (admins and customers)
+  | TLS certificate (self-signed, for an IP address, and for panel.SERVER_IP.sslip.io until Let's Encrypt's is in place: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 B1:77:8D:3D:51:14:03:46:F5:6A:A8:F1:7D:B3:CA:8A:13:D8:3D:9B:CD:CC:53:46:05:9E:E5:25:C1:E3:03:13
+  | Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+# One Let's Encrypt order. The IP address is a second --panel-host so the panel also answers at https://SERVER_IP:8443
+# (with its self-signed certificate) and the "passkeys need the panel's name" note can be shown there.
+#
+# The browser: Chrome through agent-browser 0.45.0, with no certificate error ignored at the panel's name. A CDP WebAuthn
+# virtual authenticator (WebAuthn.enable, then WebAuthn.addVirtualAuthenticator with protocol ctap2, transport
+# internal, hasResidentKey, hasUserVerification and isUserVerified true) is held by a small Node script over the
+# DevTools protocol, which also types and clicks on the same DevTools session: another client attaching and leaving
+# drops the authenticator. While the sign-in page waits, automatic presence is off, so the username field's autofill
+# request (conditional mediation) stays open as it does for a person; it is turned on just before a click. Screenshots
+# are in passkeys/, taken after the page's text showing the address was changed to SERVER_IP.
+
+# Passkeys proof 2026-11-26T20:01:51Z
+# runner: Ubuntu 24.04.5 LTS, agent-browser 0.45.0, node v24.22.3
+
+## Where passkeys work: the sign-in page's status route
+$ curl -s https://panel.SERVER_IP.sslip.io:8443/api/v1/session/passkey-login   (this machine's system trust store)
+  | {"available":true,"address":"https://panel.SERVER_IP.sslip.io:8443"}
+PASS  at the panel's name over HTTPS with Let's Encrypt's certificate: available
+$ curl -sk https://SERVER_IP:8443/api/v1/session/passkey-login   (the IP gets the self-signed certificate)
+  | {"available":false,"detail":"Passkeys need the panel's name. You opened it at an IP address or another name, so sign in with your password and code here, or open the panel at https://panel.SERVER_IP.sslip.io:8443 to use a passkey.","address":"https://panel.SERVER_IP.sslip.io:8443"}
+PASS  at the IP address: off, saying passkeys need the panel's name and where to go
+$ ssh: curl -s http://127.0.0.1:8080/api/v1/session/passkey-login   (the server's own loopback)
+  | {"available":false,"detail":"Passkeys need the panel's name. You opened it at an IP address or another name, so sign in with your password and code here, or open the panel at https://panel.SERVER_IP.sslip.io:8443 to use a passkey.","address":"https://panel.SERVER_IP.sslip.io:8443"}
+PASS  on the server's loopback: off
+
+## Chrome at https://panel.SERVER_IP.sslip.io:8443, with a virtual authenticator
+  | 2026-11-26T20:01:57.858Z virtual authenticator ready on https://panel.SERVER_IP.sslip.io:8443/ holding 0 passkey(s)
+PASS  the sign-in page offers Sign in with a passkey
+PASS  the username field asks for passkey autofill (autocomplete="username webauthn")
+  screenshots: sign-in-390.png, sign-in-1440.png
+
+## Sign in with the password and a code
+PASS  signed in: the panel shows Sign out, and no sign-in form
+
+## Account: add a passkey (the current password and a new code first)
+PASS  Account has a Passkeys section with no passkeys yet
+  | 2026-11-26T20:02:39.071Z typed into #passkey-name
+  | 2026-11-26T20:02:39.127Z typed into #passkey-current
+  | 2026-11-26T20:03:01.494Z typed into #passkey-code
+  | 2026-11-26T20:03:01.585Z clicked [data-testid=add-passkey]
+  | 2026-11-26T20:03:01.644Z WebAuthn.credentialAdded {"rpId":"panel.SERVER_IP.sslip.io","resident":true,"signCount":1}
+  | 2026-11-26T20:03:04.623Z passkeys held [{"rpId":"panel.SERVER_IP.sslip.io","resident":true,"signCount":1,"userHandleBytes":32}]
+PASS  the authenticator made a resident passkey for panel.SERVER_IP.sslip.io
+PASS  Account lists the passkey Proof laptop, not used yet
+PASS  and says it was added
+  | Passkeys
+  | Sign in with your fingerprint, face or device PIN instead of typing your password and code. Your password and code keep working.
+  | Proof laptop
+  | Added Nov 26, 2026, 9:03 PM · not used yet
+  | Remove
+  | the passkey Proof laptop
+  | Name for the new passkey
+  | 
+$ ssh: jq '.admins[0] | {passkey_user: (.passkey_user|length), passkeys: [.passkeys[] | {name, sign_count, backup_eligible, id_chars: (.id|length), public_key_chars: (.public_key|length)}]}' admins.json
+  | {
+  |   "passkey_user": 43,
+  |   "passkeys": [
+  |     {
+  |       "name": "Proof laptop",
+  |       "sign_count": 1,
+  |       "backup_eligible": false,
+  |       "id_chars": 43,
+  |       "public_key_chars": 103
+  |     }
+  |   ]
+  | }
+PASS  admins.json keeps it with the login (public key only), mode 0600
+  screenshots: account-passkey-390.png, account-passkey-1440.png
+
+## Sign out, then sign in with the passkey alone (Keep me signed in on)
+PASS  signed out: the sign-in form is back
+  | 2026-11-26T20:03:11.364Z automatic presence on
+  | 2026-11-26T20:03:11.404Z clicked [data-testid=sign-in-remember]
+  | 2026-11-26T20:03:11.453Z clicked [data-testid=passkey-sign-in]
+  | 2026-11-26T20:03:11.511Z WebAuthn.credentialAsserted {"rpId":"panel.SERVER_IP.sslip.io","resident":true,"signCount":2}
+PASS  the authenticator answered one assertion for panel.SERVER_IP.sslip.io
+PASS  signed in with no password or code typed
+  | Security
+  | 
+  | Sessions signed in to this panel.
+  | 
+  | Local operator access to this Sifruno server.
+  | Signed in locally
+  | Current session
+  | Expires Dec 3, 2026, 9:03 PM
+  | Sign out locally
+  | Sign out ends this session. Revoking other sessions keeps this one active.
+  | Operator sessions
+  | 3 of 128 sessions · each ends after 30 minutes unused, or 24 hours if kept signed in
+  | Refresh sessions
+  | This session
+PASS  Security shows this session kept signed in (7 days)
+  screenshots: signed-in-with-passkey-390.png, signed-in-with-passkey-1440.png
+
+## Restart the panel: the passkey session stays
+$ ssh: systemctl restart sifruno; ls -l sessions.json
+  | active
+  | 600 sifpanel 1310 bytes
+  | Panel over HTTPS on 0.0.0.0:8443 for panel.SERVER_IP.sslip.io, SERVER_IP — password or passkey sign-in (admins and customers)
+PASS  after the restart the same browser is still signed in, kept
+PASS  and no sign-in form is shown
+
+## Remove the passkey on Account
+PASS  a dialog asks first
+PASS  Account says it was removed and lists none
+  screenshots: passkey-removed-390.png, passkey-removed-1440.png
+$ ssh: jq '.admins[0].passkeys | length' admins.json
+  | 0
+# Account then told the browser's passkey manager which passkeys the panel still has (signalAllAcceptedCredentials):
+  | 2026-11-26T20:03:36.338Z masked the server's address in 0 text node(s)
+  | 2026-11-26T20:03:37.580Z masked the server's address in 0 text node(s)
+  | 2026-11-26T20:03:38.149Z passkeys held []
+PASS  Chrome deleted the removed passkey from the authenticator, so it is offered no more
+
+## Opened by IP address: the note
+  | Passkeys need the panel's name. You opened it at an IP address or another name, so sign in with your password and code here, or open the panel at https://panel.SERVER_IP.sslip.io:8443 to use a passkey.
+  | https://panel.SERVER_IP.sslip.io:8443
+PASS  the sign-in page shows the note: passkeys need the panel's name, with the address
+PASS  and no passkey button
+  screenshots: ip-note-390.png, ip-note-1440.png
+
+# 22 check(s) passed, 0 failed
+
+# The removal above, from the authenticator's log: Chrome deleted the passkey from the authenticator as soon as
+# Account reported the passkeys the panel still has (signalAllAcceptedCredentials), so the device offers it no more.
+  | 2026-11-26T20:03:32.735Z clicked [data-testid=confirm-remove-passkey]
+  | 2026-11-26T20:03:32.752Z WebAuthn.credentialDeleted {}
+
+# Earlier runs of the same proof script on this server, before the run above:
+# - Run 1, 19 passed and 3 failed, all the script's own: it looked for "Panel sections", an accessible name that is
+#   not in the page's text, to see that a sign-in worked (the steps after it ran signed in), and it expected a sign-in
+#   with the removed passkey to be refused, but Chrome had already deleted that passkey (signalAllAcceptedCredentials),
+#   so there was nothing to offer. The script now checks for Sign out and no sign-in form, and for the deletion.
+# - Run 2, 21 passed and 1 failed: the Security list was still loading when it was read (its expiry already showed
+#   7 days). Checks now get 5 tries a second apart.
+
+# The server deleted (nightly-fresh-install.sh cleanup), and checked through the Linode API
+== 2026-11-26T20:04:16Z Delete this run's Linode and firewall (sifruno-owner-test-pk1126)
+== 2026-11-26T20:04:34Z deleted: Linode 112012320 (sifruno-owner-test-pk1126)
+== 2026-11-26T20:04:50Z deleted: firewall 233391468 (sifruno-owner-test-pk1126)
+== 2026-11-26T20:04:51Z checked through the API: no Linode and no firewall named sifruno-owner-test-pk1126 is left
+GET /linode/instances/112012320: [{"reason":"Not found"}]
+GET /networking/firewalls/233391468: [{"reason":"Not found"}]
+
+# Not shown here: a person's own device (fingerprint, face, a phone or a password manager), only the virtual
+# authenticator; Safari and Firefox; a person picking a passkey in the username field's autofill (the virtual
+# authenticator answers that request on its own, so the explicit button was used); a customer's passkey (the Go tests
+# cover it); a use count going back on a real device (the Go tests cover it); a crash rather than a restart (the saver
+# writes within a moment of a sign-out, every 30 seconds otherwise, and once more on a graceful stop).

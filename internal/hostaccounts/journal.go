@@ -130,6 +130,8 @@ func (s *store) appendEvent(r record, e operationEvent) (record, error) {
 	if err != nil {
 		return r, recovery(e.Action, r, "journal "+e.Status+" row", err)
 	}
+	// The record changed: its certificate or "Always use HTTPS" may have.
+	s.wakeHTTPSExpiry()
 	return r, nil
 }
 func (s *store) beginOperation(r record, before *Account) (record, error) {
@@ -427,14 +429,23 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 					return ErrRecovery
 				}
 			} else {
-				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" && e.Action != "ssh_keys" && e.Action != "web" && e.Action != "certificate" && e.Action != "adopt" && e.Action != "cron" && e.Action != "domains" && e.Action != "folders" {
+				if e.Before == nil || !sameAccount(*e.Before, lastSuccess.After) || e.Action != "state" && e.Action != "conflict" && e.Action != "plan" && e.Action != "delete" && e.Action != "ssh_keys" && e.Action != "web" && e.Action != "certificate" && e.Action != "adopt" && e.Action != "cron" && e.Action != "domains" && e.Action != "folders" && e.Action != "https" {
 					return ErrRecovery
 				}
-				// Neither a cron, a domains nor a folders change moves the
-				// account's state: the last two are made only for an active
-				// site.
-				if (e.Action == "cron" || e.Action == "domains" || e.Action == "folders") && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) {
+				// Neither a cron, a domains, a folders nor an https change
+				// moves the account's state: the last three are made only for
+				// an active site.
+				if (e.Action == "cron" || e.Action == "domains" || e.Action == "folders" || e.Action == "https") && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) {
 					return ErrRecovery
+				}
+				// An https change turns "Always use HTTPS" over and changes
+				// nothing else: an unchanged setting is never journaled.
+				if e.Action == "https" {
+					want := *e.Before
+					want.Revision, want.PlainHTTP = e.After.Revision, !e.Before.PlainHTTP
+					if !sameAccount(e.After, want) {
+						return ErrRecovery
+					}
 				}
 				if e.Action == "state" && e.After.Revision != e.Before.Revision+1 || e.Action == "plan" && e.After.Revision != e.Before.Revision+1 || e.Action == "ssh_keys" && e.After.Revision != e.Before.Revision+1 || e.Action == "web" && e.After.Revision != e.Before.Revision+1 || e.Action == "certificate" && e.After.Revision != e.Before.Revision+1 || e.Action == "domains" && e.After.Revision != e.Before.Revision+1 || e.Action == "adopt" && (e.After.Revision != e.Before.Revision+1 || e.After.State != e.Before.State) || e.Action == "conflict" && e.After.Revision != e.Before.Revision || e.Action == "delete" && e.After.Revision != e.Before.Revision {
 					return ErrRecovery
@@ -469,9 +480,9 @@ func verifyHistory(tx *bolt.Tx, r record) error {
 				// its test: the old drop-in and site list went back. A cron
 				// change ends rejected when its crontab could not be written,
 				// which changes nothing: the rename is the write's last step.
-				// A domains or folders change ends rejected when the site list
-				// with the new set failed its test.
-				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" && e.Action != "state" && e.Action != "plan" && e.Action != "cron" && e.Action != "domains" && e.Action != "folders" || e.Before == nil || !sameAccount(e.After, *e.Before) {
+				// A domains, folders or https change ends rejected when the
+				// site list with the new set or setting failed its test.
+				if e.Action != "web" && e.Action != "delete" && e.Action != "certificate" && e.Action != "state" && e.Action != "plan" && e.Action != "cron" && e.Action != "domains" && e.Action != "folders" && e.Action != "https" || e.Before == nil || !sameAccount(e.After, *e.Before) {
 					return ErrRecovery
 				}
 				lastSuccess = e

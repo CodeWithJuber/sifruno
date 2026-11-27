@@ -121,12 +121,16 @@ func stripRequest(h http.Header, https bool) {
 }
 
 // phpMyAdminCookie is the allow list of cookie names phpMyAdmin and its
-// sign-in script use: the signon session, phpMyAdmin's session
-// (phpMyAdmin, phpMyAdmin_https) and its pma* settings. Every other cookie
-// the browser holds for this host name (the panel's, the admission cookie,
-// a website's on the same name) stays out of PHP's reach, and phpMyAdmin may
+// sign-in script use: the signon session, phpMyAdmin's session and its pma*
+// settings. Over HTTPS, which is how its origin always runs, phpMyAdmin
+// 5.2.2 and later put __Secure- before the name and _https after it
+// (__Secure-phpMyAdmin_https, __Secure-pma_lang_https); without its session
+// cookie each request starts a new session with a new token, and its pages'
+// own requests fail with "Error: Token mismatch". Every other cookie the
+// browser holds for this host name (the panel's, the admission cookie, a
+// website's on the same name) stays out of PHP's reach, and phpMyAdmin may
 // set no other.
-var phpMyAdminCookie = regexp.MustCompile(`^(SifrunoPhpMyAdminSignon|phpMyAdmin[A-Za-z0-9_-]*|pma[A-Za-z0-9_-]*)$`)
+var phpMyAdminCookie = regexp.MustCompile(`^(SifrunoPhpMyAdminSignon|(__Secure-)?(phpMyAdmin|pma)[A-Za-z0-9_-]*)$`)
 
 // keepPhpMyAdminCookies keeps only phpMyAdminCookie's names in a request's
 // Cookie header, as sent.

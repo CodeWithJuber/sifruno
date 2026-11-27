@@ -1,7 +1,9 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"path"
@@ -43,30 +45,91 @@ const (
 // says which step.
 var ErrMigrationFailed = errors.New("migration step failed")
 
-// MigrationError names the failed step and the end of what it printed
-// (printable ASCII, at most 512 bytes).
+// MigrationError names the failed step. Detail is the broker's own words
+// (it may name an account, a database or a file); Output is the end of
+// what the program or the old server printed on its error output
+// (printable ASCII, at most 512 bytes), which the panel shows only under
+// Technical details.
 type MigrationError struct {
 	Step   string `json:"step"`
 	Detail string `json:"detail"`
+	Output string `json:"output"`
 }
 
 func (e *MigrationError) Error() string        { return "migration " + e.Step + " failed" }
 func (e *MigrationError) Is(target error) bool { return target == ErrMigrationFailed }
 
-// The steps a MigrationError can name. The panel explains each one.
-var migrationSteps = []string{"connect", "host_key", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
+// The steps a MigrationError can name. The panel explains each one (D-0006):
+// SSH that did not reach the old server (unreachable), was refused the
+// migration key (key_refused) or met another host key (host_key_changed),
+// or failed otherwise (connect); a cPanel tool on the old server that
+// failed (cpanel_tool) or printed what is not its documented JSON
+// (cpanel_output); an account the old server does not have
+// (account_missing); a WHM answer the panel did not send (whm_output);
+// and the copy's own steps.
+var migrationSteps = []string{"unreachable", "key_refused", "host_key_changed", "connect", "host_key", "cpanel_tool", "cpanel_output", "whm_output", "account_missing", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
 
 func migrationFailed(step string, out []byte) error {
-	return &MigrationError{Step: step, Detail: installDetail(out)}
+	return &MigrationError{Step: step, Output: installDetail(out)}
+}
+
+// sshFailures are ssh's own messages (OpenSSH, run with LANG=C.UTF-8) for
+// each way a sign-in fails, checked in this order.
+var sshFailures = []struct {
+	step  string
+	marks []string
+}{
+	{"host_key_changed", []string{"Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED", "host key is known for"}},
+	{"key_refused", []string{"Permission denied"}},
+	{"unreachable", []string{"Connection refused", "Connection timed out", "Operation timed out", "No route to host", "Network is unreachable", "Could not resolve hostname", "Name or service not known", "Connection closed by", "Connection reset", "kex_exchange_identification", "banner exchange"}},
+}
+
+// sshFailure names how an SSH sign-in to the old server failed, from what
+// ssh printed; fallback is the step when ssh said nothing this knows.
+func sshFailure(fallback string, out []byte) error {
+	for _, f := range sshFailures {
+		for _, mark := range f.marks {
+			if bytes.Contains(out, []byte(mark)) {
+				return migrationFailed(f.step, out)
+			}
+		}
+	}
+	return migrationFailed(fallback, out)
 }
 
 // MigrationOpenInput names the source server. Host is a lowercase DNS name
-// or an IPv4 address; the user is always root.
+// or an IPv4 address; the user is always root. Via is "whm" when the admin
+// connected with the old server's WHM login: the panel then answers what
+// the copy asks of cPanel from WHM's API (CPanelAnswers), and the broker
+// runs no cPanel tool over SSH for this migration (D-0005). Empty is the
+// SSH path, where whmapi1 and uapi run over SSH.
 type MigrationOpenInput struct {
 	Host   string `json:"host"`
 	Port   int    `json:"port"`
+	Via    string `json:"via,omitempty"`
 	Reason string `json:"reason"`
 }
+
+// ViaWHM is a migration connected with the old server's WHM login.
+const ViaWHM = "whm"
+
+// CPanelAnswers are WHM API 1's answers for one account, which the panel
+// fetched over HTTPS with the old server's WHM login: listaccts for that
+// account, domainuserdata for its domain, php_get_vhost_versions for its
+// virtual host, and UAPI Mysql::list_databases and Mysql::list_users as
+// uapi --output=json prints them ({"result": ...}). The broker reads them
+// with the parsers and checks it uses for the same answers over SSH: they
+// are the old server's word either way.
+type CPanelAnswers struct {
+	Accounts      json.RawMessage `json:"listaccts"`
+	Site          json.RawMessage `json:"domainuserdata,omitempty"`
+	PHP           json.RawMessage `json:"php_get_vhost_versions,omitempty"`
+	Databases     json.RawMessage `json:"list_databases,omitempty"`
+	DatabaseUsers json.RawMessage `json:"list_users,omitempty"`
+}
+
+// maxCPanelRequest bounds a request that carries CPanelAnswers.
+const maxCPanelRequest = 1 << 20
 
 // MigrationHostKey is one host key the source offered, by type and SHA-256
 // fingerprint as ssh-keygen -l prints it ("SHA256:...").
@@ -87,6 +150,7 @@ type Migration struct {
 	InstallCommand string             `json:"install_command"`
 	HostKeys       []MigrationHostKey `json:"host_keys"`
 	Pinned         string             `json:"pinned_fingerprint"`
+	Via            string             `json:"via"`
 	CreatedAt      time.Time          `json:"created_at"`
 	ExpiresAt      time.Time          `json:"expires_at"`
 }
@@ -97,10 +161,12 @@ type MigrationPinInput struct {
 	Reason      string `json:"reason"`
 }
 
-// MigrationPlanInput names the source account to read.
+// MigrationPlanInput names the source account to read. CPanel is required
+// for a WHM migration and refused for an SSH one.
 type MigrationPlanInput struct {
-	Username string `json:"username"`
-	Reason   string `json:"reason"`
+	Username string         `json:"username"`
+	CPanel   *CPanelAnswers `json:"cpanel,omitempty"`
+	Reason   string         `json:"reason"`
 }
 
 // MigrationProbe is a URL from the converted .htaccess rules that verify
@@ -151,9 +217,10 @@ type MigrationPlan struct {
 // MigrateFilesInput copies the source account of the same name into the
 // account's home.
 type MigrateFilesInput struct {
-	Migration        string `json:"migration"`
-	ExpectedRevision uint64 `json:"expected_revision"`
-	Reason           string `json:"reason"`
+	Migration        string         `json:"migration"`
+	ExpectedRevision uint64         `json:"expected_revision"`
+	CPanel           *CPanelAnswers `json:"cpanel,omitempty"`
+	Reason           string         `json:"reason"`
 }
 
 // MigrateFilesResult says whether the copy holds a WordPress site
@@ -172,10 +239,11 @@ type MigrateFilesResult struct {
 // MigrateDatabaseInput copies one source database of the account into the
 // database of the same name, which must already exist here.
 type MigrateDatabaseInput struct {
-	Migration        string `json:"migration"`
-	Database         string `json:"database"`
-	ExpectedRevision uint64 `json:"expected_revision"`
-	Reason           string `json:"reason"`
+	Migration        string         `json:"migration"`
+	Database         string         `json:"database"`
+	ExpectedRevision uint64         `json:"expected_revision"`
+	CPanel           *CPanelAnswers `json:"cpanel,omitempty"`
+	Reason           string         `json:"reason"`
 }
 
 // MigrationTable compares one table's rows on the source, counted after the
@@ -231,7 +299,7 @@ func validMigrationHost(s string) bool {
 }
 
 func validMigrationOpen(in MigrationOpenInput, actor string) bool {
-	return validMigrationHost(in.Host) && in.Port >= 1 && in.Port <= 65535 && validText(in.Reason, 500) && validText(actor, 120)
+	return validMigrationHost(in.Host) && in.Port >= 1 && in.Port <= 65535 && (in.Via == "" || in.Via == ViaWHM) && validText(in.Reason, 500) && validText(actor, 120)
 }
 
 func validMigrationPin(in MigrationPinInput, actor string) bool {
@@ -261,13 +329,14 @@ type migrationRecord struct {
 	PublicKey string    `json:"public_key"`
 	HostKeys  []string  `json:"host_keys"`
 	Pinned    string    `json:"pinned"`
+	Via       string    `json:"via,omitempty"`
 	Actor     string    `json:"actor"`
 	Reason    string    `json:"reason"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 func (m migrationRecord) valid() bool {
-	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() {
+	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() || (m.Via != "" && m.Via != ViaWHM) {
 		return false
 	}
 	if _, _, ok := normalizeSSHKey(m.PublicKey); !ok {
@@ -298,7 +367,7 @@ func fingerprint(line string) (MigrationHostKey, bool) {
 }
 
 func (m migrationRecord) view() Migration {
-	out := Migration{ID: m.ID, Host: m.Host, Port: m.Port, PublicKey: cpsource.KeyLine(m.PublicKey, m.ID), InstallCommand: cpsource.InstallKeyCommand(m.PublicKey, m.ID), HostKeys: []MigrationHostKey{}, CreatedAt: m.CreatedAt, ExpiresAt: m.CreatedAt.Add(migrationLifetime)}
+	out := Migration{ID: m.ID, Host: m.Host, Port: m.Port, PublicKey: cpsource.KeyLine(m.PublicKey, m.ID), InstallCommand: cpsource.InstallKeyCommand(m.PublicKey, m.ID), HostKeys: []MigrationHostKey{}, Via: m.Via, CreatedAt: m.CreatedAt, ExpiresAt: m.CreatedAt.Add(migrationLifetime)}
 	for _, k := range m.HostKeys {
 		if fp, ok := fingerprint(k); ok {
 			out.HostKeys = append(out.HostKeys, fp)

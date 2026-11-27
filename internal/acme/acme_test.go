@@ -303,13 +303,19 @@ type issuerFake struct {
 	unreachable map[string]bool
 	failMany    error
 	probes      []string
+	// onProbe, when set, runs on every probe, outside the fake's lock.
+	onProbe func(domain string)
 }
 
 func (f *issuerFake) Reaches(_ context.Context, domain string) bool {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.probes = append(f.probes, domain)
-	return !f.unreachable[domain]
+	reached, hook := !f.unreachable[domain], f.onProbe
+	f.mu.Unlock()
+	if hook != nil {
+		hook(domain)
+	}
+	return reached
 }
 
 func (f *issuerFake) Issue(_ context.Context, names []string) (Certificate, error) {
@@ -480,8 +486,9 @@ func TestRenewalCheck(t *testing.T) {
 		{AccountID: ids["suspended"], Domain: "suspended.example", Revision: 9, Active: false},
 		// The broker reports a certificate the panel has no record of.
 		{AccountID: ids["brokerOnly"], Domain: "broker.example", Revision: 10, Active: true, NotAfter: f.now.Add(5 * day)},
-		// A live account with no record and no certificate: the panel
-		// cannot tell whether its site is live, so it is left alone.
+		// An active account with no record and no certificate whose site
+		// is not live: the broker would refuse a certificate, so it is
+		// left alone (first_test.go has the live ones).
 		{AccountID: ids["unknown"], Domain: "unknown.example", Revision: 11, Active: true},
 	}
 	wait := f.m.check(context.Background())

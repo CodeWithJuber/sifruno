@@ -26,7 +26,7 @@ import (
 
 const (
 	customersFile     = "customers.json"
-	maxCustomersBytes = 1 << 20
+	maxCustomersBytes = 16 << 20 // 500 customers with 10 passkeys each (about 1 KiB per passkey as authenticators make them)
 	maxCustomers      = 500
 	// maxCustomerSites bounds one customer's websites, and with them the
 	// request that sets them.
@@ -55,6 +55,8 @@ type customerRecord struct {
 	Setup     *setupLink    `json:"setup,omitempty"`
 	Disabled  bool          `json:"disabled"`
 	CreatedAt time.Time     `json:"created_at"`
+	// Passkeys come after setup; a new setup link removes them.
+	loginPasskeys
 }
 
 type customerFile struct {
@@ -96,6 +98,7 @@ func (f *customerFile) clone() customerFile {
 			s := *c.Setup
 			c.Setup = &s
 		}
+		c.loginPasskeys = c.loginPasskeys.clone()
 		out.Customers[i] = c
 	}
 	return out
@@ -122,7 +125,13 @@ func (f customerFile) validate(admins adminFile) error {
 	if f.Version != 1 || len(f.Customers) > maxCustomers {
 		return errors.New("unsupported customer file")
 	}
-	seen := map[string]bool{}
+	// Passkey IDs and user handles are unique across admins and customers.
+	seen, passkeys := map[string]bool{}, map[string]bool{}
+	for _, a := range admins.Admins {
+		if a.loginPasskeys.validate(passkeys) != nil {
+			return errors.New("invalid admin record")
+		}
+	}
 	for _, c := range f.Customers {
 		websites, ok := normalWebsites(c.Websites)
 		_, isAdmin := admins.find(c.Username)
@@ -138,10 +147,13 @@ func (f customerFile) validate(admins adminFile) error {
 			}
 		case c.Password == nil && c.TOTP == nil && c.Setup != nil:
 			hash, err := base64.RawStdEncoding.Strict().DecodeString(c.Setup.Hash)
-			if err != nil || len(hash) != sha256.Size || c.Setup.ExpiresAt.IsZero() {
+			if err != nil || len(hash) != sha256.Size || c.Setup.ExpiresAt.IsZero() || c.PasskeyUser != "" || len(c.Passkeys) > 0 {
 				return errors.New("invalid customer record")
 			}
 		default:
+			return errors.New("invalid customer record")
+		}
+		if c.loginPasskeys.validate(passkeys) != nil {
 			return errors.New("invalid customer record")
 		}
 		seen[c.Username] = true

@@ -2,19 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { cn } from "cn";
-import { ArrowRight, CircleAlert, CircleCheck, CircleX, Copy, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowRight, CircleAlert, CircleCheck, CircleX, Copy, Eye, EyeOff, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Field, FieldContent, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateLabel } from "@/lib/api";
-import { acceptMigration, cancelSource, checkAcceptReason, checkSourceHost, checkSourcePort, clearStaleKey, confirmFingerprint, getMigrationJob, listSourceAccounts, listStaleKeys, openSource, readyMigration, startMigration, verifyMigration } from "@/lib/migration-api";
-import type { MigrationSource, SourceAccount, StaleKey } from "@/lib/migration-api";
+import { acceptMigration, cancelSource, certificateToConfirm, checkAcceptReason, checkOptionalSSHPort, checkSourceHost, checkSourcePort, checkWHMAddress, checkWHMSecret, clearStaleKey, confirmFingerprint, connectWHM, getMigrationJob, listSourceAccounts, listStaleKeys, openSource, preferredHostKey, readyMigration, startMigration, verifyMigration } from "@/lib/migration-api";
+import type { MigrationSource, SourceAccount, StaleKey, WHMCertificate, WHMLogin } from "@/lib/migration-api";
 import { hostsLine } from "@/lib/migration-record";
 import type { MigrationRecord } from "@/lib/migration-record";
 import { jobProgress, validJobId } from "@/lib/wordpress-api";
@@ -24,10 +24,12 @@ import type { Problem } from "@/NewWebsite";
 import { useShell } from "@/shell/context";
 import "./new-website.css";
 
-// "Move a website here": connect to the old cPanel server with a key made
-// for this move, confirm its fingerprint, pick the account, follow the copy,
-// then compare and cut over. Nothing here holds a password of the old
-// server: the admin adds the key line there themselves.
+// "Move a website here": connect to the old cPanel server with its WHM
+// login (D-0005), which adds a key made for this move for root, confirm
+// the server's SSH fingerprint once, pick the account, follow the copy,
+// then compare and cut over. The WHM login is kept in this form's state
+// until it is sent, then cleared; the panel holds it in memory for this
+// move only. Without WHM, the admin adds the key line there themselves.
 
 const panel = "rounded-lg border border-border bg-card p-5 md:p-6";
 const control = "h-10 pointer-coarse:h-12";
@@ -109,28 +111,107 @@ function StaleKeys() {
 // ---- Connect, confirm, choose -------------------------------------------------
 
 type Stage = "connect" | "confirm" | "choose";
+type Way = "whm" | "ssh";
+type Secret = "token" | "password";
+
+// The move's steps, each with what happens in it, shown beside every stage
+// so the person knows where they are and what comes next.
+const moveSteps: Record<Way, { title: string; what: string }[]> = {
+  whm: [
+    { title: "Connect with WHM", what: "Sifruno signs in to WHM with your login, lists the accounts, and adds a key for this move to root's SSH keys." },
+    { title: "Confirm the SSH key", what: "You confirm the old server's SSH fingerprint once; every copy step checks it." },
+    { title: "Choose the website", what: "The account keeps its name, files, databases, users and passwords." },
+    { title: "Copy and compare", what: "Files and databases are copied over SSH, then the copy is compared with the old site." },
+    { title: "Remove the key", what: "The key leaves the old server over SSH, or through WHM if SSH cannot, and is deleted here." },
+  ],
+  ssh: [
+    { title: "Add the key over SSH", what: "You run one command as root on the old server to add a key for this move." },
+    { title: "Confirm the SSH key", what: "You compare the old server's SSH fingerprint and confirm it once." },
+    { title: "Choose the website", what: "The account keeps its name, files, databases, users and passwords." },
+    { title: "Copy and compare", what: "Files and databases are copied over SSH, then the copy is compared with the old site." },
+    { title: "Remove the key", what: "The key is removed from the old server and deleted here." },
+  ],
+};
+
+function MoveSteps({ way, current }: { way: Way; current: number }) {
+  return <ol aria-label="Steps of the move" className="flex flex-col gap-3" data-testid="move-steps">
+    {moveSteps[way].map((step, i) => <li key={step.title} aria-current={i === current ? "step" : undefined} className="flex items-start gap-3">
+      <span aria-hidden="true" className={cn("flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium",
+        i < current ? "border-primary bg-primary text-primary-foreground" : i === current ? "border-primary text-primary" : "border-border text-muted-foreground")}>
+        {i < current ? <CircleCheck className="size-4" /> : i + 1}
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span className={cn("text-sm", i === current ? "font-medium text-foreground" : "text-muted-foreground")}>{step.title}{i < current && <span className="sr-only"> (done)</span>}</span>
+        <span className="text-xs text-muted-foreground"><span className="font-medium">What happens:</span> {step.what}</span>
+      </span>
+    </li>)}
+  </ol>;
+}
+
+const emptyLogin: WHMLogin = { address: "", token: "", password: "", ssh_port: "", tls_fingerprint: "" };
 
 export function MoveWebsite() {
   const navigate = useNavigate();
+  const [way, setWay] = useState<Way>("whm");
   const [stage, setStage] = useState<Stage>("connect");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
+  // The WHM login lives only in this state until it is sent; it is cleared
+  // once the connection is made, and never stored.
+  const [login, setLogin] = useState<WHMLogin>(emptyLogin);
+  const [secret, setSecret] = useState<Secret>("token");
+  const [showSecret, setShowSecret] = useState(false);
+  const [certificate, setCertificate] = useState<WHMCertificate>();
   const [touched, setTouched] = useState(false);
   const [source, setSource] = useState<MigrationSource>();
   const [fingerprint, setFingerprint] = useState("");
   const [accounts, setAccounts] = useState<SourceAccount[]>();
   const [busy, setBusy] = useState("");
   const [problem, setProblem] = useState<Problem>();
+  // retry runs the step that failed again: every failure's next step ends
+  // with "press Try again".
+  const [retry, setRetry] = useState<() => void>();
   const [ended, setEnded] = useState("");
   const headingRef = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { headingRef.current?.focus(); }, [stage]);
+  useEffect(() => { headingRef.current?.focus(); }, [stage, way]);
 
   const hostProblem = checkSourceHost(host), portProblem = checkSourcePort(port);
+  const addressProblem = checkWHMAddress(login.address), secretProblem = checkWHMSecret(secret, secret === "token" ? login.token : login.password), sshPortProblem = checkOptionalSSHPort(login.ssh_port);
   const run = async (what: string, work: () => Promise<void>) => {
-    setBusy(what); setProblem(undefined);
-    try { await work(); } catch (error) { setProblem(problemFrom(error, what)); } finally { setBusy(""); }
+    setBusy(what); setProblem(undefined); setRetry(undefined);
+    try { await work(); } catch (error) { setProblem(problemFrom(error, what)); setRetry(() => () => void run(what, work)); } finally { setBusy(""); }
   };
+  const setField = (name: keyof WHMLogin, value: string) => setLogin((l) => ({ ...l, [name]: value }));
 
+  const connectWithWHM = (pinned: string) => {
+    void run("Sifruno could not connect to the old server's WHM.", async () => {
+      try {
+        const connected = await connectWHM({ ...login, tls_fingerprint: pinned }, secret);
+        setLogin(emptyLogin); setShowSecret(false); setCertificate(undefined);
+        setSource(connected.source); setAccounts(connected.accounts);
+        setFingerprint(preferredHostKey(connected.source.host_keys)?.fingerprint ?? ""); setStage("confirm");
+      } catch (error) {
+        const unconfirmed = certificateToConfirm(error);
+        if (!unconfirmed) throw error;
+        // Not an error to fix: the certificate is shown for the person to
+        // compare and trust. The login was not sent.
+        setCertificate(unconfirmed);
+      }
+    });
+  };
+  const submitWHM = (event: FormEvent) => {
+    event.preventDefault();
+    setTouched(true);
+    if (addressProblem || secretProblem || sshPortProblem) return;
+    setCertificate(undefined);
+    connectWithWHM(login.tls_fingerprint);
+  };
+  // The confirmed certificate stays pinned for this address: Try again and
+  // Connect reuse it, and changing the address forgets it.
+  const trust = (fingerprint: string) => {
+    setLogin((l) => ({ ...l, tls_fingerprint: fingerprint })); setCertificate(undefined);
+    connectWithWHM(fingerprint);
+  };
   const connect = (event: FormEvent) => {
     event.preventDefault();
     setTouched(true);
@@ -146,7 +227,8 @@ export function MoveWebsite() {
     void run("The fingerprint was not confirmed.", async () => {
       const pinned = await confirmFingerprint(source.id, fingerprint);
       setSource(pinned);
-      setAccounts(await listSourceAccounts(pinned.id));
+      // The WHM path listed the accounts already, through WHM.
+      if (!accounts) setAccounts(await listSourceAccounts(pinned.id));
       setStage("choose");
     });
   };
@@ -162,27 +244,109 @@ export function MoveWebsite() {
     if (!source) return;
     void run("The migration key was not removed.", async () => {
       const result = await cancelSource(source.id);
-      setEnded(result.removed_from_source ? "Stopped. The old server no longer accepts the migration key, and this server deleted it." : `Stopped. This server deleted the migration key. ${result.detail}`);
+      // detail says how the key went: proved over SSH, or through WHM.
+      setEnded(result.removed_from_source ? `Stopped. ${result.detail || "The old server no longer accepts the migration key."} This server deleted its own copy of the key.` : `Stopped. This server deleted the migration key. ${result.detail}`);
       setSource(undefined); setAccounts(undefined); setStage("connect");
     });
   };
+  const switchWay = (next: Way) => { setWay(next); setTouched(false); setProblem(undefined); setRetry(undefined); setCertificate(undefined); setLogin(emptyLogin); };
 
   const heading = (children: ReactNode) => <h2 ref={headingRef} tabIndex={-1} className="outline-none">{children}</h2>;
+  const current = stage === "connect" ? 0 : stage === "confirm" ? 1 : 2;
+  const secretId = secret === "token" ? "move-whm-token" : "move-whm-password";
+  const stop = <Button type="button" variant="outline" className={control} onClick={cancel} disabled={Boolean(busy)} data-testid="move-stop">Stop and remove the key</Button>;
+  const preferred = source ? preferredHostKey(source.host_keys) : undefined;
 
-  return <div className="flex w-full max-w-3xl flex-col gap-5" data-testid="move-website" data-stage={stage}>
+  return <div className="flex w-full max-w-3xl flex-col gap-5" data-testid="move-website" data-stage={stage} data-way={way}>
     <StaleKeys />
     {ended && <Alert role="status" className="text-start"><CircleCheck aria-hidden="true" /><AlertTitle>{ended}</AlertTitle></Alert>}
-    {stage === "connect" && <section className={`${panel} flex flex-col gap-5`}>
+    <div className={`${panel} flex flex-col gap-5`}>
+      <MoveSteps way={source?.via === "whm" ? "whm" : way} current={current} />
+    </div>
+
+    {stage === "connect" && way === "whm" && <section className={`${panel} flex flex-col gap-5`} data-testid="move-connect-whm">
       <div className="flex flex-col gap-1">
-        {heading("Connect to the old server")}
-        <p className="text-sm">Move one website account from a cPanel server you run as root. Its email and DNS stay where they are; the old site keeps running until you change DNS.</p>
+        {heading("Connect with the old server's WHM login")}
+        <p className="text-sm">Move one website account from a cPanel server. Its email and DNS stay where they are; the old site keeps running until you change DNS.</p>
+      </div>
+      <form noValidate onSubmit={submitWHM} className="flex flex-col gap-4" autoComplete="off">
+        <FieldGroup>
+          <Field data-invalid={touched && Boolean(addressProblem)}>
+            <FieldLabel htmlFor="move-whm-address">WHM address</FieldLabel>
+            <FieldDescription id="move-whm-address-help">Such as https://server1.example.com:2087. The port is 2087 unless you give another.</FieldDescription>
+            <Input id="move-whm-address" name="whm-address" className={control} value={login.address} onChange={(e) => setLogin((l) => ({ ...l, address: e.target.value, tls_fingerprint: "" }))} inputMode="url" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next" required
+              aria-invalid={touched && Boolean(addressProblem)} aria-describedby={touched && addressProblem ? "move-whm-address-help move-whm-address-error" : "move-whm-address-help"} data-testid="move-whm-address" />
+            {touched && addressProblem && <FieldError id="move-whm-address-error">{addressProblem}</FieldError>}
+          </Field>
+          <FieldSet>
+            <FieldLegend variant="label">Sign in to WHM as root with</FieldLegend>
+            <RadioGroup value={secret} onValueChange={(value) => { setSecret(value === "password" ? "password" : "token"); setShowSecret(false); }} className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+              <Field orientation="horizontal"><RadioGroupItem value="token" id="move-whm-kind-token" data-testid="move-whm-kind-token" /><FieldLabel htmlFor="move-whm-kind-token" className="font-normal">An API token (recommended)</FieldLabel></Field>
+              <Field orientation="horizontal"><RadioGroupItem value="password" id="move-whm-kind-password" data-testid="move-whm-kind-password" /><FieldLabel htmlFor="move-whm-kind-password" className="font-normal">Root's password</FieldLabel></Field>
+            </RadioGroup>
+          </FieldSet>
+          <Field data-invalid={touched && Boolean(secretProblem)}>
+            <FieldLabel htmlFor={secretId}>{secret === "token" ? "WHM API token" : "Root's password"}</FieldLabel>
+            <FieldDescription id="move-whm-secret-help">{secret === "token" ? "In WHM: Development, Manage API Tokens, Generate Token. " : ""}Sifruno uses it in memory for this move only. It is never stored, logged or shown again.</FieldDescription>
+            <div className="flex gap-2">
+              {/* autocomplete off: this is another server's login, not one for this panel to save. */}
+              <Input id={secretId} name={secretId} className={`${control} min-w-0 flex-1`} type={showSecret ? "text" : "password"} value={secret === "token" ? login.token : login.password}
+                onChange={(e) => setField(secret, e.target.value)} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="go" required
+                aria-invalid={touched && Boolean(secretProblem)} aria-describedby={touched && secretProblem ? "move-whm-secret-help move-whm-secret-error" : "move-whm-secret-help"} data-testid="move-whm-secret" />
+              <Button type="button" variant="outline" className={`${control} shrink-0 px-3`} aria-pressed={showSecret} aria-controls={secretId} onClick={() => setShowSecret((v) => !v)}>
+                {showSecret ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}Show
+              </Button>
+            </div>
+            {touched && secretProblem && <FieldError id="move-whm-secret-error">{secretProblem}</FieldError>}
+          </Field>
+          <details className="text-sm" open={Boolean(sshPortProblem && touched)}>
+            <summary className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">SSH port, if it is not 22</summary>
+            <Field data-invalid={touched && Boolean(sshPortProblem)} className="mt-3 max-w-40">
+              <FieldLabel htmlFor="move-whm-ssh-port">SSH port</FieldLabel>
+              <Input id="move-whm-ssh-port" className={control} value={login.ssh_port} placeholder="22" onChange={(e) => setField("ssh_port", e.target.value.trim())} inputMode="numeric" autoComplete="off"
+                aria-invalid={touched && Boolean(sshPortProblem)} aria-describedby="move-whm-ssh-port-error" />
+              {touched && sshPortProblem && <FieldError id="move-whm-ssh-port-error">{sshPortProblem}</FieldError>}
+            </Field>
+          </details>
+        </FieldGroup>
+        {certificate && <Alert className="text-start" data-testid="move-certificate">
+          <ShieldAlert aria-hidden="true" />
+          <AlertTitle>Check WHM's certificate before you go on</AlertTitle>
+          <AlertDescription className="flex flex-col gap-3 text-start text-foreground">
+            <p>This server does not trust WHM's certificate. cPanel's own self-signed certificate looks like this; so would another machine pretending to be the old server. Your login was not sent.</p>
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-medium">SHA-256 fingerprint</span>
+              <code className="rounded-md border border-border bg-muted p-2 font-mono text-xs break-all" data-testid="move-certificate-fingerprint">{certificate.fingerprint}</code>
+              <span className="text-xs text-muted-foreground break-all">{certificate.subject}</span>
+            </div>
+            <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">Next step:</span> Compare it with WHM's certificate on the old server (in WHM: Service Configuration, Manage Service SSL Certificates). Trust it only if it is the same.</p>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" className={control} disabled={Boolean(busy)} onClick={() => trust(certificate.fingerprint)} data-testid="move-certificate-trust"><ShieldCheck aria-hidden="true" />Trust this certificate</Button>
+              <Button type="button" variant="outline" className={control} disabled={Boolean(busy)} onClick={() => setCertificate(undefined)}>Cancel</Button>
+            </div>
+          </AlertDescription>
+        </Alert>}
+        {problem && <ProblemBox problem={problem} onRetry={retry} />}
+        {!certificate && <div><Button type="submit" className={control} disabled={Boolean(busy)} data-testid="move-whm-connect">{busy ? "Connecting…" : "Connect"}</Button></div>}
+      </form>
+      <Separator />
+      <div className="flex flex-col items-start gap-1 text-sm">
+        <span className="text-muted-foreground">No WHM access on the old server?</span>
+        <Button type="button" variant="outline" className={control} onClick={() => switchWay("ssh")} data-testid="move-use-ssh">Use SSH instead (no WHM access)</Button>
+      </div>
+    </section>}
+
+    {stage === "connect" && way === "ssh" && <section className={`${panel} flex flex-col gap-5`} data-testid="move-connect-ssh">
+      <div className="flex flex-col gap-1">
+        {heading("Connect to the old server over SSH")}
+        <p className="text-sm">Without WHM, you add Sifruno's key on the old server yourself: the next step shows one command to run there as root.</p>
       </div>
       <form noValidate onSubmit={connect} className="flex flex-col gap-4">
         <FieldGroup>
           <Field data-invalid={touched && Boolean(hostProblem)}>
             <FieldLabel htmlFor="move-host">Old server</FieldLabel>
-            <Input id="move-host" className={control} value={host} onChange={(e) => setHost(e.target.value.trim())} autoComplete="off" spellCheck={false} inputMode="url" aria-invalid={touched && Boolean(hostProblem)} aria-describedby="move-host-help move-host-error" data-testid="move-host" />
             <FieldDescription id="move-host-help">Its host name or IPv4 address, such as server1.example.com.</FieldDescription>
+            <Input id="move-host" className={control} value={host} onChange={(e) => setHost(e.target.value.trim())} autoComplete="off" spellCheck={false} inputMode="url" aria-invalid={touched && Boolean(hostProblem)} aria-describedby="move-host-help move-host-error" data-testid="move-host" />
             {touched && hostProblem && <FieldError id="move-host-error">{hostProblem}</FieldError>}
           </Field>
           <Field data-invalid={touched && Boolean(portProblem)} className="max-w-40">
@@ -191,12 +355,37 @@ export function MoveWebsite() {
             {touched && portProblem && <FieldError id="move-port-error">{portProblem}</FieldError>}
           </Field>
         </FieldGroup>
-        {problem && <ProblemBox problem={problem} />}
-        <div><Button type="submit" className={control} disabled={Boolean(busy)} data-testid="move-connect">{busy ? "Connecting…" : "Connect"}</Button></div>
+        {problem && <ProblemBox problem={problem} onRetry={retry} />}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" className={control} disabled={Boolean(busy)} data-testid="move-connect">{busy ? "Connecting…" : "Connect"}</Button>
+          <Button type="button" variant="outline" className={control} onClick={() => switchWay("whm")}>Connect with the WHM login instead</Button>
+        </div>
       </form>
     </section>}
 
-    {stage === "confirm" && source && <section className={`${panel} flex flex-col gap-5`} data-testid="move-confirm">
+    {stage === "confirm" && source && source.via === "whm" && preferred && <section className={`${panel} flex flex-col gap-5`} data-testid="move-confirm">
+      <div className="flex flex-col gap-1">
+        {heading(<>Confirm the SSH key of {source.host}</>)}
+        <p className="text-sm">Sifruno added its key for this move to root's SSH keys through WHM. WHM does not report the server's own SSH key, so Sifruno read it from SSH port {source.port} just now. Confirm it once: every copy step checks that the old server still shows it. The key expires {dateLabel(source.expires_at)}.</p>
+      </div>
+      <form onSubmit={confirm} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-medium">{preferred.type} fingerprint</span>
+          <code className="rounded-md border border-border bg-muted p-3 font-mono text-xs break-all" data-testid="move-fp">{preferred.fingerprint}</code>
+        </div>
+        <details className="text-sm">
+          <summary className="w-fit cursor-pointer text-muted-foreground hover:text-foreground">Check it on the old server yourself</summary>
+          <p className="mt-2">As root on the old server, run <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> (or the file of the type above). It prints the same fingerprint. If it does not, stop: something else answered at this address.</p>
+        </details>
+        {problem && <ProblemBox problem={problem} onRetry={retry} />}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" className={control} disabled={!fingerprint || Boolean(busy)} data-testid="move-confirm-fp"><ShieldCheck aria-hidden="true" />{busy ? "Checking…" : "Confirm and continue"}</Button>
+          {stop}
+        </div>
+      </form>
+    </section>}
+
+    {stage === "confirm" && source && source.via !== "whm" && <section className={`${panel} flex flex-col gap-5`} data-testid="move-confirm">
       <div className="flex flex-col gap-1">
         {heading(<>Let Sifruno in to {source.host}</>)}
         <p className="text-sm">Sifruno made a key for this move only. It signs in as root to read and copy the account, and is removed from both servers when the move ends. It expires {dateLabel(source.expires_at)}.</p>
@@ -216,10 +405,10 @@ export function MoveWebsite() {
             </Field>
           </FieldLabel>)}
         </RadioGroup>
-        {problem && <ProblemBox problem={problem} />}
+        {problem && <ProblemBox problem={problem} onRetry={retry} />}
         <div className="flex flex-wrap gap-2">
           <Button type="submit" className={control} disabled={!fingerprint || Boolean(busy)} data-testid="move-confirm-fp"><ShieldCheck aria-hidden="true" />{busy ? "Checking…" : "The fingerprint matches"}</Button>
-          <Button type="button" variant="outline" className={control} onClick={cancel} disabled={Boolean(busy)}>Stop and remove the key</Button>
+          {stop}
         </div>
       </form>
     </section>}
@@ -229,7 +418,7 @@ export function MoveWebsite() {
         {heading(<>Choose the website to move from {source.host}</>)}
         <p className="text-sm">The account keeps its name and its folder <code>/home/&lt;name&gt;/public_html</code>, and its databases keep their names, users and passwords.</p>
       </div>
-      {problem && <ProblemBox problem={problem} onRetry={reload} />}
+      {problem && <ProblemBox problem={problem} onRetry={retry} />}
       {accounts && accounts.length === 0 && <p className="text-sm">The old server has no accounts.</p>}
       {accounts && accounts.length > 0 && <Table data-testid="move-accounts">
         <TableHeader><TableRow><TableHead>Account</TableHead><TableHead>Main domain</TableHead><TableHead className="text-end">Disk</TableHead><TableHead><span className="sr-only">Action</span></TableHead></TableRow></TableHeader>
@@ -242,7 +431,7 @@ export function MoveWebsite() {
       </Table>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" className={control} onClick={reload} disabled={Boolean(busy)}><RefreshCw aria-hidden="true" />List again</Button>
-        <Button type="button" variant="outline" className={control} onClick={cancel} disabled={Boolean(busy)}>Stop and remove the key</Button>
+        {stop}
       </div>
     </section>}
     <div role="status" className="sr-only">{busy}</div>
@@ -286,6 +475,7 @@ function Comparison({ job, onChanged }: { job: WebsiteJob; onChanged: (job: Webs
     {v?.running && <p role="status" className="text-sm" data-testid="move-verify-running">Comparing the copy with the old site…</p>}
     {v && !v.running && <div className="flex flex-col gap-2" data-testid="move-verify">
       <div className="text-sm font-medium" data-testid="move-verdict">{v.verdict}</div>
+      {(v.why || v.next) && <Explanation problem={v} />}
       {v.ran && <div className="text-sm text-muted-foreground">Pages: {v.pages_compared} compared, {v.pages_pass} the same, {v.pages_warn} to check, {v.pages_fail} different. Closed URLs (passwords, deny rules, address lists): {v.probes_pass} as the old site, {v.probes_fail} not.</div>}
       {v.problems.length > 0 && <ul className="list-disc ps-5 text-sm" data-testid="move-verify-problems">{v.problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>}
       {v.lines.length > 0 && <TechnicalDetails>{v.lines.join("\n")}</TechnicalDetails>}
@@ -317,6 +507,7 @@ function Comparison({ job, onChanged }: { job: WebsiteJob; onChanged: (job: Webs
         <TableBody>{m.dns.map((r) => <TableRow key={r.name}><TableCell className="break-all">{r.name}</TableCell><TableCell>{r.type}</TableCell><TableCell><code>{r.value}</code></TableCell></TableRow>)}</TableBody>
       </Table>
       <p className="text-sm text-muted-foreground">Leave the MX and other mail records as they are: email stays on the old server. Keep the old server running for 14 days, so you can switch back.</p>
+      <p className="text-sm text-muted-foreground">Once these records point here, the panel gets the website's certificate by itself, usually within the hour, when certificates are set up on this server. Until then the website uses http.</p>
     </div>}
     <div role="status" className="sr-only">{busy}</div>
   </section>;

@@ -9,6 +9,8 @@ export interface VerifySummary {
   running: boolean; ran: boolean; cutover_allowed: boolean; verdict: string;
   pages_compared: number; pages_pass: number; pages_warn: number; pages_fail: number;
   probes_pass: number; probes_fail: number; problems: string[]; lines: string[]; finished_at: string;
+  // Why the copy is not the same yet, or the comparison did not run, and what to do.
+  why: string; next: string;
 }
 export interface Acceptance { actor: string; at: string; reason: string }
 export interface DnsRecord { name: string; type: "A" | "AAAA"; value: string }
@@ -48,11 +50,13 @@ function parseVerify(v: unknown): VerifySummary | null | undefined {
   if (!object(v) || !bool(v.running) || !bool(v.ran) || !bool(v.cutover_allowed) || !text(v.verdict)) return undefined;
   const numbers = [v.pages_compared, v.pages_pass, v.pages_warn, v.pages_fail, v.probes_pass, v.probes_fail];
   if (!numbers.every(count) || !optionalTexts(v.problems, 60) || !optionalTexts(v.lines, 60) || !(v.finished_at === "" || v.finished_at === undefined || date(v.finished_at))) return undefined;
+  if (!(v.why === undefined || text(v.why)) || !(v.next === undefined || text(v.next))) return undefined;
   return {
     running: v.running, ran: v.ran, cutover_allowed: v.cutover_allowed, verdict: v.verdict,
     pages_compared: v.pages_compared as number, pages_pass: v.pages_pass as number, pages_warn: v.pages_warn as number, pages_fail: v.pages_fail as number,
     probes_pass: v.probes_pass as number, probes_fail: v.probes_fail as number, problems: (v.problems as string[] | null | undefined) ?? [],
     lines: (v.lines as string[] | null | undefined) ?? [], finished_at: (v.finished_at as string | undefined) ?? "",
+    why: (v.why as string | undefined) ?? "", next: (v.next as string | undefined) ?? "",
   };
 }
 

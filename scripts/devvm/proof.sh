@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel [whm] | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -22,8 +22,9 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
   migrate-verify
                 Proof 3 rehearsal: the .htaccess scan sends an Apache site
                 with a password folder to the Compat tier, and migrate verify
-                keeps the cutover gate closed against an OpenLiteSpeed copy
-                (where the folder opens) and opens it against an Apache copy.
+                keeps the cutover gate closed against a copy on a website the
+                broker makes on OpenLiteSpeed (where the folder opens) and
+                opens it against an Apache copy.
   migrate-cpanel
                 Migration v1 against a cPanel stand-in (a Podman container
                 with sshd, MariaDB, Apache and stub whmapi1/uapi scripts; not
@@ -36,7 +37,12 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 refused before anything is made; a failed copy removes the
                 account it made; a tenant's link to /root or hard link to a
                 root-only file brings nothing of /root; no password is in
-                process arguments.
+                process arguments. With whm, the WHM login path instead
+                (D-0005): the stand-in's cPanel tools refuse over SSH, a
+                WHM API stub on port 2087 lists the accounts and adds the
+                key, one site moves, and the key goes; plus the classified
+                errors of a cPanel tool over SSH and of a WHM that prints no
+                JSON. KEEP_STANDIN=1 keeps the stand-in for screenshots.
   broker-web    The broker's web operation: OpenLiteSpeed may read the home,
                 a quota is set, the vhost is rendered, tested and reloaded,
                 a rejected config changes nothing, a symlinked public_html is
@@ -242,6 +248,10 @@ case "${1:-}" in
     exit "$status"
     ;;
   migrate-cpanel)
+    mode="${2:-}"
+    case "$mode" in ''|whm) ;; *) usage >&2; exit 2 ;; esac
+    keep="${KEEP_STANDIN:-0}"
+    case "$keep" in 0|1) ;; *) usage >&2; exit 2 ;; esac
     stage="$(mktemp -d)"
     trap 'rm -rf -- "$stage"' EXIT
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -266,7 +276,7 @@ case "${1:-}" in
     mkdir -p "$OUT"
     transcript="$OUT/migrate-cpanel-$stamp.txt"
     status=0
-    "$HERE/vm.sh" ssh "/opt/sifruno-proof/migrate-cpanel.guest.sh $guest $port" | tee "$transcript" || status=$?
+    "$HERE/vm.sh" ssh "KEEP_STANDIN=$keep /opt/sifruno-proof/migrate-cpanel.guest.sh $guest $port $mode" | tee "$transcript" || status=$?
     echo "Transcript: $transcript"
     exit "$status"
     ;;
@@ -274,10 +284,15 @@ case "${1:-}" in
     stage="$(mktemp -d)"
     trap 'rm -rf -- "$stage"' EXIT
     build "$stage/panelctl" ./cmd/panelctl
-    "$HERE/vm.sh" ssh 'install -d -m 0755 /opt/sifruno-proof'
-    "$HERE/vm.sh" put "$stage/panelctl" /opt/sifruno-proof/panelctl
+    build "$stage/hostbroker" ./cmd/hostbroker
+    build "$stage/brokerdrive" ./scripts/devvm/brokerdrive
+    # A broker left running by an earlier proof holds its binary open.
+    "$HERE/vm.sh" ssh 'systemctl stop sifruno-broker-proof 2>/dev/null; install -d -m 0755 /opt/sifruno-proof'
+    for file in panelctl hostbroker brokerdrive; do
+      "$HERE/vm.sh" put "$stage/$file" "/opt/sifruno-proof/$file"
+    done
     "$HERE/vm.sh" put "$HERE/proofs/migrate-verify.guest.sh" /opt/sifruno-proof/migrate-verify.guest.sh
-    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/panelctl /opt/sifruno-proof/migrate-verify.guest.sh; restorecon -R /opt/sifruno-proof'
+    "$HERE/vm.sh" ssh 'chmod 0755 /opt/sifruno-proof/panelctl /opt/sifruno-proof/hostbroker /opt/sifruno-proof/brokerdrive /opt/sifruno-proof/migrate-verify.guest.sh; restorecon -R /opt/sifruno-proof'
     mkdir -p "$OUT"
     transcript="$OUT/proof3-migrate-verify-$(date -u +%Y%m%dT%H%M%SZ).txt"
     status=0

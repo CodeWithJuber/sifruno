@@ -2,9 +2,12 @@ import { csrfToken, getWebsiteJob, parseJobResponse, readTimeoutMs, request, Wor
 import type { WebsiteJob } from "./wordpress-api";
 
 // Client for "Move a website here": migration v1 from a cPanel server over
-// root SSH. The old server's key and passwords never reach this page: the
-// page shows the key line the admin adds there and the host keys'
-// fingerprints, and names the account to move.
+// root SSH. The default way in is the old server's WHM login (an API token
+// or root's password), which the panel uses in memory for this connection
+// only to list the accounts and add the migration key; this page keeps it
+// in the form's state until it is sent and never stores it. The other way
+// in shows the key line the admin adds there themselves. Either way the
+// page shows the host key's fingerprint to confirm and names the account.
 
 export interface HostKey { type: string; fingerprint: string }
 export interface MigrationSource {
@@ -15,8 +18,14 @@ export interface MigrationSource {
   install_command: string;
   host_keys: HostKey[];
   pinned_fingerprint: string;
+  // "whm" when connected with the WHM login, "" for the SSH path.
+  via: "whm" | "";
   expires_at: string;
 }
+// WHM's certificate as the server read it, for the admin to confirm when
+// this server does not trust it.
+export interface WHMCertificate { fingerprint: string; trusted: boolean; subject: string; issuer: string; not_after: string }
+export interface WHMLogin { address: string; token: string; password: string; ssh_port: string; tls_fingerprint: string }
 export interface SourceAccount {
   user: string;
   domain: string;
@@ -51,7 +60,26 @@ export function parseSource(v: unknown): MigrationSource | undefined {
   if (!object(s) || !sourceId(s.id) || !text(s.host, 253) || !count(s.port) || !text(s.key_line) || !text(s.install_command) || !text(s.pinned_fingerprint, 80) || !text(s.expires_at, 40)) return undefined;
   if (!Array.isArray(s.host_keys) || s.host_keys.length > 8 || !s.host_keys.every((k) => object(k) && text(k.type, 40) && text(k.fingerprint, 80) && k.fingerprint.startsWith("SHA256:"))) return undefined;
   if (!s.key_line.includes(`sifruno-migration-${s.id}`)) return undefined;
-  return { id: s.id, host: s.host, port: s.port, key_line: s.key_line, install_command: s.install_command, host_keys: s.host_keys as HostKey[], pinned_fingerprint: s.pinned_fingerprint, expires_at: s.expires_at };
+  const via = s.via === undefined ? "" : s.via;
+  if (via !== "" && via !== "whm") return undefined;
+  return { id: s.id, host: s.host, port: s.port, key_line: s.key_line, install_command: s.install_command, host_keys: s.host_keys as HostKey[], pinned_fingerprint: s.pinned_fingerprint, via, expires_at: s.expires_at };
+}
+
+const fingerprintPattern = /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/;
+
+export function parseCertificate(v: unknown): WHMCertificate | undefined {
+  if (!object(v) || !text(v.fingerprint, 95) || !fingerprintPattern.test(v.fingerprint) || typeof v.trusted !== "boolean" || !text(v.subject, 300) || !text(v.issuer, 300) || !text(v.not_after, 40)) return undefined;
+  return { fingerprint: v.fingerprint, trusted: v.trusted, subject: v.subject, issuer: v.issuer, not_after: v.not_after };
+}
+
+// The host key the page asks the admin to confirm on the WHM path: one
+// fingerprint, ed25519 first, as ssh itself prefers it.
+export function preferredHostKey(keys: HostKey[]): HostKey | undefined {
+  for (const type of ["ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa"]) {
+    const key = keys.find((k) => k.type === type);
+    if (key) return key;
+  }
+  return keys[0];
 }
 
 export function parseAccounts(v: unknown): SourceAccount[] | undefined {
@@ -74,6 +102,33 @@ export function checkSourceHost(value: string): string | undefined {
   if (value === "127.0.0.1" || value.startsWith("127.")) return "That is this server itself. Enter the old server's address.";
   return undefined;
 }
+// The WHM form: an address the server reads as https://host:port, and one
+// login. The server checks both again.
+export function checkWHMAddress(value: string): string | undefined {
+  const address = value.trim();
+  if (!address) return "Enter WHM's address on the old server, such as https://server1.example.com:2087.";
+  if (/\s/.test(address)) return "Remove the spaces from the address.";
+  if (/^http:\/\//i.test(address)) return "Use https://: WHM takes the login only over HTTPS.";
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(address) && !/^https:\/\//i.test(address)) return "Use an https:// address.";
+  if (address.includes("@")) return "Enter the address without a user name; the login has its own field.";
+  return undefined;
+}
+export function checkWHMSecret(kind: "token" | "password", value: string): string | undefined {
+  if (kind === "token") {
+    const token = value.trim();
+    if (!token) return "Paste the WHM API token you made for root.";
+    if (!/^[A-Za-z0-9]{16,128}$/.test(token)) return "A WHM API token is 16 to 128 letters and digits. Check that it was pasted whole.";
+    return undefined;
+  }
+  if (!value) return "Enter root's password on the old server.";
+  if (/\p{Cc}/u.test(value)) return "Remove line breaks and tabs from the password.";
+  if (new TextEncoder().encode(value).length > 1024) return "Use at most 1024 characters.";
+  return undefined;
+}
+export function checkOptionalSSHPort(value: string): string | undefined {
+  return value === "" ? undefined : checkSourcePort(value);
+}
+
 export function checkSourcePort(value: string): string | undefined {
   if (!/^[1-9][0-9]{0,4}$/.test(value) || Number(value) > 65535) return "Enter the SSH port, a number from 1 to 65535 (usually 22).";
   return undefined;
@@ -96,15 +151,38 @@ export async function openSource(host: string, port: number, options: { signal?:
   const what = "Sifruno could not connect to the old server.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/sources`;
-  const source = parseSource(await request("create", url, { method: "POST", body: { host, port }, csrf, timeoutMs: slowMs, signal: options.signal, what }));
+  const source = parseSource(await request("move", url, { method: "POST", body: { host, port }, csrf, timeoutMs: slowMs, signal: options.signal, what }));
   if (!source) throw unexpected(what, `POST ${url}`);
   return source;
+}
+
+export interface WHMConnection { source: MigrationSource; accounts: SourceAccount[]; certificate: WHMCertificate }
+
+// The certificate the server asks the admin to confirm, from its 409.
+export function certificateToConfirm(error: unknown): WHMCertificate | undefined {
+  if (!(error instanceof WordPressApiError) || error.status !== 409) return undefined;
+  return parseCertificate(error.problem.certificate);
+}
+
+export async function connectWHM(login: WHMLogin, kind: "token" | "password", options: { signal?: AbortSignal } = {}): Promise<WHMConnection> {
+  const what = "Sifruno could not connect to the old server's WHM.";
+  const csrf = await csrfToken(options.signal);
+  const url = `${base}/whm`;
+  // Only the chosen login is sent; the other field's text stays here.
+  const body: Record<string, unknown> = { address: login.address.trim() };
+  if (kind === "token") body.token = login.token.trim(); else body.password = login.password;
+  if (login.ssh_port) body.ssh_port = Number(login.ssh_port);
+  if (login.tls_fingerprint) body.tls_fingerprint = login.tls_fingerprint;
+  const value = await request("move", url, { method: "POST", body, csrf, timeoutMs: slowMs, signal: options.signal, what });
+  const source = parseSource(value), accounts = object(value) ? parseAccounts({ accounts: value.accounts }) : undefined, certificate = object(value) ? parseCertificate(value.certificate) : undefined;
+  if (!source || source.via !== "whm" || !accounts || !certificate) throw unexpected(what, `POST ${url}`);
+  return { source, accounts, certificate };
 }
 
 export async function getSource(id: string, options: { signal?: AbortSignal } = {}): Promise<MigrationSource> {
   const what = "The connection to the old server could not be loaded.";
   const url = `${base}/sources/${id}`;
-  const source = parseSource(await request("read", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
+  const source = parseSource(await request("move", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
   if (!source || source.id !== id) throw unexpected(what, `GET ${url}`);
   return source;
 }
@@ -113,7 +191,7 @@ export async function confirmFingerprint(id: string, fingerprint: string, option
   const what = "The fingerprint was not confirmed.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/sources/${id}/host-key`;
-  const source = parseSource(await request("create", url, { method: "POST", body: { fingerprint }, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what }));
+  const source = parseSource(await request("move", url, { method: "POST", body: { fingerprint }, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what }));
   if (!source || source.pinned_fingerprint !== fingerprint) throw unexpected(what, `POST ${url}`);
   return source;
 }
@@ -121,7 +199,7 @@ export async function confirmFingerprint(id: string, fingerprint: string, option
 export async function listSourceAccounts(id: string, options: { signal?: AbortSignal } = {}): Promise<SourceAccount[]> {
   const what = "The old server's accounts could not be listed.";
   const url = `${base}/sources/${id}/accounts`;
-  const accounts = parseAccounts(await request("read", url, { timeoutMs: slowMs, signal: options.signal, what }));
+  const accounts = parseAccounts(await request("move", url, { timeoutMs: slowMs, signal: options.signal, what }));
   if (!accounts) throw unexpected(what, `GET ${url}`);
   return accounts;
 }
@@ -130,7 +208,7 @@ export async function cancelSource(id: string, options: { signal?: AbortSignal }
   const what = "The migration key was not removed.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/sources/${id}/cancel`;
-  const value = await request("create", url, { method: "POST", body: {}, csrf, timeoutMs: slowMs, signal: options.signal, what });
+  const value = await request("move", url, { method: "POST", body: {}, csrf, timeoutMs: slowMs, signal: options.signal, what });
   if (!object(value) || typeof value.removed_from_source !== "boolean" || !text(value.detail)) throw unexpected(what, `POST ${url}`);
   return { removed_from_source: value.removed_from_source, detail: value.detail };
 }
@@ -138,7 +216,7 @@ export async function cancelSource(id: string, options: { signal?: AbortSignal }
 export async function listStaleKeys(options: { signal?: AbortSignal } = {}): Promise<StaleKey[]> {
   const what = "The key lines left on old servers could not be listed.";
   const url = `${base}/stale-keys`;
-  const keys = parseStaleKeys(await request("read", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
+  const keys = parseStaleKeys(await request("move", url, { timeoutMs: readTimeoutMs, signal: options.signal, what }));
   if (!keys) throw unexpected(what, `GET ${url}`);
   return keys;
 }
@@ -147,13 +225,13 @@ export async function clearStaleKey(id: string, options: { signal?: AbortSignal 
   const what = "The key line was not taken off the list.";
   const csrf = await csrfToken(options.signal);
   const url = `${base}/stale-keys/${id}/cleared`;
-  const value = await request("create", url, { method: "POST", body: {}, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what });
+  const value = await request("move", url, { method: "POST", body: {}, csrf, timeoutMs: readTimeoutMs, signal: options.signal, what });
   if (!object(value) || value.cleared !== id) throw unexpected(what, `POST ${url}`);
 }
 
 async function jobChange(what: string, url: string, body: unknown, signal?: AbortSignal): Promise<WebsiteJob> {
   const csrf = await csrfToken(signal);
-  const job = parseJobResponse(await request("create", url, { method: "POST", body, csrf, timeoutMs: 20000, signal, what }));
+  const job = parseJobResponse(await request("move", url, { method: "POST", body, csrf, timeoutMs: 20000, signal, what }));
   if (!job || job.kind !== "migration" || !job.migration) throw unexpected(what, `POST ${url}`);
   return job;
 }

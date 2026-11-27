@@ -95,13 +95,13 @@ This writes `artifacts/release/sifruno-linux-amd64.tar.gz` and `sifruno-linux-am
    ./install.sh
    ```
 
-   To also reach the panel from other machines over HTTPS on port 8443, and to turn on Let's Encrypt certificates for websites, name the panel's host and a contact address:
+   To also reach the panel from other machines over HTTPS on port 8443, and to turn on Let's Encrypt certificates for websites and for the panel itself, name the panel's host and a contact address:
 
    ```bash
    ./install.sh --panel-host panel.example.com --acme-email admin@example.com
    ```
 
-   `--acme-email` accepts the certificate authority's terms of service. `--no-start` installs everything but leaves the two Sifruno units off.
+   `--acme-email` accepts the certificate authority's terms of service. With both, the broker answers the panel's name on port 80 for its certificate challenge and nothing else, and the installer warns when the name is already a website's domain. `--no-start` installs everything but leaves the two Sifruno units off.
 
 5. Keep your SSH session open. Open a second one and check that you can still sign in before you close the first.
 
@@ -116,7 +116,7 @@ The installer ends by printing the first-run steps and the rollback steps for th
    ```
 
 2. Open **Websites**. The panel asks for the operator access key, then a username, a password of at least 12 characters and an authenticator app. The key is in `/var/lib/sifpanel/state/operator/access.key`, which only root and `sifpanel` can read. Open it on the server. Do not print it in a shared terminal, paste it into chat, or include it in screenshots.
-3. If you gave `--panel-host`, sign in from anywhere at `https://NAME:8443/` after that. Only the admin sign-in works there; the access key and first-run setup stay on the server. The certificate is self-signed, so compare the fingerprint your browser shows with the one the panel logged: `journalctl -u sifruno | grep SHA-256`.
+3. If you gave `--panel-host`, sign in from anywhere at `https://NAME:8443/` after that. Only the admin sign-in works there; the access key and first-run setup stay on the server. With `--acme-email` and a NAME in public DNS that points at this server, with TCP 80 open, the panel gets a Let's Encrypt certificate for it a few minutes after it starts and renews it by itself; `journalctl -u sifruno | grep 'Panel certificate:'` says how it went and, on a failure, what to do. Until then, and for an IP address, the certificate is self-signed, so compare the fingerprint your browser shows with the one the panel logged: `journalctl -u sifruno | grep SHA-256`.
 
 ### What the installer changes
 
@@ -127,8 +127,8 @@ The installer ends by printing the first-run steps and the rollback steps for th
 | Users | Creates the system user `sifpanel`, which the panel runs as. |
 | `/etc/nsswitch.conf` | Sets `passwd`, `group` and `shadow` to `files`. Users from SSSD or LDAP no longer resolve. If authselect manages the file, do not apply an authselect profile afterwards. A backup is kept beside the file. |
 | sshd | Writes `/etc/ssh/sshd_config.d/40-sifruno.conf`: password sign-in off, and every user except root and members of `wheel` is SFTP-only with keys the broker manages in `/etc/sifruno/ssh/authorized_keys`. Checked with `sshd -t`, then sshd is reloaded. |
-| OpenLiteSpeed | Adds one `include` line and turns on namespace isolation in `/usr/local/lsws/conf/httpd_config.conf`. A backup is kept beside the file. |
-| MariaDB | Creates the admin user `sifpanel_dbadmin`; its password is only in `/var/lib/sifpanel/db-admin.cnf` (0600, `sifpanel`). |
+| OpenLiteSpeed | Adds one `include` line and turns on namespace isolation in `/usr/local/lsws/conf/httpd_config.conf`, and removes the package's sample site from it (`virtualHost Example` and its listener on port 8088). Moves the WebAdmin console to `127.0.0.1:7080` in `/usr/local/lsws/admin/conf/admin_config.conf`; Sifruno writes OpenLiteSpeed's config itself. When a listener moves, OpenLiteSpeed is stopped and started once, so websites are down for a few seconds. A backup is kept beside each file. |
+| MariaDB | Writes `/etc/my.cnf.d/sifruno.cnf` with `bind-address=127.0.0.1`: MariaDB answers on loopback only (websites connect to 127.0.0.1, the panel and phpMyAdmin through its socket). A running MariaDB that still listens elsewhere restarts once. Creates the admin user `sifpanel_dbadmin`; its password is only in `/var/lib/sifpanel/db-admin.cnf` (0600, `sifpanel`). |
 | Files | Programs in `/usr/local/lib/sifruno/bin`, the panel UI in `/usr/local/lib/sifruno/ui`, WP-CLI (pinned checksum) in `/usr/local/lib/sifruno/wp-cli.phar`, restic 0.20.0 for backups (pinned checksum) in `/usr/local/lib/sifruno/restic`. |
 | Folders | `/var/lib/sifpanel` and the panel's state in it, `/var/lib/sifruno-broker`, `/var/lib/sifruno-acme`, `/var/lib/sifruno-lscache` (root's, 0711: each website's page cache), `/etc/sifruno`, `/run/sifruno-broker`. On an upgrade, page caches that earlier releases kept in `/usr/local/lsws/cachedata` are removed, as OpenLiteSpeed's user, once no website uses them. |
 | Services | `sifruno-broker.service` (root; the only part that changes the host) and `sifruno.service` (the panel, as `sifpanel`), enabled and started. |
@@ -160,10 +160,18 @@ The installer prints these steps with the real backup names at the end of every 
    cp -a /etc/nsswitch.conf.bak-YYYYMMDD-HHMM /etc/nsswitch.conf
    ```
 
-4. Put OpenLiteSpeed's config back from its backup:
+4. Put OpenLiteSpeed's config and its WebAdmin console's config back from their backups. A moved listener needs OpenLiteSpeed stopped and started, not restarted:
 
    ```bash
-   cp -a /usr/local/lsws/conf/httpd_config.conf.bak-YYYYMMDD-HHMM /usr/local/lsws/conf/httpd_config.conf && systemctl restart lsws
+   cp -a /usr/local/lsws/conf/httpd_config.conf.bak-YYYYMMDD-HHMM /usr/local/lsws/conf/httpd_config.conf
+   cp -a /usr/local/lsws/admin/conf/admin_config.conf.bak-YYYYMMDD-HHMM /usr/local/lsws/admin/conf/admin_config.conf
+   systemctl stop lsws; while pgrep -x litespeed >/dev/null; do sleep 1; done; systemctl start lsws
+   ```
+
+5. Let MariaDB listen on every address again:
+
+   ```bash
+   rm /etc/my.cnf.d/sifruno.cnf && systemctl restart mariadb
    ```
 
 Packages, the `sifpanel` user, websites and databases stay. Remove them by hand if you want them gone.
@@ -222,7 +230,7 @@ These steps build the source and run a private loopback panel for development. T
 
    From then on, sign in with username, password and a fresh code. The access key still signs in on this machine, for example when the phone with the authenticator app is lost. Sessions last 15 minutes.
 
-7. Optional: reach the panel from another machine. Add `--https-listen 0.0.0.0:2083 --panel-host panel.example.com` (your server's name or IP; several names are comma-separated). Without `--tls-cert` and `--tls-key` the panel makes a self-signed certificate and prints its SHA-256 fingerprint; your browser warns until you use a real certificate, so compare the fingerprint before you continue. Over HTTPS only the admin sign-in works: the access key and first-run setup stay on the server. Open the port in your firewall yourself; this guide does not change firewall rules.
+7. Optional: reach the panel from another machine. Add `--https-listen 0.0.0.0:2083 --panel-host panel.example.com` (your server's name or IP; several names are comma-separated). Without `--tls-cert` and `--tls-key` the panel makes a self-signed certificate and prints its SHA-256 fingerprint; your browser warns until you use a real certificate, so compare the fingerprint before you continue. With `--acme-email` and `--accounts-socket` as well, the panel asks Let's Encrypt for a certificate for its public `--panel-host` names over HTTP-01 on port 80 (the broker started with the same `--panel-host` serves the challenge), keeps it in its state folder, renews it 30 days before it ends and serves it without a restart; an IP address keeps the self-signed one. A line in its log that starts `Panel certificate:` says what happened and, on a failure, what to do. Over HTTPS only the admin sign-in works: the access key and first-run setup stay on the server. Open the port in your firewall yourself; this guide does not change firewall rules.
 
 8. To try static hosting, create a website in **Websites**, open its **File Manager**, and choose **Upload file**. Select a static asset, review its relative path and confirm. Open the website preview to check the file, then use **Backups** to create a native ZIP.
 

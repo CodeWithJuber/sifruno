@@ -11,6 +11,8 @@ import (
 	"sifruno/internal/cpsource"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/migrateverify"
+	"sifruno/internal/whmsource"
+	"sifruno/internal/whmsource/whmtest"
 	"sifruno/internal/wizard"
 )
 
@@ -21,8 +23,12 @@ var testSourceID = strings.Repeat("e", 32)
 type migrationSpy struct {
 	pinned   bool
 	finished int
-	stale    []hostaccounts.StaleMigrationKey
-	cleared  []string
+	via      string
+	removed  bool
+	// accountsErr is what listing the old server's accounts answers.
+	accountsErr error
+	stale       []hostaccounts.StaleMigrationKey
+	cleared     []string
 }
 
 func (m *migrationSpy) view() hostaccounts.Migration {
@@ -31,12 +37,15 @@ func (m *migrationSpy) view() hostaccounts.Migration {
 	if m.pinned {
 		v.Pinned = "SHA256:abc"
 	}
+	v.Via = m.via
+	v.ExpiresAt = time.Now().Add(24 * time.Hour)
 	return v
 }
 func (m *migrationSpy) OpenMigration(_ context.Context, in hostaccounts.MigrationOpenInput, _ string) (hostaccounts.Migration, error) {
 	if in.Host == "bad host" {
 		return hostaccounts.Migration{}, hostaccounts.ErrInvalid
 	}
+	m.via = in.Via
 	return m.view(), nil
 }
 func (m *migrationSpy) GetMigration(context.Context, string) (hostaccounts.Migration, error) {
@@ -53,6 +62,9 @@ func (m *migrationSpy) MigrationAccounts(context.Context, string) ([]cpsource.Ac
 	if !m.pinned {
 		return nil, &hostaccounts.MigrationError{Step: "host_key", Detail: "not confirmed"}
 	}
+	if m.accountsErr != nil {
+		return nil, m.accountsErr
+	}
 	return []cpsource.Account{{User: "shopone", Domain: "shop.example.test", DiskUsedMiB: 14}}, nil
 }
 func (m *migrationSpy) PlanMigration(context.Context, string, hostaccounts.MigrationPlanInput, string) (hostaccounts.MigrationPlan, error) {
@@ -66,7 +78,7 @@ func (m *migrationSpy) MigrateDatabase(context.Context, string, hostaccounts.Mig
 }
 func (m *migrationSpy) FinishMigration(context.Context, string, hostaccounts.MigrationFinishInput, string) (hostaccounts.MigrationFinishResult, error) {
 	m.finished++
-	return hostaccounts.MigrationFinishResult{RemovedFromSource: true}, nil
+	return hostaccounts.MigrationFinishResult{RemovedFromSource: !m.removed}, nil
 }
 func (m *migrationSpy) StaleMigrationKeys(context.Context) ([]hostaccounts.StaleMigrationKey, error) {
 	return m.stale, nil
@@ -93,12 +105,13 @@ func migrationFixture(t *testing.T) (siteFixture, *wizard.Runner, *migrationSpy)
 	broker := &sitesBroker{}
 	spy := &migrationSpy{}
 	runner := wizard.New(broker, wizardDatabaseSpy{}, store, nil)
-	runner.EnableMigrations(wizard.MigrationOptions{Broker: spy, Databases: hashSpy{}, Connect: "127.0.0.1:80", Address: "203.0.113.7",
+	logins := whmsource.NewSessions()
+	runner.EnableMigrations(wizard.MigrationOptions{Broker: spy, Databases: hashSpy{}, Connect: "127.0.0.1:80", Address: "203.0.113.7", WHM: logins,
 		Verify: func(context.Context, migrateverify.Options) (migrateverify.Report, error) {
 			return migrateverify.Report{CutoverAllowed: true, Verdict: "CUTOVER ALLOWED", Counts: migrateverify.Counts{PagesCompared: 1, PagesPass: 1}}, nil
 		}})
 	t.Cleanup(runner.Wait)
-	f.handler = New(Options{Operator: f.manager, Accounts: broker, Wizard: runner, Migrations: spy, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
+	f.handler = New(Options{Operator: f.manager, Accounts: broker, Wizard: runner, Migrations: spy, MigrationLogins: logins, AllowedOrigins: []string{"http://127.0.0.1:8080"}})
 	return f, runner, spy
 }
 
@@ -176,6 +189,7 @@ func TestMoveAWebsiteHereRefusesAPITokens(t *testing.T) {
 	}
 	for _, c := range []struct{ method, path string }{
 		{"POST", "/api/v1/websites/migrations/sources"},
+		{"POST", "/api/v1/websites/migrations/whm"},
 		{"GET", "/api/v1/websites/migrations/sources/" + testSourceID},
 		{"GET", "/api/v1/websites/migrations/sources/" + testSourceID + "/accounts"},
 		{"POST", "/api/v1/websites/migrations"},
@@ -222,5 +236,130 @@ func TestMoveAWebsiteHereUnavailable(t *testing.T) {
 	cookie, csrf := websiteSignIn(t, f)
 	if w := websiteRequest(f.handler, "POST", "/api/v1/websites/migrations/sources", map[string]any{"host": "old.example.test", "port": 22}, cookie, csrf); w.Code != 503 {
 		t.Fatalf("without the broker's migrations: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Each failure of the old server reaches the page as what happened, why
+// and the next step for that case; what the old server printed is only
+// technical (D-0006). The owner's screen showed cPanel's preload
+// protection's raw words and "Fix the value the message names".
+func TestMoveAWebsiteHereExplainsEachFailure(t *testing.T) {
+	f, _, spy := migrationFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	base := "/api/v1/websites/migrations/sources/" + testSourceID
+	if w := websiteRequest(f.handler, "POST", base+"/host-key", map[string]any{"fingerprint": "SHA256:abc"}, cookie, csrf); w.Code != 200 {
+		t.Fatalf("pin: %d %s", w.Code, w.Body.String())
+	}
+	preload := "2026/01/02 03:04:05 LD_Preload detected, refusing to run 2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369."
+	for _, c := range []struct {
+		failed           *hostaccounts.MigrationError
+		why, next, techn string
+	}{
+		{&hostaccounts.MigrationError{Step: "cpanel_tool", Output: preload}, "cPanel's own tools on the old server did not answer properly", "Check the old server's security and cPanel (cPanel support can help), or connect with the WHM login, then press Try again.", "LD_Preload detect"},
+		{&hostaccounts.MigrationError{Step: "cpanel_output", Detail: "The old server's list of accounts could not be read (whmapi1 listaccts)."}, "injects a preload library", "cPanel support can help", "whmapi1 listaccts"},
+		{&hostaccounts.MigrationError{Step: "unreachable", Output: "ssh: connect to host 203.0.113.9 port 22: Connection timed out"}, "could not reach the old server", "firewall", "Connection timed out"},
+		{&hostaccounts.MigrationError{Step: "key_refused", Output: "Permission denied (publickey)."}, "did not accept the migration key", "PermitRootLogin", "Permission denied"},
+		{&hostaccounts.MigrationError{Step: "host_key_changed", Output: "Host key verification failed."}, "not the one you confirmed", "Stop until you know why", "Host key verification failed"},
+		{&hostaccounts.MigrationError{Step: "account_missing", Detail: "The old server has no account named shopone."}, "no account named shopone", "List the old server's accounts again", "step account_missing"},
+	} {
+		spy.accountsErr = c.failed
+		w := websiteRequest(f.handler, "GET", base+"/accounts", nil, cookie, "")
+		var problem struct {
+			Status    int    `json:"status"`
+			Detail    string `json:"detail"`
+			Next      string `json:"next"`
+			Technical string `json:"technical"`
+		}
+		if w.Code != 422 || json.Unmarshal(w.Body.Bytes(), &problem) != nil || problem.Status != 422 {
+			t.Fatalf("%s: %d %s", c.failed.Step, w.Code, w.Body.String())
+		}
+		if !strings.Contains(problem.Detail, c.why) || !strings.Contains(problem.Next, c.next) || !strings.Contains(problem.Technical, c.techn) {
+			t.Fatalf("%s: %+v", c.failed.Step, problem)
+		}
+		if c.failed.Output != "" && strings.Contains(problem.Detail+problem.Next, c.failed.Output) {
+			t.Fatalf("%s: the old server's words are outside Technical details: %+v", c.failed.Step, problem)
+		}
+		if strings.Contains(w.Body.String(), "Fix the value") {
+			t.Fatalf("%s: the generic next step: %s", c.failed.Step, w.Body.String())
+		}
+	}
+	spy.accountsErr = hostaccounts.ErrNotFound
+	if w := websiteRequest(f.handler, "GET", base+"/accounts", nil, cookie, ""); w.Code != 404 || !strings.Contains(w.Body.String(), `"next":"Connect to the old server again."`) {
+		t.Fatalf("an ended connection: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// D-0005: connect with the old server's WHM login. A self-signed
+// certificate is shown, by its fingerprint, before the login is sent; once
+// confirmed, the accounts are listed through WHM and the broker's key is
+// added for root with "restrict". The login is never echoed.
+func TestConnectWithTheWHMLogin(t *testing.T) {
+	f, _, spy := migrationFixture(t)
+	cookie, csrf := websiteSignIn(t, f)
+	whm := whmtest.New()
+	defer whm.Close()
+	url := "/api/v1/websites/migrations/whm"
+	address := "https://" + whm.Listener.Addr().String()
+	body := map[string]any{"address": address, "token": whm.Token}
+	if w := websiteRequest(f.handler, "POST", url, body, cookie, ""); w.Code != 403 {
+		t.Fatalf("without CSRF: %d", w.Code)
+	}
+	if w := websiteRequest(f.handler, "POST", url, map[string]any{"address": address, "token": whm.Token, "user": "root"}, cookie, csrf); w.Code != 422 {
+		t.Fatalf("an unknown field: %d %s", w.Code, w.Body.String())
+	}
+	w := websiteRequest(f.handler, "POST", url, body, cookie, csrf)
+	var unconfirmed struct {
+		Detail      string                `json:"detail"`
+		Next        string                `json:"next"`
+		Certificate whmsource.Certificate `json:"certificate"`
+	}
+	if w.Code != 409 || json.Unmarshal(w.Body.Bytes(), &unconfirmed) != nil || unconfirmed.Certificate.Fingerprint != whm.Fingerprint() || unconfirmed.Certificate.Trusted || !strings.Contains(unconfirmed.Next, "Trust this certificate") {
+		t.Fatalf("an untrusted certificate: %d %s", w.Code, w.Body.String())
+	}
+	if len(whm.Headers()) != 0 || spy.via != "" {
+		t.Fatal("the login was sent, or a migration opened, before the certificate was confirmed")
+	}
+	if w = websiteRequest(f.handler, "POST", url, map[string]any{"address": address, "token": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", "tls_fingerprint": whm.Fingerprint()}, cookie, csrf); w.Code != 422 || !strings.Contains(w.Body.String(), "refused the login") || strings.Contains(w.Body.String(), "ZZZZZZZZ") {
+		t.Fatalf("a wrong token: %d %s", w.Code, w.Body.String())
+	}
+	if w = websiteRequest(f.handler, "POST", url, map[string]any{"address": "http://" + whm.Listener.Addr().String(), "token": whm.Token}, cookie, csrf); w.Code != 422 || !strings.Contains(w.Body.String(), "must be https") {
+		t.Fatalf("plain http: %d %s", w.Code, w.Body.String())
+	}
+	whm.Broken = "LD_Preload detected, refusing to run"
+	if w = websiteRequest(f.handler, "POST", url, map[string]any{"address": address, "token": whm.Token, "tls_fingerprint": whm.Fingerprint()}, cookie, csrf); w.Code != 422 || !strings.Contains(w.Body.String(), "did not answer with the data cPanel documents") {
+		t.Fatalf("a WHM that prints no JSON: %d %s", w.Code, w.Body.String())
+	}
+	whm.Broken = ""
+	w = websiteRequest(f.handler, "POST", url, map[string]any{"address": address, "password": whm.Password, "ssh_port": 2222, "tls_fingerprint": whm.Fingerprint()}, cookie, csrf)
+	var connected struct {
+		Source   MigrationSource    `json:"source"`
+		Accounts []MigrationAccount `json:"accounts"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &connected) != nil || connected.Source.Via != hostaccounts.ViaWHM || len(connected.Accounts) != 1 || connected.Accounts[0].User != whmtest.User {
+		t.Fatalf("connect: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), whm.Password) || strings.Contains(w.Body.String(), whm.Token) {
+		t.Fatal("the login was echoed")
+	}
+	if ok, options := whm.Authorized("ssh-ed25519 AAAA sifruno-migration-" + testSourceID); !ok || options != "restrict" {
+		t.Fatalf("the key for root: %v %q", ok, options)
+	}
+	// The accounts are listed again through WHM, with the login in memory.
+	before := len(whm.CallList())
+	if w = websiteRequest(f.handler, "GET", "/api/v1/websites/migrations/sources/"+testSourceID+"/accounts", nil, cookie, ""); w.Code != 200 || len(whm.CallList()) != before+1 {
+		t.Fatalf("accounts through WHM: %d %s", w.Code, w.Body.String())
+	}
+	// Stopping removes the key over SSH, then its file through WHM, and
+	// forgets the login.
+	spy.removed = true
+	w = websiteRequest(f.handler, "POST", "/api/v1/websites/migrations/sources/"+testSourceID+"/cancel", map[string]any{}, cookie, csrf)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"removed_from_source":true`) || !strings.Contains(w.Body.String(), "WHM's API removed it") {
+		t.Fatalf("cancel: %d %s", w.Code, w.Body.String())
+	}
+	if ok, _ := whm.Authorized("ssh-ed25519 AAAA sifruno-migration-" + testSourceID); ok {
+		t.Fatal("the key stayed")
+	}
+	if w = websiteRequest(f.handler, "GET", "/api/v1/websites/migrations/sources/"+testSourceID+"/accounts", nil, cookie, ""); w.Code != 422 || !strings.Contains(w.Body.String(), "no longer holds the WHM login") {
+		t.Fatalf("after cancel: %d %s", w.Code, w.Body.String())
 	}
 }

@@ -1,0 +1,196 @@
+# Always use HTTPS on a real server, 2026-11-26
+# Server: a new Linode g6-standard-2 (de-fra-2) that scripts/ci/nightly-fresh-install.sh made and kept
+# (SIFRUNO_NIGHTLY_KEEP=1): AlmaLinux 9.8, SELinux Enforcing, openlitespeed-1.9.4-3.el9, lsphp83-8.3.37-1.el9.
+# Its fresh-install test passed 17 checks, 0 failed, with the release built from 9edd296. Then, by hand over SSH:
+# install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@www.SERVER_IP.sslip.io (an in-place rerun),
+# the first admin made on the panel's loopback (first-run setup works only there), and TCP 80 and 443 opened to
+# everyone and 8443 to the machine that ran the proofs, in the Linode Cloud Firewall and in firewalld.
+#
+# Part 1: scripts/devvm/proofs/public-ca-wizard.sh gives the site its certificate: the wizard's one request to
+# Let's Encrypt's production CA for this run.
+# Public-CA wizard proof 2026-11-26T10:13:25Z
+# source 9edd296; runner: Ubuntu 24.04.5 LTS, curl 8.5.0, OpenSSL 3.0.13, agent-browser 0.45.0
+# panel https://panel.SERVER_IP.sslip.io:8443, website www.SERVER_IP.sslip.io, limit 120 s from Create
+## Before the wizard
+  www.SERVER_IP.sslip.io resolves to SERVER_IP; the panel's name to SERVER_IP
+PASS  the domain resolves in public DNS to the panel's server
+PASS  the panel serves the self-signed certificate the login file names
+  a top-level link from another site to https://panel.SERVER_IP.sslip.io:8443/ answers HTTP 200
+PASS  a link from another site opens the panel (cross-site navigation answers 200)
+  https://www.SERVER_IP.sslip.io/ before the wizard: curl: (7) Failed to connect to www.SERVER_IP.sslip.io port 443 after 22 ms: Couldn't connect to server
+PASS  before the wizard, https://www.SERVER_IP.sslip.io/ has no certificate this machine trusts
+## Browser: sign in over the internet and open the wizard
+PASS  the panel's sign-in form opens at https://panel.SERVER_IP.sslip.io:8443/websites
+PASS  the admin owner signs in with password and authenticator code
+PASS  Websites, New website opens the wizard at /websites/new
+PASS  WordPress is the chosen website type
+## Browser: Create, then follow the job
+  pressed Create at 2026-11-26T10:14:19Z
+  2.2 s: steps done running pending pending pending
+  5.2 s: steps done done running pending pending
+  20.9 s: steps done done done done running
+  the job page shows its last screen (succeeded) 40.6 s after Create
+PASS  the job succeeds
+PASS  Create to the job's last screen: 40.6 s, within 120 s
+  first HTTPS 200 from https://www.SERVER_IP.sslip.io/, system trust store: 27.3 s after Create
+PASS  Create to the site's first HTTPS 200: 27.3 s, within 120 s
+PASS  that first 200 is the new WordPress site
+  step account: done (Created the hosting account www.)
+  step web: done (The site is live with PHP 8.3.)
+  step ssl: done (Installed a certificate for www.SERVER_IP.sslip.io, valid until 2027-02-24.)
+  step database: done (Created the database www_wp and its user.)
+  step wordpress: done (Installed WordPress 7.1.5 with the LiteSpeed Cache plugin 7.9.3.)
+PASS  the job's HTTPS step is done
+  last screen: www.SERVER_IP.sslip.io is ready. WordPress is installed. The site uses https with its own certificate.
+PASS  the last screen says the site uses https
+PASS  Open site on the last screen is https://www.SERVER_IP.sslip.io/
+## The certificate, checked with this machine's system trust store
+  curl | * ALPN: curl offers h2,http/1.1
+  curl | *  CAfile: /etc/ssl/certs/ca-certificates.crt
+  curl | *  CApath: /etc/ssl/certs
+  curl | * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+  curl | * ALPN: server accepted h2
+  curl | * Server certificate:
+  curl | *  subject: CN=www.SERVER_IP.sslip.io
+  curl | *  start date: Nov 26 09:16:00 2026 GMT
+  curl | *  expire date: Feb 24 09:15:59 2027 GMT
+  curl | *  subjectAltName: host "www.SERVER_IP.sslip.io" matched cert's "www.SERVER_IP.sslip.io"
+  curl | *  issuer: C=US; O=Let's Encrypt; CN=YE1
+  curl | *  SSL certificate verify ok.
+  curl | < HTTP/2 200
+PASS  curl -sv https://www.SERVER_IP.sslip.io/ exits 0 with no CA but the system's
+PASS  curl says: SSL certificate verify ok
+PASS  the page is the WordPress site
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | Certificate chain
+  openssl |  0 s:CN = www.SERVER_IP.sslip.io
+  openssl |    i:C = US, O = Let's Encrypt, CN = YE1
+  openssl |    a:PKEY: id-ecPublicKey, 256 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: Nov 26 09:16:00 2026 GMT; NotAfter: Feb 24 09:15:59 2027 GMT
+  openssl |  1 s:C = US, O = Let's Encrypt, CN = YE1
+  openssl |    i:C = US, O = ISRG, CN = Root YE
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: Sep  3 00:00:00 2025 GMT; NotAfter: Sep  2 23:59:59 2028 GMT
+  openssl |  2 s:C = US, O = ISRG, CN = Root YE
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+  openssl |  3 s:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X1
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: RSA-SHA256
+  openssl |    v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+  openssl | ---
+  openssl | Verify return code: 0 (ok)
+PASS  openssl s_client -verify_return_error exits 0
+PASS  openssl says: Verify return code: 0 (ok)
+  issuer:  C = US, O = Let's Encrypt, CN = YE1
+  SAN:     DNS:www.SERVER_IP.sslip.io
+  valid:   Nov 26 09:16:00 2026 GMT to Feb 24 09:15:59 2027 GMT
+  SHA-256: 36:A0:0F:9D:D4:46:77:53:5B:A6:2D:3C:A0:F7:91:1A:30:F5:B6:01:09:3C:B7:1F:C0:49:2F:55:07:79:EA:1B
+PASS  the issuer is Let's Encrypt's production CA (not staging, not Pebble)
+PASS  the certificate names exactly www.SERVER_IP.sslip.io
+PASS  it was issued during this run and is valid for at least 30 more days
+## A browser that ignores no certificate error opens the site
+  Chrome shows: Sifruno public CA proof
+PASS  Chrome opens https://www.SERVER_IP.sslip.io/ without a certificate warning and shows the site
+## The new site in Websites
+  row: www.SERVER_IP.sslip.io Live https until Feb 24, 2027 8.3 WordPress 7.1.5 118 MB of 1 GB (11%) Traffic: 459 KB in November 2026 Open site www.SERVER_IP.sslip.io (opens in a new tab) WordPress admin www.SERVER_IP.sslip.io (opens in a new tab) Details for www.SERVER_IP.sslip.io
+PASS  Websites lists www.SERVER_IP.sslip.io as Live
+PASS  its https badge is on, with the certificate's expiry
+
+# 0 check(s) failed
+# Times from pressing Create: last screen 40.6 s, first HTTPS 200 27.3 s (limit 120 s)
+# Screenshots: /tmp/claude-997/-workspace-CodeWithJuber-sifruno/c0f2de21-0c1c-5efd-9c92-41c7f7b53180/scratchpad/https-proof/out/public-ca-wizard-20261126T101325Z
+
+# Part 2: WordPress's own address, read on the server over SSH (the wizard's SSL step succeeded, so it is https)
+$ mysql -N -e "SELECT option_name, option_value FROM www_wp.wp_options WHERE option_name IN ('home','siteurl') ORDER BY option_name"
+home  https://www.SERVER_IP.sslip.io
+siteurl  https://www.SERVER_IP.sslip.io
+
+# Part 3: scripts/devvm/proofs/always-https.sh, the script as committed in 99ce70b (its checkout a0f60b2);
+# the server still runs the release from 9edd296. It asks Let's Encrypt for nothing.
+# Always use HTTPS proof 2026-11-26T10:22:17Z
+# source a0f60b2; runner: Ubuntu 24.04.5 LTS, curl 8.5.0
+# panel https://panel.SERVER_IP.sslip.io:8443, website www.SERVER_IP.sslip.io, uncovered alias uncovered88537.sifruno-proof.test
+## The panel's API: the admin signs in over the internet
+PASS  the panel serves the self-signed certificate the login file names
+PASS  the admin owner signs in at https://panel.SERVER_IP.sslip.io:8443 with password and authenticator code
+  GET /api/v1/websites/sites: HTTP 200; www.SERVER_IP.sslip.io: {"state":"active","https":{"on":true,"not_after":"2027-02-24T09:15:59Z"},"always_https":true,"revision":11,"aliases":[]}
+PASS  the panel lists www.SERVER_IP.sslip.io, live, with a certificate
+PASS  Always use HTTPS is on by default
+## 1. On: plain http for the certificate's name answers 301 to https, path and query kept
+  the certificate names: DNS:www.SERVER_IP.sslip.io
+  the site's rules in OpenLiteSpeed's config, over SSH:
+  vhconf | RewriteCond %{HTTPS} !on
+  vhconf | RewriteCond %{HTTP_HOST} ^www\.SERVER_IP\.sslip\.io(:[0-9]+)?$ [NC]
+  vhconf | RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+  vhconf | RewriteRule ^/?(.*)$ https://www.SERVER_IP.sslip.io/$1 [R=301,L]
+  curl -sD - http://www.SERVER_IP.sslip.io/some/path?x=1
+  < HTTP/1.1 301 Moved Permanently
+  < location: https://www.SERVER_IP.sslip.io/some/path?x=1
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 answers 301 to https://www.SERVER_IP.sslip.io/some/path?x=1
+PASS  http://www.SERVER_IP.sslip.io/ answers 301 to https://www.SERVER_IP.sslip.io/
+PASS  http://www.SERVER_IP.sslip.io/license.txt?a=b&c=d answers 301 to https://www.SERVER_IP.sslip.io/license.txt?a=b&c=d
+  https://www.SERVER_IP.sslip.io/ with this machine's system trust store: 200
+PASS  https://www.SERVER_IP.sslip.io/ answers 200 with a certificate this machine trusts
+  its title: Sifruno public CA proof
+  curl -L http://www.SERVER_IP.sslip.io/ ends: 200 1 https://www.SERVER_IP.sslip.io/ (status, redirects followed, last address)
+PASS  following it from http ends at https://www.SERVER_IP.sslip.io/ with 200 after one redirect: WordPress's own address is https, so no loop
+## 2. On: the ACME challenge path stays on http
+  a file the panel's certificate manager would write, /var/lib/sifruno-acme/sifruno-proof-1795688537, over http: 200, "challenge 1795688537"
+PASS  http://www.SERVER_IP.sslip.io/.well-known/acme-challenge/sifruno-proof-1795688537 answers 200 with the file, not a redirect
+  http://www.SERVER_IP.sslip.io/.well-known/acme-challenge/test: 404
+PASS  http://www.SERVER_IP.sslip.io/.well-known/acme-challenge/test is not redirected (404: there is no such file)
+## 3. On: an alias the certificate does not cover stays on http
+  POST domain-add uncovered88537.sifruno-proof.test: HTTP 200; aliases [{"name":"uncovered88537.sifruno-proof.test","https":"pending"}]
+PASS  the panel adds the alias uncovered88537.sifruno-proof.test
+  the site's rules in OpenLiteSpeed's config, over SSH (one name only):
+  vhconf | RewriteCond %{HTTPS} !on
+  vhconf | RewriteCond %{HTTP_HOST} ^www\.SERVER_IP\.sslip\.io(:[0-9]+)?$ [NC]
+  vhconf | RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+  vhconf | RewriteRule ^/?(.*)$ https://www.SERVER_IP.sslip.io/$1 [R=301,L]
+PASS  the alias is mapped to the site, and has no https rule
+  http://uncovered88537.sifruno-proof.test/license.txt?x=1 (Host header to the server): 200
+PASS  http://uncovered88537.sifruno-proof.test/license.txt?x=1 answers 200, not a redirect
+  http://uncovered88537.sifruno-proof.test/: 200
+PASS  http://uncovered88537.sifruno-proof.test/ answers 200, not a redirect
+PASS  the name the certificate covers still answers 301
+  the alias's HTTPS on the site page: waiting_for_dns
+PASS  no new certificate was asked for: the served one is the same
+## 4. The API refuses a switch that is not true or false, and a stale revision
+  always_https "no": HTTP 422: always_https must be true or false.
+PASS  "no" is refused with 422
+  an old revision: HTTP 409: This website changed after the page loaded it, so nothing changed. Reload the page, check the website, then try again.
+PASS  an old revision is refused with 409
+PASS  after both, http still answers 301
+## 5. Off through the panel's API: plain http serves the site
+  POST always-https false: HTTP 200; always_https false, revision 13
+PASS  the panel turns it off
+PASS  http://www.SERVER_IP.sslip.io/ answers 200
+  curl -sD - http://www.SERVER_IP.sslip.io/
+  < HTTP/1.1 200 OK
+PASS  http://www.SERVER_IP.sslip.io/license.txt?x=1 answers 200
+  http://www.SERVER_IP.sslip.io/some/path?x=1: 404 (WordPress has no such page)
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 is not redirected
+PASS  https://www.SERVER_IP.sslip.io/ still answers 200
+PASS  the site's config in OpenLiteSpeed has no https rule
+PASS  the website list says always_https false
+## 6. On again: 301 again
+  POST always-https true: HTTP 200; always_https true, revision 14
+PASS  the panel turns it on
+PASS  http://www.SERVER_IP.sslip.io/some/path?x=1 answers 301 to https://www.SERVER_IP.sslip.io/some/path?x=1
+  curl -sD - http://www.SERVER_IP.sslip.io/some/path?x=1
+  < HTTP/1.1 301 Moved Permanently
+  < location: https://www.SERVER_IP.sslip.io/some/path?x=1
+PASS  http://www.SERVER_IP.sslip.io/ answers 301 again, not a cached page
+PASS  the ACME challenge path is still not redirected
+PASS  the uncovered alias still answers 200
+## 7. Clean up: the alias goes, the switch stays on
+  POST domain-remove uncovered88537.sifruno-proof.test: HTTP 200
+PASS  the panel removes the alias
+PASS  http still answers 301
+
+# 0 check(s) failed

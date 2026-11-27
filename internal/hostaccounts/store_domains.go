@@ -162,6 +162,136 @@ func (s *store) setSiteDomains(ctx context.Context, id string, in SiteDomainsInp
 	return SiteDomainsResult{Account: withWeb(r), Domains: want}, nil
 }
 
+// setAlwaysHTTPS turns a live site's "Always use HTTPS" on or off, checked,
+// journaled and installed as a domains change is. The setting is kept
+// whether or not the site has a certificate: the redirect is rendered only
+// while a valid one is in force (webSites). The journal's rows carry it on
+// the account (PlainHTTP), and the pending target ("on" or "off") is what
+// a recovery installs.
+func (s *store) setAlwaysHTTPS(ctx context.Context, id string, in AlwaysHTTPSInput, actor string) (Account, error) {
+	if snapshotReentry(ctx, s) {
+		return Account{}, ErrConflict
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !idPattern.MatchString(id) || !validAlwaysHTTPSInput(in, actor) {
+		return Account{}, ErrInvalid
+	}
+	if s.web == nil {
+		return Account{}, ErrUnavailable
+	}
+	items, err := s.mutationReady(ctx)
+	if err != nil {
+		return Account{}, err
+	}
+	index := -1
+	for i, item := range items {
+		if item.Account.ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Account{}, ErrNotFound
+	}
+	r := items[index]
+	// As for domains: a running WordPress install is left alone, and a
+	// suspended site keeps its suspended config.
+	if r.Account.Revision != in.ExpectedRevision || r.Account.State != "active" || !r.Web.enabled() || s.installing[id] {
+		return Account{}, ErrConflict
+	}
+	plainHTTP := !*in.AlwaysHTTPS
+	// An unchanged setting changes nothing; SetWeb repairs a drifted config.
+	if r.Account.PlainHTTP == plainHTTP {
+		return withWeb(r), nil
+	}
+	if r.Account.Revision == ^uint64(0) {
+		return Account{}, recovery("https", r, "revision at its limit", ErrConflict)
+	}
+	// Two history rows, with room left as historyRoom leaves it for the
+	// operations a tenant can reach, so the result can always be journaled.
+	if !historyRoom(r, operationRows, false) {
+		return Account{}, ErrConflict
+	}
+	if s.native.Verify(ctx, r) != nil {
+		return Account{}, ErrConflict
+	}
+	r.Pending = &pending{Action: "https", Target: httpsTarget(plainHTTP), Actor: actor, Reason: in.Reason}
+	next := append([]record(nil), items...)
+	next[index] = r
+	sites := webSites(next, "")
+	operationID, e := randomID()
+	if e != nil {
+		return Account{}, e
+	}
+	r.Pending.OperationID = operationID
+	before := r.Account
+	after := r.Account
+	after.Revision++
+	after.PlainHTTP = plainHTTP
+	intent := operationEvent{OperationID: operationID, Action: "https", Status: "intended", Actor: actor, Reason: in.Reason, Before: &before, After: after}
+	r, err = s.appendEvent(r, intent)
+	if err != nil {
+		return Account{}, ErrRecovery
+	}
+	applyCtx, cancel := webContext(ctx)
+	defer cancel()
+	switch e := s.native.ApplySites(applyCtx, sites, s.tenantBroken(next, id)); {
+	case errors.Is(e, ErrWebRejected):
+		operation := *r.Pending
+		r.Pending = nil
+		if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+			return Account{}, ErrRecovery
+		}
+		return Account{}, ErrWebRejected
+	case e != nil:
+		s.recoveryRequired(r, *r.Pending, "site list", e)
+		return Account{}, ErrRecovery
+	}
+	r.Account.PlainHTTP = plainHTTP
+	r.Account.Revision++
+	r.Account.UpdatedAt = time.Now().UTC()
+	r.Actor, r.Reason = actor, in.Reason
+	operation := *r.Pending
+	r.Pending = nil
+	if _, e := s.resultEvent(r, operation, "succeeded"); e != nil {
+		return Account{}, ErrRecovery
+	}
+	return withWeb(r), nil
+}
+
+// finishAlwaysHTTPS finishes an interrupted "Always use HTTPS" change at
+// start, as finishDomains does: the setting was durable in the pending
+// target before the config changed, and installing the site list is
+// idempotent.
+func (s *store) finishAlwaysHTTPS(ctx context.Context, items []record, r record) error {
+	operation := *r.Pending
+	applyCtx, cancel := webContext(ctx)
+	e := s.native.ApplySites(applyCtx, webSites(items, ""), s.tenantBroken(items, r.Account.ID))
+	cancel()
+	switch {
+	case errors.Is(e, ErrWebRejected):
+		r.Pending = nil
+		if _, e := s.resultEvent(r, operation, "rejected"); e != nil {
+			return ErrRecovery
+		}
+		return nil
+	case e != nil:
+		logRecovery(operation.Action, r, "finish at start", e)
+		return nil
+	}
+	r.Account.PlainHTTP = operation.Target == "off"
+	r.Account.Revision++
+	r.Account.UpdatedAt = time.Now().UTC()
+	r.Actor, r.Reason = operation.Actor, operation.Reason
+	r.Pending = nil
+	if _, e := s.resultEvent(r, operation, "reconciled"); e != nil {
+		return ErrRecovery
+	}
+	return nil
+}
+
 // finishDomains finishes an interrupted domains operation at start: the new
 // set was durable before the config changed, and installing the site list
 // is idempotent. A config that now fails its test ends it rejected,

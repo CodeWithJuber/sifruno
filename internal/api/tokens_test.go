@@ -104,6 +104,8 @@ func TestAPITokenThroughThePanelAPI(t *testing.T) {
 			{"POST", "/api/v1/accounts/" + strings.Repeat("a", 32) + "/abandon-create"},
 			// An admin's finish of an unfinished delete.
 			{"POST", "/api/v1/accounts/" + strings.Repeat("a", 32) + "/finish-delete"},
+			// An admin's change of an account's plan and limits.
+			{"POST", "/api/v1/accounts/" + strings.Repeat("a", 32) + "/plan"},
 			// A site's restore, which overwrites it, and its drill.
 			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/restore"},
 			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups/drill"},
@@ -120,12 +122,15 @@ func TestAPITokenThroughThePanelAPI(t *testing.T) {
 				t.Fatalf("network=%v %s %s with a token: %d %s", network, route.method, route.path, w.Code, w.Body.String())
 			}
 		}
-		// Backing up now and the backup list stay open to a token: the
-		// answer comes from the route (no backups on this fixture), not
-		// from the token fence.
+		// Backing up now and the backup list stay open to a token, as do a
+		// site's domains, redirects and Always use HTTPS: the answer comes
+		// from the route (no such site on this fixture), not from the token
+		// fence.
 		for _, route := range []struct{ method, path string }{
 			{"GET", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups"},
 			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/backups"},
+			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/domain-add"},
+			{"POST", "/api/v1/websites/sites/" + strings.Repeat("a", 32) + "/always-https"},
 		} {
 			w := clientRequest(h, network, route.method, route.path, created.Token, map[string]string{})
 			if w.Code == 403 || w.Code == 401 || strings.Contains(w.Body.String(), "token_not_allowed") {

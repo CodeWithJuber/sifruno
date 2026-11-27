@@ -286,8 +286,9 @@ func (m *Manager) setCustomerState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, next.Customers[i].public(m.now()))
 }
 
-// newCustomerSetupLink resets a login: the password and authenticator are
-// cleared, the customer's sessions end, and a new link replaces any old one.
+// newCustomerSetupLink resets a login: the password, authenticator and
+// passkeys are cleared, the customer's sessions end, and a new link replaces
+// any old one.
 // It is how a customer who lost the authenticator app gets back in.
 func (m *Manager) newCustomerSetupLink(w http.ResponseWriter, r *http.Request) {
 	id, a, ok := m.managementAuthorization(w, r, true)
@@ -310,7 +311,9 @@ func (m *Manager) newCustomerSetupLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := &next.Customers[i]
-	c.Password, c.TOTP, c.Setup = nil, nil, &link
+	// The passkeys go with the password and authenticator: the new setup
+	// may be for someone other than whoever held them.
+	c.Password, c.TOTP, c.Setup, c.loginPasskeys = nil, nil, &link, loginPasskeys{}
 	if !m.commitCustomersLocked(w, id, a, next) {
 		return
 	}

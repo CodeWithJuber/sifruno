@@ -233,6 +233,31 @@ func redirectRules(redirects []Redirect) []string {
 	return rules
 }
 
+// httpsRules send plain http requests for each of these domains (checked
+// DNS names) to the same address on https, one rule each so the target
+// names the domain itself and a Host header with a port goes to the default
+// https port. The path and query are kept, and the ACME challenge path is
+// left alone, as for a domain redirect:
+//
+//	RewriteCond %{HTTPS} !on
+//	RewriteCond %{HTTP_HOST} ^example\.com(:[0-9]+)?$ [NC]
+//	RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+//	RewriteRule ^/?(.*)$ https://example.com/$1 [R=301,L]
+//
+// One vhost serves both listeners, so the rule tests the request's own
+// scheme: %{HTTPS} is "on" for a request over TLS (doc.go, Sources).
+func httpsRules(domains []string) []string {
+	rules := []string{}
+	for _, d := range domains {
+		rules = append(rules,
+			`RewriteCond %{HTTPS} !on`,
+			`RewriteCond %{HTTP_HOST} ^`+quoteDots(d)+`(:[0-9]+)?$ [NC]`,
+			`RewriteCond %{REQUEST_URI} !^`+quoteDots(acmeChallengeURI),
+			`RewriteRule ^/?(.*)$ https://`+d+`/$1 [R=301,L]`)
+	}
+	return rules
+}
+
 // quoteDots escapes the one regular-expression metacharacter a checked path
 // or domain can hold.
 func quoteDots(s string) string { return strings.ReplaceAll(s, ".", `\.`) }

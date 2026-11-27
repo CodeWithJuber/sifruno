@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"sifruno/internal/hostaccounts"
@@ -99,6 +100,7 @@ func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(
 	var webUser string
 	f.BoolVar(&webPreview, "web-preview", false, "Opt in to named native web configuration preview; no activation")
 	f.StringVar(&webUser, "web-user", "", "Enable the web operation; the OpenLiteSpeed user that reads public_html (the `user` in httpd_config.conf)")
+	panelHost := f.String("panel-host", "", "The panel's --panel-host value; with --web-user, port 80 serves its DNS names for the panel's certificate challenges only")
 	f.StringVar(&opts.StateDir, "state", "", "New dedicated root-only broker state")
 	f.StringVar(&opts.SocketPath, "socket", "", "Exclusive absolute Unix socket")
 	f.StringVar(&opts.HomesDir, "homes", "", "Dedicated managed home parent")
@@ -109,8 +111,13 @@ func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(
 	}
 	opts.ControllerUID = uint32(*uid)
 	on := features{webPreview: webPreview}
+	panelHosts := panelDNSNames(*panelHost)
+	if (*panelHost != "" && webUser == "") || !hostaccounts.ValidPanelHosts(panelHosts) {
+		fmt.Fprintln(stderr, "Invalid native broker configuration")
+		return 2
+	}
 	if webUser != "" {
-		on.web = &hostaccounts.WebOptions{ServerUser: webUser}
+		on.web = &hostaccounts.WebOptions{ServerUser: webUser, PanelHosts: panelHosts}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -119,6 +126,28 @@ func runWithPreviewServices(args []string, stdout, stderr io.Writer, probe func(
 		return 1
 	}
 	return 0
+}
+
+// panelDNSNames reads the panel's --panel-host value as the panel does
+// (comma-separated, trimmed, lower-cased) and keeps its DNS names once each,
+// counting a www. form as its name, as OpenLiteSpeed maps them. An IP
+// address is left out: no vhost maps it. What is kept is checked by the
+// caller, so anything that is not a plain name refuses the configuration.
+func panelDNSNames(value string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(value, ",") {
+		h := strings.ToLower(strings.TrimSpace(part))
+		if h == "" || net.ParseIP(h) != nil {
+			continue
+		}
+		key := strings.TrimPrefix(h, "www.")
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 func startupOptions(args []string) (hostaccounts.BrokerOptions, bool) {

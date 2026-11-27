@@ -124,6 +124,9 @@ func registerAccounts(a huma.API, o Options) {
 		return &accountListOutput{Body: accountListBody{Items: v}}, nil
 	})
 	huma.Register(a, op("create-account", "POST", "/api/v1/accounts"), func(ctx context.Context, in *accountCreateInput) (*accountOutput, error) {
+		if panelHost(o.PanelHosts, in.Body.Domain) {
+			return nil, huma.Error422UnprocessableEntity(panelHostTaken)
+		}
 		v, err := service.Create(ctx, hostaccounts.CreateInput(in.Body), siteActor(ctx))
 		if err != nil {
 			return nil, accountError(err)

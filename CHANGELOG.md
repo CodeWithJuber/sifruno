@@ -4,6 +4,15 @@
 
 ### Changed
 
+- A session ends after 30 minutes without use and at 12 hours, instead of
+  15 minutes after sign-in. Before sign-in the panel shows only the sign-in
+  form.
+- Each way a website move can fail says what happened and what to do next;
+  the old server's own output is only under Technical details.
+- MariaDB listens on 127.0.0.1 only, OpenLiteSpeed's WebAdmin console on
+  127.0.0.1:7080, and the stock Example listener on port 8088 is removed.
+- The installed programs get the SELinux type `bin_t`, so the broker can
+  create accounts on an enforcing system.
 - The repository is public. CI runs only on GitHub-hosted `ubuntu-24.04`
   runners: `source-checks.yml` runs Go vet and tests, the UI build, every
   Node test file, the Python fixture tests and `reuse lint` on pull requests
@@ -37,6 +46,22 @@
 - The Ghidra and REA analysis tooling and the `rea-agents` dev dependency.
 
 ### Added
+
+- Passkeys. An admin or customer adds one on Account, with the current
+  password and a code, and then signs in with it alone. They work when the
+  panel is opened by its name over a trusted certificate.
+- "Keep me signed in on this device" at sign-in: 24 hours without use and
+  7 days at most. Password and passkey sessions now survive a panel restart;
+  access-key sessions still end with it.
+- The panel gets its own Let's Encrypt certificate for `--panel-host` when
+  `--acme-email` is set, and renews it without a restart.
+- "Always use HTTPS" on a website's Domains tab, on by default: http answers
+  with a redirect once a valid certificate is in force.
+- Every live website without a certificate gets one requested once its name
+  points at this server, at most three new websites an hour.
+- Move a website from cPanel with the old server's WHM login (an API token or
+  the root password, kept in memory only). Copying over SSH stays as "Use SSH
+  instead".
 
 - Files for an open-source project: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`
   (Contributor Covenant 2.1), `SECURITY.md` (private vulnerability

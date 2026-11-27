@@ -45,10 +45,14 @@ func Render(s Server) (map[string][]byte, error) {
 	listeners := append([]Listener(nil), s.Listeners...)
 	sort.Slice(listeners, func(i, j int) bool { return listeners[i].Name < listeners[j].Name })
 
-	files := make(map[string][]byte, len(sites)+1)
-	files[ServerConfigPath] = renderServer(listeners, sites)
+	challenge := challengeHosts(s.ChallengeHosts, sites)
+	files := make(map[string][]byte, len(sites)+2)
+	files[ServerConfigPath] = renderServer(listeners, sites, challenge, s.ChallengeUser, s.ChallengeGroup)
 	for _, v := range sites {
 		files[VhostConfigPath(v.Name)] = renderVhost(v)
+	}
+	if len(challenge) > 0 {
+		files[VhostConfigPath(PanelChallengeName)] = renderChallengeVhost()
 	}
 	for path, data := range files {
 		if err := checkLines(data); err != nil {
@@ -63,10 +67,31 @@ func VhostConfigPath(name string) string {
 	return "conf/vhosts/" + NamePrefix + name + "/vhconf.conf"
 }
 
+// challengeHosts are the panel's names the challenge-only vhost maps: those
+// no site serves, as OpenLiteSpeed keys them (hostKey). A site's vhost
+// serves the same challenge folder for its own names.
+func challengeHosts(hosts []string, sites []site) []string {
+	taken := map[string]bool{}
+	for _, v := range sites {
+		for _, d := range v.Domains {
+			taken[hostKey(d)] = true
+		}
+	}
+	var out []string
+	for _, h := range hosts {
+		if !taken[hostKey(h)] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // renderServer writes the server-level fragment: one virtualhost block per
-// site, then the listeners with their map lines. A secure listener is left
-// out while no site has its own certificate, because it would map no site.
-func renderServer(listeners []Listener, sites []site) []byte {
+// site, the challenge-only vhost for the panel's names when there are any,
+// then the listeners with their map lines. A secure listener is left out
+// while no site has its own certificate, because it would map no site; it
+// never maps the panel's names.
+func renderServer(listeners []Listener, sites []site, challenge []string, challengeUser, challengeGroup string) []byte {
 	anyCertificate := false
 	for _, v := range sites {
 		if v.TLS.CertFile != "" {
@@ -96,6 +121,22 @@ func renderServer(listeners []Listener, sites []site) []byte {
 		kv(&b, "group", v.Group)
 		b.WriteString("}\n")
 	}
+	if len(challenge) > 0 {
+		// Like a suspended site's: the empty root folder, no scripts and
+		// no symlinks, so it names no path a tenant controls.
+		b.WriteString("\nvirtualhost " + NamePrefix + PanelChallengeName + " {\n")
+		kv(&b, "vhRoot", SuspendedDocRoot+"/")
+		kv(&b, "configFile", pathpkg.Join(ServerRoot, VhostConfigPath(PanelChallengeName)))
+		kv(&b, "allowSymbolLink", "0")
+		kv(&b, "enableScript", "0")
+		kv(&b, "restrained", "1")
+		// The web server's own user and group: the vhost runs nothing, and
+		// without them OpenLiteSpeed warns that the root-owned vhRoot's
+		// owner is below its minimum UID (Server.ChallengeUser).
+		kv(&b, "user", challengeUser)
+		kv(&b, "group", challengeGroup)
+		b.WriteString("}\n")
+	}
 	for _, l := range listeners {
 		if l.Secure && !anyCertificate {
 			continue
@@ -121,8 +162,40 @@ func renderServer(listeners []Listener, sites []site) []byte {
 			}
 			kv(&b, "map", NamePrefix+v.Name+" "+strings.Join(domains, ", "))
 		}
+		if !l.Secure && len(challenge) > 0 {
+			kv(&b, "map", NamePrefix+PanelChallengeName+" "+strings.Join(challenge, ", "))
+		}
 		b.WriteString("}\n")
 	}
+	return b.Bytes()
+}
+
+// renderChallengeVhost writes the vhconf.conf of the vhost that serves the
+// panel's own names: a suspended site's form without its logs and
+// certificate. It serves the challenge context and refuses everything else
+// with 403; OpenLiteSpeed 1.9.4 serves the challenge context before the
+// vhost's rule, as for a suspended site (renderVhost).
+func renderChallengeVhost() []byte {
+	var b bytes.Buffer
+	b.WriteString(header)
+	b.WriteString("# The panel's own host names: ACME HTTP-01 challenges only, everything else 403\n\n")
+	kv0(&b, "docRoot", SuspendedDocRoot+"/")
+	b.WriteString("\nindex  {\n")
+	kv(&b, "useServer", "0")
+	kv(&b, "indexFiles", "index.html")
+	kv(&b, "autoIndex", "0")
+	b.WriteString("}\n")
+	renderCache(&b, site{Site: Site{Suspended: true}})
+	renderACMEChallenge(&b)
+	b.WriteString("\nrewrite  {\n")
+	kv(&b, "enable", "1")
+	kv(&b, "autoLoadHtaccess", "0")
+	kv(&b, "rules", "<<<END_rules")
+	for _, r := range suspendedRules {
+		b.WriteString(r + "\n")
+	}
+	b.WriteString("  END_rules\n")
+	b.WriteString("}\n")
 	return b.Bytes()
 }
 
@@ -196,6 +269,11 @@ func renderVhost(v site) []byte {
 	if !v.Suspended {
 		renderPHP(&b, v)
 		rules = append(append([]string(nil), denyRules...), redirectRules(v.Redirects)...)
+		// After the site's own redirects, so a redirected domain or path
+		// takes one hop to its target, not two.
+		if v.AlwaysHTTPS {
+			rules = append(rules, httpsRules(securedDomains(v))...)
+		}
 		autoLoad = "1"
 	}
 	renderCache(&b, v)

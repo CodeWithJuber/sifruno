@@ -1,0 +1,104 @@
+# Public-CA wizard proof 2026-11-25T20:48:59Z
+# source 992432f; runner: Ubuntu 24.04.5 LTS, curl 8.5.0, OpenSSL 3.0.13, agent-browser 0.44.0
+# panel https://www.SERVER_IP.sslip.io:8443, website www.SERVER_IP.sslip.io, limit 120 s from Create
+## Before the wizard
+  www.SERVER_IP.sslip.io resolves to SERVER_IP; the panel's name to SERVER_IP
+PASS  the domain resolves in public DNS to the panel's server
+PASS  the panel serves the self-signed certificate the login file names
+  a top-level link from another site to https://www.SERVER_IP.sslip.io:8443/ answers HTTP 200
+PASS  a link from another site opens the panel (cross-site navigation answers 200)
+  https://www.SERVER_IP.sslip.io/ before the wizard: curl: (7) Failed to connect to www.SERVER_IP.sslip.io port 443 after 13 ms: Couldn't connect to server
+PASS  before the wizard, https://www.SERVER_IP.sslip.io/ has no certificate this machine trusts
+## Browser: sign in over the internet and open the wizard
+PASS  the panel's sign-in form opens at https://www.SERVER_IP.sslip.io:8443/websites
+PASS  the admin owner signs in with password and authenticator code
+PASS  Websites, New website opens the wizard at /websites/new
+FAIL  WordPress is the chosen website type
+## Browser: Create, then follow the job
+  pressed Create at 2026-11-25T20:49:10Z
+  2.2 s: steps done running pending pending pending
+  6.1 s: steps done done running pending pending
+  20.5 s: steps done done done done running
+  the job page shows its last screen (succeeded) 37.2 s after Create
+PASS  the job succeeds
+PASS  Create to the job's last screen: 37.2 s, within 120 s
+  first HTTPS 200 from https://www.SERVER_IP.sslip.io/, system trust store: 25.2 s after Create
+PASS  Create to the site's first HTTPS 200: 25.2 s, within 120 s
+PASS  that first 200 is the new WordPress site
+  step account: done (Created the hosting account www.)
+  step web: done (The site is live with PHP 8.3.)
+  step ssl: done (Installed a certificate for www.SERVER_IP.sslip.io, valid until 2027-02-23.)
+  step database: done (Created the database www_wp and its user.)
+  step wordpress: done (Installed WordPress 7.1.5 with the LiteSpeed Cache plugin 7.9.3.)
+PASS  the job's HTTPS step is done
+  last screen: www.SERVER_IP.sslip.io is ready. WordPress is installed. The site uses https with its own certificate.
+PASS  the last screen says the site uses https
+PASS  Open site on the last screen is https://www.SERVER_IP.sslip.io/
+## The certificate, checked with this machine's system trust store
+  curl | * ALPN: curl offers h2,http/1.1
+  curl | *  CAfile: /etc/ssl/certs/ca-certificates.crt
+  curl | *  CApath: /etc/ssl/certs
+  curl | * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+  curl | * ALPN: server accepted h2
+  curl | * Server certificate:
+  curl | *  subject: CN=www.SERVER_IP.sslip.io
+  curl | *  start date: Nov 25 19:50:51 2026 GMT
+  curl | *  expire date: Feb 23 19:50:50 2027 GMT
+  curl | *  subjectAltName: host "www.SERVER_IP.sslip.io" matched cert's "www.SERVER_IP.sslip.io"
+  curl | *  issuer: C=US; O=Let's Encrypt; CN=YE2
+  curl | *  SSL certificate verify ok.
+  curl | < HTTP/2 200
+PASS  curl -sv https://www.SERVER_IP.sslip.io/ exits 0 with no CA but the system's
+PASS  curl says: SSL certificate verify ok
+PASS  the page is the WordPress site
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | verify return:1
+  openssl | Certificate chain
+  openssl |  0 s:CN = www.SERVER_IP.sslip.io
+  openssl |    i:C = US, O = Let's Encrypt, CN = YE2
+  openssl |    a:PKEY: id-ecPublicKey, 256 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: Nov 25 19:50:51 2026 GMT; NotAfter: Feb 23 19:50:50 2027 GMT
+  openssl |  1 s:C = US, O = Let's Encrypt, CN = YE2
+  openssl |    i:C = US, O = ISRG, CN = Root YE
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: Sep  3 00:00:00 2025 GMT; NotAfter: Sep  2 23:59:59 2028 GMT
+  openssl |  2 s:C = US, O = ISRG, CN = Root YE
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: ecdsa-with-SHA384
+  openssl |    v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+  openssl |  3 s:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X1
+  openssl |    a:PKEY: id-ecPublicKey, 384 (bit); sigalg: RSA-SHA256
+  openssl |    v:NotBefore: May 13 00:00:00 2026 GMT; NotAfter: Sep  2 23:59:59 2032 GMT
+  openssl | ---
+  openssl | Verify return code: 0 (ok)
+PASS  openssl s_client -verify_return_error exits 0
+PASS  openssl says: Verify return code: 0 (ok)
+  issuer:  C = US, O = Let's Encrypt, CN = YE2
+  SAN:     DNS:www.SERVER_IP.sslip.io
+  valid:   Nov 25 19:50:51 2026 GMT to Feb 23 19:50:50 2027 GMT
+  SHA-256: DD:B4:9C:A6:BD:3E:94:9E:9E:9F:23:95:E5:1C:95:11:5E:58:96:0F:63:0D:35:C4:A2:4A:77:51:4B:D6:38:7A
+PASS  the issuer is Let's Encrypt's production CA (not staging, not Pebble)
+PASS  the certificate names exactly www.SERVER_IP.sslip.io
+PASS  it was issued during this run and is valid for at least 30 more days
+## A browser that ignores no certificate error opens the site
+  Chrome shows: Sifruno public CA proof
+PASS  Chrome opens https://www.SERVER_IP.sslip.io/ without a certificate warning and shows the site
+## The new site in Websites
+  row: www.SERVER_IP.sslip.io Live https until Feb 23, 2027 8.3 WordPress 7.1.5 118 MB of 1 GB (11%) Traffic: 540 KB in November 2026 Open site www.SERVER_IP.sslip.io (opens in a new tab) WordPress admin www.SERVER_IP.sslip.io (opens in a new tab) Details for www.SERVER_IP.sslip.io
+PASS  Websites lists www.SERVER_IP.sslip.io as Live
+PASS  its https badge is on, with the certificate's expiry
+
+# 1 check(s) failed
+# Times from pressing Create: last screen 37.2 s, first HTTPS 200 25.2 s (limit 120 s)
+# Screenshots: /tmp/claude-994/-workspace-CodeWithJuber-sifruno/c0f2de21-0c1c-5efd-9c92-41c7f7b53180/scratchpad/owner-test-proof/public-ca-wizard-20261125T204859Z
+
+# Follow-up 2026-11-25T20:51:53Z, not part of the run above: the same admin opens the same wizard; Create is not pressed.
+  page: /websites/new
+  the run's check, the text of [role=radio][aria-checked=true]: "" (empty: the radio has no text of its own)
+  its accessible name, from the label around it: "WordPress"
+  the element with id nw-kind-wordpress: input type=radio checked=true
+  the fixed check, the label around the checked radio is for: nw-kind-wordpress
+PASS  WordPress is the chosen website type (the fixed check)

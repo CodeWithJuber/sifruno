@@ -29,6 +29,7 @@ type Website struct {
 	Kind             string       `json:"kind" enum:"wordpress,php" doc:"What the wizard made: wordpress, or php for a PHP site with no WordPress (its wordpress_version and admin_url are empty)."`
 	State            string       `json:"state" doc:"The hosting account's state: active, suspended or recovery_required; partly_deleted when a delete removed the hosting account but not yet the site's database."`
 	HTTPS            WebsiteHTTPS `json:"https"`
+	AlwaysHTTPS      bool         `json:"always_https" doc:"Always use HTTPS: true unless the site's owner turned it off. While it is on and the site is live with a certificate that has not expired, plain http for each domain the certificate covers answers 301 to the same address on https; ACME challenges stay on http. Without such a certificate it waits and changes nothing. Changed with the always-https action."`
 	PHPVersion       string       `json:"php_version" doc:"The PHP version the site runs with. Empty when the account service reports none."`
 	WordPressVersion string       `json:"wordpress_version"`
 	URL              string       `json:"url"`
@@ -163,7 +164,7 @@ const (
 
 var (
 	websiteAccountID  = regexp.MustCompile(websiteAccountForm)
-	websiteActionPath = regexp.MustCompile(`^/api/v1/websites/sites/[a-f0-9]{32}/(php|state|folder|delete|domain-add|domain-remove|redirect-add|redirect-remove)$`)
+	websiteActionPath = regexp.MustCompile(`^/api/v1/websites/sites/[a-f0-9]{32}/(php|state|folder|delete|domain-add|domain-remove|redirect-add|redirect-remove|always-https)$`)
 	websitePHP        = []string{"8.1", "8.2", "8.3", "8.4"}
 	// phpRoot holds the lsphpNN packages; tests point it at a directory of
 	// their own.
@@ -485,7 +486,7 @@ func website(a hostaccounts.Account, j wizard.Job, certs SiteCertificates) Websi
 		https.NotAfter = time.Unix(a.Certificate.NotAfter, 0).UTC().Format(time.RFC3339)
 	}
 	site := Website{
-		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: siteKind(j), State: a.State, HTTPS: https,
+		AccountID: a.ID, Username: a.Username, Domain: a.Domain, Kind: siteKind(j), State: a.State, HTTPS: https, AlwaysHTTPS: !a.PlainHTTP,
 		PHPVersion: a.Web.PHPVersion, WordPressVersion: j.Result.WordPressVersion, URL: j.Result.URL, AdminURL: j.Result.AdminURL, CreatedAt: j.CreatedAt, Revision: a.Revision,
 		SiteFolderChanged: a.SiteFolderChanged, Limits: websiteLimits(a.Limits),
 	}

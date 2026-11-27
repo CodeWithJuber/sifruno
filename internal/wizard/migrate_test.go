@@ -12,11 +12,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"sifruno/internal/cpsource"
 	"sifruno/internal/dbhost"
 	"sifruno/internal/hostaccounts"
 	"sifruno/internal/migrateverify"
+	"sifruno/internal/whmsource"
+	"sifruno/internal/whmsource/whmtest"
 )
 
 const testHash = "*0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A"
@@ -42,13 +45,33 @@ type fakeMigrationBroker struct {
 	removedOK   bool
 	finishErr   error
 	detail      string
+	// via is the source's way in; cpanel counts the steps that carried
+	// WHM's answers, cleared the stale lines taken off the list.
+	via     string
+	cpanel  []string
+	cleared int
+}
+
+func (f *fakeMigrationBroker) ClearStaleMigrationKey(context.Context, string, hostaccounts.MigrationFinishInput, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleared++
+	return nil
+}
+
+func (f *fakeMigrationBroker) sawCPanel(step string, a *hostaccounts.CPanelAnswers) {
+	if a != nil {
+		f.mu.Lock()
+		f.cpanel = append(f.cpanel, step)
+		f.mu.Unlock()
+	}
 }
 
 func (f *fakeMigrationBroker) GetMigration(_ context.Context, id string) (hostaccounts.Migration, error) {
 	if id != sourceID {
 		return hostaccounts.Migration{}, hostaccounts.ErrNotFound
 	}
-	m := hostaccounts.Migration{ID: id, Host: "old.example.test", Port: 22}
+	m := hostaccounts.Migration{ID: id, Host: "old.example.test", Port: 22, Via: f.via, PublicKey: "restrict ssh-ed25519 AAAA sifruno-migration-" + id}
 	if f.pinned {
 		m.Pinned = "SHA256:abc"
 	}
@@ -56,6 +79,7 @@ func (f *fakeMigrationBroker) GetMigration(_ context.Context, id string) (hostac
 }
 func (f *fakeMigrationBroker) PlanMigration(_ context.Context, id string, in hostaccounts.MigrationPlanInput, _ string) (hostaccounts.MigrationPlan, error) {
 	f.order.add("plan " + in.Username)
+	f.sawCPanel("plan", in.CPanel)
 	return f.plan, f.planErr
 }
 
@@ -79,6 +103,7 @@ func (f *fakeMigrationBroker) revision(id string, expected uint64, raise bool) e
 }
 func (f *fakeMigrationBroker) MigrateFiles(_ context.Context, id string, in hostaccounts.MigrateFilesInput, _ string) (hostaccounts.MigrateFilesResult, error) {
 	f.order.add(fmt.Sprintf("files %s rev=%d", id[28:], in.ExpectedRevision))
+	f.sawCPanel("files", in.CPanel)
 	if f.filesErr != nil {
 		return hostaccounts.MigrateFilesResult{}, f.filesErr
 	}
@@ -96,6 +121,7 @@ func (f *fakeMigrationBroker) MigrateFiles(_ context.Context, id string, in host
 }
 func (f *fakeMigrationBroker) MigrateDatabase(_ context.Context, id string, in hostaccounts.MigrateDatabaseInput, _ string) (hostaccounts.MigrateDatabaseResult, error) {
 	f.order.add("copy-db " + in.Database)
+	f.sawCPanel("database", in.CPanel)
 	if f.dbErr != nil {
 		return hostaccounts.MigrateDatabaseResult{}, f.dbErr
 	}
@@ -490,5 +516,161 @@ func TestMigrationQuota(t *testing.T) {
 		if got := migrationQuota(c.used, c.limit); got != c.want {
 			t.Errorf("%d/%d: %d", c.used, c.limit, got)
 		}
+	}
+}
+
+// Every failure of a move says why and what to do for that case, and the
+// old server's own words stay in Technical details (D-0006).
+func TestMigrationFailuresSayWhatToDo(t *testing.T) {
+	preload := "2026/01/02 03:04:05 LD_Preload detected, refusing to run 2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369."
+	for _, c := range []struct {
+		name            string
+		plan, files, db error
+		why, next, tech string
+	}{
+		{name: "unreachable", plan: &hostaccounts.MigrationError{Step: "unreachable", Output: "ssh: connect to host 203.0.113.9 port 22: No route to host"},
+			why: "Sifruno could not reach the old server", next: "firewall accepts connections from this server, then move the website again.", tech: "No route to host"},
+		{name: "key refused", plan: &hostaccounts.MigrationError{Step: "key_refused", Output: "root@203.0.113.9: Permission denied (publickey)."},
+			why: "did not accept the migration key", next: "PermitRootLogin prohibit-password or yes", tech: "Permission denied"},
+		{name: "host key changed", plan: &hostaccounts.MigrationError{Step: "host_key_changed", Output: "Host key verification failed."},
+			why: "SSH host key is not the one you confirmed", next: "Stop until you know why", tech: "Host key verification failed"},
+		{name: "cPanel tool", plan: &hostaccounts.MigrationError{Step: "cpanel_tool", Output: preload},
+			why:  "cPanel's own tools on the old server did not answer properly. This happens when something injects a preload library into them (a security problem on the old server) or when cPanel's files are damaged or being updated.",
+			next: "Check the old server's security and cPanel (cPanel support can help), or connect with the WHM login, then move the website again.", tech: "LD_Preload detect"},
+		{name: "cPanel output", plan: &hostaccounts.MigrationError{Step: "cpanel_output", Detail: "The old server's details of the site could not be read (whmapi1 domainuserdata)."},
+			why: "did not answer properly", next: "cPanel support can help", tech: "whmapi1 domainuserdata"},
+		{name: "account missing", plan: &hostaccounts.MigrationError{Step: "account_missing", Detail: "The old server has no account named shopone."},
+			why: "The old server has no account named shopone.", next: "List the old server's accounts again", tech: "step account_missing"},
+		{name: "no room here", files: &hostaccounts.MigrationError{Step: "space", Detail: "The copy needs about 3.0 GiB, but only 1.0 GiB is free on this server beyond the 2.0 GiB it keeps free."},
+			why: "This server does not have room for the copy. The copy needs about 3.0 GiB", next: "Free space on this server", tech: "step space"},
+		{name: "database", db: &hostaccounts.MigrationError{Step: "dump", Output: "mysqldump: Got error: 1045: Access denied for user 'root'@'localhost'"},
+			why: "A database could not be copied: the old server's dump tool stopped.", next: "Check the database on the old server", tech: "Access denied for user"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMigrationFixture(t)
+			f.broker.planErr, f.broker.filesErr, f.broker.dbErr = c.plan, c.files, c.db
+			job := f.migrate(t)
+			e := job.Error
+			if job.State != StateFailed || e == nil || !strings.Contains(e.Why, c.why) || !strings.Contains(e.Next, c.next) || !strings.Contains(e.Technical, c.tech) {
+				t.Fatalf("%+v", e)
+			}
+			var failed *hostaccounts.MigrationError
+			for _, err := range []error{c.plan, c.files, c.db} {
+				if errors.As(err, &failed) && failed.Output != "" && strings.Contains(e.Why+e.Next, failed.Output) {
+					t.Fatalf("the old server's words are outside Technical details: %+v", e)
+				}
+			}
+			if strings.Contains(e.Next, "Fix the value") || strings.Contains(e.Why, "The old server's answer could not be used") {
+				t.Fatalf("a generic text: %+v", e)
+			}
+		})
+	}
+}
+
+// A comparison that finds differences says so in plain words, with the
+// next step; one that matches says nothing more.
+func TestVerifyDifferencesSayWhatToDo(t *testing.T) {
+	f := newMigrationFixture(t)
+	f.verdict = migrateverify.Report{Verdict: "CUTOVER LOCKED: 1 failed check(s)", Counts: migrateverify.Counts{PagesCompared: 3, PagesFail: 1, ProbesFail: 1}}
+	job := f.migrate(t)
+	v := job.Migration.Verify
+	if v == nil || !strings.Contains(v.Why, "1 page(s) differ") || !strings.Contains(v.Why, "1 closed URL(s)") || !strings.Contains(v.Next, "press Compare again") || !strings.Contains(v.Next, "accept the red lines") {
+		t.Fatalf("verify: %+v", v)
+	}
+	f = newMigrationFixture(t)
+	if v = f.migrate(t).Migration.Verify; v.Why != "" || v.Next != "" {
+		t.Fatalf("a matching copy: %+v", v)
+	}
+}
+
+// whmFixture is a move connected with the old server's WHM login: the fake
+// WHM holds the broker's key, and the panel holds the login in memory.
+func whmFixture(t *testing.T) (*migrationFixture, *whmtest.Server, *whmsource.Sessions) {
+	t.Helper()
+	whm := whmtest.New()
+	t.Cleanup(whm.Close)
+	c, err := whmsource.New(whm.Address(), whmsource.Login{Token: whm.Token}, whm.Fingerprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := "restrict ssh-ed25519 AAAA sifruno-migration-" + sourceID
+	if err = c.AuthorizeKey(context.Background(), line, sourceID); err != nil {
+		t.Fatal(err)
+	}
+	logins := whmsource.NewSessions()
+	logins.Put(sourceID, c, line, time.Now().Add(time.Hour))
+	f := newMigrationFixture(t)
+	f.broker.via = hostaccounts.ViaWHM
+	o := *f.runner.migrationOptions()
+	o.WHM = logins
+	f.runner.EnableMigrations(o)
+	return f, whm, logins
+}
+
+// D-0005: on the WHM path every step that asks cPanel carries WHM's own
+// answers, fetched through its API; the key is removed over SSH, and WHM's
+// API deletes its file; the login is then forgotten.
+func TestWHMMoveAsksCPanelThroughWHM(t *testing.T) {
+	f, whm, logins := whmFixture(t)
+	job := f.migrate(t)
+	if job.State != StateSucceeded || job.Migration.Via != hostaccounts.ViaWHM || !job.Migration.KeyRemoved {
+		t.Fatalf("job: %+v %+v", job.Migration, job.Error)
+	}
+	if !slices.Equal(f.broker.cpanel, []string{"plan", "files", "database"}) {
+		t.Fatalf("steps with WHM's answers: %q", f.broker.cpanel)
+	}
+	calls := strings.Join(whm.CallList(), ",")
+	for _, want := range []string{"listaccts", "domainuserdata", "php_get_vhost_versions", "uapi_cpanel", "deletesshkey", "listsshkeys"} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("WHM was not asked %s: %s", want, calls)
+		}
+	}
+	if ok, _ := whm.Authorized("ssh-ed25519 AAAA sifruno-migration-" + sourceID); ok || logins.Has(sourceID) {
+		t.Fatal("the key or the login stayed")
+	}
+	key := job.Steps[len(job.Steps)-1]
+	if key.State != StepDone || !strings.Contains(key.Message, "WHM's API also deleted the key's file") {
+		t.Fatalf("key step: %+v", key)
+	}
+}
+
+// When SSH cannot remove the key, WHM's API removes it, and the step says
+// plainly that it is gone and how.
+func TestWHMRemovesTheKeyWhenSSHCannot(t *testing.T) {
+	f, whm, _ := whmFixture(t)
+	f.broker.removedOK, f.broker.detail = false, "The old server did not remove the key: Connection refused."
+	job := f.migrate(t)
+	key := job.Steps[len(job.Steps)-1]
+	if !job.Migration.KeyRemoved || key.State != StepDone || !strings.Contains(key.Message, "WHM's API removed it") || f.broker.cleared != 1 {
+		t.Fatalf("key step: %+v removed=%v cleared=%d", key, job.Migration.KeyRemoved, f.broker.cleared)
+	}
+	if ok, _ := whm.Authorized("ssh-ed25519 AAAA sifruno-migration-" + sourceID); ok {
+		t.Fatal("the key is still authorized")
+	}
+}
+
+// A WHM that answers with something other than its JSON stops the move with
+// its own explanation, and the old server's words stay technical.
+func TestWHMMoveWithABrokenWHM(t *testing.T) {
+	f, whm, _ := whmFixture(t)
+	whm.Broken = "LD_Preload detected, refusing to run"
+	job := f.migrate(t)
+	if job.State != StateFailed || !strings.Contains(job.Error.Why, "did not answer with the data cPanel documents") || strings.Contains(job.Error.Why+job.Error.Next, "LD_Preload") || !strings.Contains(job.Error.Technical, "LD_Preload") {
+		t.Fatalf("job: %+v", job.Error)
+	}
+	if len(f.broker.cpanel) != 0 {
+		t.Fatalf("the broker was asked without WHM's answers: %q", f.broker.cpanel)
+	}
+}
+
+// A panel that restarted no longer holds the login: the move is refused
+// before anything is made.
+func TestWHMMoveNeedsTheLoginInMemory(t *testing.T) {
+	f, _, logins := whmFixture(t)
+	logins.Forget(sourceID)
+	_, err := f.runner.StartMigration(context.Background(), MigrationInput{Source: sourceID, Username: "shopone"}, "test operator")
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || !errors.Is(err, ErrConflict) || !strings.Contains(refusal.Detail, "connect with the WHM login again") {
+		t.Fatalf("%v", err)
 	}
 }

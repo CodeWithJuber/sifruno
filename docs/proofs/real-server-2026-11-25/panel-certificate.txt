@@ -1,0 +1,276 @@
+# The panel's own Let's Encrypt certificate on a real server, 2026-11-26
+# Server: a new Linode g6-standard-2 (de-fra-2), ID 111978604, that scripts/ci/nightly-fresh-install.sh made and kept
+# (SIFRUNO_NIGHTLY_KEEP=1, with the owner's admin key added): AlmaLinux 9.8, SELinux Enforcing,
+# openlitespeed-1.9.4-3.el9, lsphp83-8.3.37-1.el9. Its fresh-install test passed 17 checks, 0 failed, with the
+# release built from a00ed8d. By hand: TCP 80 and 443 opened to everyone and 8443 to the machine that ran the
+# proof, in the Linode Cloud Firewall and in firewalld. The panel's name is panel.SERVER_IP.sslip.io, where
+# SERVER_IP is the server's address with dashes for dots; the transcript writes the address SERVER_IP throughout.
+#
+# The steps below are in the order they ran. Part 1 found that port 80 did not answer the panel's name, before
+# the panel was restarted, so Let's Encrypt was asked for nothing then; 1c5348f fixed the cause. Part 2 is the
+# panel's one request to Let's Encrypt's production CA. Part 4 is scripts/devvm/proofs/panel-certificate.sh as
+# committed with this file. Part 5 deletes the server.
+
+# Part 1: the release built from a00ed8d (setup by hand over SSH)
+
+## The installer with --panel-host and --acme-email, units written but not restarted (--no-start)
+$ install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@panel.SERVER_IP.sslip.io --no-start
+  | Changed in this run:
+  |   - /etc/systemd/system/sifruno-broker.service written
+  |   - /etc/systemd/system/sifruno.service written
+  |
+  | ExecStart=/usr/local/lib/sifruno/bin/hostbroker --state /var/lib/sifruno-broker --socket /run/sifruno-broker/control.sock --homes /home --controller-uid 994 --web-user nobody --panel-host panel.SERVER_IP.sslip.io
+  | ExecStart=/usr/local/lib/sifruno/bin/sifruno --listen 127.0.0.1:8080 --sites-listen= --state /var/lib/sifpanel/state --ui /usr/local/lib/sifruno/ui --accounts-socket /run/sifruno-broker/control.sock --db-defaults-file /var/lib/sifpanel/db-admin.cnf --https-listen 0.0.0.0:8443 --panel-host panel.SERVER_IP.sslip.io --phpmyadmin-listen 0.0.0.0:8444 --phpmyadmin-upstream 127.0.0.1:8090 --phpmyadmin-uid 993 --acme-email admin@panel.SERVER_IP.sslip.io
+
+## Restart the broker alone: it renders the panel's name on port 80
+cat: /usr/local/lsws/conf/vhosts/sifruno-panel/vhconf.conf: No such file or directory
+  | active
+  | Stopping Sifruno account broker (root; the panel's only way to change the host)...
+  | Stopped Sifruno account broker (root; the panel's only way to change the host).
+  | Started Sifruno account broker (root; the panel's only way to change the host).
+  | sifruno broker: the web server config with the panel's own names (for its certificate) could not be loaded at start; the next website change loads it
+  | listener sifruno-http {
+  |   address                 *:80
+  |   secure                  0
+  | }
+
+## From this machine, over the internet: port 80 at panel.SERVER_IP.sslip.io
+  http://panel.SERVER_IP.sslip.io/.well-known/acme-challenge/<random token> answers 404, body matches the file: no
+  http://panel.SERVER_IP.sslip.io/ answers 404
+STOP: port 80 does not serve the challenge folder at panel.SERVER_IP.sslip.io; the panel is not restarted, so Let's Encrypt is asked for nothing.
+
+## Why: OpenLiteSpeed's config test with the challenge vhost the broker renders, run by hand, then put back
+  | drwxr-x---. 5 lsadm nobody 4096 Nov 26 10:56 /usr/local/lsws/conf
+  | -rw-------. 1 lsadm nobody  262 Nov 26 10:56 /usr/local/lsws/conf/sifruno.conf
+  | drwxr-x---. 5 lsadm nobody 4096 Nov 26 10:53 /usr/local/lsws/conf/vhosts
+  | drwxr-xr-x. 2 sifpanel sifpanel 4096 Nov 26 10:53 /var/lib/sifruno-acme
+  | drwxr-xr-x. 2 root     root     4096 Nov 26 10:48 /var/lib/sifruno-suspended
+  | 2026-11-26 10:56:23.559940 [WARN] [19552] [config:server:vhosts:vhost:Example] Uid of /usr/local/lsws/Example/html/ is 0, smaller than minimum requirement 11, use server uid!
+  | 2026-11-26 10:56:23.560013 [WARN] [19552] [config:server:vhosts:vhost:Example] Gid of /usr/local/lsws/Example/html/ is 65534, smaller than minimum requirement 10, use server gid!
+  | 2026-11-26 10:56:23.560583 [WARN] [19552] [config:server:vhosts:vhost:sifruno-panel] Uid of /var/lib/sifruno-suspended/ is 0, smaller than minimum requirement 11, use server uid!
+  | 2026-11-26 10:56:23.560591 [WARN] [19552] [config:server:vhosts:vhost:sifruno-panel] Gid of /var/lib/sifruno-suspended/ is 65534, smaller than minimum requirement 10, use server gid!
+  | exit 1
+  | restored sifruno.conf from /usr/local/lsws/conf/sifruno.conf.bak-20261126-105623
+  The broker refuses a config with a warning for a vhost it wrote, so the challenge vhost was never loaded.
+  With "user nobody" and "group nobody" in its virtualhost block the same test printed no line for it (1c5348f).
+
+# Part 2: the release built from ace350e, with 1c5348f (setup by hand over SSH)
+
+## The release built from ace350e, copied in and unpacked over the old one
+  sha256 4989d45ee96ead236a6b0f64135cb9f4c23635025dcb9237cae261999de66270
+  | sifruno-linux-amd64.tar.gz: OK
+  | bin
+  | install.sh
+  | phpmyadmin
+  | SHA256SUMS
+  | ui
+
+## The installer with --panel-host and --acme-email, nothing restarted (--no-start)
+$ install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@panel.SERVER_IP.sslip.io --no-start
+  | Changed in this run:
+  |   - program /usr/local/lib/sifruno/bin/sifruno installed
+  |   - program /usr/local/lib/sifruno/bin/hostbroker installed
+  |   - program /usr/local/lib/sifruno/bin/hostsetup installed
+  |   - program /usr/local/lib/sifruno/bin/panelctl installed
+  |
+  | ExecStart=/usr/local/lib/sifruno/bin/hostbroker --state /var/lib/sifruno-broker --socket /run/sifruno-broker/control.sock --homes /home --controller-uid 994 --web-user nobody --panel-host panel.SERVER_IP.sslip.io
+  | ExecStart=/usr/local/lib/sifruno/bin/sifruno --listen 127.0.0.1:8080 --sites-listen= --state /var/lib/sifpanel/state --ui /usr/local/lib/sifruno/ui --accounts-socket /run/sifruno-broker/control.sock --db-defaults-file /var/lib/sifpanel/db-admin.cnf --https-listen 0.0.0.0:8443 --panel-host panel.SERVER_IP.sslip.io --phpmyadmin-listen 0.0.0.0:8444 --phpmyadmin-upstream 127.0.0.1:8090 --phpmyadmin-uid 993 --acme-email admin@panel.SERVER_IP.sslip.io
+
+## Restart the broker alone: it renders the panel's name on port 80
+  | active
+  | sifruno broker: recovery: operation=htaccess account=- user=- step="graceful restart for .htaccess changes" error="the web server's config test failed"
+  | sifruno broker: recovery: operation=htaccess account=- user=- step="graceful restart for .htaccess changes" error="the web server's config test failed"
+  | sifruno broker: recovery: operation=htaccess account=- user=- step="graceful restart for .htaccess changes" error="the web server's config test failed"
+  | sifruno broker: recovery: operation=htaccess account=- user=- step="graceful restart for .htaccess changes" error="the web server's config test failed"
+  | Stopping Sifruno account broker (root; the panel's only way to change the host)...
+  | Stopped Sifruno account broker (root; the panel's only way to change the host).
+  | Started Sifruno account broker (root; the panel's only way to change the host).
+  | listener sifruno-http {
+  |   address                 *:80
+  |   secure                  0
+  |   map                     sifruno-panel panel.SERVER_IP.sslip.io
+  | }
+  | # Generated by Sifruno from its site database. Do not edit: the next render replaces this file.
+  | # The panel's own host names: ACME HTTP-01 challenges only, everything else 403
+  |
+  | docRoot                   /var/lib/sifruno-suspended/
+  |
+  | index  {
+  |   useServer               0
+  |   indexFiles              index.html
+  |   autoIndex               0
+  | }
+  |
+  | module cache {
+  |   ls_enabled              0
+  |   checkPublicCache        0
+  |   checkPrivateCache       0
+  |   enableCache             0
+  |   enablePrivateCache      0
+  | }
+  |
+  | context /.well-known/acme-challenge/ {
+  |   location                /var/lib/sifruno-acme/
+  |   allowBrowse             1
+  |   autoIndex               0
+  |   forceType               text/plain
+  |   rewrite  {
+  |     enable                0
+  |   }
+  | }
+  |
+  | rewrite  {
+  |   enable                  1
+  |   autoLoadHtaccess        0
+  |   rules                   <<<END_rules
+  | RewriteRule .* - [F,L]
+  |   END_rules
+  | }
+
+## From this machine, over the internet: port 80 at panel.SERVER_IP.sslip.io
+  http://panel.SERVER_IP.sslip.io/.well-known/acme-challenge/<random token> answers 200, body matches the file: yes
+  http://panel.SERVER_IP.sslip.io/ answers 403
+
+## Restart the panel: it asks Let's Encrypt for panel.SERVER_IP.sslip.io (the one request)
+  MainPID 20913
+  | 2026-11-26T11:27:20+0000 localhost sifruno[20913]: Panel over HTTPS on 0.0.0.0:8443 for panel.SERVER_IP.sslip.io — password sign-in only (admins and customers)
+  | 2026-11-26T11:27:20+0000 localhost sifruno[20913]: TLS certificate (self-signed, for an IP address, and for panel.SERVER_IP.sslip.io until Let's Encrypt's is in place: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 0C:30:A9:DD:5E:9E:09:47:3F:19:A9:AC:67:E2:21:B9:8F:BF:01:67:F7:C3:43:50:AD:F8:B7:F4:65:12:4F:8D
+  | 2026-11-26T11:27:31+0000 localhost sifruno[20913]: acme: panel.SERVER_IP.sslip.io (account panel): certificate installed, valid until 2027-02-24
+  | 2026-11-26T11:27:31+0000 localhost sifruno[20913]: Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+
+## The installer again with the same flags (a normal run)
+  | Changed in this run: nothing
+  | active
+  | active
+
+# Part 3: the release built from the branch head, with a3a50ba (the startup line's wording)
+
+## The release built from a3a50ba, copied in and unpacked over the old one
+  sha256 8e2895d3c899277fb8ba82f67229ba37df894c40cbb53fb8236a672814c753ce
+  | sifruno-linux-amd64.tar.gz: OK
+
+## The installer with the same flags, a normal run: new programs, both units restarted
+$ install.sh --panel-host panel.SERVER_IP.sslip.io --acme-email admin@panel.SERVER_IP.sslip.io
+  | Changed in this run:
+  |   - program /usr/local/lib/sifruno/bin/sifruno installed
+  |   - panel UI installed in /usr/local/lib/sifruno/ui
+  |   - sifruno-broker.service restarted with the new files
+  |   - sifruno.service restarted with the new files
+  | active
+  | active
+  | 2026-11-26T11:43:02+0000 localhost sifruno[22574]: TLS certificate (self-signed, for an IP address only; panel.SERVER_IP.sslip.io uses its Let's Encrypt certificate: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 0C:30:A9:DD:5E:9E:09:47:3F:19:A9:AC:67:E2:21:B9:8F:BF:01:67:F7:C3:43:50:AD:F8:B7:F4:65:12:4F:8D
+  | 2026-11-26T11:43:02+0000 localhost sifruno[22574]: Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+
+## The installer once more with the same flags
+  | Changed in this run: nothing
+  | active
+  | active
+
+## The installer's preflight warns about no website: the panel's own challenge vhost is not one
+$ install.sh --dry-run --panel-host panel.SERVER_IP.sslip.io --acme-email admin@panel.SERVER_IP.sslip.io | grep -c ^WARNING; grep map sifruno.conf
+  | 0
+  |   map                     sifruno-panel panel.SERVER_IP.sslip.io
+
+# Part 4: scripts/devvm/proofs/panel-certificate.sh panel.SERVER_IP.sslip.io
+# Panel certificate proof 2026-11-26T11:45:44Z
+# source a3a50ba; runner: Ubuntu 24.04.5 LTS, curl 8.5.0, OpenSSL 3.0.13
+# panel https://panel.SERVER_IP.sslip.io:8443
+## Before: the name, the units and port 80
+  panel.SERVER_IP.sslip.io resolves to SERVER_IP
+PASS  panel.SERVER_IP.sslip.io resolves in public DNS to the server
+  | ExecStart=/usr/local/lib/sifruno/bin/hostbroker --state /var/lib/sifruno-broker --socket /run/sifruno-broker/control.sock --homes /home --controller-uid 994 --web-user nobody --panel-host panel.SERVER_IP.sslip.io
+  | ExecStart=/usr/local/lib/sifruno/bin/sifruno --listen 127.0.0.1:8080 --sites-listen= --state /var/lib/sifpanel/state --ui /usr/local/lib/sifruno/ui --accounts-socket /run/sifruno-broker/control.sock --db-defaults-file /var/lib/sifpanel/db-admin.cnf --https-listen 0.0.0.0:8443 --panel-host panel.SERVER_IP.sslip.io --phpmyadmin-listen 0.0.0.0:8444 --phpmyadmin-upstream 127.0.0.1:8090 --phpmyadmin-uid 993 --acme-email admin@panel.SERVER_IP.sslip.io
+PASS  the installer passed --panel-host panel.SERVER_IP.sslip.io to the broker
+PASS  and --panel-host panel.SERVER_IP.sslip.io and --acme-email to the panel
+  http://panel.SERVER_IP.sslip.io/ from this machine: 403
+PASS  port 80 answers panel.SERVER_IP.sslip.io with 403 outside the challenge path: the panel's name serves nothing else there
+## The certificate, checked from this machine with its system trust store
+  curl | *  CAfile: /etc/ssl/certs/ca-certificates.crt
+  curl | *  CApath: /etc/ssl/certs
+  curl | * SSL connection using TLSv1.3 / TLS_AES_128_GCM_SHA256 / X25519 / id-ecPublicKey
+  curl | * Server certificate:
+  curl | *  subject: CN=panel.SERVER_IP.sslip.io
+  curl | *  start date: Nov 26 10:28:58 2026 GMT
+  curl | *  expire date: Feb 24 10:28:57 2027 GMT
+  curl | *  subjectAltName: host "panel.SERVER_IP.sslip.io" matched cert's "panel.SERVER_IP.sslip.io"
+  curl | *  issuer: C=US; O=Let's Encrypt; CN=YE2
+  curl | *  SSL certificate verify ok.
+PASS  curl -sv https://panel.SERVER_IP.sslip.io:8443/ exits 0 with no CA but the system's
+PASS  curl says: SSL certificate verify ok
+  openssl |  0 s:CN = panel.SERVER_IP.sslip.io
+  openssl |    i:C = US, O = Let's Encrypt, CN = YE2
+  openssl |  1 s:C = US, O = Let's Encrypt, CN = YE2
+  openssl |    i:C = US, O = ISRG, CN = Root YE
+  openssl |  2 s:C = US, O = ISRG, CN = Root YE
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |  3 s:C = US, O = Internet Security Research Group, CN = ISRG Root X2
+  openssl |    i:C = US, O = Internet Security Research Group, CN = ISRG Root X1
+  openssl | Verification: OK
+  openssl | Verify return code: 0 (ok)
+PASS  openssl s_client -verify_return_error exits 0
+PASS  openssl says: Verify return code: 0 (ok)
+  issuer:  C = US, O = Let's Encrypt, CN = YE2
+  SAN:     DNS:panel.SERVER_IP.sslip.io
+  valid:   Nov 26 10:28:58 2026 GMT to Feb 24 10:28:57 2027 GMT
+  SHA-256: B3:B8:40:9D:39:3B:6C:81:3D:0E:76:A4:25:A2:93:CD:47:83:F4:CC:8D:21:D7:ED:F3:1B:A5:CE:5A:D5:25:73
+PASS  the issuer is Let's Encrypt
+PASS  the certificate names exactly panel.SERVER_IP.sslip.io
+  to an IP address (no SNI): subject=O = Sifruno self-signed, CN = Sifruno panel issuer=O = Sifruno self-signed, CN = Sifruno panel
+PASS  an IP address still gets the self-signed certificate
+## On the server: got while the panel ran, saved privately, on the renewal loop's record
+  | 2026-11-26T11:27:20+0000 localhost sifruno[20913]: Panel over HTTPS on 0.0.0.0:8443 for panel.SERVER_IP.sslip.io — password sign-in only (admins and customers)
+  | 2026-11-26T11:27:20+0000 localhost sifruno[20913]: TLS certificate (self-signed, for an IP address, and for panel.SERVER_IP.sslip.io until Let's Encrypt's is in place: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 0C:30:A9:DD:5E:9E:09:47:3F:19:A9:AC:67:E2:21:B9:8F:BF:01:67:F7:C3:43:50:AD:F8:B7:F4:65:12:4F:8D
+  | 2026-11-26T11:27:31+0000 localhost sifruno[20913]: acme: panel.SERVER_IP.sslip.io (account panel): certificate installed, valid until 2027-02-24
+  | 2026-11-26T11:27:31+0000 localhost sifruno[20913]: Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+  | 2026-11-26T11:34:09+0000 localhost sifruno[21924]: Panel over HTTPS on 0.0.0.0:8443 for panel.SERVER_IP.sslip.io — password sign-in only (admins and customers)
+  | 2026-11-26T11:34:09+0000 localhost sifruno[21924]: TLS certificate (self-signed, for an IP address, and for panel.SERVER_IP.sslip.io until Let's Encrypt's is in place: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 0C:30:A9:DD:5E:9E:09:47:3F:19:A9:AC:67:E2:21:B9:8F:BF:01:67:F7:C3:43:50:AD:F8:B7:F4:65:12:4F:8D
+  | 2026-11-26T11:34:09+0000 localhost sifruno[21924]: Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+  | 2026-11-26T11:43:02+0000 localhost sifruno[22574]: Panel over HTTPS on 0.0.0.0:8443 for panel.SERVER_IP.sslip.io — password sign-in only (admins and customers)
+  | 2026-11-26T11:43:02+0000 localhost sifruno[22574]: TLS certificate (self-signed, for an IP address only; panel.SERVER_IP.sslip.io uses its Let's Encrypt certificate: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 0C:30:A9:DD:5E:9E:09:47:3F:19:A9:AC:67:E2:21:B9:8F:BF:01:67:F7:C3:43:50:AD:F8:B7:F4:65:12:4F:8D
+  | 2026-11-26T11:43:02+0000 localhost sifruno[22574]: Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+  | 2026-11-26T11:45:15+0000 localhost sifruno[23451]: Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+  | 2026-11-26T11:45:15+0000 localhost sifruno[23451]: Panel over HTTPS on 0.0.0.0:8443 for panel.SERVER_IP.sslip.io — password sign-in only (admins and customers)
+  | 2026-11-26T11:45:15+0000 localhost sifruno[23451]: TLS certificate (self-signed, for an IP address only; panel.SERVER_IP.sslip.io uses its Let's Encrypt certificate: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 0C:30:A9:DD:5E:9E:09:47:3F:19:A9:AC:67:E2:21:B9:8F:BF:01:67:F7:C3:43:50:AD:F8:B7:F4:65:12:4F:8D
+  the process that started with the self-signed certificate: 20913; the one that installed Let's Encrypt's: 20913
+PASS  the panel installed Let's Encrypt's certificate in the process that started with the self-signed one: no restart in between
+PASS  the panel said so in plain words
+  attempts for the panel's certificate in the panel's whole log: 1
+PASS  the panel asked Let's Encrypt at most twice
+  sifpanel:sifpanel 600 /var/lib/sifpanel/state/tls/letsencrypt.pem; 4 certificates and 1 key in it
+PASS  the chain and its key are one file, the panel's own, mode 0600
+PASS  the saved leaf is the one served
+  certificates.json | {"account_id":"panel","domain":"panel.SERVER_IP.sslip.io","not_after":"2027-02-24T10:28:57Z","last_attempt":"2026-11-26T11:27:20.788993548Z","last_result":"installed"}
+PASS  the renewal loop's record: the panel, installed, with the certificate's expiry
+PASS  the panel says its renewal check renews it 30 days before it ends
+  133 s after the panel started, past the renewal loop's first check:
+  lines about the panel's certificate from 90 s after the start on: 0
+PASS  the panel still runs, and the first check asked for nothing (the certificate is not due)
+## A restart serves the saved certificate and asks for nothing
+  | 2026-11-26T11:47:29+0000 localhost sifruno[24151]: TLS certificate (self-signed, for an IP address only; panel.SERVER_IP.sslip.io uses its Let's Encrypt certificate: see the line that starts "Panel certificate:"), valid until 2027-12-28, SHA-256 0C:30:A9:DD:5E:9E:09:47:3F:19:A9:AC:67:E2:21:B9:8F:BF:01:67:F7:C3:43:50:AD:F8:B7:F4:65:12:4F:8D
+  | 2026-11-26T11:47:29+0000 localhost sifruno[24151]: Panel certificate: from Let's Encrypt for panel.SERVER_IP.sslip.io, valid until 2027-02-24. The renewal check, 2 minutes after start and then every 12 hours, renews it 30 days before then.
+PASS  after the restart it logs the saved certificate
+PASS  and asks Let's Encrypt for nothing
+PASS  https://panel.SERVER_IP.sslip.io:8443/ serves the same certificate
+PASS  the record's last attempt is unchanged
+## A website or account named panel.SERVER_IP.sslip.io is refused through the panel's API
+  | POST /api/v1/websites/php {"domain":"panel.SERVER_IP.sslip.io","php_version":"8.3","database":"none"} -> 422 This name is the panel's own address. Use a different domain for the website.
+  | POST /api/v1/websites/php {"domain":"www.panel.SERVER_IP.sslip.io","php_version":"8.3","database":"none"} -> 422 This name is the panel's own address. Use a different domain for the website.
+  | POST /api/v1/accounts {"username":"panelname","domain":"panel.SERVER_IP.sslip.io","reason":"panel certificate proof"} -> 422 This name is the panel's own address. Use a different domain for the website.
+  | websites listed: []
+PASS  creating a PHP website named panel.SERVER_IP.sslip.io answers 422: This name is the panel's own address. Use a different domain for the website.
+PASS  and for www.panel.SERVER_IP.sslip.io
+PASS  creating a hosting account for panel.SERVER_IP.sslip.io answers 422 the same
+PASS  no website named panel.SERVER_IP.sslip.io exists
+
+# 0 check(s) failed
+
+# Part 5: the server deleted (nightly-fresh-install.sh cleanup), and checked through the Linode API
+== 2026-11-26T11:48:54Z Delete this run's Linode and firewall (sifruno-owner-test-pc3a)
+== 2026-11-26T11:49:12Z deleted: Linode 111978604 (sifruno-owner-test-pc3a)
+== 2026-11-26T11:49:28Z deleted: firewall 233379784 (sifruno-owner-test-pc3a)
+== 2026-11-26T11:49:29Z checked through the API: no Linode and no firewall named sifruno-owner-test-pc3a is left
+
+exit 0
+GET /linode/instances/111978604: [{"reason":"Not found"}]
+GET /networking/firewalls/233379784: [{"reason":"Not found"}]
+Linodes labelled sifruno-owner-test-pc3a: 0

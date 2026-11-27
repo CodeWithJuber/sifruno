@@ -74,8 +74,14 @@ type linuxSystem struct {
 	// fields for the same reason.
 	cronDir string
 	logRoot string
-	cacheMu sync.Mutex
-	cache   *accountDatabase
+	// panelHosts are WebOptions.PanelHosts: every render maps them to the
+	// challenge-only vhost.
+	panelHosts []string
+	// webUser and webGroup are OpenLiteSpeed's user and its primary group,
+	// which the challenge-only vhost names.
+	webUser, webGroup string
+	cacheMu           sync.Mutex
+	cache             *accountDatabase
 }
 
 // accountDatabase is one parse of /etc/passwd and /etc/group with the

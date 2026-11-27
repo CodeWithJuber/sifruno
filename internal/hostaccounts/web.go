@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"time"
 
 	"sifruno/internal/olsweb"
 )
@@ -20,6 +21,17 @@ type WebOptions struct {
 	// ServerUser is the OpenLiteSpeed process user (the `user` setting in
 	// httpd_config.conf) that reads static files from public_html.
 	ServerUser string
+	// PanelHosts are the panel's own host names (DNS names only, lower
+	// case, each once counting its www. form). Port 80 serves them for the
+	// panel's certificate challenges only (olsweb.Server.ChallengeHosts).
+	PanelHosts []string
+}
+
+// ValidPanelHosts reports whether hosts may be WebOptions.PanelHosts: at
+// most olsweb.MaxDomainsPerSite lowercase DNS names, none twice counting
+// its www. form.
+func ValidPanelHosts(hosts []string) bool {
+	return olsweb.ValidateChallengeHosts(hosts) == nil
 }
 
 // WebInput asks for an account's site to be live with these settings.
@@ -74,11 +86,43 @@ func siteName(id string) string { return "u" + id[:31] }
 // softQuotaMiB leaves a warning margin under the hard limit.
 func softQuotaMiB(hard int) int { return hard - hard/10 }
 
+// servedWeb is the web state webSites renders for a record, and whether it
+// lists the site at all: live, and not being deleted. A web change in
+// flight counts as done.
+func servedWeb(r record) (WebState, bool) {
+	w := r.Web
+	if r.Pending != nil && r.Pending.Action == "web" {
+		w = r.WebNext
+	}
+	return w, w.enabled() && (r.Pending == nil || r.Pending.Action != "delete")
+}
+
+// httpsUntil is the Unix second at which the record's "Always use HTTPS"
+// stops: its certificate's NotAfter. Zero when it has none in the config:
+// no certificate is installed, or the owner turned it off. A certificate or
+// switch change in flight counts as done.
+func httpsUntil(r record) int64 {
+	certificate := r.TLS
+	if r.Pending != nil && r.Pending.Action == "certificate" {
+		certificate = r.TLSNext
+	}
+	plainHTTP := r.Account.PlainHTTP
+	if r.Pending != nil && r.Pending.Action == "https" {
+		plainHTTP = r.Pending.Target == "off"
+	}
+	if !certificate.installed() || plainHTTP {
+		return 0
+	}
+	return certificate.NotAfter
+}
+
 // webSites lists every live site as OpenLiteSpeed should serve it, sorted by
 // name, without the account named by except (used while removing a site).
 // Settings in flight are used for the account they belong to, so a recovery
 // renders the same config as the interrupted write. A site with a
-// certificate gets its files in olsweb.TLSRoot/<site name>/. A suspended
+// certificate gets its files in olsweb.TLSRoot/<site name>/, and plain
+// http for the domains it covers is redirected to https while it is valid,
+// unless the account's PlainHTTP says otherwise. A suspended
 // account's site stays in the list marked suspended, so OpenLiteSpeed
 // refuses every request for it; a state change in flight counts as done.
 func webSites(items []record, except string) []olsweb.Site {
@@ -87,11 +131,8 @@ func webSites(items []record, except string) []olsweb.Site {
 		if r.Account.ID == except {
 			continue
 		}
-		w := r.Web
-		if r.Pending != nil && r.Pending.Action == "web" {
-			w = r.WebNext
-		}
-		if !w.enabled() || (r.Pending != nil && r.Pending.Action == "delete") {
+		w, served := servedWeb(r)
+		if !served {
 			continue
 		}
 		certificate := r.TLS
@@ -135,6 +176,12 @@ func webSites(items []record, except string) []olsweb.Site {
 			// here yet, or it was added since) is served over http only.
 			site.TLS = siteTLS(site.Name)
 			site.TLS.Domains = coveredDomains(certificate, site.Domains, r.Account.Domain)
+			// "Always use HTTPS": plain http for those domains goes to
+			// https while the certificate is valid, unless the owner
+			// turned it off. One past its NotAfter is not in force, so the
+			// next render after it expires serves plain http again; the
+			// broker renders at that second (https_expiry.go).
+			site.AlwaysHTTPS = time.Now().Unix() < httpsUntil(r)
 		}
 		sites = append(sites, site)
 	}

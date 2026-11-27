@@ -82,6 +82,16 @@ test("every control the panel hides names a route the server has", () => {
   assert.ok(gated.size >= 10, `only ${gated.size} gated routes found`);
 });
 
+test("the Always use HTTPS switch shows only for a login that may use its route", () => {
+  const route = "POST /api/v1/websites/sites/{account_id}/always-https";
+  // A site's owner may turn it on and off for its own websites.
+  assert.equal(table[route], "ownWebsite");
+  assert.match(read("../SiteDomains.tsx"), /const canHttps = viewer\.can\("POST \/api\/v1\/websites\/sites\/\{account_id\}\/always-https"\);[\s\S]*\{canHttps && <AlwaysHttpsSection /);
+  const base = { authenticated: true, csrf_token: "c".repeat(43), expires_at: "2026-11-24T10:15:00Z", role: "customer", username: "alice" };
+  assert.equal(auth.allows({ ...base, routes: [route] }, route), true);
+  assert.equal(auth.allows({ ...base, routes: ["GET /api/v1/websites/sites/{account_id}"] }, route), false);
+});
+
 test("a restricted session may use only the routes it lists", () => {
   const base = { authenticated: true, csrf_token: "c".repeat(43), expires_at: "2026-11-24T10:15:00Z" };
   const admin = { ...base, role: "admin", username: "admin" };

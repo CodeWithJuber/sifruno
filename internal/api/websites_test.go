@@ -216,7 +216,7 @@ func checkWebsiteShape(t *testing.T, item map[string]json.RawMessage, more ...st
 	if slices.Contains(more, "php_versions") {
 		more = append(more, "redirects")
 	}
-	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "aliases", "created_at", "domain", "https", "kind", "php_version", "redirect_count", "revision", "site_folder_changed", "state", "url", "username", "wordpress_version"}, more...)))
+	want := slices.Sorted(slices.Values(append([]string{"account_id", "admin_url", "aliases", "always_https", "created_at", "domain", "https", "kind", "php_version", "redirect_count", "revision", "site_folder_changed", "state", "url", "username", "wordpress_version"}, more...)))
 	if !slices.Equal(keys, want) {
 		t.Fatalf("website keys %q", keys)
 	}
@@ -246,7 +246,8 @@ func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
 	broker.change(second.Result.AccountID, func(a *hostaccounts.Account) {
 		a.Certificate = hostaccounts.CertificateState{NotAfter: notAfter.Unix(), Fingerprint: strings.Repeat("f", 64)}
 	})
-	broker.change(first.Result.AccountID, func(a *hostaccounts.Account) { a.State = "suspended" })
+	// Its owner turned Always use HTTPS off; the second keeps the default.
+	broker.change(first.Result.AccountID, func(a *hostaccounts.Account) { a.State, a.PlainHTTP = "suspended", true })
 	// Deleted on the broker: gone from the list.
 	broker.mu.Lock()
 	broker.accounts = slices.DeleteFunc(broker.accounts, func(a hostaccounts.Account) bool { return a.ID == third.Result.AccountID })
@@ -265,12 +266,12 @@ func TestWebsitesListJoinsBrokerAndJobs(t *testing.T) {
 		t.Fatalf("sites %+v", sites)
 	}
 	want := Website{AccountID: second.Result.AccountID, Username: "second", Domain: "second.example", Kind: "wordpress", State: "active",
-		HTTPS: WebsiteHTTPS{On: true, NotAfter: "2027-02-21T12:30:00Z"}, PHPVersion: "8.3", WordPressVersion: "7.1.5",
+		HTTPS: WebsiteHTTPS{On: true, NotAfter: "2027-02-21T12:30:00Z"}, AlwaysHTTPS: true, PHPVersion: "8.3", WordPressVersion: "7.1.5",
 		URL: "http://second.example/", AdminURL: "http://second.example/wp-admin/", CreatedAt: second.CreatedAt, Revision: 2, Aliases: []WebsiteDomain{}}
 	if !reflect.DeepEqual(sites[0], want) {
 		t.Fatalf("second site %+v\nwant %+v", sites[0], want)
 	}
-	if s := sites[1]; s.State != "suspended" || s.HTTPS != (WebsiteHTTPS{}) || s.PHPVersion != "8.2" || s.Username != "first" {
+	if s := sites[1]; s.State != "suspended" || s.HTTPS != (WebsiteHTTPS{}) || s.AlwaysHTTPS || s.PHPVersion != "8.2" || s.Username != "first" {
 		t.Fatalf("first site %+v", s)
 	}
 	if !strings.Contains(w.Body.String(), `"https":{"on":false,"not_after":""}`) {

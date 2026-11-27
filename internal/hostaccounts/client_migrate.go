@@ -67,7 +67,7 @@ func (c *client) PlanMigration(ctx context.Context, id string, in MigrationPlanI
 		return MigrationPlan{}, ErrInvalid
 	}
 	var out MigrationPlan
-	err := c.send(ctx, c.slow, "POST", "/v1/migrations/"+id+"/plan", migrationBody[MigrationPlanInput]{in, actor}, &out, maxMigrationAnswer)
+	err := c.exchange(ctx, c.slow, "POST", "/v1/migrations/"+id+"/plan", migrationBody[MigrationPlanInput]{in, actor}, maxCPanelRequest, &out, maxMigrationAnswer)
 	return out, err
 }
 
@@ -77,7 +77,7 @@ func (c *client) MigrateFiles(ctx context.Context, id string, in MigrateFilesInp
 		return MigrateFilesResult{}, ErrInvalid
 	}
 	var out MigrateFilesResult
-	err := c.send(ctx, c.long, "POST", "/v1/accounts/"+id+"/migrate-files", migrationBody[MigrateFilesInput]{in, actor}, &out, maxResponseBytes)
+	err := c.exchange(ctx, c.long, "POST", "/v1/accounts/"+id+"/migrate-files", migrationBody[MigrateFilesInput]{in, actor}, maxCPanelRequest, &out, maxResponseBytes)
 	return out, err
 }
 
@@ -87,7 +87,7 @@ func (c *client) MigrateDatabase(ctx context.Context, id string, in MigrateDatab
 		return MigrateDatabaseResult{}, ErrInvalid
 	}
 	var out MigrateDatabaseResult
-	err := c.send(ctx, c.long, "POST", "/v1/accounts/"+id+"/migrate-database", migrationBody[MigrateDatabaseInput]{in, actor}, &out, maxMigrationAnswer)
+	err := c.exchange(ctx, c.long, "POST", "/v1/accounts/"+id+"/migrate-database", migrationBody[MigrateDatabaseInput]{in, actor}, maxCPanelRequest, &out, maxMigrationAnswer)
 	return out, err
 }
 

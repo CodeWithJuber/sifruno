@@ -14,6 +14,9 @@ var (
 	listenerNamePattern = regexp.MustCompile(`^[a-z](?:[a-z0-9-]{0,14}[a-z0-9])?$`)
 	usernamePattern     = regexp.MustCompile(`^[a-z][a-z0-9_]{2,31}$`)
 	tlsFileNamePattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	// systemNamePattern is a system user or group name, such as the web
+	// server's own (nobody, www-data, _lsws).
+	systemNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 )
 
 // Validate checks a spec without rendering it. Render calls it first; it is
@@ -104,7 +107,40 @@ func normalize(s Server) ([]site, error) {
 	if err := checkFolderListeners(s.Listeners, s.Sites); err != nil {
 		return nil, err
 	}
+	if err := ValidateChallengeHosts(s.ChallengeHosts); err != nil {
+		return nil, err
+	}
+	if len(s.ChallengeHosts) > 0 {
+		if !systemNamePattern.MatchString(s.ChallengeUser) {
+			return nil, fieldErr("challenge_user", "must match %s", systemNamePattern)
+		}
+		if !systemNamePattern.MatchString(s.ChallengeGroup) {
+			return nil, fieldErr("challenge_group", "must match %s", systemNamePattern)
+		}
+	}
 	return out, nil
+}
+
+// ValidateChallengeHosts checks Server.ChallengeHosts alone, for a caller
+// that has the names before the rest of the server: at most
+// MaxDomainsPerSite domain names, each once counting its www. form, as for
+// a site's domains.
+func ValidateChallengeHosts(hosts []string) error {
+	if len(hosts) > MaxDomainsPerSite {
+		return fieldErr("challenge_hosts", "at most %d names", MaxDomainsPerSite)
+	}
+	seen := map[string]int{}
+	for i, h := range hosts {
+		field := fmt.Sprintf("challenge_hosts[%d]", i)
+		if !validDomain(h) {
+			return fieldErr(field, "must be a lowercase DNS name")
+		}
+		if j, dup := seen[hostKey(h)]; dup {
+			return fieldErr(field, "is the same name as challenge_hosts[%d]", j)
+		}
+		seen[hostKey(h)] = i
+	}
+	return nil
 }
 
 func validateListeners(listeners []Listener) error {
@@ -173,6 +209,9 @@ func listenerAddress(l Listener) (string, error) {
 func validateSite(field string, in Site, workers int) (site, error) {
 	if !siteNamePattern.MatchString(in.Name) {
 		return site{}, fieldErr(field+".name", "must match %s", siteNamePattern)
+	}
+	if in.Name == PanelChallengeName {
+		return site{}, fieldErr(field+".name", "%s is the panel's challenge vhost", PanelChallengeName)
 	}
 	if !usernamePattern.MatchString(in.Username) {
 		return site{}, fieldErr(field+".username", "must match %s", usernamePattern)
@@ -246,6 +285,9 @@ func validateSite(field string, in Site, workers int) (site, error) {
 	}
 	if err := checkCovered(field, in); err != nil {
 		return site{}, err
+	}
+	if in.AlwaysHTTPS && in.TLS.CertFile == "" {
+		return site{}, fieldErr(field+".always_https", "only a site with a certificate redirects http to https")
 	}
 	if err := checkRedirects(field, in.Domains, in.Redirects); err != nil {
 		return site{}, err

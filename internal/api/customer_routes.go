@@ -17,9 +17,9 @@ import (
 // TestCustomerRouteTableCoversEveryRoute fails when a route is added
 // without a decision, or an entry names a route that does not exist.
 //
-// A customer may list and open its websites, change their domains and
-// redirects, databases (phpMyAdmin included), files and scheduled jobs, read
-// their logs and usage, and see their backups. It may not create, suspend,
+// A customer may list and open its websites, change their domains,
+// redirects and Always use HTTPS, databases (phpMyAdmin included), files and
+// scheduled jobs, read their logs and usage, and see their backups. It may not create, suspend,
 // resume or delete a website, change its PHP version, folder, plan or
 // limits, take or restore a backup, set up backup storage, see the server,
 // use API tokens, see other customers, run the New website wizard, move a
@@ -63,6 +63,15 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/session/password":             customerOpen,
 	"POST /api/v1/session/authenticator/begin":  customerOpen,
 	"POST /api/v1/session/authenticator/finish": customerOpen,
+	// Signing in with a passkey needs no session; the person's own passkeys
+	// are its own, and the operator refuses an admin viewing as a customer.
+	"GET /api/v1/session/passkey-login":         customerOpen,
+	"POST /api/v1/session/passkey-login/begin":  customerOpen,
+	"POST /api/v1/session/passkey-login/finish": customerOpen,
+	"GET /api/v1/session/passkeys":              customerOpen,
+	"POST /api/v1/session/passkeys/begin":       customerOpen,
+	"POST /api/v1/session/passkeys/finish":      customerOpen,
+	"POST /api/v1/session/passkeys/{id}/remove": customerOpen,
 	// The panel's own management: admins only.
 	"GET /api/v1/session/sessions":                         adminOnly,
 	"POST /api/v1/session/sessions/{id}/revoke":            adminOnly,
@@ -87,6 +96,7 @@ var customerRoutes = map[string]customerAccess{
 	"POST /api/v1/websites/sites/{account_id}/domain-remove":                   ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/redirect-add":                    ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/redirect-remove":                 ownWebsite,
+	"POST /api/v1/websites/sites/{account_id}/always-https":                    ownWebsite,
 	"POST /api/v1/websites/sites/{account_id}/php":                             adminOnly,
 	"POST /api/v1/websites/sites/{account_id}/state":                           adminOnly,
 	"POST /api/v1/websites/sites/{account_id}/folder":                          adminOnly,
@@ -186,6 +196,7 @@ var customerRoutes = map[string]customerAccess{
 	// Moving a website here from another server: it needs root on the old
 	// server and makes a hosting account, so it is the operator's.
 	"POST /api/v1/websites/migrations/sources":               adminOnly,
+	"POST /api/v1/websites/migrations/whm":                   adminOnly,
 	"GET /api/v1/websites/migrations/sources/{id}":           adminOnly,
 	"POST /api/v1/websites/migrations/sources/{id}/host-key": adminOnly,
 	"GET /api/v1/websites/migrations/sources/{id}/accounts":  adminOnly,

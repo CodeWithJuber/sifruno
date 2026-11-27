@@ -2,8 +2,10 @@ package hostaccounts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -18,11 +20,13 @@ import (
 // fakeMigrate is the migration engine with a cPanel server behind it: it
 // answers the fixed commands with the documented shapes.
 type fakeMigrate struct {
-	mu        sync.Mutex
-	folders   map[string]bool
-	pinned    map[string]string
-	commands  []string
-	answers   map[string]string
+	mu       sync.Mutex
+	folders  map[string]bool
+	pinned   map[string]string
+	commands []string
+	answers  map[string]string
+	// fails answers a command with this error output and exit code.
+	fails     map[string]fakeFailure
 	site      htaccess.SiteResult
 	homeFile  bool
 	removed   bool // the source's line is gone: the next sign-in is refused
@@ -75,6 +79,9 @@ func (f *fakeMigrate) Remote(_ context.Context, m migrationRecord, command strin
 	if remove, _ := cpsource.RemoveKeyCommand(m.ID); command == remove {
 		f.removed = true
 		return nil, 0, nil
+	}
+	if fail, ok := f.fails[command]; ok {
+		return []byte(fail.out), fail.code, nil
 	}
 	answer, ok := f.answers[command]
 	if !ok {
@@ -242,7 +249,7 @@ func TestMigrationPlanReadsTheAccount(t *testing.T) {
 		t.Fatalf("a home .htaccess: %+v", plan)
 	}
 	var failed *MigrationError
-	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "someone", Reason: "Move a website here"}, "test operator"); !errors.As(err, &failed) || failed.Step != "source" {
+	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "someone", Reason: "Move a website here"}, "test operator"); !errors.As(err, &failed) || failed.Step != "account_missing" {
 		t.Fatalf("an account the source does not have: %v", err)
 	}
 }
@@ -279,7 +286,7 @@ func TestMigrateCopiesOnlyTheSameNamedAccount(t *testing.T) {
 	// Another account here is not the source's fixtureacct.
 	other := createFixtureNamed(t, s, "otheracct", "fixture.test.example")
 	var failed *MigrationError
-	if _, err = s.migrateFiles(ctx, other.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: other.Revision, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "source" {
+	if _, err = s.migrateFiles(ctx, other.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: other.Revision, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "account_missing" {
 		t.Fatalf("a differently named account: %v", err)
 	}
 }
@@ -487,5 +494,150 @@ func TestMigrationInputsAreChecked(t *testing.T) {
 	}
 	if _, ok := migrateRsh("/var/lib/with space", 22); ok {
 		t.Fatal("a folder with a space went into rsync's ssh command")
+	}
+}
+
+type fakeFailure struct {
+	out  string
+	code int
+}
+
+// TestMigrationFailuresAreNamed: every way the old server fails gets its
+// own step, so the panel can say what happened and what to do (D-0006),
+// and what the old server printed travels apart from the broker's words:
+// the panel shows it only under Technical details.
+func TestMigrationFailuresAreNamed(t *testing.T) {
+	preload := "2026/01/02 03:04:05 LD_Preload detected, refusing to run 2026/01/02 03:04:05 libinjected.so.1 The subprocess reported error number 3 when it ended. at bin/apitool.pl line 369."
+	for _, c := range []struct {
+		name, out, step, detail string
+		code                    int
+		answer                  string
+	}{
+		{name: "a cPanel tool that refuses to run", out: preload, code: 3, step: "cpanel_tool"},
+		{name: "a cPanel tool that prints no JSON", answer: "LD_Preload detected, refusing to run", step: "cpanel_output", detail: "whmapi1 listaccts"},
+		{name: "the key refused", out: "root@203.0.113.9: Permission denied (publickey).", code: 255, step: "key_refused"},
+		{name: "another host key", out: "Host key verification failed.", code: 255, step: "host_key_changed"},
+		{name: "no answer", out: "ssh: connect to host 203.0.113.9 port 22: Connection timed out", code: 255, step: "unreachable"},
+		{name: "an ssh failure ssh does not name", out: "ssh: something else", code: 255, step: "connect"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f, _ := migrateStore(t)
+			m := pinnedMigration(t, s)
+			if c.answer != "" {
+				f.answers[cpsource.ListAccountsCommand()] = c.answer
+			} else {
+				f.fails = map[string]fakeFailure{cpsource.ListAccountsCommand(): {c.out, c.code}}
+			}
+			_, err := s.migrationAccounts(context.Background(), m.ID)
+			var failed *MigrationError
+			if !errors.As(err, &failed) || failed.Step != c.step || !strings.Contains(failed.Detail, c.detail) {
+				t.Fatalf("%+v %v", failed, err)
+			}
+			if c.out != "" && (failed.Output != installDetail([]byte(c.out)) || strings.Contains(failed.Detail, c.out)) {
+				t.Fatalf("the old server's output is not kept apart: %+v", failed)
+			}
+		})
+	}
+	s, _, _ := migrateStore(t)
+	m := pinnedMigration(t, s)
+	var failed *MigrationError
+	if _, err := s.planMigration(context.Background(), m.ID, MigrationPlanInput{Username: "someone", Reason: "Move a website here"}, "test operator"); !errors.As(err, &failed) || failed.Step != "account_missing" || failed.Output != "" {
+		t.Fatalf("an account the old server does not have: %+v %v", failed, err)
+	}
+}
+
+// fixtureAnswers are WHM's answers for fixtureacct, as the panel relays
+// them: the same documents whmapi1 and uapi print over SSH.
+func fixtureAnswers(f *fakeMigrate) *CPanelAnswers {
+	return &CPanelAnswers{
+		Accounts:      json.RawMessage(f.answers[cpsource.ListAccountsCommand()]),
+		Site:          json.RawMessage(f.answers["/usr/local/cpanel/bin/whmapi1 --output=json domainuserdata domain=fixture.test"]),
+		PHP:           json.RawMessage(f.answers[cpsource.VhostPHPCommand()]),
+		Databases:     json.RawMessage(f.answers["/usr/local/cpanel/bin/uapi --output=json --user=fixtureacct Mysql list_databases"]),
+		DatabaseUsers: json.RawMessage(f.answers["/usr/local/cpanel/bin/uapi --output=json --user=fixtureacct Mysql list_users"]),
+	}
+}
+
+// A migration connected with the old server's WHM login takes what the
+// copy asks of cPanel from the panel, which read it through WHM's API, and
+// never runs whmapi1 or uapi over SSH, where a broken or hijacked cPanel
+// on the old server refuses (D-0005). rsync, the dump and SQL still run
+// over SSH. An SSH migration takes no answers from the panel.
+func TestWHMMigrationTakesCPanelAnswersFromThePanel(t *testing.T) {
+	s, f, _ := migrateStore(t)
+	ctx := context.Background()
+	opened, err := s.openMigration(ctx, MigrationOpenInput{Host: "source.example.test", Port: 22, Via: ViaWHM, Reason: "Move a website here"}, "test operator")
+	if err != nil || opened.Via != ViaWHM {
+		t.Fatalf("open: %+v %v", opened, err)
+	}
+	if _, err = s.openMigration(ctx, MigrationOpenInput{Host: "source.example.test", Port: 22, Via: "ftp", Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another way in: %v", err)
+	}
+	m, err := s.pinMigrationHostKey(ctx, opened.ID, MigrationPinInput{Fingerprint: opened.HostKeys[0].Fingerprint, Reason: "Fingerprint checked"}, "test operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	answers := fixtureAnswers(f)
+	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a plan without WHM's answers: %v", err)
+	}
+	if _, err = s.migrationAccounts(ctx, m.ID); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("the broker listed a WHM migration's accounts: %v", err)
+	}
+	plan, err := s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", CPanel: answers, Reason: "Move a website here"}, "test operator")
+	if err != nil || plan.Domain != "fixture.test" || plan.PHPSource != "ea-php82" || len(plan.Databases) != 1 || len(plan.Users) != 1 || plan.Users[0].Hash == "" || len(plan.Cron) != 1 {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	a := createFixture(t, s)
+	if _, err = s.migrateFiles(ctx, a.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: a.Revision, Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a copy without WHM's answers: %v", err)
+	}
+	if _, err = s.migrateFiles(ctx, a.ID, MigrateFilesInput{Migration: m.ID, ExpectedRevision: a.Revision, CPanel: answers, Reason: "Move a website here"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.migrateDatabase(ctx, a.ID, MigrateDatabaseInput{Migration: m.ID, Database: "fixtureacct_wp", ExpectedRevision: a.Revision, CPanel: answers, Reason: "Move a website here"}, "test operator"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.commands {
+		if strings.Contains(c, "/usr/local/cpanel/") {
+			t.Fatalf("a cPanel tool ran over SSH for a WHM migration: %s", c)
+		}
+	}
+	// An answer that is not WHM's documented JSON is named as such.
+	bad := *answers
+	bad.Accounts = json.RawMessage(`"LD_Preload detect"`)
+	var failed *MigrationError
+	if _, err = s.planMigration(ctx, m.ID, MigrationPlanInput{Username: "fixtureacct", CPanel: &bad, Reason: "x"}, "test operator"); !errors.As(err, &failed) || failed.Step != "cpanel_output" {
+		t.Fatalf("an answer that is not JSON: %v", err)
+	}
+	ssh := pinnedMigration(t, s)
+	if _, err = s.planMigration(ctx, ssh.ID, MigrationPlanInput{Username: "fixtureacct", CPanel: answers, Reason: "x"}, "test operator"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an SSH migration took the panel's answers: %v", err)
+	}
+
+	// Over the broker's HTTP: via and cpanel are accepted keys, and a
+	// failure carries the old server's output apart from the broker's words.
+	h := handler(s)
+	call := func(method, path string, payload any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(payload)
+		req := httptest.NewRequest(method, "http://unix"+path, strings.NewReader(string(raw)))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	rec := call("POST", "/v1/migrations", map[string]any{"actor": "test operator", "input": map[string]any{"host": "source.example.test", "port": 22, "via": "whm", "reason": "x"}})
+	var viaHTTP Migration
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &viaHTTP) != nil || viaHTTP.Via != ViaWHM {
+		t.Fatalf("open over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	rec = call("POST", "/v1/migrations/"+m.ID+"/plan", map[string]any{"actor": "test operator", "input": map[string]any{"username": "fixtureacct", "cpanel": answers, "reason": "x"}})
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"domain":"fixture.test"`) {
+		t.Fatalf("plan over HTTP: %d %s", rec.Code, rec.Body)
+	}
+	f.fails = map[string]fakeFailure{"/usr/bin/crontab -l -u fixtureacct": {"crontab: LD_Preload detect", 3}}
+	rec = call("POST", "/v1/migrations/"+m.ID+"/plan", map[string]any{"actor": "test operator", "input": map[string]any{"username": "fixtureacct", "cpanel": answers, "reason": "x"}})
+	if rec.Code != 422 || !strings.Contains(rec.Body.String(), `"step":"source"`) || !strings.Contains(rec.Body.String(), `"output":"crontab: LD_Preload detect"`) {
+		t.Fatalf("a failure over HTTP: %d %s", rec.Code, rec.Body)
 	}
 }

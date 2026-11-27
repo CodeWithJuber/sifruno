@@ -56,7 +56,7 @@ function KeyForm({ intro, onSession }: { intro: ReactNode; onSession: (s: AuthSe
     <FieldGroup>
       <Field><FieldLabel htmlFor="access-key">Access key</FieldLabel>
         <Input id="access-key" type="password" autoComplete="off" spellCheck={false} value={key} onChange={(e) => setKey(e.target.value)} required />
-        <FieldDescription>It is in <code>operator/access.key</code> inside the panel's state folder on this server.</FieldDescription>
+        <FieldDescription>A file on this server that only root can read. Show it in your SSH session with <code className="wrap-anywhere">sudo cat /var/lib/sifpanel/state/operator/access.key</code> (the installer's place for it) and paste it here. Do not share it.</FieldDescription>
       </Field>
       <Button type="submit" disabled={busy || key.trim().length !== 43}><KeyRound aria-hidden="true" />{busy ? "Checking…" : "Continue"}</Button>
     </FieldGroup>

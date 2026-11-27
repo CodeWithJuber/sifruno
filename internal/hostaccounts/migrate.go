@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"sifruno/internal/cpsource"
+	"sifruno/internal/sitemodel"
 )
 
 // Migration v1 (README, Migration): the broker reads one website account
@@ -67,7 +70,7 @@ func (e *MigrationError) Is(target error) bool { return target == ErrMigrationFa
 // (cpanel_output); an account the old server does not have
 // (account_missing); a WHM answer the panel did not send (whm_output);
 // and the copy's own steps.
-var migrationSteps = []string{"unreachable", "key_refused", "host_key_changed", "connect", "host_key", "cpanel_tool", "cpanel_output", "whm_output", "account_missing", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key"}
+var migrationSteps = []string{"unreachable", "key_refused", "host_key_changed", "connect", "host_key", "cpanel_tool", "cpanel_output", "whm_output", "account_missing", "source", "tier", "space", "fetch", "copy", "reload", "database", "dump", "import", "compare", "remove_key", "archive"}
 
 func migrationFailed(step string, out []byte) error {
 	return &MigrationError{Step: step, Output: installDetail(out)}
@@ -113,6 +116,32 @@ type MigrationOpenInput struct {
 // ViaWHM is a migration connected with the old server's WHM login.
 const ViaWHM = "whm"
 
+// ViaArchive is a migration from a cPanel backup file the admin uploaded
+// (migrate_archive.go): no server, no key; the file is the source.
+const ViaArchive = "archive"
+
+// MigrationArchive is what an uploaded backup file holds, as the broker
+// read it: the account, its domain, its databases, the file's size, and
+// what does not move. It never holds a hash or a key.
+type MigrationArchive struct {
+	User       string           `json:"user"`
+	Domain     string           `json:"domain"`
+	Databases  []string         `json:"databases"`
+	Bytes      int64            `json:"bytes"`
+	HomeBytes  int64            `json:"home_bytes"`
+	NotCarried []sitemodel.Item `json:"not_carried"`
+	// Home is the home the old server gave the account (userdata), where
+	// its .htaccess files' AuthUserFile lines point.
+	Home string `json:"home"`
+}
+
+// MigrationArchiveInput is an upload's framing line: the file's exact
+// size, then the bytes.
+type MigrationArchiveInput struct {
+	Size   int64  `json:"size"`
+	Reason string `json:"reason"`
+}
+
 // CPanelAnswers are WHM API 1's answers for one account, which the panel
 // fetched over HTTPS with the old server's WHM login: listaccts for that
 // account, domainuserdata for its domain, php_get_vhost_versions for its
@@ -155,8 +184,11 @@ type Migration struct {
 	HostKeys       []MigrationHostKey `json:"host_keys"`
 	Pinned         string             `json:"pinned_fingerprint"`
 	Via            string             `json:"via"`
-	CreatedAt      time.Time          `json:"created_at"`
-	ExpiresAt      time.Time          `json:"expires_at"`
+	// Archive is the uploaded backup file's contents for a migration from
+	// one; Host, Port, the keys and the command are empty then.
+	Archive   *MigrationArchive `json:"archive,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+	ExpiresAt time.Time         `json:"expires_at"`
 }
 
 // MigrationPinInput confirms one of the offered host keys.
@@ -227,6 +259,10 @@ type MigrationPlan struct {
 	// connections come from (its SSH_CONNECTION), or empty when it did not
 	// say: verify needs it for folders open to some addresses only.
 	ClientAddress string `json:"client_address"`
+	// NotCarried is what a backup file holds that does not move, each with
+	// its reason (sitemodel); empty for a move from a server, whose
+	// skipped grants and cron lines are listed above.
+	NotCarried []sitemodel.Item `json:"not_carried,omitempty"`
 }
 
 // MigrateFilesInput copies the source account of the same name into the
@@ -292,6 +328,7 @@ type MigrationFinishResult struct {
 // client.
 type MigrationService interface {
 	OpenMigration(context.Context, MigrationOpenInput, string) (Migration, error)
+	OpenArchiveMigration(context.Context, MigrationArchiveInput, io.Reader, string) (Migration, error)
 	GetMigration(context.Context, string) (Migration, error)
 	PinMigrationHostKey(context.Context, string, MigrationPinInput, string) (Migration, error)
 	MigrationAccounts(context.Context, string) ([]cpsource.Account, error)
@@ -349,10 +386,15 @@ type migrationRecord struct {
 	Actor     string    `json:"actor"`
 	Reason    string    `json:"reason"`
 	CreatedAt time.Time `json:"created_at"`
+	// Archive is set for a migration from an uploaded backup file only.
+	Archive *MigrationArchive `json:"archive,omitempty"`
 }
 
 func (m migrationRecord) valid() bool {
-	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() || (m.Via != "" && m.Via != ViaWHM) {
+	if m.Via == ViaArchive {
+		return idPattern.MatchString(m.ID) && m.Host == "" && m.Port == 0 && len(m.HostKeys) == 0 && m.PublicKey == "" && m.Pinned == "" && !m.CreatedAt.IsZero() && validArchive(m.Archive)
+	}
+	if !idPattern.MatchString(m.ID) || !validMigrationHost(m.Host) || m.Port < 1 || m.Port > 65535 || len(m.HostKeys) == 0 || len(m.HostKeys) > maxHostKeys || m.CreatedAt.IsZero() || (m.Via != "" && m.Via != ViaWHM) || m.Archive != nil {
 		return false
 	}
 	if _, _, ok := normalizeSSHKey(m.PublicKey); !ok {
@@ -383,6 +425,12 @@ func fingerprint(line string) (MigrationHostKey, bool) {
 }
 
 func (m migrationRecord) view() Migration {
+	if m.Via == ViaArchive {
+		a := *m.Archive
+		a.Databases = slices.Clone(a.Databases)
+		a.NotCarried = slices.Clone(a.NotCarried)
+		return Migration{ID: m.ID, HostKeys: []MigrationHostKey{}, Via: ViaArchive, Archive: &a, CreatedAt: m.CreatedAt, ExpiresAt: m.CreatedAt.Add(migrationLifetime)}
+	}
 	out := Migration{ID: m.ID, Host: m.Host, Port: m.Port, PublicKey: cpsource.KeyLine(m.PublicKey, m.ID), InstallCommand: cpsource.InstallKeyCommand(m.PublicKey, m.ID), HostKeys: []MigrationHostKey{}, Via: m.Via, CreatedAt: m.CreatedAt, ExpiresAt: m.CreatedAt.Add(migrationLifetime)}
 	for _, k := range m.HostKeys {
 		if fp, ok := fingerprint(k); ok {

@@ -1,10 +1,12 @@
 package hostaccounts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http/httptest"
 	"reflect"
 	"slices"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"sifruno/internal/cpmove"
 	"sifruno/internal/cpsource"
 	"sifruno/internal/htaccess"
 )
@@ -37,6 +40,8 @@ type fakeMigrate struct {
 	protection SiteProtection
 	// copied runs when Files has put the files in the home.
 	copied func()
+	// archives are the uploaded backup files, by migration.
+	archives map[string][]byte
 }
 
 func newFakeMigrate() *fakeMigrate {
@@ -117,10 +122,50 @@ func (f *fakeMigrate) Database(_ context.Context, _ migrationRecord, db string, 
 	f.databases = append(f.databases, db+" as "+l.Users[db])
 	return MigrateDatabaseResult{Database: db, Tables: []MigrationTable{{Table: "wp_posts", Source: 3, Copy: 3}}}, nil
 }
+func (f *fakeMigrate) SaveArchive(ctx context.Context, id string, size int64, body io.Reader) (*cpmove.Archive, error) {
+	data, err := io.ReadAll(io.LimitReader(body, size))
+	if err != nil || int64(len(data)) != size {
+		return nil, &MigrationError{Step: "archive", Detail: "short upload"}
+	}
+	f.mu.Lock()
+	if f.archives == nil {
+		f.archives = map[string][]byte{}
+	}
+	f.folders[id], f.archives[id] = true, data
+	f.mu.Unlock()
+	return f.ReadArchive(ctx, migrationRecord{ID: id, Via: ViaArchive})
+}
+func (f *fakeMigrate) ReadArchive(ctx context.Context, m migrationRecord) (*cpmove.Archive, error) {
+	f.mu.Lock()
+	data, ok := f.archives[m.ID]
+	ok = ok && f.folders[m.ID]
+	f.mu.Unlock()
+	if !ok {
+		return nil, ErrUnavailable
+	}
+	a, err := cpmove.Read(ctx, bytes.NewReader(data), cpmove.DefaultLimits(), discardArchive{})
+	if err != nil {
+		return nil, archiveFailure(err)
+	}
+	return a, nil
+}
+
+// discardArchive reads every member and keeps none, as the fake engine
+// extracts nothing.
+type discardArchive struct{}
+
+func (discardArchive) Dir(string, fs.FileMode) error { return nil }
+func (discardArchive) File(_ string, _ fs.FileMode, r io.Reader) error {
+	_, err := io.Copy(io.Discard, r)
+	return err
+}
+func (discardArchive) Symlink(string, string) error { return nil }
+
 func (f *fakeMigrate) Forget(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.folders, id)
+	delete(f.archives, id)
 	return nil
 }
 func (f *fakeMigrate) Folders() ([]string, error) {

@@ -1742,6 +1742,37 @@ Known gaps, found in review and not fixed in v1:
   CDN in front of it, IPv6 where SSH used IPv4), the check can fail; it
   fails closed, and a person checks the folder and accepts.
 
+### From a cPanel backup file
+
+`POST /v1/migrations/archive` takes a backup file the admin uploaded
+(`cpmove-USER.tar.gz`, `USER.tar.gz`, `backup-…_USER.tar.gz`): one framing
+line with its exact `size` (at most 32 GiB) and the reason, then the bytes
+(`decodeFramed`, as a file upload). The broker writes it as
+`<state>/migrate/<id>/archive`, root 0600, in a folder of its own (root
+0700), after a room check, and reads it with `cpmove.Read`
+(docs/migration-design.md): one TAR stream, every size, count and path
+bounded, names outside the archive's one top folder refused, links out of
+the home, hard links and special files left out with a reason, setuid,
+setgid and sticky bits dropped. The record has `via: "archive"`, no host,
+port or keys, and what the file holds (account, domain, databases, the
+old home's path, what does not move); it lives 24 hours like any
+migration, and finishing or expiring it deletes the folder. The upload runs
+outside `migrateMu`; its id is reserved meanwhile so the sweep does not
+take its folder for a stray one.
+
+The steps are the SSH path's with the file as the source: the plan reads
+the file's metadata and stages only its `.htaccess` files for the tier;
+the copy extracts the home (`homedir/`, the same parts left out as the
+SSH copy's excludes) through an `os.Root` into the root-only staging
+folder, within the free space margin, and from there it is the same
+`placeFiles` as rsync's staged copy: groups and modes, the scan and
+conversion again, protected folders first, `cp` as the site's user. A
+database step extracts `mysql/DB.sql` alone and loads it as the site's user
+through the temporary MariaDB user; with no live database to count
+against, each table's source count is the copy's. The certificate step
+reads `apache_tls/DOMAIN` and checks it as an SSH move's certificate. No
+command runs on any other server.
+
 ## Verification cost
 
 Every request checks every account's files: its passwd and group identity (from

@@ -245,26 +245,18 @@ func (s *store) migrateCertificate(ctx context.Context, id string, in MigrateCer
 	}
 	work, cancel := backupContext(ctx, 2*migrateRemoteTimeout)
 	defer cancel()
-	if _, _, err = s.lockedSourceSite(work, m, r.Account.Username, r.Account.Domain, in.CPanel); err != nil {
-		return MigrateCertificateResult{}, err
-	}
-	command, err := cpsource.VhostSSLCommand(r.Account.Domain)
-	if err != nil {
-		return MigrateCertificateResult{}, ErrInvalid
-	}
-	out, err := s.cpanelAnswer(work, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.SSL }, command)
-	if err != nil {
-		return MigrateCertificateResult{}, err
-	}
-	ssl, err := cpsource.ParseVhostSSL(out, r.Account.Domain)
-	clear(out)
+	ssl, err := s.sourceCertificate(work, m, r, in)
 	unchanged := MigrateCertificateResult{Revision: r.Account.Revision}
 	switch {
 	case errors.Is(err, cpsource.ErrNoCertificate):
-		unchanged.Refused, unchanged.Detail = "no_certificate", "The old server has no certificate for "+r.Account.Domain+"."
+		where := "The old server has"
+		if m.Via == ViaArchive {
+			where = "The backup file has"
+		}
+		unchanged.Refused, unchanged.Detail = "no_certificate", where+" no certificate for "+r.Account.Domain+"."
 		return unchanged, nil
 	case err != nil:
-		return MigrateCertificateResult{}, &MigrationError{Step: "cpanel_output", Detail: "The old server's certificate for the site could not be read (whmapi1 fetch_vhost_ssl_components)."}
+		return MigrateCertificateResult{}, err
 	}
 	bundle, refusal := copiedCertificate(ssl, r.Account.Domain, s.certRoots, time.Now())
 	if refusal != nil {
@@ -280,4 +272,39 @@ func (s *store) migrateCertificate(ctx context.Context, id string, in MigrateCer
 		return MigrateCertificateResult{}, err
 	}
 	return MigrateCertificateResult{Copied: true, Certificate: res.Certificate, Issuer: issuerName(bundle.leaf), Revision: res.Account.Revision}, nil
+}
+
+// sourceCertificate reads the certificate the old site served for the
+// account's domain: from the old server, after checking it has the account
+// with that domain, or from the backup file the account came from.
+func (s *store) sourceCertificate(ctx context.Context, m migrationRecord, r record, in MigrateCertificateInput) (cpsource.VhostSSL, error) {
+	if m.Via == ViaArchive {
+		if in.CPanel != nil {
+			return cpsource.VhostSSL{}, ErrInvalid
+		}
+		if err := archiveSite(m, r); err != nil {
+			return cpsource.VhostSSL{}, err
+		}
+		return s.archiveCertificate(ctx, m)
+	}
+	if _, _, err := s.lockedSourceSite(ctx, m, r.Account.Username, r.Account.Domain, in.CPanel); err != nil {
+		return cpsource.VhostSSL{}, err
+	}
+	command, err := cpsource.VhostSSLCommand(r.Account.Domain)
+	if err != nil {
+		return cpsource.VhostSSL{}, ErrInvalid
+	}
+	out, err := s.cpanelAnswer(ctx, m, in.CPanel, func(a *CPanelAnswers) json.RawMessage { return a.SSL }, command)
+	if err != nil {
+		return cpsource.VhostSSL{}, err
+	}
+	ssl, err := cpsource.ParseVhostSSL(out, r.Account.Domain)
+	clear(out)
+	switch {
+	case errors.Is(err, cpsource.ErrNoCertificate):
+		return cpsource.VhostSSL{}, err
+	case err != nil:
+		return cpsource.VhostSSL{}, &MigrationError{Step: "cpanel_output", Detail: "The old server's certificate for the site could not be read (whmapi1 fetch_vhost_ssl_components)."}
+	}
+	return ssl, nil
 }

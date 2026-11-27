@@ -12,6 +12,7 @@ import (
 // The broker's migration routes (README, Migration):
 //
 //	POST /v1/migrations                         host, port, reason
+//	POST /v1/migrations/archive                 size, reason; then the backup file
 //	GET  /v1/migrations/{id}                    the migration
 //	POST /v1/migrations/{id}/host-key           fingerprint, reason
 //	GET  /v1/migrations/{id}/accounts           the source's accounts
@@ -28,7 +29,7 @@ var (
 )
 
 func migrateRoute(path string) bool {
-	return path == "/v1/migrations" || path == "/v1/migrations/stale" || migrationPath.MatchString(path) || migrateCopyPath.MatchString(path)
+	return path == "/v1/migrations" || path == "/v1/migrations/archive" || path == "/v1/migrations/stale" || migrationPath.MatchString(path) || migrateCopyPath.MatchString(path)
 }
 
 // answerMigration writes the result, or 422 migration_failed with the step,
@@ -64,6 +65,29 @@ func serveMigrate(ctx context.Context, w http.ResponseWriter, r *http.Request, s
 			return
 		}
 		result, err := s.openMigration(ctx, in.Input, in.Actor)
+		answerMigration(w, result, err)
+		return
+	}
+	if r.URL.Path == "/v1/migrations/archive" {
+		// The upload runs past the listener's 45 seconds, on its own limit.
+		if r.Method != "POST" {
+			writeError(w, ErrInvalid)
+			return
+		}
+		if e := http.NewResponseController(w).SetReadDeadline(time.Now().Add(archiveUploadTimeout)); e != nil && !errors.Is(e, http.ErrNotSupported) {
+			writeError(w, ErrUnavailable)
+			return
+		}
+		if !backupDeadline(w, archiveUploadTimeout) {
+			return
+		}
+		var in body[MigrationArchiveInput]
+		archive, err := decodeFramed(r, &in, []string{"size", "reason"})
+		if err != nil {
+			writeError(w, ErrInvalid)
+			return
+		}
+		result, err := s.openArchiveMigration(ctx, in.Input, archive, in.Actor)
 		answerMigration(w, result, err)
 		return
 	}

@@ -118,11 +118,96 @@ certificate. OpenLiteSpeed reads a site's `.htaccess` rewrite rules itself.
   locations other than PHP's, nested locations) is refused, naming the
   file, the line number and the directive, so the person sees exactly what
   does not move.
-- **PHP settings.** `php_value` and `php_flag` from `.htaccess`, cPanel's
-  `userdata` PHP version and nginx's `fastcgi_param PHP_VALUE` become a
-  `.user.ini` in the document root, which LSPHP reads per directory.
-  `disable_functions`, `open_basedir` and other settings only the server
-  may set are not carried.
+- **PHP settings.** `php_value` and `php_flag` from the root `.htaccess`
+  become the site's vhost `phpIniOverride`, written by the root broker
+  (below). `disable_functions`, `open_basedir`, settings that name a file
+  and every `php_admin_*` line are refused, naming the line.
+
+## PHP settings
+
+Many cPanel sites set PHP options in `.htaccess` (`php_value memory_limit
+512M`), and cPanel's MultiPHP INI Editor writes a block of them for the
+DSO and LSAPI handlers. PHP-FPM sites read the same from the document
+root's `.user.ini`, where Wordfence's extended protection also loads its
+firewall with `auto_prepend_file`.
+
+**How PHP runs here, on a running server** (2026-11-27, a server the
+nightly script made, AlmaLinux 9.8, OpenLiteSpeed 1.9.5, LSPHP 8.3.37; a
+site made through the installed broker):
+
+- The site's vhost has its own `lsapi` extprocessor,
+  `/usr/local/lsws/lsphp83/bin/lsphp`, started through the CGI daemon as
+  the account. PHP reports the SAPI `litespeed` and reads
+  `/usr/local/lsws/lsphp83/etc/php.ini`.
+- `user_ini.filename` is `.user.ini`, but the lsphp processes'
+  environment has no `LSPHP_ENABLE_USER_INI` (only `PHP_LSAPI_CHILDREN`,
+  `LSAPI_AVOID_FORK` and LSAPI's padding), and PHP reads a `.user.ini`
+  only when it is `on` (php-src `sapi/litespeed/lsapi_main.c`). A
+  `.user.ini` in the document root with `memory_limit = 77M` and an
+  `auto_prepend_file` changed nothing after a restart: `memory_limit`
+  stayed 128M and the file did not run.
+- A `php_value upload_max_filesize 33M` line in `.htaccess` changed
+  nothing (2M), as OpenLiteSpeed reads only rewrite rules there.
+- A `phpIniOverride` block written into the site's `vhconf.conf` with
+  `php_value` and `php_flag` lines set every value it named, read back
+  through PHP: `memory_limit` 256M, `upload_max_filesize` and
+  `post_max_size` 64M, `max_execution_time` 120, `max_input_vars` 3000,
+  `display_errors` 1 (`php_flag ... on`), `short_open_tag` 0 (`off`),
+  `date.timezone` Europe/Berlin, `error_reporting` 32767,
+  `session.cookie_httponly` 1, `session.gc_maxlifetime` 7200. The site's
+  code could still change `memory_limit` with `ini_set`, as with Apache's
+  `.htaccess` lines.
+- PHP's access levels for every setting on the list below are 6
+  (`PHP_INI_PERDIR`) or 7 (`PHP_INI_ALL`); `disable_functions`,
+  `sendmail_path`, `allow_url_fopen` and `file_uploads` are 4
+  (`PHP_INI_SYSTEM`). The server's `maxReqBodySize` is 2047M.
+
+**The one way:** the root broker writes the settings into the vhost's
+`phpIniOverride` (`internal/olsweb` phpini.go), not a `.user.ini`.
+Turning on `LSPHP_ENABLE_USER_INI` for every site would apply every
+`.user.ini` in every folder of every site, with whatever it sets, outside
+the settings and limits the broker checks; it is not done.
+
+**What converts** (`internal/htaccess` phpsettings.go): a `php_value` or
+`php_flag` line of the root `.htaccess`, at its top level or inside
+`<IfModule>` sections Apache reads, of `memory_limit`,
+`upload_max_filesize`, `post_max_size` (sizes), `max_execution_time`,
+`max_input_time`, `max_input_vars`, `max_input_nesting_level`,
+`max_file_uploads`, `session.gc_maxlifetime`, `session.cookie_lifetime`,
+`default_socket_timeout`, `pcre.backtrack_limit`, `pcre.recursion_limit`,
+`error_reporting` (whole numbers, -1 where PHP takes it),
+`display_errors`, `display_startup_errors`, `log_errors`, `html_errors`,
+`short_open_tag`, the session cookie flags (On, Off, 1 or 0),
+`output_buffering`, `zlib.output_compression` (either) and
+`date.timezone` (a time zone name). The later line for a setting wins; at
+most 32 settings. cPanel's `session.save_path` for its own session folder
+does nothing here (this server's PHP keeps sessions in its own), and Off
+for a setting PHP 5.4 removed does nothing on either server; neither
+refuses.
+
+**What refuses, naming the line:** `auto_prepend_file`,
+`auto_append_file`, `include_path`, `sendmail_path`, `session.save_path`
+and any value that names a file or folder; `open_basedir` and
+`disable_functions`; every `php_admin_value` and `php_admin_flag`; any
+other setting or value; and a setting in a folder's `.htaccess` or a
+`<Files>` section, which applied to part of the site only. Wordfence's
+mod_php block is refused at its `php_value auto_prepend_file` line, not as
+an access rule.
+
+**Limits the server keeps:** `memory_limit` is written no larger than
+the account's memory, the address space each of its lsphp processes gets
+(`AccountLimits.MemoryMiB`, 1024 MiB unless a plan says otherwise; -1
+becomes that too), and the plan names a larger one as a note.
+
+**On a move:** the copy puts the settings into the recorded set with the
+converted redirects and error pages (`placeFiles`, `setSiteFolders`),
+live before `cp` makes the files reachable. The document root's
+`.user.ini` comes with the tier check: an `auto_prepend_file` or
+`auto_append_file` there is a note that keeps the cutover gate closed
+until a person accepts it, because the file it ran (often a firewall) does
+not run on the copy. The proof reads every carried setting back through
+PHP on the old server and the copy
+(`docs/proofs/real-server-2026-11-25/migrate-php-settings.txt`).
 
 ## Export: the way back
 
@@ -177,13 +262,17 @@ output stays under Technical details.
   (`ParseWPConfig`).
 - The export writer (`cpmove.Write`), with a round trip through
   `cpmove.Read`.
+- PHP settings from the root `.htaccess` carried into the site's
+  `phpIniOverride` on a move from a cPanel server or backup file, and the
+  `.user.ini` firewall note.
 
 Not built yet: the broker's steps for a server that is not cPanel (and so
 the third answer to "where is the website now?"), the panel API clients
 for DirectAdmin and CyberPanel (CyberPanel publishes no API for listing
-websites; its source would have to be read), writing the carried PHP
-settings as `.user.ini` during a copy (a site with `php_value` lines is
-refused by the `.htaccess` tier check today), and an export button.
+websites; its source would have to be read), PHP settings from a
+`.user.ini` or nginx's `fastcgi_param PHP_VALUE` (the model reads them,
+`sitemodel.PHP`, but no copy applies them, and its own list is wider than
+the converter's), and an export button.
 
 ## Not in this design yet
 

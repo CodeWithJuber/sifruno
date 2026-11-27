@@ -9,13 +9,12 @@ import (
 	"sifruno/internal/htaccess"
 )
 
-// PHP settings move into a .user.ini in the document root. LSPHP, like
-// every CGI and FastCGI PHP, reads .user.ini files per directory, for the
-// settings PHP marks PHP_INI_PERDIR or PHP_INI_ALL (php.net, "Where a
-// configuration setting may be set" and ".user.ini files"). OpenLiteSpeed
-// itself takes PHP settings only from the virtual host's phpIniOverride
-// (internal/htaccess, doc.go), which Sifruno does not render per site, so
-// .htaccess php_value lines would be ignored there.
+// The model's PHP settings are what an adapter read. No copy applies them
+// as a .user.ini: Sifruno's LSPHP reads no .user.ini, as a running server
+// showed (docs/migration-design.md, "PHP settings"). A move from cPanel
+// applies the root .htaccess's settings through the vhost's
+// phpIniOverride instead, with internal/htaccess phpsettings.go's own
+// list; UserINI below is not written by any copy.
 
 // userSettings are the settings a site may set for itself in .user.ini, as
 // php.net's ini list marks them (PHP_INI_PERDIR or PHP_INI_ALL). Settings

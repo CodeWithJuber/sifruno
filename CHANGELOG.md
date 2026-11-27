@@ -7,11 +7,22 @@
 - Moving a website from cPanel no longer refuses `.htaccess` lines
   OpenLiteSpeed can safely ignore or that Sifruno handles: cPanel's PHP
   handler block, Expires, compression, caching and security headers,
-  `FileETag`, `Options -Indexes`, `AddType` and `AddDefaultCharset`.
-  `php_value` and `php_flag` move as notes to check before cutover. A
+  `FileETag`, `Options -Indexes`, `AddType` and `AddDefaultCharset`. A
   refusal names the file, line and directive, says a folder would open only
   when an access rule is the reason, and names the lines to change on the
   old server; `panelctl htaccess scan --details` shows the same.
+- Moving a website from cPanel carries the root `.htaccess`'s `php_value`
+  and `php_flag` lines for memory and upload sizes, time and input limits,
+  error display and reporting, output buffering, session cookies and the
+  time zone into the site's web server config, so the copy's PHP runs with
+  the old site's settings; `memory_limit` stays within the account's
+  memory. Settings that name a file (such as `auto_prepend_file`),
+  `open_basedir`, `disable_functions`, `php_admin_*` lines and settings in
+  a folder's `.htaccess` refuse the move, naming the line. A `.user.ini`
+  that loads a file before every script, such as Wordfence's firewall, is
+  a note to accept before cutover: this server's PHP does not read
+  `.user.ini` files. `proof.sh migrate-cpanel` shows it on a real server
+  (`docs/proofs/real-server-2026-11-25/migrate-php-settings.txt`).
 - Moving a website from cPanel carries the `.htaccess` lines WordPress
   plugins write: `<Files>` and `<FilesMatch>` rules that close
   `wp-config.php`, `xmlrpc.php`, Wordfence's `.user.ini` and other names

@@ -73,6 +73,15 @@ type Sink interface {
 	Symlink(name, target string) error
 }
 
+// GroupSink is a Sink that also hears each home entry's group name as the
+// archive records it, after the entry is made: a copy needs to know what
+// the old web server read through its group (nobody on cPanel), as an SSH
+// copy marks it.
+type GroupSink interface {
+	Sink
+	Group(name, group string) error
+}
+
 // homeExcludes are the parts of a cPanel home that are not the website,
 // the same list the SSH copy leaves out (hostaccounts migrateExcludes):
 // mail and its settings, logs, caches, old keys and certificates, and www,
@@ -270,6 +279,7 @@ func (rd *reader) home(rel string, h *tar.Header, body io.Reader) error {
 		if rd.sink.Dir(target, mode) != nil {
 			return ErrIO
 		}
+		return rd.group(target, h.Gname)
 	case tar.TypeReg, tar.TypeRegA:
 		rd.homeBytes += h.Size
 		if rel == "public_html/.htaccess" && h.Size <= htaccess.MaxFileBytes {
@@ -283,6 +293,7 @@ func (rd *reader) home(rel string, h *tar.Header, body io.Reader) error {
 		if err := rd.file(target, mode, h.Size, body); err != nil {
 			return err
 		}
+		return rd.group(target, h.Gname)
 	case tar.TypeSymlink:
 		if _, inside := linkTarget(rel, h.Linkname, false); !inside {
 			rd.skip("file", "A link to a place outside the website's home was not copied.", rel)
@@ -295,6 +306,16 @@ func (rd *reader) home(rel string, h *tar.Header, body io.Reader) error {
 		rd.skip("file", "A second name (hard link) for another file was not copied; the file itself was.", rel)
 	default:
 		rd.skip("file", "A device, pipe or other special file was not copied.", rel)
+	}
+	return nil
+}
+
+// group tells a GroupSink the group name the archive records for an entry.
+func (rd *reader) group(name, group string) error {
+	if g, ok := rd.sink.(GroupSink); ok && group != "" {
+		if g.Group(name, group) != nil {
+			return ErrIO
+		}
 	}
 	return nil
 }

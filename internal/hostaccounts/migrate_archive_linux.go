@@ -159,6 +159,26 @@ type stageSink struct {
 	budget uint64
 	used   uint64
 	full   bool
+	// mark, when set, is the group an entry of the old web server's group
+	// gets, as rsync's --groupmap gives it on an SSH copy (fetchArgs), so
+	// placeFiles finds what that web server read through its group alone
+	// (D-0001). Entries are otherwise root's group.
+	mark int
+}
+
+// webGroups are the old web server's groups: cPanel's and a plain Apache's,
+// the same names fetchArgs maps.
+var webGroups = map[string]bool{"nobody": true, "apache": true}
+
+func (s *stageSink) Group(name, group string) error {
+	to, ok := s.keep(name, true)
+	if !ok {
+		to, ok = s.keep(name, false)
+	}
+	if !ok || to == "." || s.mark <= 0 || !webGroups[group] {
+		return nil
+	}
+	return s.root.Root.Lchown(to, -1, s.mark)
 }
 
 func (s *stageSink) Dir(name string, mode fs.FileMode) error {
@@ -227,7 +247,7 @@ func homeHtaccess(name string, dir bool) (string, bool) {
 
 // extractArchive reads the migration's backup file into dir (a fresh
 // root-only staging folder) through keep, within the free space margin.
-func (m *migrator) extractArchive(ctx context.Context, rec migrationRecord, dir string, most uint64, keep func(string, bool) (string, bool)) error {
+func (m *migrator) extractArchive(ctx context.Context, rec migrationRecord, dir string, most uint64, mark int, keep func(string, bool) (string, bool)) error {
 	avail, total, _, err := m.e.space(m.e.stage)
 	if err != nil {
 		return ErrUnavailable
@@ -237,7 +257,7 @@ func (m *migrator) extractArchive(ctx context.Context, rec migrationRecord, dir 
 		return ErrUnavailable
 	}
 	defer root.Close()
-	sink := &stageSink{root: cpmove.RootSink{Root: root}, keep: keep, budget: min(most, roomLeft(avail, total))}
+	sink := &stageSink{root: cpmove.RootSink{Root: root}, keep: keep, budget: min(most, roomLeft(avail, total)), mark: mark}
 	_, err = m.readArchive(ctx, rec.ID, sink)
 	if sink.full {
 		return &MigrationError{Step: "space", Detail: "The copy from the backup file reached the free space this server keeps (or, for a database dump, the 32 GiB one may take), so it was stopped."}
@@ -251,7 +271,7 @@ func (m *migrator) archivePreflight(ctx context.Context, rec migrationRecord, st
 	if unix.Mkdirat(int(stage.Fd()), "htaccess", 0700) != nil {
 		return ErrUnavailable
 	}
-	return m.extractArchive(ctx, rec, filepath.Join(stagePath, "htaccess"), maxDumpBytes, homeHtaccess)
+	return m.extractArchive(ctx, rec, filepath.Join(stagePath, "htaccess"), maxDumpBytes, 0, homeHtaccess)
 }
 
 // archiveDatabase loads one database's dump from the backup file into the
@@ -310,7 +330,7 @@ func (m *migrator) archiveDatabase(ctx context.Context, rec migrationRecord, db 
 // <stage>/db/<db>.sql, as the SSH path's dump lands there.
 func (m *migrator) archiveDump(ctx context.Context, rec migrationRecord, stagePath, db string) error {
 	want := "mysql/" + db + ".sql"
-	err := m.extractArchive(ctx, rec, filepath.Join(stagePath, "db"), maxDumpBytes, func(name string, dir bool) (string, bool) {
+	err := m.extractArchive(ctx, rec, filepath.Join(stagePath, "db"), maxDumpBytes, 0, func(name string, dir bool) (string, bool) {
 		return db + ".sql", !dir && name == want
 	})
 	if err != nil {

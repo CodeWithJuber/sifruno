@@ -767,6 +767,187 @@ print(json.dumps(b))" "$CIP" "$1" "$2" > "$WORK/whm.json"
   check "the connection's login is forgotten: listing it again is refused" bash -c "code=\$(curl -s -o /dev/null -w '%{http_code}' -b $JAR -H 'Origin: $API' $API/api/v1/websites/migrations/sources/$SRC/accounts); [ \$code != 200 ]"
 }
 
+# ---- A cPanel backup file (archive mode) ----------------------------------------
+# With "archive" as the third argument, sections 3 to 9 (the SSH path) are
+# left out and this runs instead: the stand-in makes a backup file of the
+# shop and staff accounts in the layout cPanel's public "Backup Tarball
+# Contents" page describes (mkcpmove.sh below stands in for pkgacct; it is
+# not cPanel), the admin uploads each through the panel, and the move is
+# the same job as over SSH: files, the database with the same user and
+# hash, PHP, cron, the converted .htaccess rules, verify against the old
+# site, ready. Then two hostile files are refused before anything is made.
+cat > "$WORK/mkcpmove.sh" <<'MK'
+#!/bin/bash
+# STAND-IN for pkgacct in the migration proof: not cPanel. Makes
+# /root/cpmove-USER.tar.gz with cp/, userdata/, cron/, mysql/ (dumps and
+# CREATE statements), mysql.sql (SHOW GRANTS, as MariaDB prints them) and
+# homedir/, as cPanel's "Backup Tarball Contents" page lists them.
+set -euo pipefail
+u="$1" d="$2" php="$3"
+T="/root/pkg/cpmove-$u"
+rm -rf /root/pkg
+mkdir -p "$T/cp" "$T/userdata" "$T/cron" "$T/mysql" "$T/homedir" "$T/dnszones"
+printf 'pkgacct version: 10\narchive version: 4\n' > "$T/version"
+printf 'DNS=%s\nUSER=%s\nPLAN=default\n' "$d" "$u" > "$T/cp/$u"
+printf -- '---\naddon_domains: {}\nmain_domain: %s\nparked_domains: []\nsub_domains: []\n' "$d" > "$T/userdata/main"
+printf -- '---\ndocumentroot: /home/%s/public_html\ngroup: %s\nhomedir: /home/%s\nphpversion: ea-php%s\nserveralias: www.%s\nservername: %s\nuser: %s\n' "$u" "$u" "$u" "$php" "$d" "$d" "$u" > "$T/userdata/$d"
+printf '$ORIGIN %s.\n@ 14400 IN A 192.0.2.10\n' "$d" > "$T/dnszones/$d.db"
+crontab -l -u "$u" > "$T/cron/$u" 2>/dev/null || :
+for db in $(mysql -N -B -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE '${u}\\_%'"); do
+  mysqldump --single-transaction "$db" > "$T/mysql/$db.sql"
+  printf 'CREATE DATABASE `%s`;\n' "$db" > "$T/mysql/$db.create"
+done
+: > "$T/mysql.sql"
+for user in $(mysql -N -B -e "SELECT User FROM mysql.user WHERE User LIKE '${u}\\_%' AND Host='localhost'"); do
+  mysql -N -B -r -e "SHOW GRANTS FOR '$user'@'localhost'" | sed 's/$/;/' >> "$T/mysql.sql"
+done
+cp -a "/home/$u/." "$T/homedir/"
+mkdir -p "$T/homedir/mail" && echo 'mail stays with the old host' > "$T/homedir/mail/inbox"
+cd /root/pkg && tar -czf "/root/cpmove-$u.tar.gz" "cpmove-$u"
+rm -rf /root/pkg
+MK
+archive_proof() {
+  jm() { json "$WORK/job.json" "d['job']['migration']$1"; }
+  archive_move() { # archive_move USER: the move of $SRC and its comparison; JOB and $WORK/job.json
+    call POST /api/v1/websites/migrations "$(body start "{\"source\":\"$SRC\",\"username\":\"$1\"}")"
+    JOB="$(json "$WORK/answer.json" "d['job']['id']")"
+    [ "$code" = 202 ] || echo "  start answered $code: $(head -c 400 "$WORK/answer.json")"
+    for _ in $(seq 1 450); do
+      call GET "/api/v1/websites/jobs/$JOB"
+      cp "$WORK/answer.json" "$WORK/job.json"
+      state="$(json "$WORK/job.json" "d['job']['state']")"
+      [ "$state" != running ] && break
+      sleep 2
+    done
+    for _ in $(seq 1 150); do
+      [ "$(json "$WORK/job.json" "(d['job']['migration'].get('verify') or {}).get('running')")" = False ] && break
+      sleep 2; call GET "/api/v1/websites/jobs/$JOB"; cp "$WORK/answer.json" "$WORK/job.json"
+    done
+    echo "  job $JOB: $state"
+    python3 -c "import json,sys; [print('    %-8s %-8s %s' % (s['name'], s['state'], s['message'][:400].rstrip())) for s in json.load(open(sys.argv[1]))['job']['steps']]" "$WORK/job.json"
+  }
+  echo
+  echo "## 3. Backup files of $SHOP and $STAFF, in the layout cPanel documents"
+  podman cp "$WORK/mkcpmove.sh" "$CTR:/root/mkcpmove.sh"
+  for u in "$SHOP:$SHOP_DOMAIN" "$STAFF:$STAFF_DOMAIN"; do
+    in_ctr "bash /root/mkcpmove.sh ${u%%:*} ${u#*:} $PHPXY" && podman cp "$CTR:/root/cpmove-${u%%:*}.tar.gz" "$WORK/cpmove-${u%%:*}.tar.gz"
+  done
+  check "the stand-in made cpmove-$SHOP.tar.gz with cp/, userdata/, cron/, mysql/ and homedir/" bash -c "tar -tzf $WORK/cpmove-$SHOP.tar.gz | grep -qx 'cpmove-$SHOP/cp/$SHOP' && tar -tzf $WORK/cpmove-$SHOP.tar.gz | grep -qx 'cpmove-$SHOP/homedir/public_html/wp-config.php' && tar -tzf $WORK/cpmove-$SHOP.tar.gz | grep -qx 'cpmove-$SHOP/mysql/${SHOP}_wp.sql'"
+  check "its mysql.sql holds the user's grants as MariaDB prints them, with the hash" bash -c "tar -xzOf $WORK/cpmove-$SHOP.tar.gz cpmove-$SHOP/mysql.sql | grep -q 'TO \`${SHOP}_wpu\`@\`localhost\` IDENTIFIED BY PASSWORD'"
+  echo "  cpmove-$SHOP.tar.gz: $(stat -c %s "$WORK/cpmove-$SHOP.tar.gz") bytes, $(tar -tzf "$WORK/cpmove-$SHOP.tar.gz" | wc -l) entries; cpmove-$STAFF.tar.gz: $(stat -c %s "$WORK/cpmove-$STAFF.tar.gz") bytes"
+  python3 -c "import json,sys; print(json.dumps({'access_key': open(sys.argv[1]).read().strip()}))" "$DIR/state/operator/access.key" > "$WORK/login.json"
+  CSRF=""
+  call POST /api/v1/session/login "$WORK/login.json"
+  CSRF="$(json "$WORK/answer.json" "d['csrf_token']")"
+  check "the panel signs in with the server's access key" test "$code" = 200 -a -n "$CSRF"
+  upload() { # upload FILE: sends the backup file; $SRC and $WORK/answer.json
+    code="$(curl -s -o "$WORK/answer.json" -w '%{http_code}' -b "$JAR" -c "$JAR" -H "Origin: $API" -H "X-CSRF-Token: $CSRF" \
+      -H 'Content-Type: application/octet-stream' --data-binary "@$1" "$API/api/v1/websites/migrations/archive")"
+    SRC="$(json "$WORK/answer.json" "d['source']['id']")"
+  }
+  code="$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "Origin: $API" -H 'Content-Type: application/octet-stream' --data-binary "@$WORK/cpmove-$SHOP.tar.gz" "$API/api/v1/websites/migrations/archive")"
+  check "an upload without the CSRF token is refused (403)" test "$code" = 403
+
+  echo
+  echo "## 4. Move $SHOP_DOMAIN from its backup file"
+  upload "$WORK/cpmove-$SHOP.tar.gz"
+  echo "  answer: $(json "$WORK/answer.json" "{k: d['source']['archive'][k] for k in ('user','domain','databases','home_bytes')}")"
+  echo "  not carried: $(json "$WORK/answer.json" "[i['text'][:60] for i in d['source']['archive']['not_carried']]")"
+  check "the upload is read: account $SHOP, $SHOP_DOMAIN, the database ${SHOP}_wp" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['archive']['user']+' '+d['source']['archive']['domain']+' '+','.join(d['source']['archive']['databases'])")" = "$SHOP $SHOP_DOMAIN ${SHOP}_wp"
+  check "it says that mail and the DNS zone do not move" test "$(json "$WORK/answer.json" "sorted({i['part'] for i in d['source']['archive']['not_carried']})")" = "['dns', 'mail']"
+  check "the file is root's 0600 in the migration's own 0700 folder" test "$(stat -c '%U %a' "$STATE/migrate/$SRC/archive" "$STATE/migrate/$SRC" 2>/dev/null | paste -sd ' ')" = "root 600 root 700"
+  check "the file is the one uploaded (same sha256)" test "$(sha256sum < "$STATE/migrate/$SRC/archive" | cut -d' ' -f1)" = "$(sha256sum < "$WORK/cpmove-$SHOP.tar.gz" | cut -d' ' -f1)"
+  check "no migration key was made for a backup file" test ! -e "$STATE/migrate/$SRC/ssh_key"
+  call GET "/api/v1/websites/migrations/sources/$SRC/accounts"
+  check "the source lists the file's one account" test "$code" = 200 -a "$(json "$WORK/answer.json" "[a['user'] for a in d['accounts']]")" = "['$SHOP']"
+  sample_start
+  archive_move "$SHOP"
+  sample_stop
+  check "the move succeeded" test "$state" = succeeded
+  check "its first and last steps name the backup file" test "$(json "$WORK/job.json" "[s['title'] for s in d['job']['steps'] if s['name'] in ('source','key')]")" = "['Read the website from the backup file', 'Delete the uploaded backup file']"
+  check "the tier is Native (rewrite rules, and Akismet's access rules converted)" test "$(jm "['tier']")" = native
+  check "the job names Akismet's .htaccess as converted" test "$(json "$WORK/job.json" "[x['file'] for x in d['job']['migration']['converted']]")" = "['wp-content/plugins/akismet/.htaccess']"
+  check "the account has the same name and /home/$SHOP/public_html" test "$(stat -c %U "/home/$SHOP/public_html" 2>/dev/null)" = "$SHOP"
+  src_sum="$(in_ctr "sha256sum /home/$SHOP/public_html/wp-config.php" | cut -d' ' -f1)"
+  dst_sum="$(sha256sum "/home/$SHOP/public_html/wp-config.php" 2>/dev/null | cut -d' ' -f1)"
+  check "wp-config.php arrived unchanged (same sha256) and is the site user's" test -n "$src_sum" -a "$src_sum" = "$dst_sum" -a "$(stat -c %U "/home/$SHOP/public_html/wp-config.php" 2>/dev/null)" = "$SHOP"
+  check "the backup's mail folder was left out" test ! -e "/home/$SHOP/mail"
+  src_hash="$(in_ctr "mysql -N -e \"SELECT authentication_string FROM mysql.user WHERE User='${SHOP}_wpu' AND Host='localhost'\"")"
+  dst_hash="$(mysql --protocol=socket -uroot -N -e "SELECT authentication_string FROM mysql.user WHERE User='${SHOP}_wpu' AND Host='localhost'" 2>/dev/null)"
+  check "the database user ${SHOP}_wpu has the same password hash as in the backup" test -n "$src_hash" -a "$src_hash" = "$dst_hash"
+  src_posts="$(in_ctr "mysql -N -e 'SELECT COUNT(*) FROM ${SHOP}_wp.wp_posts'")"
+  dst_posts="$(mysql --protocol=socket -uroot -N -e "SELECT COUNT(*) FROM ${SHOP}_wp.wp_posts" 2>/dev/null)"
+  check "the database ${SHOP}_wp has the same rows (wp_posts $src_posts = $dst_posts)" test -n "$src_posts" -a "$src_posts" = "$dst_posts"
+  check "the site's own user signs in to its database with the old password (wp-config unchanged)" bash -c "mysql --protocol=socket -u${SHOP}_wpu -p\"\$(cat $WORK/shop.pw)\" -N -e 'SELECT 1' ${SHOP}_wp 2>/dev/null | grep -qx 1"
+  echo "  database step: $(json "$WORK/job.json" "[s['message'] for s in d['job']['steps'] if s['name']=='database'][0]")"
+  account="$(json "$WORK/job.json" "d['job']['result']['account_id']")"
+  vhconf="$LSWS/conf/vhosts/sifruno-u${account:0:31}/vhconf.conf"
+  check "the copy runs PHP ${PHPXY:0:1}.${PHPXY:1} (lsphp$PHPXY), the backup's version" grep -q "lsphp$PHPXY/bin/lsphp" "$vhconf"
+  new() { status -H "Host: $1" "http://127.0.0.1$2" "${@:3}"; }
+  for path in /wp-content/plugins/akismet/ /wp-content/plugins/akismet/akismet.php; do
+    check "the copy answers 403 for $path, as the old site" test "$(new "$SHOP_DOMAIN" "$path")" = 403
+  done
+  check "the copy answers 200 for the allow-listed akismet.css, as the old site" test "$(new "$SHOP_DOMAIN" /wp-content/plugins/akismet/_inc/akismet.css)" = 200
+  check "the scheduled job arrived in the site user's crontab" grep -q "wp-cron.php" "/var/spool/cron/$SHOP"
+  check "the preview (this server, the site's Host header) serves the site's title" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' http://127.0.0.1/ | grep -q '$TITLE'"
+  check "the preview serves the moved post" bash -c "curl -s -H 'Host: $SHOP_DOMAIN' 'http://127.0.0.1/?s=Moved' | grep -q 'Moved with Sifruno'"
+  echo "  verify: $(jm "['verify']['verdict']")"
+  echo "  pages $(jm "['verify']['pages_compared']") compared, $(jm "['verify']['pages_pass']") pass, $(jm "['verify']['pages_fail']") fail; notes: $(jm "['notes']")"
+  check "verify compared the copy with the old site and found no difference" test "$(jm "['verify']['cutover_allowed']")" = True
+  gate="$(jm "['gate']")"
+  if [ "$gate" = closed ]; then
+    call POST "/api/v1/websites/migrations/$JOB/accept" "$(body accept '{"reason":"Proof run: the notes were read and accepted"}')"
+    cp "$WORK/answer.json" "$WORK/job.json"; gate="$(jm "['gate']")"
+  fi
+  check "the cutover gate is open (gate: $gate)" test "$gate" = open -o "$gate" = accepted
+  call POST "/api/v1/websites/migrations/$JOB/ready" "$(body ready '{}')"
+  cp "$WORK/answer.json" "$WORK/job.json"
+  check "marked ready, the panel names A records for the domain at $VMIP" test "$(jm "['dns'][0]['value']")" = "$VMIP" -a "$(jm "['gate']")" = ready
+  check "the uploaded file is deleted from this server, its folder too" test ! -e "$STATE/migrate/$SRC"
+  check "the job says the file was deleted" test "$(jm "['key_removed']")" = True
+  check "no password or hash was in any process's arguments during the upload and the move" bash -c "! grep -qF -e \"$(cat "$WORK/shop.pw")\" -e '$src_hash' $WORK/ps-samples.txt"
+  check "the job record holds no password or hash" bash -c "! grep -qF -e \"$(cat "$WORK/shop.pw")\" -e '$src_hash' $DIR/state/wizard/jobs.json"
+
+  echo
+  echo "## 5. Move $STAFF_DOMAIN from its backup file: a password folder, a closed folder and address lists, converted"
+  upload "$WORK/cpmove-$STAFF.tar.gz"
+  check "the staff backup is read" test "$code" = 200 -a "$(json "$WORK/answer.json" "d['source']['archive']['user']")" = "$STAFF"
+  archive_move "$STAFF"
+  check "the move succeeded" test "$state" = succeeded
+  echo "  converted: $(jm "['converted']")"
+  check "the copy closes /private/ with 401" test "$(new "$STAFF_DOMAIN" /private/)" = 401
+  check "the copy opens /private/ with the password from the backup's user file (200)" test "$(new "$STAFF_DOMAIN" /private/ -u "staff:$HT_PW")" = 200
+  check "the copy denies /backups/backup.sql with 403" test "$(new "$STAFF_DOMAIN" /backups/backup.sql)" = 403
+  check "the copy answers 401 for /pub/index.html, rewritten into /private/" test "$(new "$STAFF_DOMAIN" /pub/index.html)" = 401
+  check "the uploaded staff file is deleted" test ! -e "$STATE/migrate/$SRC"
+
+  echo
+  echo "## 6. Hostile and wrong files are refused before anything is made"
+  before="$(find "$STATE/migrate" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"
+  python3 - "$WORK/evil.tar.gz" "$RUNID" <<'PY'
+import io, sys, tarfile
+out, runid = sys.argv[1], sys.argv[2]
+with tarfile.open(out, "w:gz") as t:
+    for name, body in [("cpmove-evil%s/cp/evil%s" % (runid, runid), b"DNS=evil.proof.test\n"),
+                       ("cpmove-evil%s/homedir/../../../../tmp/sifruno-evil-%s" % (runid, runid), b"escaped\n")]:
+        i = tarfile.TarInfo(name); i.size = len(body); t.addfile(i, io.BytesIO(body))
+PY
+  upload "$WORK/evil.tar.gz"
+  check "a file with a name that climbs out of its folder is refused (422)" test "$code" = 422
+  echo "  why: $(json "$WORK/answer.json" "d['detail']")"
+  check "and says it is damaged or in a form Sifruno does not read" grep -q "damaged or in a form Sifruno does not read" "$WORK/answer.json"
+  check "nothing was written outside, nor kept" test ! -e "/tmp/sifruno-evil-$RUNID" -a "$(find "$STATE/migrate" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" = "$before"
+  head -c 200000 /dev/urandom | gzip > "$WORK/random.tar.gz"
+  upload "$WORK/random.tar.gz"
+  check "a file that is not a backup is refused (422) and nothing is kept" test "$code" = 422 -a "$(find "$STATE/migrate" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" = "$before"
+}
+if [ "$MODE" = archive ]; then
+  archive_proof
+  echo
+  if [ "$fails" -eq 0 ]; then echo "RESULT: every check passed"; else echo "RESULT: $fails check(s) failed"; fi
+  exit "$fails"
+fi
+
 if [ "$MODE" = whm ]; then
   whm_proof
   echo

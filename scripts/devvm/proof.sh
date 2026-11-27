@@ -10,7 +10,7 @@ OUT="${SIFRUNO_PROOF_OUT:-$REPO/artifacts/devvm}"
 
 usage() {
   cat <<'USAGE'
-usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel [whm|cert] | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
+usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | migrate-cpanel [whm|cert|archive] | broker-web | broker-wordpress | broker-site-actions | site-domains | files | backups | broker-isolation | account-limits | site-tools | wordpress-wizard | phpmyadmin | whmcs-module | panel-shell | customer-login | installer-sshd | create-recovery | htaccess-reload
   broker-sftp   Proof 2: the root broker creates a regular Linux user and the
                 user signs in over SFTP with a broker-managed key. With
                 extra-accounts (for example 105) it also creates that many
@@ -45,8 +45,12 @@ usage: proof.sh broker-sftp [extra-accounts] | wordpress-ols | migrate-verify | 
                 JSON. With cert, the old sites serve https with certificates
                 from a throwaway CA: two moves copy them (one over SSH, one
                 with the WHM login) and answer https at once, and an expired
-                one is not copied while its move finishes. KEEP_STANDIN=1
-                keeps the stand-in for screenshots.
+                one is not copied while its move finishes. With archive,
+                the stand-in makes backup files of two accounts in the
+                layout cPanel documents (a pkgacct stand-in, not cPanel),
+                each is uploaded through the panel and moved, and a file
+                that climbs out of its folder or is not a backup is refused.
+                KEEP_STANDIN=1 keeps the stand-in for screenshots.
   broker-web    The broker's web operation: OpenLiteSpeed may read the home,
                 a quota is set, the vhost is rendered, tested and reloaded,
                 a rejected config changes nothing, a symlinked public_html is
@@ -253,7 +257,7 @@ case "${1:-}" in
     ;;
   migrate-cpanel)
     mode="${2:-}"
-    case "$mode" in ''|whm|cert) ;; *) usage >&2; exit 2 ;; esac
+    case "$mode" in ''|whm|cert|archive) ;; *) usage >&2; exit 2 ;; esac
     keep="${KEEP_STANDIN:-0}"
     case "$keep" in 0|1) ;; *) usage >&2; exit 2 ;; esac
     stage="$(mktemp -d)"
